@@ -11,7 +11,7 @@
 
 ## 必读
 
-[测试规范](testing.md) · [文档规范](documentation.md)。
+[测试规范](../standards/testing.md) · [文档规范](../standards/documentation.md)。
 
 ## 范围与非目标
 
