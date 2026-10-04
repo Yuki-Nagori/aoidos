@@ -57,7 +57,7 @@ fn lock_until_stable(
 }
 
 // `None`：被信号打断，调用方再试。放在非泛型函数里，避免每个闭包单态化出
-// 一份生产路径走不到的分支，把 llvm-cov 行覆盖打穿（注释规范）。
+// 一份生产路径走不到的分支，导致 llvm-cov 行覆盖缺口（task 013）。
 // 覆盖率改为「任一单态化走到即算覆盖」之后，可以收回这个拆分。
 fn settle(
     result: std::result::Result<(), TryLockError>,
@@ -138,7 +138,7 @@ mod tests {
         let third = acquire(&dir).unwrap();
         drop(third);
         // Windows 的字节范围锁是强制的，持有期间另一个句柄读不了；Unix 的 flock 是建议锁（task 013）。
-        // 释放后再读，三端看到的都是最后持有者写下的 PID。Windows 锁改为建议锁之前必须保持这个顺序。
+        // 释放后再读，三端看到的都是最后持有者写下的 PID。
         let text = fs::read_to_string(&lock_path).unwrap();
         assert_eq!(text, format!("{}\n", std::process::id()));
         fs::remove_dir_all(&dir).unwrap();
@@ -148,7 +148,8 @@ mod tests {
     fn write_pid_truncates_a_longer_previous_value() {
         let dir = tdir("lock-pid");
         let path = dir.join("storage.lock");
-        fs::write(&path, b"10000\n").unwrap();
+        let previous = format!("{}0000\n", std::process::id());
+        fs::write(&path, previous).unwrap();
         let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
         write_pid(&mut file).unwrap();
         assert_eq!(

@@ -105,18 +105,36 @@ fn short_hash(data: &[u8]) -> String {
 }
 
 /// 归一化路径分隔符：拼接而来的路径可能混合 `/` 与 `\`，交给 SQLite 等
-/// C 库前统一为平台分隔符（Windows 混合分隔符会报 PATH_NOT_FOUND）。
+/// C 库前在 Windows 将 `/` 转为 `\`（混合分隔符会报 PATH_NOT_FOUND）。
 ///
-/// 经 `to_string_lossy` 转换，非 UTF-8 字节会替换成 U+FFFD；本仓路径全部
-/// 来自 [`sanitize_component`] / 脚本 id 消毒过的组件与系统 API，保证 UTF-8。
+/// 保留操作系统原始路径编码；Unix 的 `\` 是合法文件名字符，不转换。
+#[cfg(windows)]
 pub fn normalize(path: &Path) -> PathBuf {
-    PathBuf::from(
-        path.to_string_lossy()
-            .replace('/', std::path::MAIN_SEPARATOR_STR),
-    )
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let wide: Vec<_> = path
+        .as_os_str()
+        .encode_wide()
+        .map(|c| {
+            if c == u16::from(b'/') {
+                u16::from(b'\\')
+            } else {
+                c
+            }
+        })
+        .collect();
+    PathBuf::from(OsString::from_wide(&wide))
+}
+
+/// 归一化路径分隔符。Unix 原样保留路径，不转换反斜杠或非 UTF-8 字节。
+#[cfg(not(windows))]
+pub fn normalize(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 /// 在数据根下拼装相对路径。组件不得为空、`..`、`.`，不得含路径分隔符或盘符。
+/// 仅校验组件文本，不解析符号链接；数据根及其子目录必须由应用控制。
 ///
 /// # Errors
 ///
@@ -276,6 +294,17 @@ mod tests {
     fn normalize_unifies_mixed_separators() {
         let normalized = normalize(Path::new(r"C:\data\nested/storage.sqlite"));
         assert_eq!(normalized, Path::new(r"C:\data\nested\storage.sqlite"));
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        let path = PathBuf::from(OsString::from_wide(&[0xd800, u16::from(b'/'), 0x0061]));
+        assert_eq!(
+            normalize(&path)
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>(),
+            [0xd800, u16::from(b'\\'), 0x0061]
+        );
     }
 
     #[cfg(not(windows))]
@@ -283,5 +312,18 @@ mod tests {
     fn normalize_keeps_unix_separators() {
         let normalized = normalize(Path::new("/data/nested/storage.sqlite"));
         assert_eq!(normalized, Path::new("/data/nested/storage.sqlite"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_preserves_non_utf8_and_backslashes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"/data/\xff\\name.sqlite"));
+        assert_eq!(
+            normalize(path).as_os_str().as_bytes(),
+            path.as_os_str().as_bytes()
+        );
     }
 }

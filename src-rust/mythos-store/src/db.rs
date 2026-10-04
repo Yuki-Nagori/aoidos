@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, DatabaseName};
+use rusqlite::{Connection, DatabaseName, TransactionBehavior};
 
 use super::atomic;
 use super::error::{Result, StoreError};
@@ -21,6 +21,8 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// 推到 v+1；任一迁移失败即回滚并上抛，数据库保持在旧版本。
 ///
 /// 比当前二进制新的库在改日志模式之前就拒绝，避免把只读打开写成 WAL。
+/// 调用方先持有 [`super::lock::InstanceLock`]；同一目录只放一个业务库，备份共用 `backups/`。
+/// 迁移 SQL 必须是可信的内嵌语句，不含 BEGIN / COMMIT / ROLLBACK；事务边界由 runner 管理。
 ///
 /// # Errors
 ///
@@ -29,7 +31,7 @@ pub fn open(path: &Path, migrations: &[&str]) -> Result<Connection> {
     // 入参可能带混合分隔符（剧本 / 配置拼接），先经路径层归一化再交给 SQLite。
     let path = paths::normalize(path);
     make_parent_dirs(&path)?;
-    let conn = Connection::open(&path).map_err(err_open)?;
+    let mut conn = Connection::open(&path).map_err(err_open)?;
     conn.busy_timeout(BUSY_TIMEOUT).map_err(err_pragma)?;
     let mut version = query_user_version(&conn)?;
     let target = migrations.len() as u32;
@@ -43,7 +45,7 @@ pub fn open(path: &Path, migrations: &[&str]) -> Result<Connection> {
         if version > 0 {
             backup(&conn, &path, version)?;
         }
-        apply_migration(&conn, version, migrations[version as usize])?;
+        apply_migration(&mut conn, version, migrations[version as usize])?;
         version += 1;
     }
     Ok(conn)
@@ -55,18 +57,20 @@ fn newer_than_binary(version: u32, target: u32) -> StoreError {
     ))
 }
 
-fn apply_migration(conn: &Connection, version: u32, sql: &str) -> Result<()> {
-    conn.execute_batch("BEGIN IMMEDIATE").map_err(err_begin)?;
-    if let Err(source) = conn.execute_batch(sql) {
-        let _ = conn.execute_batch("ROLLBACK");
+fn apply_migration(conn: &mut Connection, version: u32, sql: &str) -> Result<()> {
+    // RAII 在 SQL、版本更新或 COMMIT 失败时回滚，调用方不会拿到仍在事务中的连接。
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(err_begin)?;
+    if let Err(source) = tx.execute_batch(sql) {
         return Err(StoreError::Migration {
             version: version + 1,
             source,
         });
     }
-    let sql = format!("PRAGMA user_version = {}; COMMIT;", version + 1);
-    conn.execute_batch(&sql).map_err(err_commit)?;
-    Ok(())
+    tx.pragma_update(None, "user_version", version + 1)
+        .map_err(err_commit)?;
+    tx.commit().map_err(err_commit)
 }
 
 fn query_user_version(conn: &Connection) -> Result<u32> {
@@ -387,9 +391,10 @@ CREATE TABLE items(id INTEGER PRIMARY KEY);";
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 2, "reopen must not re-run migrations");
-        assert!(
-            !dir.join("backups").exists(),
-            "fresh creation must not back up"
+        assert_eq!(
+            fs::read_dir(dir.join("nested/backups")).unwrap().count(),
+            1,
+            "version 1 to 2 backs up once; reopening must not add a backup"
         );
         drop(again);
         fs::remove_dir_all(&dir).unwrap();
@@ -401,7 +406,7 @@ CREATE TABLE items(id INTEGER PRIMARY KEY);";
         let path = dir.join("storage.sqlite");
         let bad = [
             V1,
-            "CREATE TABLE broken(; ALTER TABLE missing ADD COLUMN x INTEGER;",
+            "CREATE TABLE partial(id INTEGER); INSERT INTO heroes(name) VALUES ('discard'); ALTER TABLE missing ADD COLUMN x INTEGER;",
         ];
         let err = open(&path, &bad).unwrap_err();
         assert_eq!(err.code(), "migration");
@@ -411,8 +416,53 @@ CREATE TABLE items(id INTEGER PRIMARY KEY);";
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 1, "must stay on last good version");
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM heroes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "successful statements before the failure must roll back"
+        );
+        let partial: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'partial'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(partial, 0, "DDL must also roll back");
         drop(conn);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_commit_rolls_back_and_leaves_connection_reusable() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        apply_migration(&mut conn, 0, V1).unwrap();
+        // 延迟外键检查让语句全部成功、COMMIT 才失败，验证版本更新也随事务回滚。
+        let sql = "CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(parent_id INTEGER REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED);
+INSERT INTO children VALUES (42);";
+        assert_eq!(apply_migration(&mut conn, 1, sql).unwrap_err().code(), "io");
+        assert!(
+            conn.is_autocommit(),
+            "failed commit must not leave a transaction open"
+        );
+        assert_eq!(query_user_version(&conn).unwrap(), 1);
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name IN ('parents', 'children')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "schema changes must roll back with the failed commit"
+        );
+        apply_migration(&mut conn, 1, V2).unwrap();
+        assert_eq!(query_user_version(&conn).unwrap(), 2);
     }
 
     #[test]

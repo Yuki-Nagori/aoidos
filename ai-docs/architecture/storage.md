@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-05。设计稿 v1（[task 011](../task/011-storage-design.md) 产出，**待评审**）。状态：**规划**——本文是规则与结构文档，实现 task 待定稿后新增。工程纪律前提见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-05。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。业务记录、记忆与导入导出仍按各自任务规划；工程纪律前提见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -49,7 +49,7 @@ CREATE TABLE point_allocations (
 ## 访问层与迁移
 
 - 所有 SQL 集中在存储 crate；域 crate（记录 / 记忆 / 引擎）经 trait 访问，不直接持连接。
-- Schema 迁移：`PRAGMA user_version` + 按版本号排列的 `.sql` 迁移文件；启动时顺序执行，任一失败即拒绝启动并保留原库（不半改）；每个迁移配套回填测试。
+- Schema 迁移：`PRAGMA user_version` + 按版本号排列的内嵌 SQL 切片；每次迁移用 IMMEDIATE 事务，执行或提交失败由 RAII 回滚，`user_version` 与 schema 同事务推进。SQL 不得自行 BEGIN / COMMIT / ROLLBACK；每个迁移配套回填测试。
 - 业务 crate 不依赖 tauri：数据根路径由装配层（src-tauri）解析后注入。
 
 ## 目录与路径规范
@@ -66,14 +66,14 @@ CREATE TABLE point_allocations (
 ```
 
 - **script-id 规范**：`[a-z0-9-]{1,64}`，由剧本名消毒生成（小写、空格转连字符、去非法字符）；超长截断后追加 8 位短 hash 防碰撞。
-- **路径规则**：业务 crate 只接受「相对数据根的路径」，由唯一 path 工具拼装——拒绝 `..`、消毒非法字符（Windows `<>:"|?*` 与保留名）、超长路径启用 `\\?\` 前缀策略。任何来自剧本包的文件名在落盘前必须经同一消毒函数（zip slip 防护）。
+- **路径规则**：装配层注入系统数据根，业务相对路径由 `join_under_root` 拼装——拒绝 `..`、分隔符、盘符，消毒 Windows 非法字符与保留名。该工具只校验组件文本，不解析符号链接；数据根及子目录必须由应用控制。不可信剧本包的完整解包防护与 Windows 长路径前缀尚未实现。`normalize` 只在 Windows 转换正斜杠，保留操作系统原始编码；Unix 反斜杠是合法文件名字符。
 
 ## 原子写工具（全仓唯一实现）
 
 - API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8），域 crate 一律经此写盘，**禁止直接写目标文件**。
-- 步骤：同目录唯一临时名 `<name>.<pid>.<rand>.tmp` → 写入 + fsync → `rename` 覆盖目标。Windows 下 rename 遇锁定（杀软 / 同步盘扫描）按指数退避重试数次，仍失败则报错上抛——不静默丢写。
+- 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。Windows 下 rename 遇占用按 25ms 指数退避重试 5 次，仍失败报 `locked` 并清理本次 tmp；目录目标直接报 `io`。父目录同步遇权限拒绝或卷不支持 flush 时保留成功结果，其它同步错误上抛，此时目标可能已经更新。
 - 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行（对局恢复语义，006 引用）。
-- 并发与锁：桌面单进程假设 + 单写者约定；启动时检测多开（锁文件 + PID 探测），多开实例只读运行并提示。
+- 并发与锁：单写者约定；打开数据库前持有 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
 
 ## shell 与进程边界
 
@@ -94,4 +94,4 @@ CREATE TABLE point_allocations (
 
 ## 待实现期标定
 
-- WAL 还是 DELETE 日志模式（按崩溃恢复实测取舍）；备份保留份数 N；rename 重试次数与退避上限；多开检测的探测方式细节。
+- 已标定（task 013）：WAL，备份保留最近 3 份，rename 重试 5 次 / 25ms 指数退避，OS 独占实例锁。业务 schema、记录 append 与导入导出随相应任务实现。

@@ -1,5 +1,5 @@
 //! 全仓唯一的落盘实现：唯一 tmp + fsync + rename 原子写，与文件自愈工具。
-//! 任何模块禁止直接写目标文件，一律经本模块。
+//! 普通文件覆写经本模块；SQLite 事务与备份、多开锁文件由各自模块维护。
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -14,7 +14,6 @@ const RETRIES: u32 = 5;
 const BASE_DELAY_MS: u64 = 25;
 // 这两个号码只在 Windows 上是占用（ACCESS_DENIED / SHARING_VIOLATION，task 013）。
 // Unix 上同号是 EIO / EPIPE。Windows 把它们报成可区分的 ErrorKind 之后，可以删掉按号码判断的分支。
-// 仅 Windows 编译：非 Windows 的 lib 目标没有使用方，无条件定义会被 clippy dead_code 拦下（CI 实测）。
 #[cfg(windows)]
 const WINDOWS_ACCESS_DENIED: i32 = 5;
 #[cfg(windows)]
@@ -26,6 +25,7 @@ static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 ///
 /// 目标被操作系统拒绝替换（Windows 共享冲突，或三端通用的 busy）时按 25ms 指数退避重试，
 /// 耗尽后报 `locked` 并清理 tmp。目标是目录时三端都立刻报 `io`，不进入占用重试。
+/// rename 成功后的父目录同步若失败，返回错误时目标可能已经更新。
 ///
 /// # Errors
 ///
@@ -95,16 +95,25 @@ fn tmp_sibling(target: &Path) -> Result<PathBuf> {
         .file_name()
         .ok_or_else(|| StoreError::InvalidPath(target.display().to_string()))?;
     let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    Ok(target.with_file_name(format!(
-        "{}.{}.{}.tmp",
-        file_name.to_string_lossy(),
-        std::process::id(),
-        seq
-    )))
+    let mut tmp_name = file_name.to_os_string();
+    tmp_name.push(format!(".{}.{seq}.tmp", std::process::id()));
+    Ok(target.with_file_name(tmp_name))
 }
 
 fn write_tmp(tmp: &Path, bytes: &[u8]) -> Result<()> {
-    match write_tmp_inner(tmp, bytes) {
+    // create_new 原子地拒绝既有文件与符号链接；创建失败时不清理，因为该路径不属于本次写入。
+    let mut file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .map_err(StoreError::from_io)?;
+    let result = write_tmp_inner(&mut file, bytes);
+    drop(file);
+    finish_tmp_write(result, tmp)
+}
+
+fn finish_tmp_write(result: Result<()>, tmp: &Path) -> Result<()> {
+    match result {
         Ok(()) => Ok(()),
         Err(err) => {
             let _ = fs::remove_file(tmp);
@@ -113,8 +122,7 @@ fn write_tmp(tmp: &Path, bytes: &[u8]) -> Result<()> {
     }
 }
 
-fn write_tmp_inner(tmp: &Path, bytes: &[u8]) -> Result<()> {
-    let mut file = File::create(tmp).map_err(StoreError::from_io)?;
+fn write_tmp_inner(file: &mut File, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes).map_err(StoreError::from_io)?;
     file.sync_all().map_err(StoreError::from_io)
 }
@@ -201,12 +209,12 @@ fn directory_target_error() -> StoreError {
 
 /// rename 已经发布目录项之后，尽力刷父目录元数据。
 ///
-/// 打不开目录、或不支持目录 flush 的卷，不把已经完成的替换改成失败（task 013）。
-/// 这不是临时绕过：替换已经可见，flush 失败不能再向调用方报错。
+/// 权限拒绝或卷不支持目录 flush 时，保留已经完成的替换结果（task 013）。
+/// 其它同步错误仍上抛，调用方不能据此认定替换尚未发生。
 ///
 /// # Errors
 ///
-/// 父目录不存在，或 flush 失败且不是「卷不支持目录同步」时返回。
+/// 打开父目录或 flush 失败，且不是「卷不支持目录同步」时返回。
 pub(crate) fn sync_parent(target: &Path) -> Result<()> {
     accept_dir_sync(sync_dir(parent_for_sync(target)))
 }
@@ -471,6 +479,48 @@ mod tests {
         let err = write_tmp(&dir, b"x").unwrap_err();
         assert_ne!(err.code(), "locked");
         assert!(dir.is_dir());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_tmp_preserves_existing_file_on_create_conflict() {
+        let dir = tdir("atomic-tmp-conflict");
+        let tmp = dir.join("existing.tmp");
+        fs::write(&tmp, b"keep").unwrap();
+        assert_eq!(write_tmp(&tmp, b"new").unwrap_err().code(), "io");
+        assert_eq!(fs::read(&tmp).unwrap(), b"keep");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_tmp_write_removes_owned_file() {
+        let dir = tdir("atomic-tmp-write-fail");
+        let tmp = dir.join("owned.tmp");
+        fs::write(&tmp, b"partial").unwrap();
+        // 只读句柄确定地拒绝写入，不依赖磁盘配额或平台特有设备。
+        let mut file = File::open(&tmp).unwrap();
+        let result = write_tmp_inner(&mut file, b"new");
+        drop(file);
+        assert!(finish_tmp_write(result, &tmp).is_err());
+        assert!(!tmp.exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tmp_sibling_preserves_non_utf8_file_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tdir("atomic-non-utf8");
+        let path = dir.join(OsStr::from_bytes(b"data-\xff.txt"));
+        let tmp = tmp_sibling(&path).unwrap();
+        assert!(
+            tmp.file_name()
+                .unwrap()
+                .as_bytes()
+                .starts_with(b"data-\xff.txt.")
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

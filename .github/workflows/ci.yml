@@ -8,11 +8,20 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "ai-docs/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "ai-docs/**"
+      - "**/*.md"
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   verify:
@@ -22,6 +31,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -32,13 +42,10 @@ jobs:
           # 与 rust-toolchain.toml 保持一致
           toolchain: "1.99.0"
           components: clippy, rustfmt, llvm-tools-preview
-      - name: 安装 Tauri Linux 依赖
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: Swatinem/rust-cache@v2
+        with:
+          # 失败也保留依赖编译缓存，修复格式或测试后无需重编依赖；工作区源码仍重新检查。
+          cache-on-failure: true
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
@@ -48,15 +55,22 @@ jobs:
         run: bun run typecheck
       - name: lint（eslint）
         run: bun run lint
-      - name: lint（clippy + cargo check）
-        run: bun run lint:rust
       - name: format（prettier）
         run: bun run format:check
       - name: format（rustfmt）
         run: bun run format:rust:check
       - name: test + coverage（vitest）
         run: bun run test:coverage
-      - name: test + coverage 门槛（cargo-llvm-cov）
-        run: bun run coverage:rust
       - name: 死代码检查（knip）
         run: bun run knip
+      # 快速门禁先完成，避免格式 / 前端错误消耗 Linux 系统依赖安装和 Rust 编译时间。
+      - name: 安装 Tauri Linux 依赖
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: lint（clippy + cargo check）
+        run: bun run lint:rust
+      - name: test + coverage 门槛（cargo-llvm-cov）
+        run: bun run coverage:rust
