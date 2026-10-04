@@ -30,6 +30,8 @@
 
 `typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `format:check` · `format:rust:check` · `test:coverage` · `test:rust` · `coverage:rust` · `knip`，共十项，任一失败即失败。husky 在每次 commit 前只跑双端格式检查（秒级反馈，拦住排版噪音）；lint、测试与覆盖率交给推送前自查与 CI——CI 把十项拆成具名步骤逐步执行，不聚合调用，失败直接定位。失败处理：格式挂了跑对应 format，lint 能自动修的走 `lint:fix`，测试挂了用 `test:watch` 本地复现。
 
+CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两次全量 Rust 编译）：`cargo check` 不单跑（clippy 已含类型检查）；`cargo test` 不单跑（llvm-cov 先执行同一套测试，单次插桩编译同时验证测试与覆盖率门槛）。见 ci.yml 顶部注释。
+
 覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `cargo llvm-cov --workspace --lib` 要求行 100%，`lib.rs` 是装配（事件循环不可测）经 `--ignore-filename-regex` 不计，命令与业务文件必须足额。改口径属于门禁变更，先登记 task。
 
 首次 `cargo check` 或改动 `[profile.*]` 后的全量重编译是一次性成本，属正常现象。

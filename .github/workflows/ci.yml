@@ -1,4 +1,8 @@
-# CI：三平台各一条流水线，与本地 verify 同一组检查，步骤拆分便于定位失败
+# CI：三平台各一条流水线，与本地 verify 同一组门禁。
+# 与本地十项的差异（省两次 Rust 编译形态，语义不变）：
+#   - cargo check 不单跑——clippy 已包含类型检查；
+#   - cargo test 不单跑——llvm-cov 会先跑一遍测试，同一插桩编译同时验证测试与 100% 行覆盖。
+#     若测试失败 coverage 步骤直接失败；行覆盖门槛失守时日志带未覆盖行号。
 name: CI
 
 on:
@@ -42,11 +46,9 @@ jobs:
         run: bun install --frozen-lockfile
       - name: typecheck（vue-tsc）
         run: bun run typecheck
-      - name: typecheck（cargo check）
-        run: bun run typecheck:rust
       - name: lint（eslint）
         run: bun run lint
-      - name: lint（clippy）
+      - name: lint（clippy + cargo check）
         run: bun run lint:rust
       - name: format（prettier）
         run: bun run format:check
@@ -54,9 +56,7 @@ jobs:
         run: bun run format:rust:check
       - name: test + coverage（vitest）
         run: bun run test:coverage
-      - name: test（cargo test）
-        run: bun run test:rust
-      - name: coverage 门槛（cargo-llvm-cov）
+      - name: test + coverage 门槛（cargo-llvm-cov）
         run: bun run coverage:rust
       - name: 死代码检查（knip）
         run: bun run knip
