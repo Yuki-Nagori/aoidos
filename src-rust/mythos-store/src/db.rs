@@ -28,6 +28,27 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// 路径无法创建、文件不是可读的 SQLite 库、迁移失败，或库版本高于二进制时返回。
 pub fn open(path: &Path, migrations: &[&str]) -> Result<Connection> {
+    open_with_progress(path, migrations, &mut |_| {})
+}
+
+/// 迁移进度：从 `from` 迁到 `to`（每个迁移一步）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationProgress {
+    pub from: u32,
+    pub to: u32,
+}
+
+/// 同 [`open`]，并把每个迁移步（from → to）交给 `on_progress`。
+/// 回调只收纯数据，无 Tauri 类型（职责边界：业务 crate 不得依赖 Tauri）。
+///
+/// # Errors
+///
+/// 与 [`open`] 相同。
+pub fn open_with_progress(
+    path: &Path,
+    migrations: &[&str],
+    on_progress: &mut dyn FnMut(MigrationProgress),
+) -> Result<Connection> {
     // 入参可能带混合分隔符（剧本 / 配置拼接），先经路径层归一化再交给 SQLite。
     let path = paths::normalize(path);
     make_parent_dirs(&path)?;
@@ -45,6 +66,10 @@ pub fn open(path: &Path, migrations: &[&str]) -> Result<Connection> {
         if version > 0 {
             backup(&conn, &path, version)?;
         }
+        on_progress(MigrationProgress {
+            from: version,
+            to: version + 1,
+        });
         apply_migration(&mut conn, version, migrations[version as usize])?;
         version += 1;
     }
@@ -81,6 +106,16 @@ fn query_user_version(conn: &Connection) -> Result<u32> {
         Ok(version) => Ok(version),
         Err(_) => Err(StoreError::Corrupt(format!("negative user_version {v}"))),
     }
+}
+
+/// 只读打开并返回 user_version（不执行迁移；文件不存在时创建空库，版本 0）。
+///
+/// # Errors
+///
+/// 打开失败或版本为负时返回。
+pub fn current_version(path: &Path) -> Result<u32> {
+    let conn = Connection::open(path).map_err(err_open)?;
+    query_user_version(&conn)
 }
 
 fn enable_wal(conn: &Connection) -> Result<()> {
@@ -222,6 +257,45 @@ fn make_parent_dirs(path: &Path) -> Result<()> {
     fs::create_dir_all(parent_dir(path)).map_err(StoreError::from_io)
 }
 
+/// 迁移备份条目（新到旧排序）。
+#[derive(Debug)]
+pub struct BackupEntry {
+    pub path: PathBuf,
+    pub version: u32,
+    pub nanos: u128,
+    pub size: u64,
+}
+
+/// 列出 `backups/` 下的迁移备份，新到旧排序；只认 `storage-v{v}-{nanos}.sqlite`，
+/// 其余文件（含无法解析的同前缀文件）跳过。目录不存在视为空。
+///
+/// # Errors
+///
+/// 目录或条目元数据不可读时返回。
+pub fn list_backups(db_path: &Path) -> Result<Vec<BackupEntry>> {
+    let dir = parent_dir(db_path).join("backups");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries: Vec<BackupEntry> = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(StoreError::from_io)? {
+        let entry = entry.map_err(StoreError::from_io)?;
+        let path = entry.path();
+        let Some((nanos, version)) = backup_rank(&path) else {
+            continue;
+        };
+        let size = entry.metadata().map_err(StoreError::from_io)?.len();
+        entries.push(BackupEntry {
+            path,
+            version,
+            nanos,
+            size,
+        });
+    }
+    entries.sort_by_key(|entry| std::cmp::Reverse((entry.nanos, entry.version)));
+    Ok(entries)
+}
+
 fn parent_dir(path: &Path) -> &Path {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
@@ -273,6 +347,7 @@ fn sqlite_store_code(source: &rusqlite::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     fn sql_err() -> rusqlite::Error {
         rusqlite::Error::InvalidColumnName("x".into())
@@ -535,6 +610,52 @@ INSERT INTO children VALUES (42);";
             "the pre-migration backup must be among the kept ones"
         );
         drop(_conn);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn open_reports_each_migration_step() {
+        let dir = tdir("db-progress");
+        let path = dir.join("storage.sqlite");
+        let steps = RefCell::new(Vec::new());
+        {
+            let _conn = open_with_progress(&path, &[V1, V2], &mut |progress| {
+                steps.borrow_mut().push((progress.from, progress.to));
+            })
+            .unwrap();
+        }
+        assert_eq!(steps.borrow().as_slice(), [(0, 1), (1, 2)]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_backups_returns_ranked_entries_newest_first() {
+        let dir = tdir("db-list");
+        let path = dir.join("storage.sqlite");
+        {
+            let _conn = open(&path, &[V1]).unwrap();
+        }
+        let backups = dir.join("backups");
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("storage-v1-100.sqlite"), b"a").unwrap();
+        fs::write(backups.join("storage-v1-200.sqlite"), b"bb").unwrap();
+        fs::write(backups.join("storage-v2-150.sqlite"), b"ccc").unwrap();
+        fs::write(backups.join("notes.sqlite"), b"skip").unwrap();
+
+        let items = list_backups(&path).unwrap();
+        assert_eq!(items.len(), 3, "非迁移备份命名不入选");
+        assert_eq!(items[0].nanos, 200);
+        assert_eq!(items[1].nanos, 150);
+        assert_eq!(items[2].version, 1);
+        assert_eq!(items[2].size, 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_backups_on_missing_directory_is_empty() {
+        let dir = tdir("db-list-missing");
+        let items = list_backups(&dir.join("storage.sqlite")).unwrap();
+        assert!(items.is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
 

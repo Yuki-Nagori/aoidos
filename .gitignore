@@ -21,6 +21,7 @@ Thumbs.db
 /target/
 src-tauri/target/
 src-tauri/gen/schemas/
+cov.info
 
 # zcode
 .zcode/

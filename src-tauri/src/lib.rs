@@ -2,7 +2,7 @@ mod commands;
 pub mod events;
 pub mod ipc;
 
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use ipc::CmdError;
 
@@ -31,7 +31,16 @@ pub(crate) fn emit_event<R: Runtime, T: serde::Serialize + ?Sized>(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::greet])
+        .setup(|app| {
+            let dir = app.path().app_data_dir().expect("app data dir");
+            commands::init_db_path(dir.join("storage.sqlite"));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::greet,
+            commands::store_list_backups,
+            commands::store_get_migration
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
