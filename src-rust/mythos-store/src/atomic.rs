@@ -14,7 +14,10 @@ const RETRIES: u32 = 5;
 const BASE_DELAY_MS: u64 = 25;
 // 这两个号码只在 Windows 上是占用（ACCESS_DENIED / SHARING_VIOLATION，task 013）。
 // Unix 上同号是 EIO / EPIPE。Windows 把它们报成可区分的 ErrorKind 之后，可以删掉按号码判断的分支。
+// 仅 Windows 编译：非 Windows 的 lib 目标没有使用方，无条件定义会被 clippy dead_code 拦下（CI 实测）。
+#[cfg(windows)]
 const WINDOWS_ACCESS_DENIED: i32 = 5;
+#[cfg(windows)]
 const WINDOWS_SHARING_VIOLATION: i32 = 32;
 
 static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -372,7 +375,7 @@ mod tests {
         let dir = tdir("atomic-map-unix");
         let file = dir.join("target-file");
         // 5 / 32 在 Unix 上是 EIO / EPIPE（task 013）。Windows 改用可区分的 ErrorKind 后，这个测试和原始错误码分支一起删。
-        for raw in [WINDOWS_ACCESS_DENIED, WINDOWS_SHARING_VIOLATION] {
+        for raw in [5, 32] {
             let err = finish_rename_err(io::Error::from_raw_os_error(raw), &file);
             assert_eq!(err.code(), "io", "raw {raw} must not be locked off Windows");
         }

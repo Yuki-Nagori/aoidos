@@ -20,7 +20,7 @@ Validation: 实际检查及结果；不能只写 tested
 Cleanup: 删除项，或写无废弃项
 ```
 
-正文可中文，type / scope 用简短英文。type 取：feat / fix / refactor / cleanup / build / test / docs / ci / chore / revert；scope 取实际模块（如 `tauri`、`web`、`docs`、`repo`）。不用 update、misc、WIP 当行为描述。破坏既有接口时标题冒号前加 `!` 并在正文说明影响与迁移。
+正文可中文，type / scope 用简短英文。type 取：feat / fix / refactor / cleanup / build / test / docs / ci / chore / revert；scope 取实际模块（如 `tauri`、`web`、`docs`、`repo`）。不用 update、misc、WIP 当行为描述。破坏既有接口时标题冒号前加 `!` 并在正文说明影响与迁移。CI 修复、门禁机械修正等不立项的平凡改动，`Task:` 字段写 `无` 并注明缘由。
 
 ## Task 状态同步
 
