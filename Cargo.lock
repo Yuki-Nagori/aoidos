@@ -1887,6 +1887,8 @@ dependencies = [
 name = "mythos"
 version = "0.1.0"
 dependencies = [
+ "mythos-store",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",
