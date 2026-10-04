@@ -37,6 +37,7 @@ impl CmdError {
 
 impl From<StoreError> for CmdError {
     fn from(err: StoreError) -> Self {
+        let code = err.code();
         let detail = match &err {
             StoreError::InvalidPath(raw) => Some(serde_json::json!({ "path": raw })),
             StoreError::LockedTimeout { path } => {
@@ -49,11 +50,7 @@ impl From<StoreError> for CmdError {
             })),
             _ => None,
         };
-        Self::new(
-            format!("store.{}", err.code()),
-            store_message(err.code()),
-            detail,
-        )
+        Self::new(format!("store.{code}"), store_message(code), detail)
     }
 }
 

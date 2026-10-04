@@ -10,6 +10,10 @@ use ipc::CmdError;
 /// 本文件在覆盖率口径外（装配代码需要活的 AppHandle，tauri::test 的 mock
 /// 在 Windows 触发 STATUS_ENTRYPOINT_NOT_FOUND）——事件名与载荷形状的
 /// 纯逻辑在 events 模块内有直测，这里只做一行的平台投递。
+///
+/// # Errors
+///
+/// 事件载荷未送达（`app.event-failed`）时返回。
 // TODO(task 017): 首个调用方在 017 落地；在此之前 dead_code 为接口先行的预期状态。
 #[allow(dead_code)]
 pub(crate) fn emit_event<R: Runtime, T: serde::Serialize + ?Sized>(
