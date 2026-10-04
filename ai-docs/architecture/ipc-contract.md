@@ -85,6 +85,6 @@ else showGenericError(err);
 
 已在本文冻结的预算、错误形状、信封、密钥规则和取消分界，下游任务只引用，不另写一套。
 
-- **005**：冻结每个 `llm.*` 的触发条件、`llm_submit` / `llm_cancel` 的其余参数，以及是否启用空输出温度重试。
-- **006**：定义记录追加事件，以及 `engine_get_record_page` 的分页载荷。该命令不是阶段快照。
-- **012**：冻结 `engine.no-scene`、`engine.invalid-phase` 的触发条件，阶段事件的 data，以及 `engine_get_phase` 的快照载荷。单回合拒绝码用本文的 `app.busy`。
+- **005**：[task 005 — LLM 接入与护栏](../task/005-llm-design.md)：冻结每个 `llm.*` 的触发条件、`llm_submit` / `llm_cancel` 的其余参数，以及是否启用空输出温度重试。
+- **006**：[task 006 — 对局记录与上下文](../task/006-record-design.md)：定义记录追加事件，以及 `engine_get_record_page` 的分页载荷。该命令不是阶段快照。
+- **012**：[task 012 — 回合与阶段状态机](../task/012-turn-state-machine-design.md)：冻结 `engine.no-scene`、`engine.invalid-phase` 的触发条件，阶段事件的 data，以及 `engine_get_phase` 的快照载荷。单回合拒绝码用本文的 `app.busy`。

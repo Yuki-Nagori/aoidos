@@ -11,7 +11,7 @@ LLM 接入是 Mythos 叙事驱动的地基，但直接开写实现会把「供�
 
 ## 必读
 
-[Herta 调查](../research/001-herta.md) · [职责边界](../architecture/ts-rust-boundary.md) · [通信契约](../architecture/ipc-contract.md) · [Rust 约定](../standards/rust.md)。
+[Herta 调查](../research/001-herta.md) · [职责边界](../architecture/ts-rust-boundary.md) · [通信契约](../architecture/ipc-contract.md) · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [Rust 约定](../standards/rust.md)。
 
 ## 产出物
 

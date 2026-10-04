@@ -11,7 +11,7 @@
 
 ## 必读
 
-[职责边界](../architecture/ts-rust-boundary.md) · [通信契约](../architecture/ipc-contract.md) · [006 对局记录设计](006-record-design.md)（块语法与追加时机）· [005 LLM 设计](005-llm-design.md)（调用点与护栏）· [UI 规范](../standards/ui.md)（机器行呈现）。
+[职责边界](../architecture/ts-rust-boundary.md) · [通信契约](../architecture/ipc-contract.md) · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [006 对局记录设计](006-record-design.md)（块语法与追加时机）· [005 LLM 设计](005-llm-design.md)（调用点与护栏）· [UI 规范](../standards/ui.md)（机器行呈现）。
 
 ## 产出物
 
@@ -21,7 +21,7 @@
 2. 状态机形态：显式状态枚举 + 转移表（可直译为 Rust enum + match）；单回合不变量（同一时刻至多一个在飞回合）。对外拒绝第二个在飞回合只用命令层 `app.busy`，不另设公开错误码。
 3. 掷骰与判定流：何时需要骰（触发条件）、修正来源（角色能力 / 处境 / 积累优劣势）、成败分支的生成方式（失败不是终点 → 分支节拍）、骰结果的记录块与呈现。
 4. 中断与恢复：玩家插话（steer）、重生成 / 回退（rewind）语义、取消正在进行的生成、崩溃后回合续接。
-5. 对接面：005 的调用时机、006 的记录追加点、007 的记忆钩子（回合结束采样）。冻结 `engine.no-scene` 与 `engine.invalid-phase` 的触发条件、`engine:scene:advanced` / `engine:phase:changed` 的 data，以及 `engine_get_phase` 的快照载荷（须能重绘，不依赖重放）。
+5. 对接面：[005](005-llm-design.md) 的调用时机、[006](006-record-design.md) 的记录追加点、[007](007-memory-design.md) 的记忆钩子（回合结束采样）。冻结 `engine.no-scene` 与 `engine.invalid-phase` 的触发条件、`engine:scene:advanced` / `engine:phase:changed` 的 data，以及 `engine_get_phase` 的快照载荷（须能重绘，不依赖重放）。
 6. `engine:scene:advanced` / `engine:phase:changed` 的发送端实现：data 由本设计冻结，发送经 [016 事件基建](016-ipc-events-infra.md)（每流 seq + `emit_to` 适配），归属本任务定稿后衍生的实现 task。
 
 ## 范围与非目标
