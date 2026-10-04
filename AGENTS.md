@@ -15,6 +15,7 @@ Mythos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScri
 | Rust 约定（命令层 / 工作区 / profile）    | [ai-docs/standards/rust.md](ai-docs/standards/rust.md)                                         |
 | 测试、覆盖率门槛、knip、基准              | [ai-docs/standards/testing.md](ai-docs/standards/testing.md)                                   |
 | 文档怎么写、图表规则                      | [ai-docs/standards/documentation.md](ai-docs/standards/documentation.md)                       |
+| 注释怎么写（Rust / TS·Vue / TODO）        | [ai-docs/standards/comments.md](ai-docs/standards/comments.md)                                 |
 | 提交一致性与消息格式                      | [ai-docs/standards/commits.md](ai-docs/standards/commits.md)                                   |
 | 当前任务与状态                            | [ai-docs/task-index.md](ai-docs/task-index.md)                                                 |
 | 未排期的产品构想                          | [ai-docs/ideas/](ai-docs/ideas/)                                                               |

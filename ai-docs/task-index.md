@@ -68,3 +68,4 @@ ai-docs/
 | 001  | [模板基线](task/001-template-baseline.md)        | —    | done |
 | 002  | [Mythos 产品化改名](task/002-rebrand-mythos.md)  | 001  | done |
 | 003  | [UI 风格规范落档](task/003-ui-style-standard.md) | 002  | done |
+| 014  | [注释规范落档](task/014-comments-standard.md)    | 002  | done |

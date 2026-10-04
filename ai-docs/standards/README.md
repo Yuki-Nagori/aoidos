@@ -12,6 +12,7 @@
 | Rust / Tauri 约定  | [Rust](rust.md)              | 改动 `src-tauri/`           |
 | 测试、覆盖率与基准 | [测试规范](testing.md)       | 新增 / 移动测试，动门禁口径 |
 | 文档与图表         | [文档规范](documentation.md) | 新建 / 修改文档             |
+| 注释与接口文档     | [注释规范](comments.md)      | 写注释、评审                |
 
 ## 文档职责
 
