@@ -8,7 +8,13 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "ai-docs/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "ai-docs/**"
+      - "**/*.md"
 
 concurrency:
   group: ci-${{ github.ref }}
