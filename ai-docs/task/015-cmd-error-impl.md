@@ -1,6 +1,6 @@
 # 015 — 实现：CmdError 与命令错误形状对齐通信契约
 
-- 状态：in-progress
+- 状态：done
 - 依赖：010、013
 - 优先级：P0
 - 创建 / 更新：2026-10-05 / 2026-10-05
@@ -57,7 +57,8 @@ clippy 可能对「恒为 Ok 的 Result」提示 `unnecessary_wraps`——契约
 - 2026-10-05：创建任务。事件信封 / `seq` 明确不在本任务——没有真实发送方不预建，随 005 实现任务落地（契约已冻结形状）。
 - 2026-10-05：实现完成。`unnecessary_wraps` 未触发（greet 的 `Ok` 恒定返回在 `-D warnings` 下干净）。`From<StoreError>` 的九码断言用「按码构造 → 前缀 / 文案」表驱动直测；`detail.path` 仅 `InvalidPath` / `LockedTimeout` 携带。
 - 2026-10-05：IPC 整体 review 补齐 detail 覆盖——`AlreadyRunning` 带 `lockPath`、`Corrupt` 带 `reason`（区分「库新于二进制 → 升级应用」与「文件损坏 → 恢复备份」）；测试同步（detail 缺省断言改用 Io 变体）。
+- 2026-10-05：巡检同步（issue #6）：状态标 done；契约「IPC 映射尚未落地」回写为已落地（映射在 `src-tauri/src/ipc.rs`）；完成摘要测试数修正为 71（完成时 62）。
 
 ## 完成摘要
 
-命令层错误基座落地：`src-tauri/src/ipc.rs` 提供 `CmdError`（`{ code, message, detail? }`，camelCase，detail 缺省省略）与 `From<StoreError>`（`store.` 前缀 + 九码中文映射 + 路径 detail）；`greet` 对齐契约形状。60 个 Rust 测试全过，行覆盖 100%，verify 十项 exit 0。限制（完成时）：`detail` 当初只携带路径类信息，后经 review 扩展（见工作记录）；事件信封 / `seq` 随 005 实现任务。
+命令层错误基座落地：`src-tauri/src/ipc.rs` 提供 `CmdError`（`{ code, message, detail? }`，camelCase，detail 缺省省略）与 `From<StoreError>`（`store.` 前缀 + 九码中文映射 + 路径 detail）；`greet` 对齐契约形状。71 个 Rust 测试全过（完成时 62，后续 016 / 017 与 review 增至），行覆盖 100%，verify 十项 exit 0。`detail` 覆盖经 review 扩展（路径 / 锁文件 / 迁移原因，见工作记录）；事件信封与 `seq` 的纯逻辑基座已由 016 提供，发送适配随 005 实现任务。

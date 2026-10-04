@@ -45,7 +45,7 @@
 ## 错误码目录
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
-- 命名空间 `<域>.<错误>`：`store.*` 的裸码已由 `StoreError::code()` 实现，IPC 映射尚未落地。命令层写成 `format!("store.{}", err.code())`，不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`llm.*` 与 `engine.*` 的码名在本文预留，触发条件分别由 005、012 冻结。`app.*` 属于命令层。
+- 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`llm.*` 与 `engine.*` 的码名在本文预留（映射随 005、012 的实现任务落地），触发条件分别由 005、012 冻结。`app.*` 属于命令层。
 - 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（事件载荷未送达；监听者以快照对齐，不重试发送）、`app.not-ready`（存储尚未初始化——早于 setup 的调用；桌面正常流程不会出现）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
