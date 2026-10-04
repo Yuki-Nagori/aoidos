@@ -50,17 +50,21 @@
 | 日期       | 命令                                     | 预期        | 实际结果                                                                     |
 | ---------- | ---------------------------------------- | ----------- | ---------------------------------------------------------------------------- |
 | 2026-10-05 | `cargo test --workspace`                 | 全过        | Windows 55 passed（mythos-store 54 + src-tauri 1）；Unix 少 1 个占用文件测试 |
-| 2026-10-05 | `bun run coverage:rust`                  | 行覆盖 100% | 1222/1222 行；mythos-store 五模块全 100%                                     |
+| 2026-10-05 | `bun run coverage:rust`                  | 行覆盖 100% | Windows 1222/1222 行；mythos-store 五模块全 100%                             |
 | 2026-10-05 | `cargo fmt --all` / clippy `-D warnings` | exit 0      | 均通过                                                                       |
-| 2026-10-05 | `bun run verify`                         | 十项 exit 0 | exit 0                                                                       |
+| 2026-10-05 | `bun run verify`                         | 十项 exit 0 | Windows exit 0                                                               |
+| 2026-10-05 | `bun run coverage:rust`（issue #1 修复） | 行覆盖 100% | macOS 1237/1237 行，mythos-store 55 + src-tauri 1 个测试通过                 |
 
 ## 风险与回退
+
+issue #1 修复后，macOS 本地 `bun run verify` 十项 exit 0（2026-10-05）。
 
 rusqlite bundled 需要本机 C 编译器（MSVC 已具备，tauri 构建依赖同款）。目录目标在三端都立刻报 `io`；占用重试只吃三端通用的 busy，外加 Windows 的 5/32。Unix 上打不开「文件被占用所以 rename 失败」的集成场景，该测试 `cfg(windows)`。回退：crate 独立，摘除 members 即还原。
 
 ## 决策与工作记录
 
 - 2026-10-05：创建任务（ready）。设计标定初值：WAL、备份 3 份、重试 5 次 25ms 指数退避、OS 级独占锁。
+- 2026-10-05：[issue #1](https://github.com/Yuki-Nagori/mythos/issues/1) 复核：原验收只在 Windows 成立；Ubuntu / macOS CI 均为 1197/1199 行（99.83%）。macOS 本地复现。`finish_rename_err` 已有三端映射测试，缺的是完整重试失败路径；泛型 `replace_with_retry` 的不同闭包实例还会各自缺少成功 / 失败路径，汇总 HTML 行号不能完整反映实例缺口。改用 `&mut dyn FnMut` 共享同一实现，补充 busy 耗尽与非 busy 立即失败测试，断言调用次数、错误与目标路径、原文件保留和 tmp 清理。门槛与忽略口径保持原值。修复后的三平台 CI 验证证据同步在 issue 评论中。
 - 2026-10-05：实现完成。实测沉淀三条：(1) 拼接路径的混合分隔符（`a/b\c`）会让 SQLite 报 PATH_NOT_FOUND——归一化收敛到 `paths::normalize`（路径层职责，不在 db 消费点修补）；(2) 错误映射一行体用具名函数（`err_open` 等）而非闭包，闭包错误分支不可触达会拖垮 llvm-cov 行覆盖，约定沉淀至[注释规范](../standards/comments.md)；(3) 三端错误码按语义对齐，不按原始 errno 数字对齐。目录目标一律 `io` 且不重试。`WouldBlock` / `ResourceBusy` / `ExecutableFileBusy` 三端都是 `locked`。Windows 另把 rename 的 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）当占用；这两个数字在 Unix 上是 EIO / EPIPE，保持 `io`。备份走 rusqlite `backup` feature 的在线备份 API（热 WAL 上 `fs::copy` 主文件会丢掉未 checkpoint 的提交），保留份数按文件名里的版本号和时间戳整数排序，忽略非 `storage-v*` 文件。实例锁只解锁不删文件。`script_id` 上限 64，FNV-1a 取低 32 位，Windows 保留名追加 `-0`，与 `join_under_root` 之后的目录名相同。比二进制新的库在改成 WAL 之前拒绝。`busy_timeout` 5 秒。父目录缺失时 Windows rename 的 ACCESS_DENIED 与 Unix 的 ENOENT 都报 `not-found`。`FlushFileBuffers` 需要写句柄，同步用写打开。多开锁从 fs2 换成 fs4 1.1：`TryLockError::WouldBlock` 直接表示占用，不再比对原始错误码。Rust 1.89 起 `File::try_lock` 是固有方法，调用必须写 `FileExt::try_lock`。
 
 ## 完成摘要

@@ -120,13 +120,14 @@ fn write_tmp_inner(tmp: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn rename_with_retry(tmp: &Path, target: &Path) -> Result<()> {
-    replace_with_retry(tmp, target, || fs::rename(tmp, target))
+    replace_with_retry(tmp, target, &mut || fs::rename(tmp, target))
 }
 
+// 共享一个重试实现，避免各闭包的泛型实例各自缺少成功 / 失败路径，造成覆盖率汇总缺口（issue #1）。
 fn replace_with_retry(
     tmp: &Path,
     target: &Path,
-    mut rename: impl FnMut() -> io::Result<()>,
+    rename: &mut dyn FnMut() -> io::Result<()>,
 ) -> Result<()> {
     let mut attempt = 0;
     loop {
@@ -409,7 +410,7 @@ mod tests {
         let tmp = dir.join("data.txt.tmp");
         fs::write(&tmp, b"new").unwrap();
         let mut calls = 0;
-        replace_with_retry(&tmp, &target, || {
+        replace_with_retry(&tmp, &target, &mut || {
             calls += 1;
             if calls == 1 {
                 Err(io::Error::new(io::ErrorKind::ResourceBusy, "busy"))
@@ -420,6 +421,47 @@ mod tests {
         .unwrap();
         assert_eq!(calls, 2);
         assert_eq!(fs::read(&target).unwrap(), b"new");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replace_exhausts_busy_retries_and_preserves_target() {
+        let dir = tdir("atomic-retry-exhausted");
+        let target = dir.join("data.txt");
+        let tmp = dir.join("data.txt.tmp");
+        fs::write(&target, b"old").unwrap();
+        fs::write(&tmp, b"new").unwrap();
+        // Unix 打开的文件仍可被 rename；注入 busy 让三端都验证完整的重试耗尽路径（issue #1）。
+        let mut calls = 0;
+        let err = replace_with_retry(&tmp, &target, &mut || {
+            calls += 1;
+            Err(io::Error::from(io::ErrorKind::ResourceBusy))
+        })
+        .unwrap_err();
+        assert_eq!(calls, RETRIES + 1, "initial attempt plus five retries");
+        assert!(matches!(err, StoreError::LockedTimeout { path } if path == target));
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(!tmp.exists(), "failed replacement must clean up tmp");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replace_stops_on_non_busy_error_and_preserves_target() {
+        let dir = tdir("atomic-retry-io");
+        let target = dir.join("data.txt");
+        let tmp = dir.join("data.txt.tmp");
+        fs::write(&target, b"old").unwrap();
+        fs::write(&tmp, b"new").unwrap();
+        let mut calls = 0;
+        let err = replace_with_retry(&tmp, &target, &mut || {
+            calls += 1;
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1, "non-busy errors must not retry");
+        assert_eq!(err.code(), "not-found");
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(!tmp.exists(), "failed replacement must clean up tmp");
         fs::remove_dir_all(&dir).unwrap();
     }
 
