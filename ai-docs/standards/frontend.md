@@ -4,7 +4,7 @@
 
 ## 逻辑归属
 
-组件只做编排与渲染；可复用、可测试的逻辑放 `src-web/utils/` 并配单测，`<script setup>` 顶层不堆过程式逻辑，超过十行就抽函数。全局状态与路由在需求真实出现前不引入（当前模板无 pinia / vueuse / vue-router）。
+组件只做编排与渲染；可复用、可测试的逻辑放 `src-web/utils/` 并配单测，`<script setup>` 顶层不堆过程式逻辑，超过十行就抽函数。全局状态与路由在需求真实出现前不引入（当前无 pinia / vueuse / vue-router）。
 
 ## SFC 与类型
 

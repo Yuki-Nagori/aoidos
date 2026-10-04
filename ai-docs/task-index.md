@@ -8,10 +8,13 @@
 ai-docs/
 ├── architecture/          # 架构总览与主题文档
 ├── standards/             # 技术规范与依据
+├── ideas/                 # 构想记录：未排期，只 mark 不承诺
+├── research/              # 调查报告：读开源仓库攒灵感
 ├── task-index.md          # 本文件：任务队列与状态
 └── task/
     ├── _template.md       # 创建任务时复制
-    └── 001-template-baseline.md
+    ├── 001-template-baseline.md
+    └── …                  # 后续任务按编号递增，目录树不逐一列举
 ```
 
 1. 复制[模板](task/_template.md)为 `task/NNN-kebab-case.md`，编号取当前最大编号加一，不复用；填写范围与可判断的验收条件。
@@ -34,6 +37,7 @@ ai-docs/
 
 ## 任务队列
 
-| 编号 | 任务                                      | 依赖 | 状态 |
-| ---- | ----------------------------------------- | ---- | ---- |
-| 001  | [模板基线](task/001-template-baseline.md) | —    | done |
+| 编号 | 任务                                            | 依赖 | 状态 |
+| ---- | ----------------------------------------------- | ---- | ---- |
+| 001  | [模板基线](task/001-template-baseline.md)       | —    | done |
+| 002  | [Mythos 产品化改名](task/002-rebrand-mythos.md) | 001  | done |

@@ -18,8 +18,8 @@ async function greet(): Promise<void> {
 
 <template>
   <main class="shell">
-    <h1>bun-vue-tauri-template</h1>
-    <p class="subtitle">Bun · Vue 3 · TypeScript · Tauri 2</p>
+    <h1>Mythos</h1>
+    <p class="subtitle">AI 驱动的剧情跑团</p>
     <form class="row" @submit.prevent="greet">
       <input v-model="name" type="text" placeholder="输入名字试试 IPC…" />
       <button type="submit">Greet</button>

@@ -23,7 +23,7 @@ TypeScript 停在 5.x：TypeScript 7 尚无 typescript-eslint 支持，等工具
 
 ## IPC 通道
 
-前端 `@tauri-apps/api/core` 的 `invoke(name, args)` ↔ Rust `#[tauri::command]`，命令注册在 `src-tauri/src/lib.rs` 的 `generate_handler![]`；插件与系统能力经 `src-tauri/capabilities/default.json` 声明权限，模板默认只有 `core:default`。可运行示例：`commands::greet` ↔ `src-web/App.vue`。
+前端 `@tauri-apps/api/core` 的 `invoke(name, args)` ↔ Rust `#[tauri::command]`，命令注册在 `src-tauri/src/lib.rs` 的 `generate_handler![]`；插件与系统能力经 `src-tauri/capabilities/default.json` 声明权限，当前只有 `core:default`。可运行示例：`commands::greet` ↔ `src-web/App.vue`。
 
 ## CI
 

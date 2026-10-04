@@ -1,11 +1,11 @@
 [package]
-name = "bun-vue-tauri-template"
-description = "bun + Vue + TypeScript + Tauri 桌面应用模板"
+name = "mythos"
+description = "AI 驱动的剧情跑团桌面应用"
 version.workspace = true
 edition.workspace = true
 
 [lib]
-name = "bun_vue_tauri_template_lib"
+name = "mythos_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

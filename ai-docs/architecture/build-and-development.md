@@ -40,11 +40,10 @@
 $ bun run tauri:build
 ```
 
-内部顺序：`bun run build` → cargo release 编译（LTO / strip）→ bundle。产物在 `target/release/bundle/`：Windows 为 `msi/*.msi` 与 `nsis/*-setup.exe`；macOS、Linux 走同一命令出 dmg / deb / rpm / AppImage（模板的验证口径是 Windows，首次跨平台发布请在目标平台实测）。升级版本改两处定义——`package.json` 与根 `Cargo.toml` 的 `[workspace.package] version`——再由 `bun install` / `cargo check` 刷新锁文件一并提交。
+内部顺序：`bun run build` → cargo release 编译（LTO / strip）→ bundle。产物在 `target/release/bundle/`：Windows 为 `msi/*.msi` 与 `nsis/*-setup.exe`；macOS、Linux 走同一命令出 dmg / deb / rpm / AppImage（本仓库的验证口径是 Windows，首次跨平台发布请在目标平台实测）。升级版本改两处定义——`package.json` 与根 `Cargo.toml` 的 `[workspace.package] version`——再由 `bun install` / `cargo check` 刷新锁文件一并提交。
 
-## 启用模板（clone 后第一步）
+## 图标与示例命令
 
-1. 全局改名：`package.json` 的 `name`；`src-tauri/Cargo.toml` 的 package 与 `[lib] name`（下划线形态）及 `main.rs` 的 lib 引用；`tauri.conf.json` 的 `productName`、`identifier`（反向 DNS）、窗口 `title`；`index.html` 与 `App.vue` 的标题；README / AGENTS。改完跑 `bun run verify && bun run tauri:build` 确认链路完整。
-2. 换图标：改 `public/icon.svg` 后执行 `bun run tauri icon public/icon.svg`，全套生成到 `src-tauri/icons/`（含 android / ios 子目录，纯桌面项目可删）。
-3. 写第一个真实命令：`commands.rs` 定义 → `generate_handler![]` 注册 → 需要插件能力时在 `capabilities/default.json` 加权限 → TS 声明同型并 `invoke` → 照 `tests/web/App.test.ts` mock 测试。示例 `greet` 被替换后删除。
-4. 工作方式登记：下一个非平凡改动从[任务索引](../task-index.md)建 task 开始。
+1. 换图标：替换 `src-tauri/icons/icon.png`（1024×1024 方形）后执行 `bun run tauri icon src-tauri/icons/icon.png`，全套生成到 `src-tauri/icons/`（含 android / ios 子目录，纯桌面项目可删）；浏览器 favicon 用 `public/icon.png`，随手同步一份。
+2. 替换 greet 示例为第一个真实命令：`commands.rs` 定义 → `generate_handler![]` 注册 → 需要插件能力时在 `capabilities/default.json` 加权限 → TS 声明同型并 `invoke` → 照 `tests/web/App.test.ts` mock 测试。示例 `greet` 被替换后删除。
+3. 工作方式登记：非平凡改动从[任务索引](../task-index.md)建 task 开始。

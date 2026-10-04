@@ -22,7 +22,7 @@
 ├── .github/workflows/ci.yml   # 三平台 CI
 ├── .husky/pre-commit          # 提交前查双端格式（全量门禁在 CI）
 ├── ai-docs/                   # 本文档体系
-├── public/                    # Vite 静态资产（icon.svg 作 favicon 与图标源）
+├── public/                    # Vite 静态资产（icon.png 作 favicon）
 ├── eslint.config.js / knip.json / vite.config.ts / vitest.config.ts
 ├── rust-toolchain.toml        # Rust 工具链锁定
 └── Cargo.toml                 # 虚拟工作区根（members 与 profile 调优）
@@ -36,4 +36,4 @@
 
 ## 命名
 
-仓库 / 包名 `bun-vue-tauri-template`，Rust package 同名、lib 名为下划线形态的 `bun_vue_tauri_template_lib`。启用模板时的统一改名清单见[构建与开发](build-and-development.md)。
+仓库 / 包名 `mythos`，Rust package 同名、lib 名为下划线形态的 `mythos_lib`；产品显示名 `Mythos`（`tauri.conf.json` 的 productName 与窗口标题）。
