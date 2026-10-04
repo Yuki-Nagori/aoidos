@@ -16,6 +16,8 @@ fn stream_seqs() -> &'static Mutex<HashMap<String, u64>> {
 }
 
 /// 取「事件名 + 流标识」的下一个 seq：同流单调递增，异流互不占号。
+///
+/// 条目随进程存活、不清退：每流一个 `u64`，量级为 O(流数)（桌面单机可忽略）。
 pub fn next_seq(event: &str, stream_id: &str) -> u64 {
     let key = format!("{event}:{stream_id}");
     let mut streams = stream_seqs().lock().expect("stream seq mutex poisoned");

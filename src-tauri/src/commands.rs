@@ -5,8 +5,10 @@ use mythos_store::db;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// 示例命令：前端 `invoke("greet", { name })` 调用。首个真实命令落地时替换。
-/// 契约要求所有命令统一 `Result<T, CmdError>` 形状；本命令当前无失败路径。
+/// 示例命令：前端 `invoke("greet", { name })` 调用。契约要求所有命令统一
+/// `Result<T, CmdError>` 形状；本命令当前无失败路径。
+/// store 域命令（`store_list_backups` / `store_get_migration`）已就位，
+/// 本占位在 008 界面落地、前端改用真实命令时退役。
 #[tauri::command]
 pub fn greet(name: &str) -> Result<String, CmdError> {
     Ok(format!("Hello, {name}! You've been greeted from Rust!"))
