@@ -50,6 +50,8 @@
 
 ## 验证计划与结果
 
+2026-10-05 issue #3 与 CI 配置优化：macOS `bun run verify` 十项 exit 0。已核对三平台矩阵、Rust 工具链、CI 调用的 bun scripts 与本地门槛；testing.md 只引用脚本入口，不再维护过期参数副本。
+
 | 日期       | 命令（Windows 11）                                                   | 结果                                        |
 | ---------- | -------------------------------------------------------------------- | ------------------------------------------- |
 | 2026-10-04 | `bun run verify`（Rust 1.98.1）                                      | 十项全过；前端覆盖率 100%                   |
@@ -63,6 +65,8 @@
 1.99.0 的新 clippy lint 可能以 `-D warnings` 拦下代码。回退：把 `rust-toolchain.toml` 与 ci.yml 的 toolchain 改回 1.98.1（CI 同步两处）。
 
 ## 决策与工作记录
+
+- 2026-10-05：[issue #3](https://github.com/Yuki-Nagori/mythos/issues/3) 修复：testing.md 删除过期的 `--summary-only` 命令副本，仅引用 `bun run coverage:rust` 与 package.json 唯一参数来源，保留门槛和统计范围说明。CI 优化：格式 / 前端 / knip 快速门禁前置，Linux 系统依赖安装和 Rust 编译后置；失败也保存 Rust 依赖缓存，token 仅 `contents: read`，每 job 30 分钟超时。三平台和所有门禁保持原值。
 
 - 2026-10-04：创建任务。自 kairos 裁剪骨架；图标换通用立方体；依赖最小化（无状态库 / UI 库 / 额外插件），根 `Cargo.toml` 改虚拟工作区。
 - 2026-10-05：依赖升到当前最新（eslint 10、vite 8、knip 6 等；TypeScript 停 5.9，TS 7 无 typescript-eslint 支持）。Rust 工具链升 1.99.0。覆盖率只统计逻辑文件：`greet` 移入 `commands.rs`，装配 `lib.rs` 不计。husky 只查格式，lint / test 归 CI（步骤拆分，不聚合）。
