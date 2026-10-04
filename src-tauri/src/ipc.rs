@@ -59,7 +59,8 @@ impl From<StoreError> for CmdError {
     }
 }
 
-/// `StoreError::code()` 的九个返回值 → 可展示中文。新增码时在此补一行。
+/// `StoreError::code()` 的九个返回值 → 可展示中文。新增码先在
+/// ai-docs/architecture/ipc-contract.md 错误码目录登记，再在此补一行。
 fn store_message(code: &str) -> String {
     let text = match code {
         "invalid-path" => "路径不合法",

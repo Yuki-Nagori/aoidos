@@ -121,6 +121,11 @@ mod tests {
         let snapshot = store_get_migration().unwrap();
         assert_eq!(snapshot["from"], 1);
 
+        // 重复注入忽略：仍读原库（OnceLock 单例语义）。
+        init_db_path(dir.join("other.sqlite"));
+        let snapshot = store_get_migration().unwrap();
+        assert_eq!(snapshot["from"], 1);
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
