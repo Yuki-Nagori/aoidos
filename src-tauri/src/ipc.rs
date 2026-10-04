@@ -48,6 +48,11 @@ impl From<StoreError> for CmdError {
                 "version": version,
                 "reason": source.to_string(),
             })),
+            StoreError::AlreadyRunning { lock_path } => {
+                Some(serde_json::json!({ "lockPath": lock_path.display().to_string() }))
+            }
+            // 损坏原因区分处置方式：库新于二进制 → 升级应用；文件损坏 → 恢复备份。
+            StoreError::Corrupt(reason) => Some(serde_json::json!({ "reason": reason })),
             _ => None,
         };
         Self::new(format!("store.{code}"), store_message(code), detail)
@@ -132,14 +137,29 @@ mod tests {
         assert_eq!(value["code"], "store.locked");
         assert_eq!(value["detail"]["path"], "t");
 
-        let plain: CmdError = StoreError::Corrupt("c".into()).into();
-        assert_eq!(plain.code(), "store.corrupt");
+        // Io 类错误不携带 detail；detail 为 None 时字段必须省略。
+        let plain: CmdError = StoreError::Io {
+            code: "io",
+            source: io::Error::other("storage io"),
+        }
+        .into();
+        assert_eq!(plain.code(), "store.io");
         let value = serde_json::to_value(&plain).unwrap();
-        assert_eq!(value["code"], "store.corrupt");
+        assert_eq!(value["code"], "store.io");
         assert!(
             value.get("detail").is_none(),
             "detail 为 None 时字段必须省略"
         );
+    }
+
+    #[test]
+    fn detail_carries_variant_context() {
+        // AlreadyRunning 带锁文件路径；Corrupt 带损坏原因（区分「库新于二进制 → 升级应用」与「文件损坏 → 恢复备份」）。
+        let running: CmdError = StoreError::AlreadyRunning { lock_path: "l".into() }.into();
+        assert_eq!(running.detail.as_ref().unwrap()["lockPath"], "l");
+
+        let corrupt: CmdError = StoreError::Corrupt("库新于二进制".into()).into();
+        assert_eq!(corrupt.detail.as_ref().unwrap()["reason"], "库新于二进制");
     }
 
     #[test]
