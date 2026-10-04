@@ -26,7 +26,8 @@ pub fn next_seq(event: &str, stream_id: &str) -> u64 {
     *next
 }
 
-/// 契约信封 `{ seq, data }`。`data` 需要能重绘状态（契约：快照对齐，不重放）。
+/// 契约信封 `{ seq, data }`。`data` 的语义随事件而定——chunk 类为增量，
+/// 快照类须能重绘状态；监听者以快照对齐、不重放（契约：事件命名与载荷）。
 pub fn envelope<T: Serialize + ?Sized>(
     event: &str,
     stream_id: &str,
