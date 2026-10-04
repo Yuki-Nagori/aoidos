@@ -69,6 +69,19 @@ mod tests {
     }
 
     #[test]
+    fn empty_stream_id_is_its_own_stream() {
+        // 契约：stream_id 为空表示该事件无流概念——同一事件名下共享一个计数。
+        let event = "llm:turn:chunk";
+        assert_eq!(next_seq(event, ""), 1);
+        assert_eq!(next_seq(event, ""), 2);
+        assert_eq!(
+            next_seq(event, &unique_stream("other")),
+            1,
+            "非空流与无流概念互不占号"
+        );
+    }
+
+    #[test]
     fn envelope_carries_seq_and_data() {
         let stream = unique_stream("envelope");
         let value = envelope("llm:turn:chunk", &stream, &serde_json::json!({ "k": 1 }));
