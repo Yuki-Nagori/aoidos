@@ -22,6 +22,11 @@ impl From<StoreError> for CmdError {
             StoreError::LockedTimeout { path } => {
                 Some(serde_json::json!({ "path": path.display().to_string() }))
             }
+            // 契约看门狗表：迁移失败「原因放 detail」。
+            StoreError::Migration { version, source } => Some(serde_json::json!({
+                "version": version,
+                "reason": source.to_string(),
+            })),
             _ => None,
         };
         Self {
@@ -117,5 +122,14 @@ mod tests {
             value.get("detail").is_none(),
             "detail 为 None 时字段必须省略"
         );
+    }
+
+    #[test]
+    fn migration_reason_lands_in_detail() {
+        // 契约看门狗表：迁移失败「原因放 detail」。
+        let cmd: CmdError = err_for("migration").into();
+        let detail = cmd.detail.unwrap();
+        assert_eq!(detail["version"], 1);
+        assert!(detail["reason"].as_str().is_some());
     }
 }

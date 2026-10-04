@@ -23,6 +23,7 @@ LLM 接入是 Mythos 叙事驱动的地基，但直接开写实现会把「供�
 4. 代理配置。密钥的存放、文件权限和 hint 长度已在通信契约冻结，本文不另写。
 5. 每个 `llm.*` 的触发条件，以及 `llm_submit` / `llm_cancel` 的其余参数。码名、错误形状、取消成功（`llm:turn:done` / `cancelled`）与 `llm.aborted` 的分界以通信契约为准。
 6. `llm:turn:chunk / done / failed` 的发送端实现：字段契约已冻结，发送经 [016 事件基建](016-ipc-events-infra.md)（每流 seq + `emit_to` 适配），归属本任务定稿后衍生的实现 task，不在本设计文档展开。
+7. `llm_get_turn` 快照命令（契约快照表的对接位）：返回该 turn 已累积的文本与 outcome（completed / cancelled / failed），供监听者对齐、不依赖事件重放。
 
 ## 范围与非目标
 
