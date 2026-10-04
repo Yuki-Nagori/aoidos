@@ -46,7 +46,7 @@
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
 - 命名空间 `<域>.<错误>`：`store.*` 的裸码已由 `StoreError::code()` 实现，IPC 映射尚未落地。命令层写成 `format!("store.{}", err.code())`，不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`llm.*` 与 `engine.*` 的码名在本文预留，触发条件分别由 005、012 冻结。`app.*` 属于命令层。
-- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）。存储路径或文件缺失只用 `store.not-found`。
+- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（事件载荷未送达；监听者以快照对齐，不重试发送）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - llm 预留（005 冻结每个码的触发条件）：`llm.missing-key` `llm.auth` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`。用户 `cancel_` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。

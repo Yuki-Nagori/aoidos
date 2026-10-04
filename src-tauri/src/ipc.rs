@@ -15,6 +15,26 @@ pub struct CmdError {
     detail: Option<serde_json::Value>,
 }
 
+impl CmdError {
+    /// 判别码（含域前缀），与序列化后的 `code` 字段一致。
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// 命令层自建错误（`app.*` 命名空间）的统一入口；域错误走各自的 `From`。
+    pub(crate) fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        detail: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            detail,
+        }
+    }
+}
+
 impl From<StoreError> for CmdError {
     fn from(err: StoreError) -> Self {
         let detail = match &err {
@@ -29,11 +49,11 @@ impl From<StoreError> for CmdError {
             })),
             _ => None,
         };
-        Self {
-            code: format!("store.{}", err.code()),
-            message: store_message(err.code()),
+        Self::new(
+            format!("store.{}", err.code()),
+            store_message(err.code()),
             detail,
-        }
+        )
     }
 }
 
@@ -116,6 +136,7 @@ mod tests {
         assert_eq!(value["detail"]["path"], "t");
 
         let plain: CmdError = StoreError::Corrupt("c".into()).into();
+        assert_eq!(plain.code(), "store.corrupt");
         let value = serde_json::to_value(&plain).unwrap();
         assert_eq!(value["code"], "store.corrupt");
         assert!(
