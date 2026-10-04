@@ -155,7 +155,10 @@ mod tests {
     #[test]
     fn detail_carries_variant_context() {
         // AlreadyRunning 带锁文件路径；Corrupt 带损坏原因（区分「库新于二进制 → 升级应用」与「文件损坏 → 恢复备份」）。
-        let running: CmdError = StoreError::AlreadyRunning { lock_path: "l".into() }.into();
+        let running: CmdError = StoreError::AlreadyRunning {
+            lock_path: "l".into(),
+        }
+        .into();
         assert_eq!(running.detail.as_ref().unwrap()["lockPath"], "l");
 
         let corrupt: CmdError = StoreError::Corrupt("库新于二进制".into()).into();

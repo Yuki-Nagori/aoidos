@@ -20,6 +20,7 @@ pub(crate) fn init_db_path(db: PathBuf) {
     let _ = DB_PATH.set(db);
 }
 
+/// 业务库路径；setup 未注入（理论上不可达）时报 `app.not-ready`。
 fn db_path() -> Result<&'static PathBuf, CmdError> {
     DB_PATH.get().ok_or_else(not_ready)
 }

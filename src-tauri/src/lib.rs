@@ -14,7 +14,7 @@ use ipc::CmdError;
 /// # Errors
 ///
 /// 事件载荷未送达（`app.event-failed`）时返回。
-// TODO(task 017): 首个调用方在 017 落地；在此之前 dead_code 为接口先行的预期状态。
+// TODO(task 005): 首个调用方（llm:turn:* 发送端）随 005 的实现 task 落地（017 范围修订后不再包含事件适配）；在此之前 dead_code 为接口先行的预期状态。
 #[allow(dead_code)]
 pub(crate) fn emit_event<R: Runtime, T: serde::Serialize + ?Sized>(
     app: &AppHandle<R>,
