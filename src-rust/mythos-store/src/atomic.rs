@@ -1,0 +1,493 @@
+//! 全仓唯一的落盘实现：唯一 tmp + fsync + rename 原子写，与文件自愈工具。
+//! 任何模块禁止直接写目标文件，一律经本模块。
+
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread::sleep;
+use std::time::Duration;
+
+use super::error::{Result, StoreError};
+
+const RETRIES: u32 = 5;
+const BASE_DELAY_MS: u64 = 25;
+// 这两个号码只在 Windows 上是占用（ACCESS_DENIED / SHARING_VIOLATION，task 013）。
+// Unix 上同号是 EIO / EPIPE。Windows 把它们报成可区分的 ErrorKind 之后，可以删掉按号码判断的分支。
+const WINDOWS_ACCESS_DENIED: i32 = 5;
+const WINDOWS_SHARING_VIOLATION: i32 = 32;
+
+static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// 原子写任意字节：同目录唯一 tmp → fsync → rename 覆盖。父目录不存在则自动创建。
+///
+/// 目标被操作系统拒绝替换（Windows 共享冲突，或三端通用的 busy）时按 25ms 指数退避重试，
+/// 耗尽后报 `locked` 并清理 tmp。目标是目录时三端都立刻报 `io`，不进入占用重试。
+///
+/// # Errors
+///
+/// 父目录无法创建、写入失败、重试耗尽，或 rename 遇到非占用错误时返回 [`StoreError`]。
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    // 相对文件名 `file.txt` 的 parent 是空路径，create_dir_all("") 直接成功。
+    let parent = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(parent).map_err(StoreError::from_io)?;
+    let tmp = tmp_sibling(path)?;
+    write_tmp(&tmp, bytes)?;
+    rename_with_retry(&tmp, path)
+}
+
+/// [`write_atomic`] 的 UTF-8 文本便捷封装。
+///
+/// # Errors
+///
+/// 与 [`write_atomic`] 相同。
+pub fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
+    write_atomic(path, text.as_bytes())
+}
+
+/// 清理目录内残留的 `*.tmp`（崩溃 / 失败遗留），返回清理数量。
+///
+/// # Errors
+///
+/// 目录无法读取，或某个临时文件无法删除时返回。
+pub fn clean_temp_files(dir: &Path) -> Result<usize> {
+    let mut removed = 0;
+    for entry in fs::read_dir(dir).map_err(StoreError::from_io)? {
+        let entry = entry.map_err(StoreError::from_io)?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "tmp") {
+            fs::remove_file(&path).map_err(StoreError::from_io)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// JSONL 自愈：文件必须以换行结尾；尾行不完整（缺换行）则截断到上一完整行。
+/// 返回是否发生截断。空文件 / 已完整返回 `false`。
+///
+/// # Errors
+///
+/// 文件无法读取或截断无法落盘时返回。
+pub fn truncate_incomplete_jsonl(path: &Path) -> Result<bool> {
+    let bytes = fs::read(path).map_err(StoreError::from_io)?;
+    if bytes.is_empty() || bytes.last() == Some(&b'\n') {
+        return Ok(false);
+    }
+    let new_len = match bytes.iter().rposition(|&b| b == b'\n') {
+        Some(cut) => cut as u64 + 1,
+        None => 0, // 没有完整行可留，清空，避免留下半行
+    };
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(StoreError::from_io)?;
+    file.set_len(new_len).map_err(StoreError::from_io)?;
+    file.sync_all().map_err(StoreError::from_io)?;
+    Ok(true)
+}
+
+fn tmp_sibling(target: &Path) -> Result<PathBuf> {
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| StoreError::InvalidPath(target.display().to_string()))?;
+    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    Ok(target.with_file_name(format!(
+        "{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        seq
+    )))
+}
+
+fn write_tmp(tmp: &Path, bytes: &[u8]) -> Result<()> {
+    match write_tmp_inner(tmp, bytes) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = fs::remove_file(tmp);
+            Err(err)
+        }
+    }
+}
+
+fn write_tmp_inner(tmp: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = File::create(tmp).map_err(StoreError::from_io)?;
+    file.write_all(bytes).map_err(StoreError::from_io)?;
+    file.sync_all().map_err(StoreError::from_io)
+}
+
+fn rename_with_retry(tmp: &Path, target: &Path) -> Result<()> {
+    replace_with_retry(tmp, target, || fs::rename(tmp, target))
+}
+
+fn replace_with_retry(
+    tmp: &Path,
+    target: &Path,
+    mut rename: impl FnMut() -> io::Result<()>,
+) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        match rename() {
+            Ok(()) => return sync_parent(target),
+            Err(err) => {
+                if !should_retry_rename(&err, target, attempt) {
+                    let _ = fs::remove_file(tmp);
+                    return Err(finish_rename_err(err, target));
+                }
+                sleep(retry_delay(attempt));
+                attempt += 1;
+            }
+        }
+    }
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(BASE_DELAY_MS << attempt)
+}
+
+// 目录目标三端都立刻失败（task 013）。Windows 对「文件 rename 到目录」也报 ACCESS_DENIED，
+// 若先按占用重试，目录会在 Windows 上等满退避、在 Unix 上马上返回 `io`。
+fn should_retry_rename(err: &io::Error, target: &Path, attempt: u32) -> bool {
+    attempt < RETRIES && !target.is_dir() && is_replace_busy(err)
+}
+
+// `WouldBlock` / `ResourceBusy` / `ExecutableFileBusy` 三端都表示目标暂时不能替换。
+fn is_replace_busy(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::ResourceBusy | io::ErrorKind::ExecutableFileBusy
+    ) || is_windows_sharing_violation(err)
+}
+
+#[cfg(windows)]
+fn is_windows_sharing_violation(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(WINDOWS_ACCESS_DENIED) | Some(WINDOWS_SHARING_VIOLATION)
+    )
+}
+
+#[cfg(not(windows))]
+fn is_windows_sharing_violation(_: &io::Error) -> bool {
+    false
+}
+
+fn finish_rename_err(err: io::Error, target: &Path) -> StoreError {
+    if target.is_dir() {
+        return directory_target_error();
+    }
+    if is_replace_busy(&err) {
+        StoreError::LockedTimeout {
+            path: target.to_path_buf(),
+        }
+    } else {
+        StoreError::from_io(err)
+    }
+}
+
+fn directory_target_error() -> StoreError {
+    StoreError::Io {
+        code: "io",
+        source: io::Error::new(
+            io::ErrorKind::IsADirectory,
+            "atomic replace target is a directory",
+        ),
+    }
+}
+
+/// rename 已经发布目录项之后，尽力刷父目录元数据。
+///
+/// 打不开目录、或不支持目录 flush 的卷，不把已经完成的替换改成失败（task 013）。
+/// 这不是临时绕过：替换已经可见，flush 失败不能再向调用方报错。
+///
+/// # Errors
+///
+/// 父目录不存在，或 flush 失败且不是「卷不支持目录同步」时返回。
+pub(crate) fn sync_parent(target: &Path) -> Result<()> {
+    accept_dir_sync(sync_dir(parent_for_sync(target)))
+}
+
+fn parent_for_sync(target: &Path) -> &Path {
+    match target.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    let file = open_dir(dir)?;
+    file.sync_all()
+}
+
+fn accept_dir_sync(result: io::Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) if is_dir_sync_unsupported(&err) => Ok(()),
+        Err(err) => Err(StoreError::from_io(err)),
+    }
+}
+
+fn is_dir_sync_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+    )
+}
+
+#[cfg(windows)]
+fn open_dir(dir: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // 不带 FILE_FLAG_BACKUP_SEMANTICS 时，打开目录得到 ACCESS_DENIED，目录项无法 flush（task 013）。
+    // FlushFileBuffers 还要求写权限。Windows 允许普通只读句柄打开并 flush 目录之前，这两个条件都要留着。
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)
+}
+
+#[cfg(not(windows))]
+fn open_dir(dir: &Path) -> io::Result<File> {
+    File::open(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Instant, SystemTime};
+
+    fn tdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mythos-store-{}-{}",
+            tag,
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn write_creates_parents_and_overwrites() {
+        let dir = tdir("atomic-basic");
+        let path = dir.join("nested/deeper/data.txt");
+        write_text_atomic(&path, "first").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+        write_text_atomic(&path, "second").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+        assert_eq!(clean_temp_files(&dir).unwrap(), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_atomic_rejects_directory_without_retrying() {
+        let dir = tdir("atomic-dir-target");
+        let target = dir.join("occupied");
+        fs::create_dir_all(&target).unwrap();
+        let started = Instant::now();
+        let err = write_atomic(&target, b"x").unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_millis(700),
+            "a directory is not a locked file"
+        );
+        assert_eq!(err.code(), "io");
+        assert_eq!(clean_temp_files(&dir).unwrap(), 0, "tmp must be cleaned");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_atomic_reports_locked_when_target_held_open() {
+        // std 默认带 FILE_SHARE_DELETE，占着的文件仍可被 rename。剥掉该共享位，
+        // 模拟杀软 / 同步盘（task 013）。Unix 的 rename 不因文件打开而失败，所以此测试只在 Windows 编译；
+        // 标准库改成默认不共享 DELETE 之后可以删。
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+
+        let dir = tdir("atomic-locked");
+        let target = dir.join("data.txt");
+        fs::write(&target, b"old").unwrap();
+        let _held = File::options()
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&target)
+            .unwrap();
+        let started = Instant::now();
+        let err = write_atomic(&target, b"new").unwrap_err();
+        assert!(
+            started.elapsed() >= Duration::from_millis(700),
+            "busy target must back off"
+        );
+        assert_eq!(err.code(), "locked");
+        assert_eq!(clean_temp_files(&dir).unwrap(), 0);
+        drop(_held);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finish_rename_err_matches_on_every_os() {
+        let dir = tdir("atomic-map");
+        let as_dir = dir.join("target-dir");
+        fs::create_dir(&as_dir).unwrap();
+        let as_file = dir.join("target-file");
+
+        for kind in [
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::ResourceBusy,
+            io::ErrorKind::ExecutableFileBusy,
+        ] {
+            let err = finish_rename_err(io::Error::new(kind, "busy"), &as_file);
+            assert_eq!(err.code(), "locked", "{kind:?} is busy on every OS");
+        }
+
+        let dir_err = finish_rename_err(io::Error::from_raw_os_error(5), &as_dir);
+        assert_eq!(dir_err.code(), "io", "directory target is io everywhere");
+
+        let missing = finish_rename_err(io::Error::from(io::ErrorKind::NotFound), &as_file);
+        assert_eq!(missing.code(), "not-found");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sharing_codes_are_locked() {
+        let dir = tdir("atomic-map-win");
+        let file = dir.join("target-file");
+        for raw in [WINDOWS_ACCESS_DENIED, WINDOWS_SHARING_VIOLATION] {
+            let err = finish_rename_err(io::Error::from_raw_os_error(raw), &file);
+            assert_eq!(err.code(), "locked", "raw {raw} is a Windows sharing code");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_eio_and_epipe_are_not_locked() {
+        let dir = tdir("atomic-map-unix");
+        let file = dir.join("target-file");
+        // 5 / 32 在 Unix 上是 EIO / EPIPE（task 013）。Windows 改用可区分的 ErrorKind 后，这个测试和原始错误码分支一起删。
+        for raw in [WINDOWS_ACCESS_DENIED, WINDOWS_SHARING_VIOLATION] {
+            let err = finish_rename_err(io::Error::from_raw_os_error(raw), &file);
+            assert_eq!(err.code(), "io", "raw {raw} must not be locked off Windows");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retry_policy_is_shared() {
+        assert_eq!(retry_delay(0), Duration::from_millis(25));
+        assert_eq!(retry_delay(1), Duration::from_millis(50));
+        assert_eq!(retry_delay(4), Duration::from_millis(400));
+
+        let dir = tdir("atomic-policy");
+        let file = dir.join("file");
+        let folder = dir.join("folder");
+        fs::create_dir(&folder).unwrap();
+        let busy = io::Error::new(io::ErrorKind::ResourceBusy, "busy");
+        assert!(should_retry_rename(&busy, &file, 0));
+        assert!(!should_retry_rename(&busy, &file, RETRIES));
+        assert!(!should_retry_rename(&busy, &folder, 0));
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        assert!(!should_retry_rename(&missing, &file, 0));
+        assert!(!is_replace_busy(&missing));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replace_retries_once_then_publishes() {
+        let dir = tdir("atomic-retry");
+        let target = dir.join("data.txt");
+        let tmp = dir.join("data.txt.tmp");
+        fs::write(&tmp, b"new").unwrap();
+        let mut calls = 0;
+        replace_with_retry(&tmp, &target, || {
+            calls += 1;
+            if calls == 1 {
+                Err(io::Error::new(io::ErrorKind::ResourceBusy, "busy"))
+            } else {
+                fs::rename(&tmp, &target)
+            }
+        })
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_tmp_cleans_up_when_create_fails() {
+        let dir = tdir("atomic-tmp-fail");
+        let err = write_tmp(&dir, b"x").unwrap_err();
+        assert_ne!(err.code(), "locked");
+        assert!(dir.is_dir());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parent_for_sync_uses_dot_for_a_bare_file_name() {
+        assert_eq!(parent_for_sync(Path::new("file.txt")), Path::new("."));
+        assert_eq!(parent_for_sync(Path::new("dir/file.txt")), Path::new("dir"));
+    }
+
+    #[test]
+    fn sync_parent_reports_a_missing_directory() {
+        let err = sync_parent(Path::new("mythos-store-missing-parent/file.txt")).unwrap_err();
+        assert_eq!(err.code(), "not-found");
+    }
+
+    #[test]
+    fn accept_dir_sync_ignores_unsupported_volumes() {
+        assert!(accept_dir_sync(Ok(())).is_ok());
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::InvalidInput,
+            io::ErrorKind::Unsupported,
+        ] {
+            assert!(accept_dir_sync(Err(io::Error::new(kind, "skip"))).is_ok());
+        }
+        let err = accept_dir_sync(Err(io::Error::from(io::ErrorKind::NotFound))).unwrap_err();
+        assert_eq!(err.code(), "not-found");
+    }
+
+    #[test]
+    fn tmp_sibling_rejects_paths_without_file_name() {
+        assert!(tmp_sibling(Path::new("a/..")).is_err());
+    }
+
+    #[test]
+    fn clean_temp_files_removes_only_tmp() {
+        let dir = tdir("atomic-clean");
+        fs::write(dir.join("a.tmp"), b"x").unwrap();
+        fs::write(dir.join("b.tmp"), b"x").unwrap();
+        fs::write(dir.join("keep.txt"), b"x").unwrap();
+        assert_eq!(clean_temp_files(&dir).unwrap(), 2);
+        assert!(dir.join("keep.txt").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn truncate_incomplete_jsonl_cuts_partial_tail() {
+        let dir = tdir("jsonl-heal");
+        let path = dir.join("log.jsonl");
+        fs::write(&path, b"{\"a\":1}\n{\"a\":2}\n{\"a\":3").unwrap();
+        assert!(truncate_incomplete_jsonl(&path).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"{\"a\":1}\n{\"a\":2}\n");
+
+        fs::write(&path, b"{\"a\":1}\n").unwrap();
+        assert!(!truncate_incomplete_jsonl(&path).unwrap());
+
+        fs::write(&path, b"{\"a\":1").unwrap();
+        assert!(truncate_incomplete_jsonl(&path).unwrap());
+        assert!(fs::read(&path).unwrap().is_empty());
+
+        fs::write(&path, b"").unwrap();
+        assert!(!truncate_incomplete_jsonl(&path).unwrap());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

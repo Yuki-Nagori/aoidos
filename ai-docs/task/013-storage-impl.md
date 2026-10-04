@@ -1,6 +1,6 @@
 # 013 — 实现：存储与文件基建 crate（mythos-store）
 
-- 状态：ready
+- 状态：done
 - 依赖：011
 - 优先级：P0
 - 创建 / 更新：2026-10-05 / 2026-10-05
@@ -19,7 +19,7 @@
 
 1. `paths`：组件消毒（非法字符 / Windows 保留名 / 尾点尾空格）、`script_id_from_name`（`[a-z0-9-]{1,64}`，截断 + FNV-1a 短 hash，CJK 回退）、`join_under_root`（拒 `..` / 分隔符 / 盘符）。
 2. `atomic`：`write_atomic` / `write_text_atomic`（唯一 tmp + fsync + rename，Windows 锁定退避重试，失败上抛并清理 tmp）、`clean_temp_files`（`.tmp` 自愈）、`truncate_incomplete_jsonl`（尾行截断恢复）。
-3. `lock`：`InstanceLock`（fs2 独占锁，进程退出自动释放，写 PID），二次获取报 `already-running`。
+3. `lock`：`InstanceLock`（fs4 独占锁，进程退出自动释放，写 PID），二次获取报 `already-running`。
 4. `db`：`open(path, migrations)`——rusqlite bundled、WAL、`PRAGMA user_version` 顺序迁移（事务包裹，失败回滚拒启）、迁移前文件备份（保留 3 份）、库新于二进制时报 `corrupt`。
 5. `error`：`StoreError` 与 `code()` 命名空间 `store`（invalid-path / already-running / locked / migration / disk-full / permission / not-found / corrupt / io）。
 
@@ -29,7 +29,7 @@
 
 ## 实施步骤
 
-1. 根 `Cargo.toml`：`members` 增 `src-rust/mythos-store`，workspace 依赖增 rusqlite（bundled）、fs2。
+1. 根 `Cargo.toml`：`members` 增 `src-rust/mythos-store`，workspace 依赖增 rusqlite（bundled、backup）、fs4。
 2. 按 `error → paths → atomic → lock → db` 顺序实现，每模块带单测（含错误路径）。
 3. `cargo fmt / clippy / test / coverage:rust`（新 crate 纳入 workspace 100% 行覆盖），`bun run verify` 十项。
 
@@ -39,26 +39,30 @@
 
 ## 验收标准
 
-- [ ] `bun run verify` 十项 exit 0；`coverage:rust` 对新 crate 行覆盖 100%。
-- [ ] 原子写：崩溃模拟（tmp 残留）可自愈；目标被占用时重试后报 `locked` 且 tmp 已清理。
-- [ ] 迁移：顺序执行幂等，失败回滚且 `user_version` 不变，备份文件生成且保留 3 份；库新于二进制报 `corrupt`。
-- [ ] 多开：二次获取报 `already-running`，释放后可重取。
-- [ ] 明文密钥 / 业务 schema 不在本 crate（范围纪律）。
+- [x] `bun run verify` 十项 exit 0；`coverage:rust` 对新 crate 行覆盖 100%。
+- [x] 原子写：崩溃模拟（tmp 残留）可自愈；目标被占用时重试后报 `locked` 且 tmp 已清理。
+- [x] 迁移：顺序执行幂等，失败回滚且 `user_version` 不变，备份文件生成且保留 3 份；库新于二进制报 `corrupt`。
+- [x] 多开：二次获取报 `already-running`，释放后可重取。
+- [x] 明文密钥 / 业务 schema 不在本 crate（范围纪律）。
 
 ## 验证计划与结果
 
-| 日期 | 命令         | 预期 | 实际结果 |
-| ---- | ------------ | ---- | -------- |
-| —    | 待开始后填写 | —    | 未执行   |
+| 日期       | 命令                                     | 预期        | 实际结果                                                                     |
+| ---------- | ---------------------------------------- | ----------- | ---------------------------------------------------------------------------- |
+| 2026-10-05 | `cargo test --workspace`                 | 全过        | Windows 55 passed（mythos-store 54 + src-tauri 1）；Unix 少 1 个占用文件测试 |
+| 2026-10-05 | `bun run coverage:rust`                  | 行覆盖 100% | 1222/1222 行；mythos-store 五模块全 100%                                     |
+| 2026-10-05 | `cargo fmt --all` / clippy `-D warnings` | exit 0      | 均通过                                                                       |
+| 2026-10-05 | `bun run verify`                         | 十项 exit 0 | exit 0                                                                       |
 
 ## 风险与回退
 
-rusqlite bundled 需要本机 C 编译器（MSVC 已具备，tauri 构建依赖同款）；rename 重试在非 Windows 上几乎不触发，路径经 cfg 隔离不影响覆盖口径。回退：crate 独立，摘除 members 即还原。
+rusqlite bundled 需要本机 C 编译器（MSVC 已具备，tauri 构建依赖同款）。目录目标在三端都立刻报 `io`；占用重试只吃三端通用的 busy，外加 Windows 的 5/32。Unix 上打不开「文件被占用所以 rename 失败」的集成场景，该测试 `cfg(windows)`。回退：crate 独立，摘除 members 即还原。
 
 ## 决策与工作记录
 
 - 2026-10-05：创建任务（ready）。设计标定初值：WAL、备份 3 份、重试 5 次 25ms 指数退避、OS 级独占锁。
+- 2026-10-05：实现完成。实测沉淀三条：(1) 拼接路径的混合分隔符（`a/b\c`）会让 SQLite 报 PATH_NOT_FOUND——归一化收敛到 `paths::normalize`（路径层职责，不在 db 消费点修补）；(2) 错误映射一行体用具名函数（`err_open` 等）而非闭包，闭包错误分支不可触达会拖垮 llvm-cov 行覆盖，约定沉淀至[注释规范](../standards/comments.md)；(3) 三端错误码按语义对齐，不按原始 errno 数字对齐。目录目标一律 `io` 且不重试。`WouldBlock` / `ResourceBusy` / `ExecutableFileBusy` 三端都是 `locked`。Windows 另把 rename 的 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）当占用；这两个数字在 Unix 上是 EIO / EPIPE，保持 `io`。备份走 rusqlite `backup` feature 的在线备份 API（热 WAL 上 `fs::copy` 主文件会丢掉未 checkpoint 的提交），保留份数按文件名里的版本号和时间戳整数排序，忽略非 `storage-v*` 文件。实例锁只解锁不删文件。`script_id` 上限 64，FNV-1a 取低 32 位，Windows 保留名追加 `-0`，与 `join_under_root` 之后的目录名相同。比二进制新的库在改成 WAL 之前拒绝。`busy_timeout` 5 秒。父目录缺失时 Windows rename 的 ACCESS_DENIED 与 Unix 的 ENOENT 都报 `not-found`。`FlushFileBuffers` 需要写句柄，同步用写打开。多开锁从 fs2 换成 fs4 1.1：`TryLockError::WouldBlock` 直接表示占用，不再比对原始错误码。Rust 1.89 起 `File::try_lock` 是固有方法，调用必须写 `FileExt::try_lock`。
 
 ## 完成摘要
 
-未完成。
+`src-rust/mythos-store` 落地：`paths`（组件消毒 / script-id / join_under_root / normalize）、`atomic`（唯一原子写 + tmp 自愈 + JSONL 尾行截断）、`lock`（OS 级独占实例锁）、`db`（rusqlite WAL + user_version 顺序迁移 + 迁移前在线备份保留 3 份）、`error`（`store` 错误码命名空间）。Windows 上 `cargo test --workspace` 55 通过，行覆盖 1222/1222，`bun run verify` 十项 exit 0。crate 不依赖 tauri；消费命令随 006 / 007 接入。

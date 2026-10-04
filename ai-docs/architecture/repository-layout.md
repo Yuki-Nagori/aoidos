@@ -17,6 +17,7 @@
 │   ├── capabilities/          # IPC 权限声明
 │   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）
 │   └── build.rs               # tauri-build
+├── src-rust/                  # 业务 crate（mythos-store：存储与文件基建，不依赖 tauri）
 ├── tests/web/                 # Vitest 单测（目录镜像 src-web）
 ├── scripts/                   # 仓库脚本（setup.mts 环境配置，bun install 的 postinstall 调用）
 ├── .github/workflows/ci.yml   # 三平台 CI

@@ -1,0 +1,9 @@
+[package]
+name = "mythos-store"
+description = "存储与文件基建：原子写、路径消毒、迁移、多开锁"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rusqlite = { workspace = true }
+fs4 = { workspace = true }
