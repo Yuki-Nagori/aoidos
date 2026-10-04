@@ -37,17 +37,33 @@ ai-docs/
 
 ## 任务队列
 
-| 编号 | 任务                                                           | 依赖          | 状态    |
-| ---- | -------------------------------------------------------------- | ------------- | ------- |
-| 001  | [模板基线](task/001-template-baseline.md)                      | —             | done    |
-| 002  | [Mythos 产品化改名](task/002-rebrand-mythos.md)                | 001           | done    |
-| 003  | [UI 风格规范落档](task/003-ui-style-standard.md)               | 002           | done    |
-| 004  | [引入 Tailwind v4 并接线 token](task/004-tailwind-v4.md)       | 002           | ready   |
-| 005  | [LLM 接入与护栏·设计](task/005-llm-design.md)                  | 002           | ready   |
-| 006  | [对局记录与上下文·设计](task/006-record-design.md)             | 005、011      | planned |
-| 007  | [记忆系统·设计](task/007-memory-design.md)                     | 005、006、011 | planned |
-| 008  | [界面结构与交互·设计](task/008-ui-shell-design.md)             | 003           | ready   |
-| 009  | [主题系统与剧本皮肤·设计](task/009-theming-design.md)          | 004           | planned |
-| 010  | [通信契约与工程纪律·设计](task/010-ipc-contract-design.md)     | 002           | ready   |
-| 011  | [存储与文件基建·设计](task/011-storage-design.md)              | 002           | ready   |
-| 012  | [回合与阶段状态机·设计](task/012-turn-state-machine-design.md) | 005、006      | planned |
+任务按性质分三类：**设计**（产出规则 / 结构文档，定稿评审后新增对应实现任务）、**实现**（写代码，必须引用已定稿的设计）、**文档 / 基线**（纯文档与工程收尾）。优先级：底层任务 P0，界面任务 P1，远期任务 P2；同优先级内按编号顺序。
+
+### 设计任务
+
+| 编号 | 任务                                                      | 域                    | 依赖          | 状态        |
+| ---- | --------------------------------------------------------- | --------------------- | ------------- | ----------- |
+| 005  | [LLM 接入与护栏](task/005-llm-design.md)                  | **底层·LLM**          | 002           | ready       |
+| 006  | [对局记录与上下文](task/006-record-design.md)             | **底层·记录引擎**     | 005、011      | planned     |
+| 007  | [记忆系统](task/007-memory-design.md)                     | **底层·记忆**（远期） | 005、006、011 | planned     |
+| 008  | [界面结构与交互](task/008-ui-shell-design.md)             | 界面·交互             | 003           | ready       |
+| 009  | [主题系统与剧本皮肤](task/009-theming-design.md)          | 界面·主题             | 004           | planned     |
+| 010  | [通信契约与工程纪律](task/010-ipc-contract-design.md)     | **底层·契约**         | 002           | ready       |
+| 011  | [存储与文件基建](task/011-storage-design.md)              | **底层·存储**         | 002           | in-progress |
+| 012  | [回合与阶段状态机](task/012-turn-state-machine-design.md) | **底层·状态机**       | 005、006      | planned     |
+
+### 实现任务
+
+| 编号 | 任务                                                     | 域        | 依赖 | 状态  |
+| ---- | -------------------------------------------------------- | --------- | ---- | ----- |
+| 004  | [引入 Tailwind v4 并接线 token](task/004-tailwind-v4.md) | 界面·基建 | 002  | ready |
+
+（各设计的实现任务在定稿后新增，标题附「实现」，必读引用对应设计文档。）
+
+### 文档与基线
+
+| 编号 | 任务                                             | 依赖 | 状态 |
+| ---- | ------------------------------------------------ | ---- | ---- |
+| 001  | [模板基线](task/001-template-baseline.md)        | —    | done |
+| 002  | [Mythos 产品化改名](task/002-rebrand-mythos.md)  | 001  | done |
+| 003  | [UI 风格规范落档](task/003-ui-style-standard.md) | 002  | done |
