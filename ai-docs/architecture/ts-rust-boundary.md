@@ -24,15 +24,17 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 mythos-llm / mythos-en
 
 ## 通信契约
 
+命令 / 事件 / 错误码的命名与形状细则（含看门狗预算表、重试单层化、后台任务门槛的可检查清单）见[通信契约](ipc-contract.md)。
+
 - 命令：前端 `invoke(name, args)` ↔ Rust command；参数 / 返回类型 Rust 定型后 TS 立即声明同型（沿用 [Rust 约定](../standards/rust.md)）。
-- 事件：长流程（LLM 流式输出、对局推进、后台任务进度）由 Rust `emit` 事件推送给前端订阅；前端不轮询、不用 setTimeout 凑实时。
-- 错误：命令返回 `Result<T, E>`，`E` 序列化为 `{ code, message }` 可判别结构，前端按 `code` 分支。
+- 事件：长流程（LLM 流式输出、对局推进、后台任务进度）由命令层 `emit_to("main", …)` 推给前端。业务 crate 只通过不含 Tauri 类型的进度出口交出载荷。前端不轮询、不用 setTimeout 凑实时。信封与序号见[通信契约](ipc-contract.md)。
+- 错误：形状与目录见[通信契约](ipc-contract.md)。前端按 `code` 分支。
 - 大数据（对局记录、记忆文本）不塞 IPC 返回值——Rust 侧落盘，IPC 只回句柄 / 路径 / 摘要，前端需要时再按命令取分页。
 
 ## 工程纪律（借鉴 Herta）
 
-- **持久化一律原子写**：唯一 tmp 名 + rename + 半截文件自愈，不考虑「直接写目标文件」的写法。
-- **密钥隔离**：API key 只存 Rust 侧（OS 凭据库优先），IPC 只传「已设置 + 尾号 hint」，明文不进 webview、不进前端状态。
+- **持久化一律原子写**：普通文件用唯一 tmp 名 + rename + 半截文件自愈。SQLite、实例锁和 JSONL 截断的例外见[存储基建](storage.md)。
+- **密钥隔离**：API key 只存 Rust 侧（OS 凭据库优先），IPC 只传「已设置 + 尾号 hint」，明文不进 webview、不进前端状态。尾号长度和降级文件权限见[通信契约](ipc-contract.md)。
 - **网络调用分层看门狗**：连接建立（头阶段）与流式空闲分别设限；重试策略单层化——传输层与业务循环不叠加重试。
 - **后台任务默认关**：烧用户 quota 的自动化任务（记忆蒸馏、后台总结）默认关闭，启动前过多重门槛，用户返回时可在边界让位。
 

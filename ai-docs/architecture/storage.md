@@ -6,12 +6,12 @@
 
 **混合存储：SQLite 管业务状态，纯文件管记录与资产。**
 
-| 数据域                                    | 载体                      | 理由                                                                    |
-| ----------------------------------------- | ------------------------- | ----------------------------------------------------------------------- |
-| 对局记录（JSONL，append-only）            | 文件                      | 天然顺序写读，崩溃恢复语义简单（截到上一完整行）；导出 / 同步就是拷文件 |
-| 记忆 manifest、世界状态、剧本库索引       | SQLite                    | 需要查询、聚合、事务与部分更新                                          |
-| 剧本包资产（立绘 / theme.css / 设定文本） | 文件（只读）              | 随剧本包分发，不进库                                                    |
-| 密钥                                      | OS 凭据库，降级 0600 文件 | 见职责边界，不落 SQLite                                                 |
+| 数据域                                    | 载体                    | 理由                                                                    |
+| ----------------------------------------- | ----------------------- | ----------------------------------------------------------------------- |
+| 对局记录（JSONL，append-only）            | 文件                    | 天然顺序写读，崩溃恢复语义简单（截到上一完整行）；导出 / 同步就是拷文件 |
+| 记忆 manifest、世界状态、剧本库索引       | SQLite                  | 需要查询、聚合、事务与部分更新                                          |
+| 剧本包资产（立绘 / theme.css / 设定文本） | 文件（只读）            | 随剧本包分发，不进库                                                    |
+| 密钥                                      | OS 凭据库，否则私有文件 | 不落 SQLite；权限与 hint 见[通信契约](ipc-contract.md)                  |
 
 决策依据：rusqlite（bundled feature，免系统依赖）+ 手写迁移，不引 ORM / 查询构建器——桌面单机规模下重量依赖只有成本。**翻转条件**：当记录需要随机访问查询（跨局检索）时，把记录索引进 SQLite（FTS），记录文件本身仍是事实源——文件格式不变，迁移只加索引。
 
@@ -70,8 +70,8 @@ CREATE TABLE point_allocations (
 
 ## 原子写工具（全仓唯一实现）
 
-- API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8），域 crate 一律经此写盘，**禁止直接写目标文件**。
-- 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。Windows 下 rename 遇占用按 25ms 指数退避重试 5 次，仍失败报 `locked` 并清理本次 tmp；目录目标直接报 `io`。父目录同步遇权限拒绝或卷不支持 flush 时保留成功结果，其它同步错误上抛，此时目标可能已经更新。
+- API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8）。普通文件覆写经此二函数。SQLite 事务与在线备份、实例锁文件、JSONL 尾行截断由各自模块原地写，不经这里。
+- 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。重试次数与退避见[通信契约](ipc-contract.md)看门狗表。三端的 `WouldBlock`、`ResourceBusy`、`ExecutableFileBusy` 进入退避。Windows 上原始码 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）同样算占用；Unix 上同号是 EIO / EPIPE，保持 `io`，不重试。目录目标三端立即 `io`，不进入退避：Windows 把「文件 rename 到目录」也报成 ACCESS_DENIED，若先按占用重试，目录会在 Windows 上等满退避。耗尽报 `locked` 并清理本次 tmp。父目录同步只吞掉 `PermissionDenied`、`InvalidInput`、`Unsupported`；其它同步错误在 rename 已经发布后仍返回，调用方不能把该错误当成「目标未更新」。
 - 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行（对局恢复语义，006 引用）。
 - 并发与锁：单写者约定；打开数据库前持有 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
 
@@ -89,9 +89,9 @@ CREATE TABLE point_allocations (
 
 ## 错误与对接
 
-- 错误码命名空间 `store`（结构对接 [通信契约](ts-rust-boundary.md) / task 010）：磁盘满、权限、锁定超时、损坏、路径非法各占独立 code。
+- 裸码由 `StoreError::code()` 返回。IPC 的 `store.` 前缀、中文 `message` 与 `detail` 见[通信契约](ipc-contract.md)。磁盘满、权限、锁定超时、损坏、路径非法各占独立码。
 - 对接：006 用原子写 + JSONL 截断恢复；007 的载体与备份用本文的 SQLite 约定与备份目录；密钥的降级文件目录由本规范预留。
 
 ## 待实现期标定
 
-- 已标定（task 013）：WAL，备份保留最近 3 份，rename 重试 5 次 / 25ms 指数退避，OS 独占实例锁。业务 schema、记录 append 与导入导出随相应任务实现。
+- 已标定（task 013）：WAL，备份保留最近 3 份，OS 独占实例锁。rename 的重试预算见[通信契约](ipc-contract.md)看门狗表，013 已按该表实现。业务 schema、记录 append 与导入导出随相应任务实现。

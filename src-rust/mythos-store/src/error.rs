@@ -1,5 +1,5 @@
-//! 存储域错误：统一 `code()` 命名空间（契约见 ai-docs/architecture/ts-rust-boundary.md），
-//! 前端按码分支、不匹配文本。
+//! 存储域错误：`code()` 返回裸码，调用方加 `store.` 前缀（契约见 ai-docs/architecture/ipc-contract.md）。
+//! 前端按码分支、不匹配 Display 文本。
 
 use std::fmt;
 use std::io;

@@ -1,6 +1,6 @@
 # Rust / Tauri 约定
 
-更新日期：2026-10-04。除标注官方依据外均为项目约定。
+更新日期：2026-10-05。除标注官方依据外均为项目约定。
 
 ## 命令层
 
@@ -8,7 +8,7 @@
 
 invoke 的 args 对象按 camelCase 匹配 Rust snake_case 形参（[Tauri 命令文档](https://tauri.app/develop/calling-rust/)，2026-10-04 查阅）：单词形参无感，多词形参（`case_dir` ↔ `caseDir`）留意。参数与返回类型在 Rust 定型后，TS 侧立即声明同型——`invoke` 是无校验透传，两端口径漂移是最常见的静默 bug。
 
-错误处理尚未定全局契约；建议命令返回 `Result<T, E>` 且 `E` 序列化为可判别结构（如 `{ code, message }`），前端按 `code` 分支，不文本匹配 message。
+错误形状以[通信契约](../architecture/ipc-contract.md)为准：命令返回 `Result<T, CmdError>`，序列化为 `{ code, message, detail? }`。前端按 `code` 分支，不匹配 `message`。
 
 ## Cargo 工作区
 

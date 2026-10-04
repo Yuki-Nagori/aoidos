@@ -11,7 +11,7 @@
 
 ## 必读
 
-[构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [UI 风格规范](../standards/ui.md)（视觉语法）。
+[构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [通信契约](../architecture/ipc-contract.md) · [UI 风格规范](../standards/ui.md)（视觉语法）。
 
 ## 产出物
 
@@ -22,6 +22,7 @@
 3. 投影规则：预算参数初始值（工作集阈值 / 逐字尾部窗口 / recap 上限）、长块折叠规则、「recap 只增不改」约定、缓存稳定前缀契约。
 4. Token 估算：标定方法（对真实供应商用量回归）、中英混计系数及其更新流程。
 5. 块类型 ↔ UI 行类型映射表（与 [UI 规范](../standards/ui.md) 双 register 对齐，并与 008 互校）。
+6. 记录追加事件的名字，以及 `engine_get_record_page` 的分页载荷。信封和 `seq` 见通信契约。该命令是记录页，不是阶段快照；阶段快照是 `engine_get_phase`（012 冻结载荷）。
 
 ## 范围与非目标
 
@@ -47,6 +48,7 @@
 ## 决策与工作记录
 
 - 2026-10-05：创建设计任务（由原实现向 006 改设）。吸收构想 001 与可借鉴处（记录基底 / token 估算 / 缓存前缀）；ideas/001 保持「已立 task」状态指向本任务。
+- 2026-10-05：记录通道补进产出物。`engine_get_record_page` 只做记录分页；阶段对齐用通信契约里的 `engine_get_phase`。
 
 ## 完成摘要
 

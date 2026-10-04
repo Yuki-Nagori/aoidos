@@ -49,7 +49,7 @@ ai-docs/
 | 007  | [记忆系统](task/007-memory-design.md)                     | **底层·记忆**（远期） | 005、006、011 | planned |
 | 008  | [界面结构与交互](task/008-ui-shell-design.md)             | 界面·交互             | 003           | ready   |
 | 009  | [主题系统与剧本皮肤](task/009-theming-design.md)          | 界面·主题             | 004           | planned |
-| 010  | [通信契约与工程纪律](task/010-ipc-contract-design.md)     | **底层·契约**         | 002           | ready   |
+| 010  | [通信契约与工程纪律](task/010-ipc-contract-design.md)     | **底层·契约**         | 002           | done    |
 | 011  | [存储与文件基建](task/011-storage-design.md)              | **底层·存储**         | 002           | done    |
 | 012  | [回合与阶段状态机](task/012-turn-state-machine-design.md) | **底层·状态机**       | 005、006      | planned |
 
