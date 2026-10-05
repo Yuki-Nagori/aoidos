@@ -11,7 +11,7 @@
 
 ## 必读
 
-[构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [通信契约](../architecture/ipc-contract.md) · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [UI 风格规范](../standards/ui.md)（视觉语法）。
+[构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [通信契约](../architecture/ipc-contract.md) · [017 store 查询与迁移回调](017-store-commands-migration-events.md)（迁移事件待接入） · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [UI 风格规范](../standards/ui.md)（视觉语法）。
 
 ## 产出物
 
@@ -24,15 +24,18 @@
 5. 块类型 ↔ UI 行类型映射表（与 [UI 规范](../standards/ui.md) 双 register 对齐，并与 008 互校）。
 6. 记录追加事件的名字，以及 `engine_get_record_page` 的分页载荷——分页形状按契约总则（不透明 cursor；`limit` 缺省 50、上限 200，`0` 或越界报 `app.bad-request`）。信封和 `seq` 见通信契约。该命令是记录页，不是阶段快照；阶段快照是 `engine_get_phase`（012 冻结载荷）。
 
+7. 存储迁移运行期协议：承接 017 推迟的命令层 emit 适配、progress / done / failed 收尾与 store_get_migration 运行期快照设计。冻结迁移流标识、各事件版本含义、阶段、每事件 seq 基线和失败上下文；快照必须足够重绘，不能仅返回最后一步。failed 最小载荷与待冻结字段见通信契约。
+
 ## 范围与非目标
 
-范围：以上结构文档与决策。非目标：代码实现；记忆蒸馏（007）；世界状态数据库 schema（若设计中发现必需，拆新设计 task）。
+范围：以上结构文档与决策，包括记录流及存储迁移流的事件 / 快照协议。006 是设计任务；迁移发送适配、运行期状态保存、快照实现和监听恢复由本设计定稿后的实现任务承接，当前不新增实现 task。非目标：代码实现；记忆蒸馏（007）；世界状态数据库 schema（若设计中发现必需，拆新设计 task）。
 
 ## 验收标准
 
 - [ ] record-engine.md 定稿：块语法有黄金样例，投影参数有初始值并标注标定流程。
 - [ ] 块类型与 UI 行类型映射完备（008 互校无缺）。
 - [ ] 「投影不改基底」「前缀字节稳定」作为可测断言写进文档。
+- [ ] 迁移流协议覆盖 progress / done / failed、流标识、阶段和每事件 seq 基线；明确 store_get_migration 从静态版本查询扩展到运行期快照的条件及实现承接。
 - [ ] 用户评审通过后标 done。
 
 ## 验证计划与结果
@@ -49,6 +52,8 @@
 
 - 2026-10-05：创建设计任务（由原实现向 006 改设）。吸收构想 001 与可借鉴处（记录基底 / token 估算 / 缓存前缀）；ideas/001 保持「已立 task」状态指向本任务。
 - 2026-10-05：记录通道补进产出物。`engine_get_record_page` 只做记录分页；阶段对齐用通信契约里的 `engine_get_phase`。
+
+- 2026-10-05：issue #15 补齐 017 推迟项的承接：本设计冻结迁移事件及运行期快照协议，衍生实现负责命令层 emit、状态保存和监听恢复。契约登记 store:migration:failed 最小字段，未冻结上下文在本设计定稿时回写；当前静态查询不变。
 
 ## 完成摘要
 
