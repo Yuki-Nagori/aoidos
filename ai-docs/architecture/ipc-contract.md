@@ -29,7 +29,7 @@ Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 
 | `store_list_backups`  | 无   | `{ items: [{ path, version, nanos, size }] }` | 最新 50 项，新到旧；目录不存在为空；nanos 为 Unix epoch 纳秒字符串，size 为字节数    |
 | `store_get_migration` | 无   | `{ from, to, phase: "idle" }`                 | from == to == 持久化 user_version；库或父目录不存在为 0，不创建目录 / 库，不运行迁移 |
 
-快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。006 接入真实迁移流时，必须同时实现状态保存、阶段和每事件序号快照，再按下节规则对齐监听者。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
+快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。006 负责设计真实迁移流的状态、阶段和每事件序号快照，设计定稿后的实现任务负责一并落地，再按下节规则对齐监听者。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
 
 ## 事件命名与载荷
 
@@ -52,7 +52,8 @@ Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 
   - `llm:turn:chunk`，data `{ turnId, delta }`（005 可加字段，不能删这两项）
   - `llm:turn:done`，data `{ turnId, outcome: "completed" | "cancelled" }`
   - `llm:turn:failed`，data `{ turnId, code, message }`（错误码见下）
-  - `store:migration:progress` / `store:migration:done`，data `{ from, to }`。`open_with_progress` 和 `MigrationProgress` 已就绪，每步提交成功后回调，失败步骤不回调、无需迁移时不回调；此前成功步骤不会撤销。命令层 emit 适配、done / failed 收尾与运行期快照随 006 接入，当前没有真实发送方。
+  - `store:migration:progress` / `store:migration:done`，data `{ from, to }`。`open_with_progress` 和 `MigrationProgress` 已就绪，每步提交成功后回调，失败步骤不回调、无需迁移时不回调；此前成功步骤不会撤销。命令层 emit 适配、done / failed 收尾与运行期快照由 [006](../task/006-record-design.md) 设计定稿，再由其衍生实现任务落地；当前没有真实发送方。
+  - `store:migration:failed`，data 至少 `{ code, message }`，错误为统一 store.* 码与中文文案；不发送原始 SQLite / IO 错误正文。迁移流标识、版本上下文和其他字段由 006 冻结并回写本文后才能实现，不能从当前静态快照猜测载荷。失败停止该流，不再发 done；此前成功提交的步骤保留，运行期快照应能反映它们。
   - `engine:scene:advanced` / `engine:phase:changed`（012 冻结 data）
 - 流式期间发生错误：以 `*:failed` 事件收尾；命令本身的 `Err` 只表示「提交被拒绝」，两者不重复携带同一错误。
 
@@ -100,5 +101,5 @@ else showGenericError(err);
 已在本文冻结的预算、错误形状、信封、密钥规则和取消分界，下游任务只引用，不另写一套。
 
 - **005**：[task 005 — LLM 接入与护栏](../task/005-llm-design.md)：冻结每个 `llm.*` 的触发条件、`llm_submit` / `llm_cancel` 的其余参数，以及是否启用空输出温度重试。
-- **006**：[task 006 — 对局记录与上下文](../task/006-record-design.md)：定义记录追加事件，以及 `engine_get_record_page` 的分页载荷。该命令不是阶段快照。
+- **006**：[task 006 — 对局记录与上下文](../task/006-record-design.md)：定义记录追加事件，以及 `engine_get_record_page` 的分页载荷。该命令不是阶段快照。另承接存储迁移流的 progress / done / failed、流标识、阶段、失败上下文和 store_get_migration 的每事件 seq 基线设计；实际发送与运行期状态由设计定稿后的实现任务提供。
 - **012**：[task 012 — 回合与阶段状态机](../task/012-turn-state-machine-design.md)：冻结 `engine.no-scene`、`engine.invalid-phase` 的触发条件，阶段事件的 data，以及 `engine_get_phase` 的快照载荷。单回合拒绝码用本文的 `app.busy`。
