@@ -16,14 +16,14 @@
 
 Provider 用可作为 trait object 的异步接口，返回 Send 的 boxed future / stream；若锁定的 Rust 版本不能对 async trait 直接做动态分派，使用显式装箱，不把某个 SDK 类型暴露给业务层。下表约定语义边界；实现时可调整装箱和所有权表达，但不能改变请求次数及输出含义：
 
-| 操作 / 类型                         | 职责                                                     |
-| ----------------------------------- | -------------------------------------------------------- |
-| capabilities(model, mode)           | 返回明确的模型 / 端点能力，不发网络请求                  |
-| start(request, cancellation)        | 一次 HTTP 尝试，无隐式重试或自动重连；返回规范化流       |
-| Completion { prompt }               | 裸文本续写，默认叙事形态；v1 不传 suffix / echo          |
-| Chat { messages, assistantPrefix? } | 普通 chat；有 prefix 时要求 adapter 明确支持，不伪造支持 |
-| ProviderDelta                       | Text、Reasoning、Usage、Finish；只有 Text 进入叙事护栏   |
-| ProviderError                       | 结构化类别、HTTP 状态和可诊断来源；敏感正文不外传        |
+| 操作 / 类型                         | 职责                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------------ |
+| capabilities(model, mode)           | 返回明确的模型 / 端点能力，不发网络请求                                        |
+| start(request, cancellation)        | 一次 HTTP 尝试，无隐式重试或自动重连；返回规范化流                             |
+| Completion { prompt }               | 裸文本续写，默认叙事形态；v1 不传 suffix / echo                                |
+| Chat { messages, assistantPrefix? } | 普通 chat；有 prefix 时要求 adapter 明确支持，不伪造支持                       |
+| ProviderDelta                       | Text、Reasoning、Usage、Finish；只有 Text 进入目标护栏，正文与内部提议共用机制 |
+| ProviderError                       | 结构化类别、HTTP 状态和可诊断来源；敏感正文不外传                              |
 
 业务结构至少包括以下字段；所有 byte 上限计算 UTF-8 长度，token 上限由 adapter 能力约束，不能互相替代：
 
@@ -146,7 +146,7 @@ GuardSpec 是按优先级排序的规则集合；编译时建立匹配所需状�
 
 预算数字只维护在通信契约。首字节是第一个安全字符被共享输出写入方接纳的时刻，与是否存在窗口监听器无关；持久化在先时，以两者最早发生为不可重试边界。网络包、SSE 注释、usage、reasoning 都不是首字节。
 
-首字节前的头阶段截止时间覆盖连接、HTTP 头、SSE 读取和护栏等待，不因收到 keep-alive 或 reasoning 重置。首字节后空闲计时只随新的安全叙事增量被接纳而重置；心跳不能让请求无限存活。不可把 reqwest 的 connect_timeout 当成完整头预算，也不可只靠按网络 read 重置的 read_timeout 实现业务空闲看门狗。[reqwest 超时语义](https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html)
+首字节前的头阶段截止时间覆盖连接、HTTP 头、SSE 读取和护栏等待，不因收到 keep-alive 或 reasoning 重置。首字节后空闲计时只随新的护栏安全增量被输出写入方或内部提议收集器接纳而重置；心跳不能让请求无限存活。不可把 reqwest 的 connect_timeout 当成完整头预算，也不可只靠按网络 read 重置的 read_timeout 实现业务空闲看门狗。[reqwest 超时语义](https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html)
 
 这意味着 thinking 请求若迟迟没有可交付正文，也会命中头阶段截止时间；v1 叙事默认关闭 thinking。若将来确需长推理，必须先在通信契约设计独立预算，不能在 adapter 悄悄放宽。
 
@@ -165,6 +165,12 @@ GuardSpec 是按优先级排序的规则集合；编译时建立匹配所需状�
 任一路径都不超过契约的单层总请求上限；模式降级、SDK 重试和 SSE 重连也不能在其外再发请求。每步使用相同冻结 prompt / stop / 模型，仅改变 temperature；重试沿用契约退避与抖动，等待可取消。只有空白仍算有字符，不因 trim 变成可重试空输出；客户端护栏或 length 截断的空结果都不启动温度阶梯；failed 快照 / 事件带实际 finishReason，不能把所有空输出伪装成 stop。
 
 reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never())；不是换成 reqwest 就自然没有自动重试。[默认行为](https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html)、[never](https://docs.rs/reqwest/latest/reqwest/retry/fn.never.html)
+
+## 内部提议与游戏回合
+
+012 的[阶段机](turn-state-machine.md)区分 roundId 与单次 LLM turnId。020 的同一协调器支持 public 正文输出和 private 提议输出；private 复用 Provider / 护栏 / 唯一重试调度器及首交付定义，收集器有界，不创建公开 turn ring、不发 llm:turn:*、不写正文 partial。解析 / 规则校验归引擎，Provider 不采骰、不选世界补丁。现有 TurnSnapshot 与事件字段无需增加 purpose；前端只消费 public 输出。
+
+游戏回合持有共享 lease，内部提议 / 叙事子调用借用它并分别分配新 turnId；不能对子调用再次获取门禁，不能让后台任务插入回合间隙。内部 JSON 被收集器接纳后同样禁止自动重发；schema 失败不触发额外纠错请求。012 冻结提议目标、上限与每游戏回合调用预算；单次物理请求、超时、空输出 finishReason 仍唯一遵循通信契约。以下正文快照 / 事件规则描述 public 输出，private 失败由引擎操作终态和脱敏诊断收尾。
 
 ## IPC 与回合生命周期
 

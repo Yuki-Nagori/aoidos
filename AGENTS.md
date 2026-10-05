@@ -12,6 +12,7 @@ Mythos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScri
 | 通信契约（命令 / 事件 / 错误码）          | [ai-docs/architecture/ipc-contract.md](ai-docs/architecture/ipc-contract.md)                   |
 | LLM Provider、护栏、请求策略、凭据边界    | [ai-docs/architecture/llm.md](ai-docs/architecture/llm.md)                                     |
 | 记录块、投影预算、持久化与恢复            | [ai-docs/architecture/record-engine.md](ai-docs/architecture/record-engine.md)                 |
+| 回合阶段、骰判、场景推进与因果回退        | [ai-docs/architecture/turn-state-machine.md](ai-docs/architecture/turn-state-machine.md)       |
 | 命令、verify 构成、覆盖率口径、打包、图标 | [ai-docs/architecture/build-and-development.md](ai-docs/architecture/build-and-development.md) |
 | 前端约定（逻辑归属 / SFC / mock 模式）    | [ai-docs/standards/frontend.md](ai-docs/standards/frontend.md)                                 |
 | UI 风格（设计语言 / token / 动效）        | [ai-docs/standards/ui.md](ai-docs/standards/ui.md)                                             |

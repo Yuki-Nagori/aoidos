@@ -46,19 +46,19 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 
 块用 Rust `#[serde(tag = "kind")]`、camelCase；公共字段为 `seq`、`createdAt`。seq 是会话逻辑块编号，正整数；已持久化或对外确认的编号不复用，当前进程失败预留允许留下空洞，JS 安全整数上限沿用契约。LLM 块另有 turnId、outcome 和可选 finishReason / error；正文仅为护栏后的规范文本。所有可选字段省略，不写 null。记录 seq、partial 的 partSeq、窗口信封 seq 是三种不同编号，禁止混用。重开从正式文件与 sidecar 已记录的最大编号继续；没有写盘或发布过的纯内存预留不构成跨进程事实身份。
 
-| kind            | 专属字段 / 来源                                                                        | 投影规则                                                                           |
-| --------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| playerSpeech    | playerId、text；仅 engine_submit_input 的类型化玩家输入创建                            | 玩家标记，保留真实输入                                                             |
-| characterSpeech | speakerId、text、turnId、outcome、finishReason?、error?；引擎先选合法角色              | 角色标记，不允许模型改 speakerId                                                   |
-| narration       | text、turnId、outcome、finishReason?、error?                                           | 旁白标记                                                                           |
-| dice            | expression、rolls、total、source                                                       | 机器上下文；由确定性骰判执行器创建                                                 |
-| check           | diceSeq、dc、result、ruleId                                                            | 引用此前有效 dice，result 为 success / failure / criticalSuccess / criticalFailure |
-| system          | code、message、relatedSeq?、turnId?、data?                                             | 只投影注册且有上下文意义的事件，不塞任意日志                                       |
-| recap           | fromSeq、throughSeq、text、sourceHash、estimatorVersion、origin（manual / background） | 经过验证的覆盖区间摘要，非世界状态指令                                             |
-| tombstone       | targetSeq、reason                                                                      | 格式预留；v1 不创建、不执行                                                        |
-| supersede       | supersedes、replacement、reason                                                        | 格式预留；v1 不创建、不执行                                                        |
+| kind            | 专属字段 / 来源                                                                        | 投影规则                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| playerSpeech    | playerId、text；仅 engine_submit_input 的类型化玩家输入创建                            | 玩家标记，保留真实输入                                                                             |
+| characterSpeech | speakerId、text、turnId、outcome、finishReason?、error?；引擎先选合法角色              | 角色标记，不允许模型改 speakerId                                                                   |
+| narration       | text、turnId、outcome、finishReason?、error?                                           | 旁白标记                                                                                           |
+| dice            | expression、rolls、total、source                                                       | 机器上下文；由确定性骰判执行器创建                                                                 |
+| check           | diceSeq、dc?、result、ruleId、planId?                                                  | 引用此前有效 dice，result 为 success / costlySuccess / failure / criticalSuccess / criticalFailure |
+| system          | code、message、relatedSeq?、turnId?、data?                                             | 只投影注册且有上下文意义的事件，不塞任意日志                                                       |
+| recap           | fromSeq、throughSeq、text、sourceHash、estimatorVersion、origin（manual / background） | 经过验证的覆盖区间摘要，非世界状态指令                                                             |
+| tombstone       | targetSeq、reason                                                                      | 格式预留；v1 不创建、不执行                                                                        |
+| supersede       | supersedes、replacement、reason                                                        | 格式预留；v1 不创建、不执行                                                                        |
 
-`rolls` 为 `{ sides, value }[]`，sides / value 正整数且 value <= sides；expression 保存规范表达式，total 是规则解释器计算结果，source 为 `{ kind, id }`，不能信任模型提供的骰子值。diceSeq 必须同会话、早于 check 且指向 dice；DC 是有限数值，具体规则范围与 critical 判断由 012 冻结。v1 尚未启用撤回时，读到 tombstone / supersede 进入只读兼容模式，不假装其控制语义已生效；012 若要启用 rewind，须先评审并实现控制块语义。
+`rolls` 为 `{ sides, value }[]`，sides / value 正整数且 value <= sides；expression 保存规范表达式，total 是规则解释器计算结果，source 为 `{ kind, id }`，不能信任模型提供的骰子值。diceSeq 必须同会话、早于 check 且指向 dice；DC 是有限数值，PbtA 省略 dc，DC 注册规则必有；分档及 critical 扩展以[阶段机](turn-state-machine.md)为准。012 补充 dice 的 planId / rng / modifiers、check 的 planId 以及可选公共 branchSeq，022 同步类型化读写，023 执行规则。v1 rewind 使用注册 system/historyFork 的因果控制协议，待 023 实现后才能执行；tombstone / supersede 仍只读，不把格式预留当作已启用撤回。
 
 一个业务块可包含多段落，text 中 LF 在 JSON 行里转义为 `\n`；UI 分层不是拆记录的理由。v1 每个 text 上限沿用 LLM 正文限制，其他文本型块同样有界；正式行最大 2 MiB，header 最大 2 MiB，sidecar 行最大 64 KiB。超限拒绝，读取按行有界扫描，不先读完整大文件进内存；具体正文 / event / chunk 上限仍见 005。
 
@@ -68,9 +68,15 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 
 未知块可能承载控制语义：因此可以只读查看 / 原样导出，投影展示可跳过，但禁止继续生成或修改世界状态，直至对应版本受支持。已知 kind 的未知可选字段也保留；未知 header / formatVersion、坏 JSON、重复 seq、非法已知字段或 hash 不符返回 store.corrupt，不以「尾行修复」删除中间损坏。升级先备份，再原子发布迁移文件；旧文件归档，不原地重写历史行。
 
+### 阶段因果事实与有效路径
+
+012 注册的 roundAccepted / checkPlanned / checkSkipped / settlementPlanned / roundSettled / roundEnded、sceneAdvanced / sceneStayed / sessionEnded、abandonCheckpoint 与 historyFork 均为类型化 system.code，具体 data 和控制顺序以[阶段机](turn-state-machine.md)为准。未知 system.code / 不支持的 data.version 可能承载控制含义，按未知 kind 只读处理，不继续投影生成或修改世界；诊断行也须登记，不接纳任意日志码。
+
+公共 branchSeq 省略表示根路径，存在时须引用此前已 applied historyFork。rewind 不删除旧行，不复用物理 seq；投影 / record page 读取当前有效路径，历史导出保留原行。fork applied 后更换 viewEpoch，淘汰旧 cursor / bodyRef / 请求；lastRecordSeq 仍为物理最高 seq。recap 仅在覆盖范围仍有效且 sourceHash 匹配时进入 prompt，不能把已回退后果带回来。022 提供受控读写 / 重放基础，023 接入控制执行及世界解释器；解释器缺失必须拒绝，不能先启用命令。
+
 ## 正式 prompt 语法与 GuardSpec
 
-v1 grammar 用明确的保留标记，显示文本、记录 JSON 与 prompt 文本是三个不同层。静态指令、角色定义来自可信剧本，玩家输入和历史正文是数据，不可升级为 system 指令。生成一次只填充一个由引擎选定的旁白或角色块，模型不能自行选择块 kind、角色、骰判或世界状态补丁。
+v1 grammar 用明确的保留标记，显示文本、记录 JSON 与 prompt 文本是三个不同层。静态指令、角色定义来自可信剧本，玩家输入和历史正文是数据，不可升级为 system 指令。正文生成一次只填充一个由引擎选定的旁白或角色块，模型不能自行选择块 kind、角色、骰判或世界状态补丁。012 的[内部提议通道](turn-state-machine.md#判定提议通道与请求预算)使用同源 GrammarSpec 登记独立目标，只解析类型化候选，不作为正文块 / partial。
 
 | 输入来源              | prompt 标记                                           |
 | --------------------- | ----------------------------------------------------- |
@@ -229,7 +235,7 @@ recap 追加的 fromSeq..throughSeq 为此前未覆盖的连续逻辑区间（�
 
 打开时扫描文件建立 seq → offset / length 的内存索引，仅保存索引与有界视图，不复制所有正文。默认按新到旧取块视图，页 response 的 lastSeq 是一致读取边界的记录事件信封基线，另有 lastRecordSeq 表示块位置。cursor 编码版本、sessionId、固定读边界、下一位置、方向和本进程 viewEpoch；前端不解析。分页期间新追加不混入旧 cursor，坏 / 跨会话 / 过期 cursor 为 app.bad-request，重启后重新取第一页；limit 仍遵循公共契约。
 
-一页的完整 JSON 载荷限制 512 KiB；即使没达到 limit，也在完整块边界返回 nextCursor。单块加封装超过页预算时返回摘要行和 bodyRef，由 engine_get_record_body 受限分段读取完整正文；原样导出从 Rust 文件完成，不向 IPC 发整文件。bodyRef 不含磁盘路径，绑定 sessionId / seq / 内容 hash，失效或不存在分别返回 app.bad-request / app.not-found；分段界限为有效 UTF-8 边界，每段最多 32 KiB。
+一页的完整 JSON 载荷限制 512 KiB；即使没达到 limit，也在完整块边界返回 nextCursor。单块加封装超过页预算时返回摘要行和 bodyRef，由 engine_get_record_body 受限分段读取完整正文；原样导出从 Rust 文件完成，不向 IPC 发整文件。bodyRef 不含磁盘路径，绑定 sessionId / seq / 内容 hash；错误码以[通信契约](ipc-contract.md)为准：有效引用指向不存在的 recordSeq 为 app.not-found，引用无效 / 跨会话 / hash 失配 / 身份过期为 app.bad-request；分段界限为有效 UTF-8 边界，每段最多 32 KiB。
 
 普通 page 的 lastSeq 不足以恢复已加载面板中的所有缺失块。engine_get_record_view 返回 items（最新窗口）、lastRecordSeq、needsRecovery、inFlight? 和 record 事件基线，窗口受同一页字节 / 条数上限；UI 以它替换“最新窗口”，保留旧页缓存但标记为旧边界，按 seq 合并，不把窗口外历史当丢失。先订阅并有界缓存事件，再取 view，再按基线消费；缺口取 view，不把 engine_get_phase 当记录快照。
 
@@ -247,7 +253,7 @@ from / to 在 progress 中表示该步版本，在 done / 快照中表示整个�
 
 store_get_migration 运行期快照包含 migrationId、phase、from?、to、current?、lastStep?、failedStep?、seq { progress, done, failed } 、error? 和 deliveryError?，字段详见契约。新流先注册监听再取当前快照，跨 migrationId 用新快照替换；迁移提交已经先于回调发生：回调同步准备 / 预留事件、更新 current 与基线，窗口投递排队到事务外；不套用记录增量的“预留后写盘”顺序，投递失败不重跑迁移。快照保存当前流和最近终态，不做事件重放；终态生产者退出后再清退旧 migrationId 的 seq，不复用 id。
 
-数据库打开 / 迁移错误必须收尾 failed 并更新快照；平台载荷准备、序号或投递失败记录 deliveryError=app.event-failed，保留数据库真实 completed / failed 状态，不把已提交迁移伪装为回滚失败。序号不可用时仍保存 current / 终态并释放门禁，不能谎报未提交版本。真实迁移失败导致业务库不开放，后续命令报 app.not-ready；只读迁移诊断快照仍可查询。最终事件全部丢失的检测限制沿用 IPC 契约，窗口重连 / 主动恢复可重新取快照，不暗加轮询。
+数据库打开 / 迁移错误必须收尾 failed 并更新快照；平台载荷准备、序号或投递失败记录 deliveryError=app.event-failed，保留数据库真实 completed / failed 状态，不把已提交迁移伪装为回滚失败。序号不可用时仍保存 current / 终态并释放门禁，不能谎报未提交版本。真实迁移失败导致业务库不开放，所需业务存储的后续命令按[通信契约](ipc-contract.md)报 app.not-ready；只读迁移诊断快照仍可查询，前端主动取快照展示失败，不持续轮询。最终事件全部丢失的检测限制沿用 IPC 契约，窗口重连 / 主动恢复可重新取快照，不暗加轮询。
 
 ## UI 映射与验收
 
