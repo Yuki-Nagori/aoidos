@@ -48,17 +48,17 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 
 | kind            | 专属字段 / 来源                                                                        | 投影规则                                                                                           |
 | --------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| playerSpeech    | playerId、text；仅 engine_submit_input 的类型化玩家输入创建                            | 玩家标记，保留真实输入                                                                             |
+| playerSpeech    | playerId、text、mode?、contentRange?；由引擎接纳的类型化玩家输入创建                   | 玩家标记，保留真实输入                                                                             |
 | characterSpeech | speakerId、text、turnId、outcome、finishReason?、error?；引擎先选合法角色              | 角色标记，不允许模型改 speakerId                                                                   |
 | narration       | text、turnId、outcome、finishReason?、error?                                           | 旁白标记                                                                                           |
-| dice            | expression、rolls、total、source                                                       | 机器上下文；由确定性骰判执行器创建                                                                 |
-| check           | diceSeq、dc?、result、ruleId、planId?                                                  | 引用此前有效 dice，result 为 success / costlySuccess / failure / criticalSuccess / criticalFailure |
+| dice            | expression、rolls、total、source、planId、rng、modifiers                               | 机器上下文；由确定性骰判执行器创建                                                                 |
+| check           | diceSeq、dc?、result、ruleId、planId                                                   | 引用此前有效 dice，result 为 success / costlySuccess / failure / criticalSuccess / criticalFailure |
 | system          | code、message、relatedSeq?、turnId?、data?                                             | 只投影注册且有上下文意义的事件，不塞任意日志                                                       |
 | recap           | fromSeq、throughSeq、text、sourceHash、estimatorVersion、origin（manual / background） | 经过验证的覆盖区间摘要，非世界状态指令                                                             |
 | tombstone       | targetSeq、reason                                                                      | 格式预留；v1 不创建、不执行                                                                        |
 | supersede       | supersedes、replacement、reason                                                        | 格式预留；v1 不创建、不执行                                                                        |
 
-`rolls` 为 `{ sides, value }[]`，sides / value 正整数且 value <= sides；expression 保存规范表达式，total 是规则解释器计算结果，source 为 `{ kind, id }`，不能信任模型提供的骰子值。diceSeq 必须同会话、早于 check 且指向 dice；DC 是有限数值，PbtA 省略 dc，DC 注册规则必有；分档及 critical 扩展以[阶段机](turn-state-machine.md)为准。012 补充 dice 的 planId / rng / modifiers、check 的 planId 以及可选公共 branchSeq，022 同步类型化读写，023 执行规则。v1 rewind 使用注册 system/historyFork 的因果控制协议，待 023 实现后才能执行；tombstone / supersede 仍只读，不把格式预留当作已启用撤回。
+`rolls` 为 `{ sides, value }[]`，sides / value 正整数且 value <= sides；expression 保存规范表达式，total 是规则解释器计算结果，source 为 `{ kind, id }`，不能信任模型提供的骰子值。diceSeq 必须同会话、早于 check 且指向 dice；DC 是有限数值，PbtA 省略 dc，DC 注册规则必有；分档及 critical 扩展以[阶段机](turn-state-machine.md)为准。dice / check 的 planId 均必有且同值，必须关联有效 CheckPlan；rng / modifiers 类型与算术语义按 012 定型，可选公共 branchSeq 表示有效分支。当前产品存档尚不存在，不保留缺 planId 的兼容写法；022 同步类型化读写，023 执行规则。v1 rewind 使用注册 system/historyFork 的因果控制协议，待 023 实现后才能执行；tombstone / supersede 仍只读，不把格式预留当作已启用撤回。
 
 一个业务块可包含多段落，text 中 LF 在 JSON 行里转义为 `\n`；UI 分层不是拆记录的理由。v1 每个 text 上限沿用 LLM 正文限制，其他文本型块同样有界；正式行最大 2 MiB，header 最大 2 MiB，sidecar 行最大 64 KiB。超限拒绝，读取按行有界扫描，不先读完整大文件进内存；具体正文 / event / chunk 上限仍见 005。
 
@@ -73,6 +73,8 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 012 注册的 roundAccepted / checkPlanned / checkSkipped / settlementPlanned / roundSettled / roundEnded、sceneAdvanced / sceneStayed / sessionEnded、abandonCheckpoint 与 historyFork 均为类型化 system.code，具体 data 和控制顺序以[阶段机](turn-state-machine.md)为准。未知 system.code / 不支持的 data.version 可能承载控制含义，按未知 kind 只读处理，不继续投影生成或修改世界；诊断行也须登记，不接纳任意日志码。
 
 公共 branchSeq 省略表示根路径，存在时须引用此前已 applied historyFork。rewind 不删除旧行，不复用物理 seq；投影 / record page 读取当前有效路径，历史导出保留原行。fork applied 后更换 viewEpoch，淘汰旧 cursor / bodyRef / 请求；lastRecordSeq 仍为物理最高 seq。recap 仅在覆盖范围仍有效且 sourceHash 匹配时进入 prompt，不能把已回退后果带回来。022 提供受控读写 / 重放基础，023 接入控制执行及世界解释器；解释器缺失必须拒绝，不能先启用命令。
+
+012 按 008 输入规范解析角色内 / 场外，playerSpeech 的 text 始终是原文；mode 省略为 inCharacter，contentRange 省略为全文，否则是经校验的 UTF-8 字节闭开区间。prompt 只取解析视图并在 CONTEXT 标明模式；UI / 复制 / 导出保留原始 text。场外模式不会产生骰判 / 世界补丁；不把 `/ooc` 升级为 system 指令。
 
 ## 正式 prompt 语法与 GuardSpec
 
@@ -105,11 +107,13 @@ LineStart 三条各声明无缩进、一个空格、两个空格、四个空格�
 
 ### 黄金记录与分片例
 
+以下为格式 / 投影片段，不是包含全部 CheckPlan 系统事实的完整对局文件。夹具登记 DC 扩展 perception 与 plan-a；零 seed 仅用于确定性夹具，生产 seed 来自系统熵。ChaCha20 零 seed / stream / 起点的首个 little-endian u32 为 0xade0b876，映射 d20 得 15，加能力修正 2 为 17。
+
 ```json
 {"kind":"playerSpeech","seq":1,"createdAt":"2026-10-06T00:00:01Z","playerId":"player-a","text":"我举灯走进门厅。"}
 {"kind":"narration","seq":2,"createdAt":"2026-10-06T00:00:02Z","turnId":"turn-a","text":"风穿过门缝。\n灯影落在楼梯上。","outcome":"completed","finishReason":"guard"}
-{"kind":"dice","seq":3,"createdAt":"2026-10-06T00:00:03Z","expression":"1d20+2","rolls":[{"sides":20,"value":12}],"total":14,"source":{"kind":"rule","id":"perception"}}
-{"kind":"check","seq":4,"createdAt":"2026-10-06T00:00:04Z","diceSeq":3,"dc":13,"result":"success","ruleId":"perception"}
+{"kind":"dice","seq":3,"createdAt":"2026-10-06T00:00:03Z","expression":"1d20+2","rolls":[{"sides":20,"value":15}],"total":17,"source":{"kind":"rule","id":"perception"},"planId":"plan-a","rng":{"algorithm":"chacha20-v1","mappingVersion":1,"seed":"0000000000000000000000000000000000000000000000000000000000000000","startCounter":"0","endCounter":"1"},"modifiers":[{"value":2,"source":{"kind":"ability","id":"perception"}}]}
+{"kind":"check","seq":4,"createdAt":"2026-10-06T00:00:04Z","diceSeq":3,"planId":"plan-a","dc":13,"result":"success","ruleId":"perception"}
 {"kind":"characterSpeech","seq":5,"createdAt":"2026-10-06T00:00:05Z","speakerId":"keeper","turnId":"turn-b","text":"灯别灭。","outcome":"completed","finishReason":"stop"}
 ```
 
@@ -135,7 +139,7 @@ LineStart 三条各声明无缩进、一个空格、两个空格、四个空格�
 我举灯走进门厅。
 [/MYTHOS:PLAYER]
 [MYTHOS:CONTEXT]
-感知检定：掷骰合计 14，DC 13，结果 success。
+感知检定：掷骰合计 17，DC 13，结果 success。
 [/MYTHOS:CONTEXT]
 [MYTHOS:NARRATION]
 ```
