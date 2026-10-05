@@ -124,9 +124,9 @@ interface PhaseSnapshot extends PhaseState {
 
 所有可选项省略，不用 null；无活动场景省略 scene，不造空路径。inFlight 表示当前 lease 所有者，rewind 可无 roundId，内部提议可无公开 turnId；resumeRequired 表示暂停且无在飞请求，必须有 checkpoint，不能与 inFlight 同时为真。lastOperation.failed 必有脱敏 error，其他结果省略；新接纳替换上一结果，不保留旧 error。回合终态和当前 phase 独立：骰判后失败可暂停在 settling。needsRecovery 阻止恢复 / 新行动，但 get_phase 与诊断查询可用。PhaseState 的单次事件载荷最多 64 KiB，scene.path 最大深度 16，title 最多 256 字节，脱敏 error.message 最多 512 字节；超限不得预留 / 发布载荷。
 
-stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每次确认可观察状态变化递增；historyRevision 为最新已 applied historyFork 的正式 seq，根为 0。四基线必有，未产生事件为 0；各自对应下文四个事件，不能以 revision 替代信封 seq。同次确认可产生多个不同名字事件并共用 revision，各事件 data 均携带完整 PhaseState；phase 快照不含正文，正文恢复使用 llm_get_turn / record view。
+stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每次确认可观察状态变化递增；historyRevision 为最新已 applied historyFork 的正式 seq，根为 0。公开叙事先建立空 llm_get_turn 快照，再确认 / 发布 inFlight.turnId，随后启动网络请求。四基线必有，未产生事件为 0；各自对应下文四个事件，不能以 revision 替代信封 seq。同次确认可产生多个不同名字事件并共用 revision，各事件 data 均携带完整 PhaseState；phase 快照不含正文，正文恢复使用 llm_get_turn / record view。
 
-- engine:phase:changed：data 为 PhaseState，仅公开 phase 发生变化时发；同阶段内部步骤由快照 / 对应操作终态描述。
+- engine:phase:changed：data 为 PhaseState，公开 PhaseState 变化时发，包括 phase、inFlight 身份、检查点与恢复状态的变化；同阶段新公开 turnId 必须通知，私有内部步骤不改变公开状态时不发。正文 token 增量不触发该事件。
 - engine:scene:advanced：data 为 `{ ...PhaseState, previousSceneId? }`；真实切场或 sessionEnded 时发，结束后的 scene 省略；留场不发。
 - engine:operation:done：data 为 `{ ...PhaseState, operationId, outcome: "completed" | "cancelled" }`，operationId 标识此次完成；lastOperation 仍描述最近接纳操作，旧操作完成不能覆盖新接纳结果。
 - engine:operation:failed：data 为 `{ ...PhaseState, operationId, code, message }`，顶层 code / message 是此次 operation 的脱敏失败；仅当它仍是最近接纳操作时更新 lastOperation/failed 的同值 error。
