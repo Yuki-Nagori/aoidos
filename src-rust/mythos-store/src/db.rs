@@ -743,6 +743,8 @@ INSERT INTO children VALUES (42);";
     #[test]
     fn snapshot_and_backup_listing_report_invalid_parent() {
         let dir = tdir("db-read-invalid");
+        // NUL 在所有平台都不能作为文件名，元数据错误不得转换为缺失库。
+        assert!(current_version(&dir.join("invalid\0.sqlite")).is_err());
         let parent = dir.join("blocked");
         fs::write(&parent, b"not a directory").unwrap();
         assert!(current_version(&parent.join("storage.sqlite")).is_err());

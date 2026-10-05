@@ -49,7 +49,7 @@ issue #7 修复及 015–017 整体复核（本地 macOS）：
 | 日期       | 命令                    | 实际结果                                         |
 | ---------- | ----------------------- | ------------------------------------------------ |
 | 2026-10-05 | `bun run verify`        | 十项 exit 0；Rust 85 tests，Web 7 tests          |
-| 2026-10-05 | `bun run coverage:rust` | 1837/1837 行（100%），含 commands / events / ipc |
+| 2026-10-05 | `bun run coverage:rust` | 1838/1838 行（100%），含 commands / events / ipc |
 
 ## 风险与回退
 
@@ -62,7 +62,7 @@ READ_ONLY 保证不写入业务库和不执行迁移；SQLite WAL 读锁仍由 S
 - 2026-10-05：进度移到提交成功后，补测后续步骤失败时已成功步骤保留；列表保留 nanos 字符串精度和最新 50 项上限，目录错误不静默吞掉，目录及链接不冒充备份。
 - 2026-10-05：补充 Rust Serialize 载荷、TS 薄调用和两端测试；按契约整理文档，不新增 task。真实 emit_to 与监听恢复仍待 006 接入。
 
-- 2026-10-05：[Windows CI](https://github.com/Yuki-Nagori/mythos/actions/runs/37327046795) 暴露父路径为文件时也返回 NotFound 的平台差异；在缺失分支逐级验证祖先，避免误报版本 0 / 空备份列表。补测直接父级和更深祖先受阻，不放宽断言或覆盖率门槛。
+- 2026-10-05：[Windows CI](https://github.com/Yuki-Nagori/mythos/actions/runs/37327046795) 暴露父路径为文件时也返回 NotFound 的平台差异；在缺失分支逐级验证祖先，避免误报版本 0 / 空备份列表。补测直接父级、更深祖先受阻及 NUL 文件名的元数据错误，不放宽断言或覆盖率门槛。
 
 ## 完成摘要
 
