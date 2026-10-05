@@ -18,7 +18,7 @@ const BACKUPS_TO_KEEP: usize = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 打开（必要时创建）数据库并推进迁移。`migrations[v]` 把 user_version 从 v
-/// 推到 v+1；任一迁移失败即回滚并上抛，数据库保持在旧版本。
+/// 推到 v+1；失败步骤回滚并上抛，此前已提交步骤保留，版本停在失败步骤开始前。
 ///
 /// 比当前二进制新的库在改日志模式之前就拒绝，避免把只读打开写成 WAL。
 /// 调用方先持有 [`super::lock::InstanceLock`]；同一目录只放一个业务库，备份共用 `backups/`。
