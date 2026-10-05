@@ -309,6 +309,8 @@ else showGenericError(err);
 - 前端分支**反例**：`err.message.includes("rate")`（文案漂移即坏）；`switch (err.code)` 不写 default。
 - 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../standards/comments.md) 为映射器补直测（参照 `mythos-store` 的 `err_*` + stage_mappers 模式）。
 
+007 的[拟实施记忆端口](memory.md#高级设置与跨端接口)尚未注册 Tauri 命令，不改变本目录现有 API。参数 / 过期版本使用 app.bad-request、未知查询身份 app.not-found、门禁 app.busy、持久损坏 store.corrupt，网络错误沿用 llm._；内部候选拒绝 reason 不作为供应商 quota。所需旧策略不可用时，拟端口返回 app.not-ready，保留原数据并开放只读诊断，不用 store.corrupt 指代仅版本不受支持。具体 DTO / 命令由后续实施同 commit 展开到本目录，遵循 Rust / TS 同型，不新增 memory:_ 事件流或持续轮询。
+
 ## 工程纪律（可检查版）
 
 每条 = 怎么做 + 怎么检查；动机见[职责边界](ts-rust-boundary.md)与 [Herta 调查](../research/001-herta.md)。预算数字只维护在本节。
