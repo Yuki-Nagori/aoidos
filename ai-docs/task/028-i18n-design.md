@@ -11,7 +11,7 @@
 
 ## 必读
 
-[前端规范](../standards/frontend.md) · [通信契约](../architecture/ipc-contract.md) · [界面设计](../architecture/ui-shell.md) · [主题架构](../architecture/theming.md) · [LLM 预算](../architecture/llm.md) · [文档规范](../standards/documentation.md)。后续费用设计消费本任务的语言 / 格式化契约，不反向依赖计价设计。
+[前端规范](../standards/frontend.md) · [通信契约](../architecture/ipc-contract.md) · [界面设计](../architecture/ui-shell.md) · [主题架构](../architecture/theming.md) · [LLM 预算](../architecture/llm.md) · [文档规范](../standards/documentation.md)。[027 费用设计](027-llm-cost-control-design.md)消费本任务的语言 / 格式化契约，不反向依赖计价设计。
 
 ## 范围与非目标
 
@@ -36,7 +36,7 @@
 - [ ] 首批语言与默认检测 / 手动选择 / 回退规则明确，未支持语言不伪装已有翻译。
 - [ ] 文案资源、类型和缺键策略可验证，用户原文与机器协议保持原值。
 - [ ] 语言 / 币种 / 时区解耦，中文默认 CNY、其他 USD，手动币种优先；格式化不重算消费。
-- [ ] 与 026 启动 / 025 界面 / 费用设计主责对齐，偏好与 IPC 无重复接线。
+- [ ] 与 026 启动 / 025 界面 / 027 费用主责对齐，偏好与 IPC 无重复接线。
 - [ ] 用户评审后定稿，新增独立实现任务及有效依赖。
 
 ## 验证计划与结果
