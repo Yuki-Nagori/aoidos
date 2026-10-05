@@ -223,6 +223,8 @@ phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件
 | 023 → 007 未来钩子 | roundEnded/completed 确认后送 `{ sessionId, roundId, historyRevision, throughSeq }` 一次；当前仅接口，不生成记忆、不收费 |
 | src-tauri → 前端   | 适配普通载荷发 main 窗口，TS 与 Rust 同型；025 按 008 设计区分骰判行、正文、暂停恢复与脱敏失败                           |
 
+007 的[工程协议 v1](memory.md)推荐 completed 钩子只幂等登记素材与逻辑时钟；收费处理在回合释放 lease 后作为独立授权批次运行，保持本回合最多三个逻辑调用。记忆回退 / 恢复依赖本节有效路径和记录回执，不把后台候选直接送入阶段 reducer；当前仍未实现记忆钩子消费。
+
 023 用表驱动测试全部合法 / 非法转移，专项覆盖以下边界：
 
 - 判定：三档及阈值，dice 已提交而 check 缺失时不重掷。
