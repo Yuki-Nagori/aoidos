@@ -65,7 +65,9 @@ CREATE TABLE point_allocations (
 │   ├── transcript/<session-id>.jsonl
 │   ├── transcript/<session-id>.<turn-id>.partial.jsonl  # 唯一活跃安全增量日志（022 待实现）
 │   ├── memory/                   # 007 文件正文；manifest 在 storage.sqlite（029 待实现）
-│   │   ├── runs/<run-id>/        # 会话记忆版本正文与批次结果
+│   │   ├── runs/<run-id>/        # 会话记忆版本正文与批次结果（029 / 030 待实现）
+│   │   │   ├── entries/<entry-id>/<version-id>.json
+│   │   │   └── batches/<batch-id>/result.json
 │   │   └── cycle/                # 轮回刻痕，独立生命周期（032 待实现）
 │   └── exports/                  # 导出物（唯一允许被 shell 打开的目录）
 └── backups/                      # 迁移 / 覆写前的自动备份
