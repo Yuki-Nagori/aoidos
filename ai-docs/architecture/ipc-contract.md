@@ -13,7 +13,7 @@
 
 ## 命令命名
 
-- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine`。
+- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine` / `theme`（026 待实现）。
 - 动词约定：`get_` 取单值、`list_` 取列表、`set_` 替换一项配置、`create_ / update_ / delete_ / save_` 写实体、`submit_` 提交长流程、`cancel_` 取消在飞流程。
 - 形参：Rust snake_case；Tauri 默认把前端 camelCase 键映射到 snake_case 形参。**两侧固定「Rust snake_case ↔ 前端 camelCase」**，不使用 `rename` 特例。
 - 分页：可能超过一页的 `list_*` 使用 `{ cursor?, limit? }`，返回 `{ items, nextCursor? }`。省略 `limit` 时为 50，最大 200；`0` 或大于 200 返回 `app.bad-request`。cursor 是不透明字符串，前端只透传不解析。文档写明硬上限不超过 50 的列表可以不带分页，例如 `store_list_backups {}` 返回 `{ items }`。
@@ -155,6 +155,57 @@ stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每
 
 UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "auto" }`，首次默认为 false / manual；未知枚举、额外可写字段为 app.bad-request，持久化失败为对应 store.*。Rust 拥有持久化，前端不写文件。偏好修改不改变当前 round 的冻结值；任务 022 接入存储，023 在接纳时使用，025 界面实施消费该类型。源 schema / 配置升级由存储规范约束，不能把焦点、草稿或凭据塞进偏好。
 
+## 主题与皮肤命令（009 设计，尚未实现）
+
+[主题架构](theming.md)维护加载、目录、预算和防闪，026 实现。所有返回与 Rust 类型同型，当前不新增实际 invoke 注册。
+
+| 命令                 | 参数                           | 成功返回                                          |
+| -------------------- | ------------------------------ | ------------------------------------------------- |
+| theme_get_preference | 无                             | ThemePreference                                   |
+| theme_set_preference | `{ theme: "dark" 或 "light" }` | 已持久确认的 ThemePreference，仅更新主题项        |
+| theme_skin_load      | `{ scriptId }`                 | SkinLoadResult，返回规范常量，不返回原 CSS 或路径 |
+
+```ts
+interface ThemePreference {
+  version: 1;
+  theme: "dark" | "light";
+}
+// 原生首窗注入的只读值；降级值不是已持久化确认的偏好。
+interface ThemeBootstrap {
+  version: 1;
+  theme: "dark" | "light";
+  fallbackReason?: "storageUnavailable" | "invalidPreference";
+}
+interface SkinToken {
+  name: string;
+  value: string;
+}
+interface SkinWarning {
+  code:
+    | "unknown-token"
+    | "protected-token"
+    | "invalid-declaration"
+    | "invalid-value"
+    | "invalid-reference"
+    | "cyclic-reference";
+  mode?: "dark" | "light";
+  token?: string;
+  line?: number;
+}
+interface SkinLoadResult {
+  scriptId: string;
+  status: "missing" | "valid";
+  sourceHash?: string;
+  tokens: { dark: SkinToken[]; light: SkinToken[] };
+  warnings: SkinWarning[];
+  warningsTruncated: boolean;
+}
+```
+
+ThemeBootstrap 由 026 在窗口创建前注入，非 invoke 返回，也不带原 CSS / 路径 / 错误正文；普通浏览器开发确定性用 dark。首次缺偏好为 dark，未知持久枚举为 store.corrupt；非法 theme / scriptId 参数为 app.bad-request，未登记 scriptId 为 app.not-found。目录合法但 theme.css 不存在为 missing，省略 sourceHash，返回空两套 / 空 warnings；读取失败为 store.*。valid 必有 SHA-256 小写十六进制 sourceHash，空文件 / 全部声明被局部丢弃可返回空映射。结构 / 硬预算错误返回 theme.invalid-skin，无部分 tokens；前端收到失败须清退旧皮肤。
+
+SkinToken.name 只取主题目录，value 只含 Rust 规范化常量，按目录顺序输出，每模式每名称最多一次。warning.token 仅目录名或受限 ASCII 候选（最多 64 字节），非安全名称省略，不泄露原值 / 路径；line 为 1 起安全整数。载荷 / warning / 缓存限额只在主题架构维护。theme 域无后台任务或事件流，响应即是已确认结果，不借主题切换取得游戏回合 lease。
+
 ## 记录命令与运行期迁移快照（006 设计，尚未实现）
 
 规则与磁盘结构见[记录引擎](record-engine.md)，实现由 022 承接；下列载荷不修改当前 Rust / TS API。本节定稿后，022 在同次实现提交中同步两端类型与调用者，不能只改文档就宣称运行期接口已生效。
@@ -224,10 +275,11 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 ## 错误码目录
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
-- 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`llm.*` 与 `engine.*` 的码名在本文预留（映射随 018、022、023 等实现任务落地），触发条件由 005 / 006 / 012 按域冻结。`app.*` 属于命令层。
+- 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`theme.*`（026）、`llm.*` 与 `engine.*` 的码名在本文预留（映射随 018、022、023 等实现任务落地），触发条件由 005 / 006 / 012 按域冻结。`app.*` 属于命令层。
 - 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（所需业务存储未开放：初始化尚未完成，或运行期迁移失败后被冻结；后一种为 022 待实现行为。普通业务命令拒绝，但 store_get_migration 诊断仍可用；前端主动取该快照展示脱敏迁移失败，不持续轮询）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
+- theme 预留（009 设计，026 待实现）：`theme.invalid-skin` 表示存在的皮肤结构 / 硬预算不合法；缺文件为成功 missing、单条语义失败为 warnings、读取失败为 store.*，不自动重试。
 - llm 预留（005 已评审设计，映射尚未实现）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
 
 | 码               | 触发条件                                                                                                                                                                                            | 自动重试边界                                                      |

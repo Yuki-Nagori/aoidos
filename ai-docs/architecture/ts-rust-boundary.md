@@ -9,7 +9,7 @@
 - **命令层薄**：`src-tauri` 的 `#[tauri::command]` 只解参数、转发、回包，不写业务；业务逻辑在 workspace 的业务 crate 里，命令层只做转发。
 - **内存域结构归 Rust**：图（技能树 / 关系网）、索引、缓存等运行时领域结构在业务 crate 内存中维护（候选库如 petgraph，仅在需求真实出现时经 task 引入）；SQLite 与文件只做持久化与查询，重启时由持久层重建内存状态。详见[存储基建](storage.md)「三层模型」。
 
-域 → 任务覆盖：LLM 与密钥 → [task 005](../task/005-llm-design.md)；记录与上下文 → [006](../task/006-record-design.md)；记忆 → [007](../task/007-memory-design.md)；存储 / path / IO / shell 进程边界 → [011](../task/011-storage-design.md)；回合与阶段状态机（含骰判） → [012](../task/012-turn-state-machine-design.md)；通信契约 → [010](../task/010-ipc-contract-design.md)。
+域 → 任务覆盖：LLM 与密钥 → [task 005](../task/005-llm-design.md)；记录与上下文 → [006](../task/006-record-design.md)；记忆 → [007](../task/007-memory-design.md)；存储 / path / IO / shell 进程边界 → [011](../task/011-storage-design.md)；回合与阶段状态机（含骰判） → [012](../task/012-turn-state-machine-design.md)；通信契约 → [010](../task/010-ipc-contract-design.md)；主题 / 皮肤校验 → [009](../task/009-theming-design.md) 与 [026](../task/026-theming-impl.md)（设计 / 实现）。
 
 ## 工作区布局
 

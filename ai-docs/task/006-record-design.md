@@ -63,6 +63,7 @@
 - 2026-10-06：issue #20 统一迁移冻结后的 app.not-ready 与主动诊断、有效 bodyRef 指向缺失 seq 的 app.not-found；同步 012 的三档判定、内部提议与 historyFork 有效路径设计，tombstone / supersede 仍只读。006 保持设计 done，未实现。
 - 2026-10-06：接收 008 行呈现与场外输入原文 / mode / contentRange，partial 仍只用公开正文快照预览，未启用控制只读，historyFork 仍保留原始历史；022 类型读写承接，设计 done 不代表实现。
 - 2026-10-06：issue #24 把 planId / rng / modifiers 写回 dice 块表、check.planId 改为必有；黄金例同步计划身份与确定性 RNG / total，不保留不存在旧存档的兼容口径。
+- 2026-10-06：issue #26 把 narration 与 characterSpeech 分行映射，指向已定稿 008 / ui-shell；移除“008 未完成”的过期描述，未改变记录事实粒度。
 
 ## 完成摘要
 
