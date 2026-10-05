@@ -59,6 +59,15 @@ impl From<StoreError> for CmdError {
     }
 }
 
+/// 平台投递失败的诊断上下文；载荷序列化和序号错误由 events 模块处理。
+pub(crate) fn event_delivery_error(event: &str, source: String) -> CmdError {
+    CmdError::new(
+        "app.event-failed",
+        format!("事件 {event} 发送失败"),
+        Some(serde_json::json!({ "event": event, "source": source })),
+    )
+}
+
 /// `StoreError::code()` 的九个返回值 → 可展示中文。新增码先在
 /// ai-docs/architecture/ipc-contract.md 错误码目录登记，再在此补一行。
 fn store_message(code: &str) -> String {
@@ -173,5 +182,19 @@ mod tests {
         let detail = cmd.detail.unwrap();
         assert_eq!(detail["version"], 1);
         assert!(detail["reason"].as_str().is_some());
+    }
+
+    #[test]
+    fn event_delivery_error_serializes_context() {
+        let error = event_delivery_error("store:migration:progress", "platform failure".into());
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["code"], "app.event-failed");
+        assert_eq!(value["detail"]["event"], "store:migration:progress");
+        assert_eq!(value["detail"]["source"], "platform failure");
+        let invalid: CmdError = StoreError::InvalidPath("original<>path".into()).into();
+        assert_eq!(
+            serde_json::to_value(invalid).unwrap()["detail"]["path"],
+            "original<>path"
+        );
     }
 }

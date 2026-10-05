@@ -52,6 +52,8 @@ CREATE TABLE point_allocations (
 - Schema 迁移：`PRAGMA user_version` + 按版本号排列的内嵌 SQL 切片；每次迁移用 IMMEDIATE 事务，执行或提交失败由 RAII 回滚，`user_version` 与 schema 同事务推进。SQL 不得自行 BEGIN / COMMIT / ROLLBACK；每个迁移配套回填测试。
 - 业务 crate 不依赖 tauri：数据根路径由装配层（src-tauri）解析后注入。
 
+`current_version` 使用 READ_ONLY 打开读取已持久化版本，缺失库或父目录为 0，不创建数据目录 / 库。缺失分支检查现存祖先是否为目录，避免 Windows 把文件挡住父路径的 NotFound 当成新安装。读取与迁移打开共用路径归一化和 busy 预算。`open_with_progress` 在每步事务提交成功后回调 `{ from, to }`，失败步骤不回调；之前成功步骤不撤销，无需迁移时无回调。回调是同步纯数据出口，命令层事件适配尚待 006。备份的 IPC 字段与限制统一见[通信契约](ipc-contract.md)。
+
 ## 目录与路径规范
 
 ```text

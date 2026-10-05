@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-05。均为项目约定。状态：**部分落地**——首个业务 crate `src-rust/mythos-store`（task 013）已按本文分工落地并通过 CI 门禁（业务 crate 不依赖 tauri、装配 `lib.rs` 不计覆盖、域逻辑 100% 行覆盖）；后续 crate 与域落地时继续按本文检验并回写。工程纪律部分借鉴 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-05。均为项目约定。状态：**部分落地**——业务 crate `src-rust/mythos-store`（013）与 IPC 基座（015–017）已按本文分工落地并通过质量门禁（业务 crate 不依赖 tauri、装配 `lib.rs` 不计覆盖、域逻辑 100% 行覆盖）；后续 crate 与域落地时继续按本文检验并回写。工程纪律部分借鉴 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -26,7 +26,7 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 mythos-llm / mythos-en
 
 命令 / 事件 / 错误码的命名与形状细则（含看门狗预算表、重试单层化、后台任务门槛的可检查清单）见[通信契约](ipc-contract.md)。
 
-- 命令：前端 `invoke(name, args)` ↔ Rust command；参数 / 返回类型 Rust 定型后 TS 立即声明同型（沿用 [Rust 约定](../standards/rust.md)）。
+- 命令：已落地的 store 薄调用和载荷类型在 `src-web/api/store.ts`；前端 `invoke(name, args)` ↔ Rust command；参数 / 返回类型 Rust 定型后 TS 立即声明同型（沿用 [Rust 约定](../standards/rust.md)）。
 - 事件：长流程（LLM 流式输出、对局推进、后台任务进度）由命令层 `emit_to("main", …)` 推给前端。业务 crate 只通过不含 Tauri 类型的进度出口交出载荷。前端不轮询、不用 setTimeout 凑实时。信封与序号见[通信契约](ipc-contract.md)。
 - 错误：形状与目录见[通信契约](ipc-contract.md)。前端按 `code` 分支。
 - 大数据（对局记录、记忆文本）不塞 IPC 返回值——Rust 侧落盘，IPC 只回句柄 / 路径 / 摘要，前端需要时再按命令取分页。

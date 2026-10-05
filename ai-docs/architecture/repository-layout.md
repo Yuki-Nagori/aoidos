@@ -8,11 +8,14 @@
 │   ├── main.ts                # 应用入口：挂载根组件
 │   ├── App.vue                # 根组件：greet 示例（IPC 往返 + 浏览器回退）
 │   ├── app.css                # 全局样式（无 UI 框架）
+│   ├── api/                   # IPC 薄调用与 TS 载荷类型
 │   ├── utils/                 # 纯逻辑函数，配单测（计入覆盖率门槛）
 │   └── bench/                 # tinybench 基准示例
 ├── src-tauri/                 # Tauri 适配层：Rust（仅装配与命令层，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
-│   ├── src/commands.rs        # #[tauri::command] 命令层与命令单测
+│   ├── src/commands.rs        # #[tauri::command] 命令层、类型化载荷与命令单测
+│   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
+│   ├── src/events.rs          # 每流序号与事件信封，实际发送在 lib.rs
 │   ├── tauri.conf.json        # 窗口 / 打包 / 开发服务器
 │   ├── capabilities/          # IPC 权限声明
 │   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）

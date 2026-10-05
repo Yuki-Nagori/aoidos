@@ -1,6 +1,6 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-05。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**规划**——首批消费命令随 005 / 006 落地，落地时若有偏差回写本文。
+更新日期：2026-10-05。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐随 005 / 006 / 012 接入。
 
 ## 总则
 
@@ -8,6 +8,7 @@
 - 命令只回答「提交是否被接受 + 同步可得的即时结果」；长流程（生成、迁移、后台任务）的中间态一律走事件，不在命令里阻塞等待。
 - 载荷一律 JSON，字段 camelCase；Rust 侧载荷结构体标 `#[serde(rename_all = "camelCase")]`，不逐字段手写 rename。
 - 所有命令返回 `Result<T, CmdError>`，`CmdError` 固定序列化为 `{ code, message, detail? }`（见「错误码目录」）。
+- JS number 接收的整数字段必须在安全整数范围内；纳秒时间戳等大整数用十进制字符串传输。
 - 不兼容变更只换事件名。桌面应用前后端同包发布，不做字段级兼容层，信封不带版本号。
 
 ## 命令命名
@@ -19,11 +20,24 @@
 - 正例：`llm_set_key`、`engine_submit_input { text }`、`store_list_backups {}`。
 - 反例：`getScriptsData`（无域前缀）、`do_thing`（动词无信息量）、`llm_generate_stream`（流式不是命令——提交用 `llm_submit`，增量走事件）。
 
+## 已落地的 store 命令
+
+Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 只透传，不做运行时校验。命令不要求前端传入磁盘路径，setup 注入业务库路径；重复注入保留首次值。
+
+| 命令                  | 参数 | 返回                                          | 边界                                                                                 |
+| --------------------- | ---- | --------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `store_list_backups`  | 无   | `{ items: [{ path, version, nanos, size }] }` | 最新 50 项，新到旧；目录不存在为空；nanos 为 Unix epoch 纳秒字符串，size 为字节数    |
+| `store_get_migration` | 无   | `{ from, to, phase: "idle" }`                 | from == to == 持久化 user_version；库或父目录不存在为 0，不创建目录 / 库，不运行迁移 |
+
+快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。006 接入真实迁移流时，必须同时实现状态保存、阶段和每事件序号快照，再按下节规则对齐监听者。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
+
 ## 事件命名与载荷
 
 - `<域>:<对象>:<阶段>`，全小写冒号分隔（Tauri 事件名允许 `:`）。
 - 只有 `src-tauri` 调用 `emit_to("main", …)`。v1 单窗口，不做全局广播，避免未来多窗口时的载荷泄漏面。业务 crate 不得依赖 Tauri，进度经回调或通道交出普通载荷，由命令层发送。
-- 信封统一：`{ seq: u64, data: T }`。`seq` 在「事件名 + 流标识」内单调递增。`llm:turn:chunk` 与 `llm:turn:done` 各有自己的序号，互不占号。流标识：`llm:turn:*` 用 `turnId`；一次存储打开是一条迁移流；引擎阶段流的标识由 012 定。
+- 信封统一：`{ seq: u64, data: T }`，序号范围为 1 到 JS 最大安全整数（2^53−1），超过上限报 `app.event-failed`，不回绕。`seq` 在「事件名 + 流标识」内单调递增。`llm:turn:chunk` 与 `llm:turn:done` 各有自己的序号，互不占号。流标识：`llm:turn:*` 用 `turnId`；一次存储打开是一条迁移流；引擎阶段流的标识由 012 定。
+- 序号键由事件名和流标识两个独立字符串构成，空流标识仅在同一事件名下共用计数。条目存活到进程退出，空间随流数量增长。同一流由发送方串行投递；分配器仅保证序号分配，不保证并发投递顺序。data 序列化失败不占号，构造成功后投递失败会留下序号缺口。
+- 以下为真实事件消费方接入时必须满足的快照规则，当前还没有真实发送方：
 - 监听者先取该流的快照。快照给出这个流上每个事件名各自的最后 `seq`，监听者只取自己订阅的名字作为基线。之后该名字上 `seq <= 基线` 的事件丢掉；`seq == 基线 + 1` 才应用；出现更大的缺口就再取快照，不重放。没有基线时，第一条事件也按缺口处理，不从 0 推断。快照里的状态必须足够重绘，不能只给出最后一条 `delta`。
 
 | 事件                                            | 快照命令              | 状态至少包括                                                    |
@@ -38,7 +52,7 @@
   - `llm:turn:chunk`，data `{ turnId, delta }`（005 可加字段，不能删这两项）
   - `llm:turn:done`，data `{ turnId, outcome: "completed" | "cancelled" }`
   - `llm:turn:failed`，data `{ turnId, code, message }`（错误码见下）
-  - `store:migration:progress` / `store:migration:done`，data `{ from, to }`。当前 `db::open` 在返回前跑完迁移，不会发出这些事件；要发就必须给打开过程增加进度回调。
+  - `store:migration:progress` / `store:migration:done`，data `{ from, to }`。`open_with_progress` 和 `MigrationProgress` 已就绪，每步提交成功后回调，失败步骤不回调、无需迁移时不回调；此前成功步骤不会撤销。命令层 emit 适配、done / failed 收尾与运行期快照随 006 接入，当前没有真实发送方。
   - `engine:scene:advanced` / `engine:phase:changed`（012 冻结 data）
 - 流式期间发生错误：以 `*:failed` 事件收尾；命令本身的 `Err` 只表示「提交被拒绝」，两者不重复携带同一错误。
 
@@ -46,7 +60,7 @@
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
 - 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`llm.*` 与 `engine.*` 的码名在本文预留（映射随 005、012 的实现任务落地），触发条件分别由 005、012 冻结。`app.*` 属于命令层。
-- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（事件载荷未送达；监听者以快照对齐，不重试发送）、`app.not-ready`（存储尚未初始化——早于 setup 的调用；桌面正常流程不会出现）。存储路径或文件缺失只用 `store.not-found`。
+- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（存储尚未初始化——早于 setup 的调用；桌面正常流程不会出现）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - llm 预留（005 冻结每个码的触发条件）：`llm.missing-key` `llm.auth` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`。用户 `cancel_` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。

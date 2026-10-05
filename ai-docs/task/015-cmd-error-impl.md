@@ -18,10 +18,10 @@
 交付（`src-tauri/src/ipc.rs`）：
 
 1. `CmdError`：`Serialize` 为 `{ code, message, detail? }`（`detail` 为 `None` 时省略字段），字段 camelCase。
-2. `From<StoreError> for CmdError`：code 加 `store.` 前缀；`message` 按 `StoreError::code()` 映射中文文案；`InvalidPath` / `LockedTimeout` 的路径放 `detail.path`。
+2. `From<StoreError> for CmdError`：code 加 `store.` 前缀；`message` 按 `StoreError::code()` 映射中文文案；按变体携带 path、lockPath 或迁移 version / reason；无上下文时省略 detail。
 3. `greet` 示例对齐契约形状：`Result<String, CmdError>`（首个真实命令落地时替换，本任务不改其行为）。
 
-非目标：事件信封与 `seq`（随 005 实现落地，届时才有真实发送方）；`llm.*` / `engine.*` 错误码（005 / 012 冻结）；业务命令与前端 UI。
+非目标：事件信封与 `seq`（由 016 提供）；`llm.*` / `engine.*` 错误码（005 / 012 冻结）；业务命令与前端 UI。
 
 ## 实施步骤
 
@@ -42,23 +42,32 @@
 
 ## 验证计划与结果
 
+初次完成记录：
+
 | 日期       | 命令                     | 预期        | 实际结果                                        |
 | ---------- | ------------------------ | ----------- | ----------------------------------------------- |
 | 2026-10-05 | `cargo test --workspace` | 全过        | 62 passed（src-tauri 3 含 ipc.rs 2 + store 59） |
 | 2026-10-05 | `bun run coverage:rust`  | 行覆盖 100% | ipc.rs 81/81；全仓 1416/1416                    |
 | 2026-10-05 | `bun run verify`         | 十项 exit 0 | exit 0（首跑格式失守，format 后复跑通过）       |
 
+issue #7 修复及 015–017 整体复核（本地 macOS）：
+
+| 日期       | 命令                    | 实际结果                                         |
+| ---------- | ----------------------- | ------------------------------------------------ |
+| 2026-10-05 | `bun run verify`        | 十项 exit 0；Rust 85 tests，Web 7 tests          |
+| 2026-10-05 | `bun run coverage:rust` | 1838/1838 行（100%），含 commands / events / ipc |
+
 ## 风险与回退
 
-clippy 可能对「恒为 Ok 的 Result」提示 `unnecessary_wraps`——契约要求统一形状，若触发则按注释规范加带理由的 `#[allow]`。回退：摘除 ipc.rs 与 greet 签名即还原。
+前端仅按 code 分支，不把中文文案或诊断 reason 解析成稳定协议。真实平台投递尚无发送方；错误映射测试不等同于实际事件送达测试。回退必须同步消费者签名和对应契约。
 
 ## 决策与工作记录
 
-- 2026-10-05：创建任务。事件信封 / `seq` 明确不在本任务——没有真实发送方不预建，随 005 实现任务落地（契约已冻结形状）。
-- 2026-10-05：实现完成。`unnecessary_wraps` 未触发（greet 的 `Ok` 恒定返回在 `-D warnings` 下干净）。`From<StoreError>` 的九码断言用「按码构造 → 前缀 / 文案」表驱动直测；`detail.path` 仅 `InvalidPath` / `LockedTimeout` 携带。
-- 2026-10-05：IPC 整体 review 补齐 detail 覆盖——`AlreadyRunning` 带 `lockPath`、`Corrupt` 带 `reason`（区分「库新于二进制 → 升级应用」与「文件损坏 → 恢复备份」）；测试同步（detail 缺省断言改用 Io 变体）。
-- 2026-10-05：巡检同步（issue #6）：状态标 done；契约「IPC 映射尚未落地」回写为已落地（映射在 `src-tauri/src/ipc.rs`）；完成摘要测试数修正为 71（完成时 62）。
+- 2026-10-05：创建并完成 CmdError、store 九码前缀与中文映射，greet 保留示例行为。
+- 2026-10-05：第一次 review 扩展 detail：AlreadyRunning 带 lockPath，Corrupt 带 reason，Migration 带 version / reason；缺省字段用 Io 变体验证。
+- 2026-10-05：issue #6 同步状态与已落地映射描述。事件纯逻辑由 016 负责，真实发送适配仍未接入。
+- 2026-10-05：issue #7 整体复核，将平台事件错误上下文从 lib.rs 移入可测映射器，补测序列化形状和原始非法路径保留；TS CmdError 同型声明。错误码目录保持不变，完整验证见本次复核记录。
 
 ## 完成摘要
 
-命令层错误基座落地：`src-tauri/src/ipc.rs` 提供 `CmdError`（`{ code, message, detail? }`，camelCase，detail 缺省省略）与 `From<StoreError>`（`store.` 前缀 + 九码中文映射 + 路径 detail）；`greet` 对齐契约形状。71 个 Rust 测试全过（完成时 62，后续 016 / 017 与 review 增至），行覆盖 100%，verify 十项 exit 0。`detail` 覆盖经 review 扩展（路径 / 锁文件 / 迁移原因，见工作记录）；事件信封与 `seq` 的纯逻辑基座已由 016 提供，发送适配随 005 实现任务。
+CmdError 和 store 错误映射已落地，detail 缺省省略；平台事件失败的诊断映射有直测。当前两端类型、注释与契约对齐，验证结果按阶段记录，不将后续累计测试数混写为初次完成结果。
