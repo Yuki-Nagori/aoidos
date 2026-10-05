@@ -4,7 +4,7 @@
 
 ## 分层与真源
 
-采用方案 B：语义 CSS custom properties 是唯一运行时真源，声明在 `:root` / `:root[data-theme]`；Tailwind 的 `@theme inline` 仅将它们映射为工具类。组件消费语义 token，不以 Tailwind 默认色板或 `dark:` 分支再维护一套颜色。普通排版工具类可继续使用，皮肤不能写入 Tailwind 命名空间。
+采用方案 B：语义 CSS custom properties 是唯一运行时真源，声明在 `:root` / `:root[data-theme]`；Tailwind 的 `@theme inline` 仅将它们映射为工具类。组件消费语义 token，不以 Tailwind 默认色板或 `dark:` 分支再维护一套颜色。普通排版工具类可继续使用，皮肤只能写目录中明确允许的语义 token，不能写入 Tailwind 映射别名（如 `--color-*` / `--spacing-*`）或其他未登记变量；不能仅凭变量前缀判定权限。
 
 004 实现应用默认 token 与映射；026 的 Rust 业务 crate `mythos-theme` 维护目录元数据、类型化校验与规范输出，存储操作通过 store 访问，不能直接持有 SQL 连接。前端只应用 Rust 交出的值、维护显示代次，不读取 theme.css 或补一套解析器。该 crate 和命令均待创建，不把设计稿当已有 API。
 
@@ -43,7 +43,7 @@
 
 ### Tailwind 接线
 
-以下为映射片段，不是完整 CSS；004 按目录生成全部别名。先清默认颜色命名空间，再使用 inline 引用。不要重设整个 `--*` 命名空间，以免一并删掉普通排版和响应式默认值。[Tailwind 官方主题说明](https://tailwindcss.com/docs/theme#referencing-other-variables)
+以下为映射片段，不是完整 CSS；004 按目录为需要工具类的项生成别名，标为组件直接消费的项不进入 `@theme`。先清默认颜色命名空间，再使用 inline 引用。不要重设整个 `--*` 命名空间，以免一并删掉普通排版和响应式默认值。[Tailwind 官方主题说明](https://tailwindcss.com/docs/theme#referencing-other-variables)
 
 ```css
 @import "tailwindcss";
@@ -60,7 +60,7 @@
 }
 ```
 
-`--app-bg` 是渐变列表，不能别名为 `--color-app-bg`；动效不是新建一个未被 Tailwind 支持的命名空间。默认 token 需即使未出现在工具类中也保持存在，不能依赖 Tailwind 按使用量生成它们。开发测试验证 `text-ink` 等编译为语义 var 消费，旧调色板类不再可用；不只比较类名字符串。
+`--app-bg` 是渐变列表，不能别名为 `--color-app-bg`；Tailwind 本身支持 `--ease-*` 主题命名空间，但本项目 M01 `--ease-signature` 只在 `:root` 定义，由组件通过 `transition-timing-function: var(--ease-signature)` 直接消费，不进入 `@theme`，不生成 `ease-signature` 工具类，也不做同名 `var()` 自引用；M02 `--dur-micro` 同样直接消费。默认 token 需即使未出现在工具类中也保持存在，不能依赖 Tailwind 按使用量生成它们。开发测试验证 `text-ink` 等编译为语义 var 消费，旧调色板类不再可用；不只比较类名字符串。
 
 ## 应用主题偏好与防闪
 
@@ -166,23 +166,26 @@ warnings 只有固定 code、mode?、token?、line?，token 仅目录名或最�
 
 下表只验证设计结果，026 应转为 Rust / Web 夹具；没有当前运行解析器。
 
-| 输入 / 场景                                 | 预期                                                              |
-| ------------------------------------------- | ----------------------------------------------------------------- |
-| dark 中 --accent: #abc                      | 常量 #aabbccff，light 回应用默认                                  |
-| 同名 #abc 后跟 2px                          | 第二条 invalid-value，保留第一候选                                |
-| --accent: var(--muted)                      | 读取该模式的有效 muted 或应用默认值，输出 Color 常量              |
-| accent / muted 相互引用                     | 两者 cyclic-reference，依赖者一并丢弃；不恢复更早候选             |
-| --ink: var(--dur-micro)                     | invalid-reference，不安装跨类型引用                               |
-| var(--unknown) 或带 fallback                | invalid-reference / invalid-value，按失败阶段丢条，不交浏览器补救 |
-| --warning: #000                             | protected-token；原状态色保留                                     |
-| --dur-micro: 79ms / 80ms / 800ms / 801ms    | invalid-value / 接受 / 接受 / invalid-value                       |
-| --record-left: 0px / 4px / 24px / 25px      | invalid-value / 接受 / 接受 / invalid-value                       |
-| 转义 url 函数、image-set、env 或 !important | 单条拒绝；同块无关合法项仍生效，无资源请求                        |
-| :root 无主题、选择器列表或嵌套规则          | theme.invalid-skin，整份无输出                                    |
-| @import / @media / @font-face / @property   | theme.invalid-skin，不交 CSSOM 静默忽略                           |
-| 无效 UTF-8 / 第 129 声明 / 第 9 层嵌套      | theme.invalid-skin，即使多余声明后来会被丢弃                      |
-| 仅 dark 套，应用切至 light                  | 移除覆盖，使用完整默认浅色，不沿用 dark                           |
-| 切换剧本后旧请求成功 / 用户关闭皮肤         | 旧请求不安装；关闭后主题切换不重新启用                            |
+| 输入 / 场景                                           | 预期                                                              |
+| ----------------------------------------------------- | ----------------------------------------------------------------- |
+| dark 中 --accent: #abc                                | 常量 #aabbccff，light 回应用默认                                  |
+| 同名 #abc 后跟 2px                                    | 第二条 invalid-value，保留第一候选                                |
+| --accent: var(--muted)                                | 读取该模式的有效 muted 或应用默认值，输出 Color 常量              |
+| accent / muted 相互引用                               | 两者 cyclic-reference，依赖者一并丢弃；不恢复更早候选             |
+| --ink: var(--dur-micro)                               | invalid-reference，不安装跨类型引用                               |
+| var(--unknown) 或带 fallback                          | invalid-reference / invalid-value，按失败阶段丢条，不交浏览器补救 |
+| ui.md 双主题 --app-bg 的全部默认渐变，起始 stop 为 0% | 满足 GradientList 子集；默认快照和照抄的皮肤值均可解析            |
+| --app-bg 的 stop 使用无单位 0                         | invalid-value；不扩大仅允许百分比位置的子集                       |
+| --ease-signature: cubic-bezier(0.2,0.85,0.2,1)        | Easing 常量；仅组件直接消费，不生成 @theme 别名                   |
+| --warning: #000                                       | protected-token；原状态色保留                                     |
+| --dur-micro: 79ms / 80ms / 800ms / 801ms              | invalid-value / 接受 / 接受 / invalid-value                       |
+| --record-left: 0px / 4px / 24px / 25px                | invalid-value / 接受 / 接受 / invalid-value                       |
+| 转义 url 函数、image-set、env 或 !important           | 单条拒绝；同块无关合法项仍生效，无资源请求                        |
+| :root 无主题、选择器列表或嵌套规则                    | theme.invalid-skin，整份无输出                                    |
+| @import / @media / @font-face / @property             | theme.invalid-skin，不交 CSSOM 静默忽略                           |
+| 无效 UTF-8 / 第 129 声明 / 第 9 层嵌套                | theme.invalid-skin，即使多余声明后来会被丢弃                      |
+| 仅 dark 套，应用切至 light                            | 移除覆盖，使用完整默认浅色，不沿用 dark                           |
+| 切换剧本后旧请求成功 / 用户关闭皮肤                   | 旧请求不安装；关闭后主题切换不重新启用                            |
 
 ## 前端应用、隔离与回退
 

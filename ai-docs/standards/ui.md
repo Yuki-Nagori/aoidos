@@ -15,7 +15,7 @@
 
 ### 色板（按立绘微调）
 
-中性色沿用 Herta 基线（ink / muted / panel / bubble / hairline），强调色相向 `public/icon.png` 立绘靠拢：青绿主强调、紫次强调、橙品牌点缀；状态色不随主题变。
+中性色沿用 Herta 基线（ink / muted / panel / bubble / hairline），强调色相向 `public/icon.png` 立绘靠拢：青绿主强调、紫次强调、橙品牌点缀；状态色的语义和色相固定，明暗亮度按双主题表取值，皮肤不可覆盖。
 
 | Token                          | 浅色                    | 深色                    | 用途                     |
 | ------------------------------ | ----------------------- | ----------------------- | ------------------------ |
@@ -39,17 +39,17 @@
 :root,
 :root[data-theme="dark"] {
   --app-bg:
-    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.14) 0 10%, transparent 30%),
-    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.14) 0 8%, transparent 28%),
-    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.08) 0 9%, transparent 26%),
+    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.14) 0% 10%, transparent 30%),
+    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.14) 0% 8%, transparent 28%),
+    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.08) 0% 9%, transparent 26%),
     linear-gradient(135deg, #0c1a1d 0%, #0a1520 46%, #081018 100%);
 }
 
 :root[data-theme="light"] {
   --app-bg:
-    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.12) 0 10%, transparent 30%),
-    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.1) 0 8%, transparent 28%),
-    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.06) 0 9%, transparent 26%),
+    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.12) 0% 10%, transparent 30%),
+    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.1) 0% 8%, transparent 28%),
+    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.06) 0% 9%, transparent 26%),
     linear-gradient(135deg, #eef6f4 0%, #f2f4f7 100%);
 }
 ```
