@@ -18,7 +18,7 @@
 - 状态枚举与转移表、engine_submit_input、阶段 / 场景事件及 engine_get_phase。
 - PbtA 三档与 CheckPlan / RNG 元数据、内部提议、steer / resume / regenerate / historyFork、取消和崩溃恢复，记录追加时机与生成调用点。
 - scene / phase / operation 四事件及快照一致确认，暂停检查点、世界因果重放与失效 recap / viewEpoch；未知世界解释器明确拒绝。
-- 复用 020 的门禁 / UUID / 快照和 022 的记录投影；记忆只提供 007 定义的接口位置。
+- 复用 020 的门禁 / UUID / 快照和 022 的记录投影；记忆消费 completed 钩子；向 032 提供 012 定义的 SceneRuleView / 只读规则求值端口。
 
 非目标：不实现 NPC 自主排期、记忆蒸馏或完整游戏界面。
 
@@ -30,7 +30,8 @@
 
 1. 把设计转移表落为纯 Rust 状态转换，先覆盖非法转移与骰判正反例。
 2. 接入记录投影、LLM 请求与持久化输出；Tauri 命令仅适配产品输入。
-3. 补齐阶段快照 / 事件与中断恢复，回写契约、TS 同型与实际状态流。
+3. 实现 SceneCatalog 的进度 / 提示 / 出口规则登记、只读 SceneRuleView 与 SceneRuleMatch，实现引擎统一的类型化条件求值层，供场景晋级与 032 共用，不复制第二套。
+4. 补齐阶段快照 / 事件与中断恢复，回写契约、TS 同型与实际状态流。
 
 ## 预计改动
 
@@ -46,6 +47,7 @@
 - [ ] manual 等待与 auto 使用同一判定恰一次标记，重复 / 过期 plan 不重掷，偏好仅下一回合生效；场外输入无骰判 / 世界变更，重启待骰不自动收费。
 - [ ] checkpoint.stage / throughSeq / sourceRoundId 对每项重启投影有断言；不以 orphan / 最后物理 seq 代替锚点，缺事实或解释器先恢复，regenerate 无重掷分支。
 - [ ] 阶段快照可重绘，事件投递失败可按契约恢复，记录追加点与终态恰一次。
+- [ ] 场景规则视图 / 求值端口返回确认 revision 与可信依据，未知规则 / 解释器 / 过期视图与载荷超限拒绝；无规则集合保持空，不增加副作用或 LLM 调用。
 - [ ] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十项通过。
 
 ## 验证计划与结果
@@ -67,6 +69,7 @@
 - 2026-10-06：复核 012 文本与契约：同阶段公开 turnId 切换须通知，空 turn 快照先于身份发布和网络请求；补状态发现 / 首块竞态验收，公开五阶段不变。
 - 2026-10-06：按 008 / issue #11 补默认 manual 与 auto 偏好冻结、check waiting / rolling 摘要及 submit_check 恰一次接口；场外问答不改世界，重启待骰先显式恢复。状态仍 planned。
 - 2026-10-06：issue #24 明确暂停 checkpoint 的下一缺失步骤及确认事实锚；缺 check 不重掷、缺 narration 只补正文、部分结算核验 applied，regenerate 始终复用既有骰值。
+- 2026-10-06：issue #33 补齐 032 的前置交付：SceneCatalog 注册进度 / 提示 / 出口规则，023 提供 012 定义的只读 SceneRuleView / 求值结果和可信依据；032 只消费结果，不重复实现条件解释器。保持 planned，未增加公开阶段或回合调用。
 
 ## 完成摘要
 

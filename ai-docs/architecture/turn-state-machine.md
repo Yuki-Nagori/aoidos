@@ -203,6 +203,26 @@ SQL 失败或提交结果不确定按 006 pending 协议核验，needsRecovery �
 
 场景提议失败不随机替模型选，不重复发纠错请求。无符合候选时按可信规则留场；满足 sessionEnded 条件则持久化结束。接受候选时再次校验当前世界 revision、父子路径与条件；未改变场景发 sceneStayed 因果事实，不发 engine:scene:advanced。切换 / 结束先提交事实与世界投影，再发事件；header.staticPrefix 不热替换，新场景信息放动态 WorldView。世界只读投影预算沿用 006，不允许任意 SQL / 全数据库注入 prompt。
 
+### 场景规则视图与只读求值端口
+
+SceneCatalog 是可信剧本注册域；023 负责交付 SceneRuleView 及登记规则求值器，032 在其上维护派生进度 / 停滞计数和提示选择。以下是待实施的内部 Rust 端口，不新增 Tauri 命令、公开阶段或世界属性。
+
+| SceneRuleView 字段        | 注册内容与约束                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------ |
+| sceneId / catalogRevision | 已登记场景身份与规则目录修订，固定本次读取边界                                             |
+| advanceRuleIds            | 当前场景可用的晋级条件规则，目标仍由 SceneCatalog 的父子 / 入口条件限制                    |
+| progressRuleIds           | 可信进展条件规则；匹配及新的有效依据供 032 判断进展，持续匹配不等于每回合新进展            |
+| hintRules                 | hintId、whenRuleId、固定文本、priority 与目标范围；文本 / 权重由剧本注册，模型不可自由填写 |
+| exitRuleIds               | 已登记合法出口 / 结束条件；命中不代替正常晋级校验与提交                                    |
+
+端口为 `get_scene_rule_view(sceneId, catalogRevision)` 与 `evaluate_scene_rule(sceneId, ruleId, ConfirmedWorldView) -> SceneRuleMatch`。输入世界视图必须是当前已确认的不可变快照；结果含 ruleId、matched、catalogRevision、worldRevision、historyRevision 和 evidenceRefs。evidenceRefs 区分已注册剧本事实（剧本 / 规则版本、键、值 hash）与已提交记录事实（sessionId / recordSeq / 内容 hash），由注册解释器输出，不接受模型伪造引用。
+
+规则 ID 必须属于对应场景的已登记规则集合，条件由 023 实现的统一类型化条件求值层处理，场景晋级与 032 共用这一层；未知规则 / 解释器、过期 revision、缺失依据返回类型化拒绝，不能以 matched=false 掩盖无法求值。函数只读、不提交状态、不采随机、不调用 LLM。角色 / 原文相关引用仍需 022 核验有效路径；匹配结果不得直接当作世界补丁。
+
+内部端口同样有界：每类规则 ID 最多 64、hintRules 最多 32、单提示最多 512 字节，SceneRuleView 完整序列化最多 64 KiB；单次 SceneRuleMatch 的 evidenceRefs 最多 32。超过上限拒绝目录 / 求值结果，不截掉依据后宣称成功；这些是拟实施工程限制，不表示已有运行时。
+
+023 验证规则目录与只读求值结果，032 使用其确认身份幂等消费 completed 钩子；032 不复制条件解释器、不扩展权威状态。无 progress / hint / exit 配置的场景返回空登记集合，不自动制造进展或出口。原有公开五阶段、每回合三个 LLM 调用、场景提议与提交顺序保持不变。
+
 ## IPC、错误与消费
 
 engine_get_phase 可独立重绘阶段、场景、活动 round / 可公开 turn、暂停检查点、最近 operation 结果；正文从 llm_get_turn / 记录 view 获取，不把整份历史放阶段快照。精确字段、命令、阶段 / 场景 / 操作终态四个事件见[通信契约](ipc-contract.md)。内部提议省略 inFlight.turnId。启动公开叙事时先创建可读的空 turn 快照，再确认 inFlight.turnId 并发 engine:phase:changed，之后才启动网络流；即使 phase 未变也须通知。前端收到身份后按 021 的“先订阅、再快照”流程接入正文。
@@ -221,6 +241,7 @@ phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件
 | 023 → 022          | 每个事实、partial 封口、世界意图 / applied 和 fork 提交；确认后才能推进                                                  |
 | 023 → 018 / 019    | 通过 020 使用冻结 profile、Provider 与 GrammarSpec 生成的护栏；schema 不由 Provider 决策                                 |
 | 023 → 007 未来钩子 | roundEnded/completed 确认后送 `{ sessionId, roundId, historyRevision, throughSeq }` 一次；当前仅接口，不生成记忆、不收费 |
+| 023 → 032          | 交付 SceneRuleView / SceneRuleMatch 的只读内部端口；032 维护派生计数及提示，不反向改场景条件                             |
 | src-tauri → 前端   | 适配普通载荷发 main 窗口，TS 与 Rust 同型；025 按 008 设计区分骰判行、正文、暂停恢复与脱敏失败                           |
 
 007 的[工程协议 v1](memory.md)推荐 completed 钩子只幂等登记素材与逻辑时钟；收费处理在回合释放 lease 后作为独立授权批次运行，保持本回合最多三个逻辑调用。记忆回退 / 恢复依赖本节有效路径和记录回执，不把后台候选直接送入阶段 reducer；当前仍未实现记忆钩子消费。
