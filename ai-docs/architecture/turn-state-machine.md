@@ -32,30 +32,44 @@ phase 由已提交因果事实和当前活动任务派生，不另存阶段表�
 
 事件中携带的模型输出必须先由 driver 做长度 / schema 校验，再送 reducer；所有未列出的外部命令拒绝，内部不匹配的完成回执按身份丢弃并清理资源，不当成新输入。
 
-| 当前阶段                                                | 事件 / 前提                                   | 下一阶段               | 有序 effect / 确认边界                                                                                                     |
-| ------------------------------------------------------- | --------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| idle                                                    | Submit；活动场景、记录 / 世界可写、取得 lease | generating             | 先提交 playerSpeech + roundAccepted，再接纳成功，启动 checkProposal；骰判关闭时提交 checkSkipped/disabled 后直接 narration |
-| idle                                                    | Submit；可信规则强制判定                      | awaitingCheck          | 先提交 playerSpeech / roundAccepted / checkPlanned；不用付费提议，随后执行 RNG                                             |
-| generating / checkProposal                              | NoCheck；规则校验通过                         | generating / narration | 提交 checkSkipped，调用一个旁白或指定角色生成；phase 不变；公开 turnId 确认后发布状态通知                                  |
-| generating / checkProposal                              | CheckProposed；规则白名单通过                 | awaitingCheck          | 提交 checkPlanned；随后执行 RNG / 写 dice，v1 自动判定，不等待玩家点击                                                     |
-| awaitingCheck                                           | DiceCommitted                                 | settling               | 根据已提交 dice 计算并写 check；有 dice 无 check 时只补计算，绝不重新采样                                                  |
-| settling                                                | CheckCommitted；无 pending                    | settling / narration   | 投影带骰判结果的上下文，启动新的叙事 turn；公开 turnId 确认后发布状态通知，phase 仍为 settling                             |
-| generating / narration 或 settling / narration          | NarrativeCommitted；非空 completed            | settling               | 封口已由 006 确认；按可信规则生成并提交有限 WorldMutation，零变更也必须确认步骤完成                                        |
-| settling                                                | SettlementApplied                             | advancing              | 提交 roundSettled；筛选场景候选，再发起 sceneProposal 或确定性留场 / 结束                                                  |
-| advancing                                               | SceneValidated                                | advancing              | 校验候选和世界 revision，提交 sceneAdvanced / sceneStayed / sessionEnded，确认 SQLite applied 状态                         |
-| advancing                                               | AdvanceApplied                                | idle                   | 提交 roundEnded/completed，更新快照、发布终态，释放 lease；触发只读回合结束钩子                                            |
-| generating / narration 或 settling / narration          | 非空 completed/length                         | settling               | 接受为截断叙事，保留 finishReason=length，不自动再发“补完”请求                                                             |
-| 任一在飞阶段                                            | Cancel / 非持久化异步失败                     | 检查点投影阶段或 idle  | 先停止当前 child，完成已开始提交；保留正文 / 骰判，写 roundEnded/cancelled 或 failed，再发布终态                           |
-| 任一在飞阶段                                            | IO 不确定、pending mutation / 控制意图        | 当前确认阶段           | 冻结推进；快照 needsRecovery=true、operation failed；停止网络、释放 lease，修复前拒绝新行动                                |
-| generating 或 settling / narration                      | Interrupt(text)；本 round 可取消              | generating（新 round） | 持有同一 lease，旧 round 按取消封口 / 结束；新 playerSpeech + roundAccepted 提交成功后再启动新调用                         |
-| idle 或无 lease 的 awaitingCheck / settling / advancing | Resume / Regenerate；合法持久检查点           | 检查点对应阶段         | 显式新 operation / round / turn；复用有效 dice，不恢复旧 HTTP 请求                                                         |
-| idle 或无 lease 的 awaitingCheck / settling / advancing | Rewind；合法目标、重放可用                    | 目标投影阶段           | 执行下述 fork 控制协议；不启动 LLM，不重新掷骰                                                                             |
+| 当前阶段                                                | 事件 / 前提                                           | 下一阶段               | 有序 effect / 确认边界                                                                                                     |
+| ------------------------------------------------------- | ----------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| idle                                                    | Submit；角色内、活动场景、记录 / 世界可写、取得 lease | generating             | 先提交 playerSpeech + roundAccepted，再接纳成功，启动 checkProposal；骰判关闭时提交 checkSkipped/disabled 后直接 narration |
+| idle                                                    | Submit；角色内、可信规则强制判定                      | awaitingCheck          | 先提交 playerSpeech / roundAccepted / checkPlanned；不用付费提议；按冻结 diceMode 等待确认或执行 RNG                       |
+| idle                                                    | Submit；场外、活动场景、记录可写、取得 lease          | generating / narration | 先提交 playerSpeech / roundAccepted / checkSkipped/outOfCharacter；直接旁白回答，不启动判定提议                            |
+| generating / checkProposal                              | NoCheck；规则校验通过                                 | generating / narration | 提交 checkSkipped，调用一个旁白或指定角色生成；phase 不变；公开 turnId 确认后发布状态通知                                  |
+| generating / checkProposal                              | CheckProposed；规则白名单通过                         | awaitingCheck          | 提交 checkPlanned；manual 等待提交判定，auto 执行 RNG / 写 dice                                                            |
+| awaitingCheck                                           | SubmitCheck；匹配 roundId / planId，未开始执行        | awaitingCheck          | 标 rolling，按计划采样并提交 dice；重复请求不再次执行                                                                      |
+| awaitingCheck                                           | DiceCommitted                                         | settling               | 根据已提交 dice 计算并写 check；有 dice 无 check 时只补计算，绝不重新采样                                                  |
+| settling                                                | CheckCommitted；无 pending                            | settling / narration   | 投影带骰判结果的上下文，启动新的叙事 turn；公开 turnId 确认后发布状态通知，phase 仍为 settling                             |
+| generating / narration 或 settling / narration          | NarrativeCommitted；非空 completed                    | settling               | 封口已由 006 确认；按可信规则生成并提交有限 WorldMutation，零变更也必须确认步骤完成                                        |
+| settling                                                | SettlementApplied                                     | advancing              | 提交 roundSettled；筛选场景候选，再发起 sceneProposal 或确定性留场 / 结束                                                  |
+| advancing                                               | SceneValidated                                        | advancing              | 校验候选和世界 revision，提交 sceneAdvanced / sceneStayed / sessionEnded，确认 SQLite applied 状态                         |
+| advancing                                               | AdvanceApplied                                        | idle                   | 提交 roundEnded/completed，更新快照、发布终态，释放 lease；触发只读回合结束钩子                                            |
+| generating / narration 或 settling / narration          | 非空 completed/length                                 | settling               | 接受为截断叙事，保留 finishReason=length，不自动再发“补完”请求                                                             |
+| 任一在飞阶段                                            | Cancel / 非持久化异步失败                             | 检查点投影阶段或 idle  | 先停止当前 child，完成已开始提交；保留正文 / 骰判，写 roundEnded/cancelled 或 failed，再发布终态                           |
+| 任一在飞阶段                                            | IO 不确定、pending mutation / 控制意图                | 当前确认阶段           | 冻结推进；快照 needsRecovery=true、operation failed；停止网络、释放 lease，修复前拒绝新行动                                |
+| generating 或 settling / narration                      | Interrupt(text)；本 round 可取消                      | generating（新 round） | 持有同一 lease，旧 round 按取消封口 / 结束；新 playerSpeech + roundAccepted 提交成功后再启动新调用                         |
+| idle 或无 lease 的 awaitingCheck / settling / advancing | Resume / Regenerate；合法持久检查点                   | 检查点对应阶段         | 显式新 operation / round / turn；复用有效 dice，不恢复旧 HTTP 请求                                                         |
+| idle 或无 lease 的 awaitingCheck / settling / advancing | Rewind；合法目标、重放可用                            | 目标投影阶段           | 执行下述 fork 控制协议；不启动 LLM，不重新掷骰                                                                             |
 
-无 lease 的暂停阶段接纳 Submit 时，先提交 abandonCheckpoint，再复用 idle 转移；旧骰不进入新行动，已应用世界变更继续保留。强制判定优先于模型提议，NoCheck 不能跳过它。
+无 lease 的暂停阶段接纳 Submit 时，先提交 abandonCheckpoint，再复用 idle 转移；旧骰不进入新行动，已应用世界变更继续保留。先解析并分流场外输入；角色内行动的强制判定优先于模型提议，NoCheck 不能跳过它。
 
 接纳前校验所需 profile；输入与 roundAccepted 提交后返回，不等待 LLM。接纳前失败返回 Err，接纳后失败由 engine:operation:failed 和快照报告。
 
-`awaitingCheck` 指引擎正在执行已验证判定，不意味着存在玩家判定命令；v1 不发布 `engine_submit_check`。叙事 completed/guard 只说明生成块护栏正常封口，不能当作世界补丁。取消 / 失败不会触发结算和场景推进；已完成的独立世界意图保留，需回退才能撤销。
+008 / issue #11 将骰判交互定为默认 manual、可选 auto。`awaitingCheck` 包含 waiting 和 rolling 子状态：manual 持有 round lease 等待 `engine_submit_check`，auto 在计划提交后直接进入 rolling。偏好只在回合接纳时冻结；等待用户期间没有 HTTP 请求，不运行 LLM 首字节 / 空闲计时。重启后只恢复暂停检查点，不自动掷骰或收费。叙事 completed/guard 只说明生成块护栏正常封口，不能当作世界补丁。取消 / 失败不会触发结算和场景推进；已完成的独立世界意图保留，需回退才能撤销。
+
+## 玩家输入模式与判定确认
+
+`parse_input(text)` 是 Rust 纯函数；UI 仅预览，业务使用 Rust 结果。按原文首部识别 `/ooc` + 至少一个空白 + 非空内容，或整条 `((…))` 且内部非空为 outOfCharacter；其他普通文本为 inCharacter。首部 `\/` 为字面 slash，未知 / 未完成 slash 或空 wrapper 拒绝 app.bad-request。局部括号和 `/oocx` 不匹配场外语法；默认不 trim 事实原文。
+
+playerSpeech 保存 raw text、可选 mode 和 contentRange（UTF-8 字节闭开区间），省略时为 inCharacter / 全文；解析视图可去掉模式前缀 / 外壳，复制和导出仍为原文。范围必须落在字符边界且只覆盖语法确认的内容。roundAccepted 记录 mode，prompt 将其作为只读玩家上下文，不变成可信系统指令。
+
+outOfCharacter 是场外问答 / 表达偏好，不执行判定、WorldMutation 或场景切换；提交 checkSkipped/outOfCharacter，生成旁白回答，确认空结算后直接写 sceneStayed，不启动 sceneProposal 或依据场外正文结束对局。需要改变行动 / 世界时使用正式角色内输入或已冻结控制命令，不能从场外正文推导 SQL。角色身份仍由 Rust 登记，不允许前缀指定任意 actor。
+
+manual 待判定提供可信 plan 摘要（ruleId、actorId、expression、modifierTotal），UI 不传 seed、骰值、修正或规则覆盖。`engine_submit_check` 在同一串行所有者下将 waiting 改为 rolling；同 round / plan 的重复请求返回已有接纳结果，不能再次采样。auto 与手动请求竞争也由此标记裁决。请求响应只确认接纳，骰值由记录和阶段流交出；存储失败保留 / 核验实际事实，按既有 pending 协议处理。
+
+resume 到骰前时，新 round 重新校验合法计划并使用当前偏好冻结 diceMode；manual 仍须明确点击。已有 dice 的恢复 / 重生成不受偏好影响，始终复用。等待时停止 round 可释放 lease；新裸输入仍 busy，不把漫长等待当作自动取消授权。
 
 ## 判定提议通道与请求预算
 
@@ -84,7 +98,7 @@ CheckProposal 禁止 expression / rolls / dc / modifier / worldPatch；reason �
 
 v1 默认注册规则为 `pbta-2d6-v1`：2d6 + 修正之和，修正之和限定整数 −3 到 3；total >= 10 为 success，7–9 为 costlySuccess，<= 6 为 failure。三分支均须注册合法后果：代价与失败后果由规则表选择并交给叙事，失败推进新的处境，不自动终结游戏。结束只有可信 sessionEnded 条件能决定。规则可关闭骰判；暴击 / DC 判定是注册扩展，不改变五阶段。
 
-骰式 v1 只支持 `NdS±K`：N 1–20，S 2–1000，K 整数 −100 到 100；PbtA 默认仍固定 2d6，修正规则更严格。拒绝爆炸骰、无限重掷、任意函数和非有限数。骰式解析先用小子集，caith / tyche 留作候选，不在未验证可注入 RNG 及限制前接入；[caith 官方说明](https://github.com/Geobert/caith)包含更丰富骰式，不能直接视为本项目合法输入。
+骰式的 K 是 modifiers 的来源分解之和：total = sum(rolls.value) + K，不能再把 modifiers 加第二次。骰式 v1 只支持 `NdS±K`：N 1–20，S 2–1000，K 整数 −100 到 100；PbtA 默认仍固定 2d6，修正规则更严格。拒绝爆炸骰、无限重掷、任意函数和非有限数。骰式解析先用小子集，caith / tyche 留作候选，不在未验证可注入 RNG 及限制前接入；[caith 官方说明](https://github.com/Geobert/caith)包含更丰富骰式，不能直接视为本项目合法输入。
 
 RNG 建议使用 rand_chacha 的确定性生成器；实现时锁版本并用黄金向量冻结 `chacha20-v1` 的 seed 长度、字节序与无偏映射（[官方文档](https://docs.rs/rand_chacha/latest/rand_chacha/)）。
 
@@ -105,38 +119,44 @@ dice 新增 `planId`、`rng`、`modifiers`；check 新增 `planId`，result 包�
 
 ## 因果事实与重启投影
 
-006 的 system 使用下表注册的 code 保存可审计、可重放的因果事实。公共 version=1，有回合时 roundId 必有，接纳 / 控制操作有 operationId，所有引用均须在当前有效路径可解。profileRevision 仅是非敏感配置身份，不保存密钥或原始请求。stage / outcome 是事实分类，不是另存 phase。
+006 的 system 使用下表注册的 code 保存可审计、可重放的因果事实。公共 version=1，有回合时 roundId 必有，接纳 / 控制操作有 operationId，roundAccepted 保存 mode（inCharacter / outOfCharacter）及 diceMode（manual / auto），所有引用均须在当前有效路径可解。profileRevision 仅是非敏感配置身份，不保存密钥或原始请求。roundEnded.outcome 与 completedSteps 是结果 / 已完成步骤的审计摘要，不是另存 phase。
 
-| code              | data 必需内容（公共字段之外）                                                                                                                         |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| roundAccepted     | inputSeq、profileId、profileRevision、target `{ kind: narration 或 characterSpeech, speakerId? }`、sceneId；恢复时 sourceRoundId / checkpointSeq 必有 |
-| checkPlanned      | 完整 CheckPlan，包括 planId、ruleId、ruleVersion、actorId、expression、modifiers、resultPolicy、三档 branchId、worldRevision、planHash                |
-| checkSkipped      | reason（disabled / noCheck）、worldRevision                                                                                                           |
-| settlementPlanned | narrativeSeq、worldRevision、最多 32 个有序 WorldMutation，每项固定 mutationId 和版本化已注册 data                                                    |
-| roundSettled      | narrativeSeq、settlementSeq、appliedThroughMutationId?；无变更时省略最后一项                                                                          |
-| sceneAdvanced     | previousSceneId、完整 ScenePosition、worldRevision、mutationId                                                                                        |
-| sceneStayed       | sceneId、worldRevision                                                                                                                                |
-| sessionEnded      | previousSceneId、已注册 reasonId、worldRevision、mutationId                                                                                           |
-| roundEnded        | outcome（completed / cancelled / failed）、throughSeq、completedSteps[]；failed 必有脱敏 error，其他省略                                              |
-| abandonCheckpoint | sourceRoundId、checkpointSeq；之后不能自动沿用旧骰判                                                                                                  |
-| historyFork       | 下节冻结的 mode、父控制引用、targetSeq 与 prefixHash；无 round 时省略 roundId                                                                         |
+| code              | data 必需内容（公共字段之外）                                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| roundAccepted     | inputSeq、mode、diceMode、profileId、profileRevision、target `{ kind: narration 或 characterSpeech, speakerId? }`、sceneId；恢复时 sourceRoundId / checkpointSeq 必有 |
+| checkPlanned      | diceMode、完整 CheckPlan，包括 planId、ruleId、ruleVersion、actorId、expression、modifiers、resultPolicy、三档 branchId、worldRevision、planHash                      |
+| checkSkipped      | reason（disabled / noCheck / outOfCharacter）、worldRevision                                                                                                          |
+| settlementPlanned | narrativeSeq、worldRevision、最多 32 个有序 WorldMutation，每项固定 mutationId 和版本化已注册 data                                                                    |
+| roundSettled      | narrativeSeq、settlementSeq、appliedThroughMutationId?；无变更时省略最后一项                                                                                          |
+| sceneAdvanced     | previousSceneId、完整 ScenePosition、worldRevision、mutationId                                                                                                        |
+| sceneStayed       | sceneId、worldRevision                                                                                                                                                |
+| sessionEnded      | previousSceneId、已注册 reasonId、worldRevision、mutationId                                                                                                           |
+| roundEnded        | outcome（completed / cancelled / failed）、throughSeq、completedSteps[]；failed 必有脱敏 error，其他省略                                                              |
+| abandonCheckpoint | sourceRoundId、checkpointSeq；之后不能自动沿用旧骰判                                                                                                                  |
+| historyFork       | 下节冻结的 mode、父控制引用、targetSeq 与 prefixHash；无 round 时省略 roundId                                                                                         |
 
 sceneAdvanced / sessionEnded 的世界变更只允许对应注册类型，沿用 006 mutationId / applied 协议；上述表不建立世界属性 schema。completedSteps 固定来自 proposal / check / narration / settlement / advance，不接收模型任意字符串；它是派生的审计摘要，读取时与对应记录引用核验，不能单靠它越过缺失事实。恢复 roundAccepted 的 target 沿用检查点，profile 是新操作冻结值。
 
 `derive_phase(EffectiveHistory, AppliedWorld, LiveOwner?)` 为纯函数。正常打开先由 006 核验 / 封 partial、恢复已知 pending mutation，再对有效因果路径投影：
 
-| 优先匹配的持久事实                           | 无 live owner 时的阶段 / 操作                                             |
-| -------------------------------------------- | ------------------------------------------------------------------------- |
-| 有 pending / 未知控制操作                    | needsRecovery；保留确认阶段，先恢复，禁止收费和修改世界                   |
-| 当前回合 completed 或明确 abandon            | idle；保留最近终态，不恢复旧 turnId                                       |
-| roundSettled，但场景提交 / roundEnded 未完成 | advancing + resumeRequired；只补缺步骤，不重复选择已提交场景              |
-| completed 叙事已封口，尚未结算（含无骰回合） | settling + resumeRequired；只补结算，不重复正文                           |
-| dice 已提交，check / 叙事未完成              | settling + resumeRequired；补缺步骤，复用 dice                            |
-| historyFork 停在 checkPlanned，尚无 dice     | awaitingCheck + resumeRequired；显式 resume 复制合法计划到新 round 后采样 |
-| historyFork 停在 checkSkipped，尚无叙事      | idle + resumeRequired；显式 resume 从无骰叙事步骤继续                     |
-| accepted / planned 无 dice，进程中断         | 幂等写 roundEnded/failed 后 idle；保留输入与 orphan，不自动补掷           |
-| 无未完成行动，场景有效                       | idle；可提交新输入                                                        |
-| sessionEnded 或未载入场景                    | idle，省略 scene；新输入返回 engine.no-scene                              |
+| 优先匹配的持久事实                                 | 无 live owner 时的阶段 / 操作                                 | checkpoint.stage / throughSeq                                          |
+| -------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 有 pending / 未知控制操作                          | needsRecovery；先恢复，禁止收费和修改世界                     | 省略 checkpoint；禁止从未确认事实推导可恢复位置                        |
+| 当前回合 completed 或明确 abandon                  | idle；保留最近终态                                            | 省略 checkpoint                                                        |
+| roundSettled，但场景提交 / roundEnded 未完成       | advancing + resumeRequired；只补缺步骤                        | advance / 已 applied 的场景事实 seq；尚无场景确认时取 roundSettled.seq |
+| completed 叙事已封口，尚未结算（含无骰回合）       | settling + resumeRequired；只补结算                           | settle / settlementPlanned.seq；尚无计划时取 completed 叙事 seq        |
+| dice 已提交，check 缺失                            | settling + resumeRequired；计算分档，不重掷                   | check / dice.seq                                                       |
+| check 已提交，completed 叙事缺失                   | settling + resumeRequired；生成新正文                         | narration / check.seq                                                  |
+| manual checkPlanned 已提交，尚无 dice              | awaitingCheck + resumeRequired；先 resume，再确认掷骰         | check / checkPlanned.seq                                               |
+| historyFork 停在 checkPlanned，尚无 dice           | awaitingCheck + resumeRequired；显式 resume 按偏好等待 / 采样 | check / 目标 checkPlanned.seq                                          |
+| historyFork 停在 checkSkipped，尚无叙事            | idle + resumeRequired；显式 resume 生成正文                   | narration / 目标 checkSkipped.seq                                      |
+| accepted / planned 无 dice，进程中断（非上述暂停） | 幂等写 roundEnded/failed 后 idle；保留输入与 orphan           | 省略 checkpoint                                                        |
+| 无未完成行动，场景有效                             | idle；可提交新输入                                            | 省略 checkpoint                                                        |
+| sessionEnded 或未载入场景                          | idle，省略 scene；新输入返回 no-scene                         | 省略 checkpoint；有待收尾 advance 已由前列优先匹配                     |
+
+checkpoint 只在 resumeRequired=true 且已核验可恢复时出现。stage 表示下一项缺失工作：check 包括未掷骰或缺分档，narration 表示缺 completed 正文，settle 表示缺结算确认，advance 表示缺场景 / 回合收尾。throughSeq 是上表指定的已确认事实锚点，不是物理最后 seq、事件基线或合法 rewind 目标的自动推断。roundEnded/failed、orphan 和 historyFork 控制行自身不能替代这个锚点。
+
+sourceRoundId 指拥有待恢复工作的最近 roundAccepted.roundId，复用旧 dice / 正文时按 sourceRoundId / checkpointSeq 引用链解析其事实。throughSeq 必须在当前有效路径中，相关 planId / diceSeq / narrativeSeq / applied 标记一致；任何缺失 / 版本未知先 needsRecovery，不猜一个阶段。部分结算以 settlementPlanned 为锚，逐项 applied 状态另外核验。
 
 按表从上到下取第一个匹配项。roundEnded/failed 或 cancelled 保留未完成检查点；resumeRequired 表示等待用户主动恢复，此时没有请求在飞。outcome 描述操作结果，phase 描述当前执行位置。
 
@@ -148,7 +168,7 @@ resume 使用新 roundId / turnId、sourceRoundId 和 checkpoint 引用；一 LL
 
 已封 completed 的叙事存在而结算尚未确认时，resume 直接结算，不重复生成；settlementPlanned 的固定 mutationId 与 applied 标记逐项核验，只补未应用项，不重新计算一套后果。恢复 / 换回合事实保存 sourceRoundId 与已提交步骤引用，禁止仅靠阶段 enum 猜测缺哪一步。
 
-状态派生从当前有效检查点和尾部增量进行；首次打开 / rewind 可扫描整个因果文件，不能宣称恒定开销。checkpoint 只是可验证加速缓存，其 history hash / 控制版本不符就重放，丢失 checkpoint 不丢事实。
+状态派生从当前有效检查点和尾部增量进行；首次打开 / rewind 可扫描整个因果文件，不能宣称恒定开销。replayCache 是可验证的重放加速缓存，其 history hash / 控制版本不符就重放，丢失缓存不丢事实；它与 IPC 中的暂停 checkpoint 不同。
 
 恢复新 operation 按当前已保存 profile 冻结设置，不从历史还原已清除密钥；原 round 的 profileId / revision 只用于审计。没有可用配置时接纳前拒绝，不暗用备用模型。场景、世界初始化需要可信 session 基线；无基线 / 无世界 mutation 重放解释器的会话可以查看，禁止 rewind / 世界修改，不在本设计虚构世界属性 schema。
 
@@ -160,7 +180,7 @@ engine_cancel_round 取消本 round，重复取消返回其已有结果；round 
 
 rewind 与 regenerate 都用追加式 `system code=historyFork`，不用尚未定义的 tombstone / supersede。data 固定 `{ version, operationId, mode, parentControlSeq, targetSeq, sourceRoundId?, reusedDiceSeq?, prefixHash }`；mode 为 rewind / regenerate，parentControlSeq 为父分支控制 seq（根为 0），targetSeq 必须在父分支有效因果路径上。prefixHash 是父路径截至目标的有效普通块按 seq 顺序拼接原始行（含 LF）的 SHA-256；父路径由 parentControlSeq 链另行校验，不能把无效物理行或未 applied 控制算入该 hash。新分支身份就是此控制块 seq，后续普通块可带 branchSeq，根省略；物理 seq 始终递增，不从 targetSeq 重新编号。
 
-回退只允许可重放检查点：回合接纳前的已结束边界、已提交 checkPlanned 后但 dice 前的边界、或 check / checkSkipped 已提交后但叙事前的边界。拒绝 partial 内部、dice 与 check 之间、pending mutation 及任意自由行切片；目标非有效路径或未注册控制为 bad-request / invalid-phase。回退到骰前需用户主动 resume 或提交输入，才能在新分支采样新 plan；回退到 check 后只能复用该 dice。
+回退只允许可重放检查点：回合接纳前的已结束边界、已提交 checkPlanned 后但 dice 前的边界、或 check / checkSkipped 已提交后但叙事前的边界。拒绝 partial 内部、dice 与 check 之间、pending mutation 及任意自由行切片；目标非有效路径或未注册控制为 bad-request / invalid-phase。回退到骰前须主动 resume 或提交输入；新 plan 按冻结 diceMode 等待点击或采样；回退到 check 后只能复用该 dice。
 
 重生成 v1 只针对当前有效路径的最近一个已终态回合，fork 到该回合的 check 后 / 无判定时 checkSkipped 后，恢复此时世界状态并复用骰值；新 narrative 使用新 roundId / turnId。旧叙事与其后世界结算、场景推进留在物理历史但从有效上下文排除。先撤销后生成需要同一 lease；因重放 / 记录失败未成功 fork 时不启动请求。任意旧回合 swipe、多候选并行生成不属 v1。
 
@@ -179,7 +199,7 @@ SQL 失败或提交结果不确定按 006 pending 协议核验，needsRecovery �
 
 ## 场景推进与世界视图
 
-可信剧本提供 SceneCatalog、父子结构、入口 / 结束条件、规则白名单及世界只读字段优先级。driver 在已确认结算后，以 world revision 筛选有限候选；最多 32 个，超量按可信优先级和 id 稳定截取并注明，模型从该候选集合选 sceneId 或 stay。模型依据世界状态选取候选，剧本条件约束合法范围。
+可信剧本提供 SceneCatalog、父子结构、入口 / 结束条件、规则白名单及世界只读字段优先级。角色内回合的 driver 在已确认结算后，以 world revision 筛选有限候选；最多 32 个，超量按可信优先级和 id 稳定截取并注明，模型从该候选集合选 sceneId 或 stay。模型依据世界状态选取候选，剧本条件约束合法范围。
 
 场景提议失败不随机替模型选，不重复发纠错请求。无符合候选时按可信规则留场；满足 sessionEnded 条件则持久化结束。接受候选时再次校验当前世界 revision、父子路径与条件；未改变场景发 sceneStayed 因果事实，不发 engine:scene:advanced。切换 / 结束先提交事实与世界投影，再发事件；header.staticPrefix 不热替换，新场景信息放动态 WorldView。世界只读投影预算沿用 006，不允许任意 SQL / 全数据库注入 prompt。
 
@@ -189,7 +209,7 @@ engine_get_phase 可独立重绘阶段、场景、活动 round / 可公开 turn�
 
 phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件单调递增；各事件 seq 仍独立计数，不能用 revision 替代缺口检测。scene 变更与对应阶段变更在一次短临界区确认，同一 revision 可以出现在不同事件名；快照原子读状态与四基线。stateEpoch 为打开 session 的新 UUID，重开改变，旧响应不能覆盖新 epoch。发布顺序仍为准备 / 预留 → 提交事实 / applied → 确认状态与基线 → 投递；阶段的纯内存转移无新事实时直接确认再投递。投递失败不回滚事实、不启动新请求。
 
-无场景时 rewind 仍可恢复到有场景的合法检查点；cancel / 查询也不要求场景存在。submit / interrupt 检查活动场景；resume / regenerate 校验检查点中的场景，允许从已提交 sessionEnded 的未完成 advance 步骤补收尾，或从 ended 历史恢复到有场景的检查点。错误优先级：参数结构 / 限额校验（bad-request）→ id 存在性（not-found）→ 与其他 lease 冲突（busy）→ 无活动场景（no-scene）→ 目标阶段 / 检查点 / pending 不允许（invalid-phase）。interrupt / cancel 是本 lease 的受控例外，不归为第二个在飞回合；resume / regenerate / rewind 不能抢占活动 lease。存储损坏仍为 store.corrupt，底层 IO 为对应 store.*，不统统包装成 invalid-phase。engine.interrupted 仅是重启后的历史错误。
+无场景时 rewind 仍可恢复到有场景的合法检查点；cancel / 查询也不要求场景存在。submit / interrupt 检查活动场景；resume / regenerate 校验检查点中的场景，允许从已提交 sessionEnded 的未完成 advance 步骤补收尾，或从 ended 历史恢复到有场景的检查点。错误优先级：参数结构 / 限额校验（bad-request）→ id 存在性（not-found）→ 与其他 lease 冲突（busy）→ 无活动场景（no-scene）→ 目标阶段 / 检查点 / pending 不允许（invalid-phase）。interrupt / cancel / submit_check 是本 lease 的受控例外，不归为第二个在飞回合；resume / regenerate / rewind 不能抢占活动 lease。存储损坏仍为 store.corrupt，底层 IO 为对应 store.*，不统统包装成 invalid-phase。engine.interrupted 仅是重启后的历史错误。
 
 监听者先订阅四事件、缓存最多 32 条，再取 phase 快照；每 session 至多一个恢复请求，新事件只合并恢复标记；具体载荷上限引用通信契约，不在消费方重复维护数值。处理独立 seq 缺口后再按 phaseRevision 应用状态，旧 revision 只推进对应事件基线，不倒退 UI；同 revision 合并完整状态数据。切换 session / stateEpoch / historyRevision 后忽略旧请求，卸载释放全部监听。最后所有事件丢失仍需重连 / 主动恢复，没有持续轮询；与 005 / 006 相同限制如实保留。
 
@@ -201,7 +221,7 @@ phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件
 | 023 → 022          | 每个事实、partial 封口、世界意图 / applied 和 fork 提交；确认后才能推进                                                  |
 | 023 → 018 / 019    | 通过 020 使用冻结 profile、Provider 与 GrammarSpec 生成的护栏；schema 不由 Provider 决策                                 |
 | 023 → 007 未来钩子 | roundEnded/completed 确认后送 `{ sessionId, roundId, historyRevision, throughSeq }` 一次；当前仅接口，不生成记忆、不收费 |
-| src-tauri → 前端   | 适配普通载荷发 main 窗口，TS 与 Rust 同型；008 未来界面区分骰判行、正文、暂停恢复与脱敏失败                              |
+| src-tauri → 前端   | 适配普通载荷发 main 窗口，TS 与 Rust 同型；025 按 008 设计区分骰判行、正文、暂停恢复与脱敏失败                           |
 
 023 用表驱动测试全部合法 / 非法转移，专项覆盖以下边界：
 

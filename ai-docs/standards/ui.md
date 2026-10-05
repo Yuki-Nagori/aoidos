@@ -1,6 +1,6 @@
 # UI 风格规范
 
-更新日期：2026-10-05。定义 Mythos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Mythos 品牌调整）。状态：**规划**——当前 `src-web/app.css` 仍是示例样式，尚未按本规范实现；首个真实界面落地时以本规范为准，并把偏差回写进来。
+更新日期：2026-10-06。定义 Mythos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Mythos 品牌调整）。状态：**规划**——当前 `src-web/app.css` 仍是示例样式，尚未按本规范实现；首个真实界面落地时以本规范为准，并把偏差回写进来。
 
 ## 设计基调
 
@@ -58,7 +58,7 @@
 ## 布局
 
 - **与 Herta 不同**：主区是**游戏界面**（全幅舞台），对话记录不占居中主位——它是**右侧悬浮面板**，可收起（收起后完全让位给游戏），经悬停屏幕右缘或唤起按钮展开。
-- 记录面板本身玻璃化（`--panel` + hairline + 顶高光），收起 / 展开用签名缓动（~800ms）；面板内记录列保留 `max-width: 880px` 上限的 measure。
+- 记录面板本身玻璃化（`--panel` + hairline + 顶高光），收起 / 展开参数以[界面交互规范](../architecture/ui-shell.md)为准；面板内记录列保留 `max-width: 880px` 上限的 measure。
 - 气泡与机器行共享同一左缘 token（如 `--record-left: 8px`），视觉上同一条记录线。
 - 密度慷慨：行距 ~26px，气泡 `border-radius: 18px`，内边距 15–24px；chrome 用微字号，内容用正文字号。
 - 滚动列：自定义贴底跟随 + 边缘雾化渐隐 + 「跳到最新」浮标；长列表考虑 `content-visibility`。
@@ -67,14 +67,14 @@
 
 - **玩家**：右对齐，冷灰玻璃气泡，15px，无光晕。
 - **角色 / 叙事**：左对齐，白玻璃气泡，16px，多段落拆叠层气泡，悬停浮现复制 / 时间戳。
-- **机器（骰子、判定、系统、AI 工作过程）**：通栏 12px 等宽行 + 7px LED 圆点（活动 `#8b7cf6` 脉冲 / 静止灰），运行中的行用文字 shimmer 渐变；结果类行（如 `命中 · 伤害 12`）静态 LED + 等宽汇总。
+- **机器（骰子、判定、系统、脱敏工作状态）**：通栏 12px 等宽行 + 7px LED 圆点（活动 `#8b7cf6` 脉冲 / 静止灰），运行中的行用文字 shimmer 渐变；结果类行（如 `命中 · 伤害 12`）静态 LED + 等宽汇总。
 - 状态徽章克制：警示琥珀是唯一高饱和强调，diff 绿红刻意去饱和，不让机器行盖过台词。
 
-记录块、生成预览、recap、中断和未知 kind 的语义映射见[记录引擎](../architecture/record-engine.md#ui-映射与验收)；一个事实块可渲染多段气泡，不能反向改变持久记录粒度。008 继续冻结实际交互与视觉细则。
+记录块、生成预览、recap、中断和未知 kind 的语义映射见[记录引擎](../architecture/record-engine.md#ui-映射与验收)；一个事实块可渲染多段气泡，不能反向改变持久记录粒度。面板四态、舞台缩放、输入、骰判与异常交互以已定稿的[界面交互规范](../architecture/ui-shell.md)为准，尚未实现。
 
 ## 动效
 
-- 签名缓动 `--ease-signature: cubic-bezier(0.2,0.85,0.2,1)`；微交互 `--dur-micro: 140ms`，面板 / 卡片出入场 200–220ms，大型形变 ~800ms。
+- 签名缓动 `--ease-signature: cubic-bezier(0.2,0.85,0.2,1)`；微交互 `--dur-micro: 140ms`，普通卡片出入场 200–220ms，大型形变 ~800ms；对话面板按 ui-shell 的独立时长。
 - 常备动效：LED 脉冲（1.6s）、流式光标 / shimmer（1.1s / 2.8s）；滚动边缘雾化。
 - **每一条动效都必须有 `prefers-reduced-motion` 降级**；入场优先 `@starting-style`，动画不阻塞交互。
 
@@ -87,4 +87,4 @@
 
 ## 平台风险
 
-Herta 的 CSS 依赖 Chromium-only 特性（`@property`、`@starting-style`、`color-mix()`、`:has()`、`content-visibility`）。Tauri 的 Windows WebView2 是 Chromium，基本可用；若目标平台扩展到 macOS WKWebView / Linux webkit2gtk，上述特性需逐项确认并写降级路径——落地首个界面时在本节记录实测结论。
+Herta 的 CSS 依赖 Chromium-only 特性（`@property`、`@starting-style`、`color-mix()`、`:has()`、`content-visibility`）。目标包含 Windows WebView2、macOS WKWebView 与 Linux webkit2gtk，上述特性按 ui-shell 的三平台矩阵逐项验证并提供降级——落地首个界面时在本节记录实测结论。

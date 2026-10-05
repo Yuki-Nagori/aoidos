@@ -72,17 +72,18 @@ text 仅包含护栏后的已接纳正文。产品模式已持久化后再更新
 
 规则以[阶段机](turn-state-machine.md)为准，023 实现；phase、场景和操作终态事件均用 sessionId 分流。roundId 是游戏回合，turnId 是单次 LLM 调用；内部提议不发 llm:turn:*，不出现在公开 llm_get_turn，旁白 / 角色仍沿用上节。
 
-| 命令                | 参数                           | 成功返回 / 接纳                                                      |
-| ------------------- | ------------------------------ | -------------------------------------------------------------------- |
-| engine_submit_input | `{ sessionId, text }`          | `{ operationId, roundId }`；输入与接纳事实提交后返回                 |
-| engine_interrupt    | `{ sessionId, roundId, text }` | `{ operationId }`；接纳取消并换回合的请求，新 round 提交后从快照获取 |
-| engine_cancel_round | `{ sessionId, roundId }`       | `{ roundId, outcome }`；待已开始提交达到一致边界后返回胜出终态       |
-| engine_resume       | `{ sessionId }`                | `{ operationId, roundId }`；从暂停检查点显式恢复                     |
-| engine_regenerate   | `{ sessionId, roundId }`       | `{ operationId, roundId }`；返回新回合身份，默认复用骰值             |
-| engine_rewind       | `{ sessionId, targetSeq }`     | `{ operationId }`；后续控制提交 / 世界重放走事件                     |
-| engine_get_phase    | `{ sessionId }`                | 下方 PhaseSnapshot                                                   |
+| 命令                | 参数                             | 成功返回 / 接纳                                                                |
+| ------------------- | -------------------------------- | ------------------------------------------------------------------------------ |
+| engine_submit_input | `{ sessionId, text }`            | `{ operationId, roundId }`；输入与接纳事实提交后返回                           |
+| engine_interrupt    | `{ sessionId, roundId, text }`   | `{ operationId }`；接纳取消并换回合的请求，新 round 提交后从快照获取           |
+| engine_cancel_round | `{ sessionId, roundId }`         | `{ roundId, outcome }`；待已开始提交达到一致边界后返回胜出终态                 |
+| engine_resume       | `{ sessionId }`                  | `{ operationId, roundId }`；从暂停检查点显式恢复                               |
+| engine_regenerate   | `{ sessionId, roundId }`         | `{ operationId, roundId }`；返回新回合身份，始终复用已有骰值；无骰回合继续无骰 |
+| engine_rewind       | `{ sessionId, targetSeq }`       | `{ operationId }`；后续控制提交 / 世界重放走事件                               |
+| engine_submit_check | `{ sessionId, roundId, planId }` | `{ roundId, planId, accepted: true }`；同一 plan 重复返回，不重复采样          |
+| engine_get_phase    | `{ sessionId }`                  | 下方 PhaseSnapshot                                                             |
 
-text 为非空白字符串，最多 32 KiB UTF-8，保留原文，不接受模型 / 骰式 / 状态覆盖参数。所有身份由 Rust 分配，operationId 不是客户端重试幂等键；收到接纳后不自动重发命令。已在飞时新提交 busy；interrupt / cancel 仅控制指定的本 round。其他合法性、错误优先级和 rewind 检查点见阶段机。cancel 的重复返回限于本进程有界缓存，旧 round 驱逐为 not-found；暂停恢复由持久检查点决定，不靠 ring 跨进程恢复。
+text 为非空白字符串，最多 32 KiB UTF-8，保留原文；角色内 / 场外前缀及内容范围由 012 的 Rust 解析，不增加前端可覆盖身份 / 规则的参数，不接受模型 / 骰式 / 状态覆盖参数。所有身份由 Rust 分配，operationId 不是客户端重试幂等键；收到接纳后不自动重发命令。已在飞时新提交 busy；interrupt / cancel / submit_check 仅控制指定的本 round。其他合法性、错误优先级和 rewind 检查点见阶段机。cancel 的重复返回限于本进程有界缓存，旧 round 驱逐为 not-found；暂停恢复由持久检查点决定，不靠 ring 跨进程恢复。
 
 ```ts
 type EnginePhase = "idle" | "generating" | "awaitingCheck" | "settling" | "advancing";
@@ -98,8 +99,18 @@ interface PhaseState {
   phase: EnginePhase;
   scene?: ScenePosition;
   inFlight?: { operationId: string; roundId?: string; turnId?: string };
+  check?: {
+    planId: string;
+    status: "waiting" | "rolling";
+    mode: "manual" | "auto";
+    ruleId: string;
+    actorId: string;
+    expression: string;
+    modifierTotal: number;
+  };
   needsRecovery: boolean;
   resumeRequired: boolean;
+  // 暂停位置的事实锚点；派生表归阶段机，不用最后物理 seq 替代。
   checkpoint?: {
     sourceRoundId: string;
     throughSeq: number;
@@ -122,7 +133,9 @@ interface PhaseSnapshot extends PhaseState {
 }
 ```
 
-所有可选项省略，不用 null；无活动场景省略 scene，不造空路径。inFlight 表示当前 lease 所有者，rewind 可无 roundId，内部提议可无公开 turnId；resumeRequired 表示暂停且无在飞请求，必须有 checkpoint，不能与 inFlight 同时为真。lastOperation.failed 必有脱敏 error，其他结果省略；新接纳替换上一结果，不保留旧 error。回合终态和当前 phase 独立：骰判后失败可暂停在 settling。needsRecovery 阻止恢复 / 新行动，但 get_phase 与诊断查询可用。PhaseState 的单次事件载荷最多 64 KiB，scene.path 最大深度 16，title 最多 256 字节，脱敏 error.message 最多 512 字节；超限不得预留 / 发布载荷。
+check 仅在 awaitingCheck 的活动 / 暂停计划中出现，摘要由 Rust 核验；暂停时按钮先要求 resume，取得活动 roundId 后才能提交。accepted 只说明判定动作已接纳，不表示骰值已落盘；后续错误归当前 operation 的 failed 与快照，不新增一次操作终态。合法 round / plan 的重复接纳限当前及有界终态缓存；未知身份 not-found，跨 round 的 plan 为 bad-request，非待判定且未曾接纳为 invalid-phase。
+
+所有可选项省略，不用 null；无活动场景省略 scene，不造空路径。inFlight 表示当前 lease 所有者，rewind 可无 roundId，内部提议可无公开 turnId；resumeRequired 表示暂停且无在飞请求，必须有按阶段机派生表核验的 checkpoint（stage 为下一缺失工作、throughSeq 为指定确认事实），不能与 inFlight 同时为真。lastOperation.failed 必有脱敏 error，其他结果省略；新接纳替换上一结果，不保留旧 error。回合终态和当前 phase 独立：骰判后失败可暂停在 settling。needsRecovery 阻止恢复 / 新行动，但 get_phase 与诊断查询可用。PhaseState 的单次事件载荷最多 64 KiB，scene.path 最大深度 16，title 最多 256 字节，脱敏 error.message 最多 512 字节；超限不得预留 / 发布载荷。
 
 stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每次确认可观察状态变化递增；historyRevision 为最新已 applied historyFork 的正式 seq，根为 0。公开叙事先建立空 llm_get_turn 快照，再确认 / 发布 inFlight.turnId，随后启动网络请求。四基线必有，未产生事件为 0；各自对应下文四个事件，不能以 revision 替代信封 seq。同次确认可产生多个不同名字事件并共用 revision，各事件 data 均携带完整 PhaseState；phase 快照不含正文，正文恢复使用 llm_get_turn / record view。
 
@@ -132,6 +145,15 @@ stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每
 - engine:operation:failed：data 为 `{ ...PhaseState, operationId, code, message }`，顶层 code / message 是此次 operation 的脱敏失败；仅当它仍是最近接纳操作时更新 lastOperation/failed 的同值 error。
 
 接纳的长流程 done / failed 二选一恰一次；未接纳只返回 Err。cancel 不另造 operationId，用被取消流程的终态事件；interrupt 接纳后新 operation 负责换回合结果，旧 operation 正常取消收尾。PhaseState 的完整载荷只能在对应事实 / applied 确认后发布，最后事件全部丢失仍需重连或主动 get_phase，不暗加轮询。前端一 session 一个快照请求、最多 32 条缓存；按 seq 对齐，再按 phaseRevision 防止跨事件名乱序倒退。
+
+## 界面偏好（008 设计，尚未实现）
+
+| 命令                     | 参数                        | 成功返回                                       |
+| ------------------------ | --------------------------- | ---------------------------------------------- |
+| store_get_ui_preferences | 无                          | UiPreferences                                  |
+| store_set_ui_preferences | `{ panelPinned, diceMode }` | 已持久化确认的 UiPreferences；完整替换两个偏好 |
+
+UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "auto" }`，首次默认为 false / manual；未知枚举、额外可写字段为 app.bad-request，持久化失败为对应 store.*。Rust 拥有持久化，前端不写文件。偏好修改不改变当前 round 的冻结值；任务 022 接入存储，023 在接纳时使用，025 界面实施消费该类型。源 schema / 配置升级由存储规范约束，不能把焦点、草稿或凭据塞进偏好。
 
 ## 记录命令与运行期迁移快照（006 设计，尚未实现）
 
