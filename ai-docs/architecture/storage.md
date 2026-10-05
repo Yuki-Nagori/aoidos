@@ -59,13 +59,17 @@ CREATE TABLE point_allocations (
 ```text
 <app-data>/                       # tauri PathResolver::app_data_dir，注入业务 crate
 ├── storage.sqlite                # 业务状态（含 WAL/SHM）
+├── storage.lock                  # InstanceLock：OS 独占锁，释放不删除
 ├── migrations/…                  # SQL 迁移（编译期内嵌，目录仅调试导出）
 ├── workspaces/<script-id>/       # 每剧本一个工作区
 │   ├── transcript/<session-id>.jsonl
 │   ├── transcript/<session-id>.<turn-id>.partial.jsonl  # 唯一活跃安全增量日志（022 待实现）
-│   ├── memory/                   # 007 记忆文件（若走文件载体）
+│   ├── memory/                   # 007 文件正文；manifest 在 storage.sqlite（029 待实现）
+│   │   ├── runs/<run-id>/        # 会话记忆版本正文与批次结果
+│   │   └── cycle/                # 轮回刻痕，独立生命周期（032 待实现）
 │   └── exports/                  # 导出物（唯一允许被 shell 打开的目录）
 └── backups/                      # 迁移 / 覆写前的自动备份
+    └── storage-v<N>-<stamp>.sqlite  # SQLite 迁移备份；最近 3 份
 ```
 
 - **script-id 规范**：`[a-z0-9-]{1,64}`，由剧本名消毒生成（小写、空格转连字符、去非法字符）；超长截断后追加 8 位短 hash 防碰撞。
@@ -76,7 +80,7 @@ CREATE TABLE point_allocations (
 - API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8）。普通文件覆写经此二函数。SQLite 事务与在线备份、实例锁文件、JSONL 受控追加 / 尾行截断由各自模块原地写，不经这里。JSONL 追加原语由 022 在 store 中实现，全仓复用，不在 engine 再写一套 IO。
 - 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。重试次数与退避见[通信契约](ipc-contract.md)看门狗表。三端的 `WouldBlock`、`ResourceBusy`、`ExecutableFileBusy` 进入退避。Windows 上原始码 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）同样算占用；Unix 上同号是 EIO / EPIPE，保持 `io`，不重试。目录目标三端立即 `io`，不进入退避：Windows 把「文件 rename 到目录」也报成 ACCESS_DENIED，若先按占用重试，目录会在 Windows 上等满退避。耗尽报 `locked` 并清理本次 tmp。父目录同步只吞掉 `PermissionDenied`、`InvalidInput`、`Unsupported`；其它同步错误在 rename 已经发布后仍返回，调用方不能把该错误当成「目标未更新」。
 - 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行；完整行仍须校验 JSON / 身份，中间损坏不得删。partial 不是 .tmp，不由通用临时清理删除；保留已提交前文并封中断块的恢复及 buffered / high 耐久边界见[记录引擎](record-engine.md)。
-- 并发与锁：单写者约定；打开数据库前持有 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
+- 并发与锁：单写者约定；打开数据库前持有数据根 `storage.lock` 上的 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
 
 ## shell 与进程边界
 
@@ -86,15 +90,15 @@ CREATE TABLE point_allocations (
 
 ## 备份与升级
 
-- SQLite：每次迁移前自动备份到 `backups/`（保留最近 N 份，N 实现时定）。
+- SQLite：每次迁移前经 SQLite backup API 生成 `backups/storage-v<N>-<stamp>.sqlite`；N 为迁移前 schema 版本，stamp 为 Unix 时间戳纳秒整数。备份清理按规范文件名解析时间戳 / 版本整数排序，保留最近 3 份；非规范命名不占名额且不删除。备份查询只返回普通文件，跳过目录和符号链接，载荷限制见通信契约。
 - 文件域：覆写前备份（对齐 007 遗忘回写的备份要求）；版本字段 + 读取时迁移，旧文件归档不删除。
 - 剧本导入 / 导出：zip 约定（`manifest.json` + `assets/` + `theme.css`），导入时逐条消毒路径并校验 manifest；导出永远来自消毒后的规范路径。
 
 ## 错误与对接
 
 - 裸码由 `StoreError::code()` 返回。IPC 的 `store.` 前缀、中文 `message` 与 `detail` 见[通信契约](ipc-contract.md)。磁盘满、权限、锁定超时、损坏、路径非法各占独立码。
-- 对接：006 用原子写 + JSONL 截断恢复；007 的载体与备份用本文的 SQLite 约定与备份目录；密钥的降级文件目录由本规范预留。
+- 对接：006 用原子写 + JSONL 截断恢复；007 使用 SQLite manifest + 文件正文；不可变版本 / cycle 目录及依赖式清理见[记忆设计](memory.md)，SQLite 迁移备份与文件覆写备份遵守本文约定；密钥的降级文件目录由本规范预留。
 
-## 待实现期标定
+## 实现状态与后续范围
 
 - 已标定（task 013）：WAL，备份保留最近 3 份，OS 独占实例锁。rename 的重试预算见[通信契约](ipc-contract.md)看门狗表，013 已按该表实现。业务 schema、记录 append 与导入导出随相应任务实现。
