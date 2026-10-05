@@ -11,14 +11,14 @@
 
 ## 必读
 
-[构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [通信契约](../architecture/ipc-contract.md) · [017 store 查询与迁移回调](017-store-commands-migration-events.md)（迁移事件待接入） · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [UI 风格规范](../standards/ui.md)（视觉语法）。
+[LLM 设计复核稿](../architecture/llm.md)（GuardSpec 与输出提交约束，005 评审通过后冻结） · [构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [通信契约](../architecture/ipc-contract.md) · [017 store 查询与迁移回调](017-store-commands-migration-events.md)（迁移事件待接入） · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [UI 风格规范](../standards/ui.md)（视觉语法）。
 
 ## 产出物
 
 `ai-docs/architecture/record-engine.md`（规则与结构文档），需敲定：
 
-1. 记录块语法：块类型（台词 / 旁白 / 掷骰 / 判定 / 系统事件 / …）、字段、序列化格式、版本字段；附黄金样例。
-2. 持久化结构：JSONL 行格式、文件切分（按会话 / 按剧本）、原子写与崩溃截断恢复规则（复用 [011](011-storage-design.md) 的原子写工具与目录规范）。
+1. 记录块语法及 GuardSpec：玩家台词共用稳定保留前缀，open tag / 闭合标签 / stop 由同一语法生成，匹配机制沿用 005；块类型（台词 / 旁白 / 掷骰 / 判定 / 系统事件 / …）、字段、序列化格式、版本字段；附黄金样例。
+2. 持久化结构及共享输出写入方：明确安全增量先提交、后更新快照和事件，写入失败不发对应 chunk，终态与取消也保持已提交前文；JSONL 行格式、文件切分（按会话 / 按剧本）、原子写与崩溃截断恢复规则（复用 [011](011-storage-design.md) 的原子写工具与目录规范）。
 3. 投影规则：预算参数初始值（工作集阈值 / 逐字尾部窗口 / recap 上限）、长块折叠规则、「recap 只增不改」约定、缓存稳定前缀契约。
 4. Token 估算：标定方法（对真实供应商用量回归）、中英混计系数及其更新流程。
 5. 块类型 ↔ UI 行类型映射表（与 [UI 规范](../standards/ui.md) 双 register 对齐，并与 008 互校）。
@@ -54,6 +54,8 @@
 - 2026-10-05：记录通道补进产出物。`engine_get_record_page` 只做记录分页；阶段对齐用通信契约里的 `engine_get_phase`。
 
 - 2026-10-05：issue #15 补齐 017 推迟项的承接：本设计冻结迁移事件及运行期快照协议，衍生实现负责命令层 emit、状态保存和监听恢复。契约登记 store:migration:failed 最小字段，未冻结上下文在本设计定稿时回写；当前静态查询不变。
+
+- 2026-10-05：005 设计复核稿补齐 GuardSpec 输入与安全增量写入方约束；本任务冻结具体记录语法及持久化 / 终态提交协议，不能只写 UI 后再异步补记录。005 未经用户评审前，这些输入仍为设计稿。
 
 ## 完成摘要
 

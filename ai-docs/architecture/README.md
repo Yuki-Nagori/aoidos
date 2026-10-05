@@ -10,6 +10,7 @@
 | 目录与模块归属                   | [目录规划](repository-layout.md)       | 本仓库 |
 | TS / Rust 职责边界与工程纪律     | [职责边界](ts-rust-boundary.md)        | 本仓库 |
 | 通信契约（命令 / 事件 / 错误码） | [通信契约](ipc-contract.md)            | 本仓库 |
+| LLM 接入、护栏与回合生命周期     | [LLM 设计复核稿](llm.md)               | 规划   |
 | 存储、目录与原子写基建           | [存储基建](storage.md)                 | 本仓库 |
 | 构建、门禁、打包与图标           | [构建与开发](build-and-development.md) | 本仓库 |
 
