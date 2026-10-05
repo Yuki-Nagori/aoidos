@@ -1,6 +1,6 @@
 # 界面结构与交互
 
-更新 / 官方资料核验日期：2026-10-06。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/mythos/issues/11)；尚未实现。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
+更新 / 官方资料核验日期：2026-10-06。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/mythos/issues/11)；尚未实现。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
 
 ## 舞台与覆盖层
 
@@ -115,17 +115,19 @@ Enter 发送，Shift+Enter 换行；event.isComposing 或本地 compositionstart
 
 先保留草稿并标 submitting，成功接纳且 operationId 已绑定后才清除该版本草稿；用户期间继续编辑时不能清掉新版本。Err / busy 保留内容，轻提示不写入记录、不自动重试。响应丢失时显示“提交结果未确认”，主动取 phase / record view 核验，不凭 text 相同自动重发；对局切换后的旧响应不改当前草稿。
 
-| 引擎状态                           | 输入与操作                                                                       |
-| ---------------------------------- | -------------------------------------------------------------------------------- |
-| idle、可写且有场景                 | 可发送；空白输入禁用                                                             |
-| generating / settling 中有公开叙事 | 普通发送不可重入；提供“停止”“打断并说”，裸 Enter 得 busy 轻提示                  |
-| generating 中私有提议              | 提供“停止”“打断并说”；无公开 turnId 仍可用 roundId 控制                          |
-| awaitingCheck、checkPending        | 锁正文发送；默认显示“掷骰”，点击 engine_submit_check；自动偏好开启时由 Rust 执行 |
-| awaitingCheck、正在提交 dice       | 禁用骰按钮，显示“正在判定”；不接受第二次掷骰                                     |
-| settling（非叙事）/ advancing      | 锁发送与插话；允许停止 round，等待已开始提交到一致边界                           |
-| resumeRequired                     | 显示“继续 / 新行动 / 回退”；继续必须显式确认，新行动先 abandonCheckpoint         |
-| needsRecovery / 只读兼容           | 禁止发送、骰判与重生成；提供主动恢复或导出 / 诊断                                |
-| 无活动场景                         | 显示载入 / 已结束提示，不伪造 idle 可发送                                        |
+| 引擎状态                            | 输入与操作                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------------------ |
+| idle、可写且有场景                  | 可发送；空白输入禁用                                                                 |
+| generating / settling 中有公开叙事  | 普通发送不可重入；提供“停止”“打断并说”，裸 Enter 得 busy 轻提示                      |
+| generating 中私有提议               | 提供“停止”“打断并说”；无公开 turnId 仍可用 roundId 控制                              |
+| awaitingCheck、check.status=waiting | 锁正文发送；manual 显示“掷骰”调用 engine_submit_check；auto 不显示按钮，由 Rust 执行 |
+| awaitingCheck、check.status=rolling | 禁用骰按钮，显示“正在判定”；不接受第二次掷骰                                         |
+| settling（非叙事）/ advancing       | 锁发送与插话；允许停止 round，等待已开始提交到一致边界                               |
+| resumeRequired                      | 显示“继续 / 新行动 / 回退”；继续必须显式确认，新行动先 abandonCheckpoint             |
+| needsRecovery / 只读兼容            | 禁止发送、骰判与重生成；提供主动恢复或导出 / 诊断                                    |
+| 无活动场景                          | 显示载入 / 已结束提示，不伪造 idle 可发送                                            |
+
+操作优先级为 needsRecovery / 只读 → resumeRequired → phase / check.status。缺计划摘要时主动恢复快照，不臆造 waiting / planId；resumeRequired 优先于 check.status：暂停计划先显示“继续”，取得活动 roundId 后才允许 manual 掷骰；不能因快照含 waiting 就给旧 round 按钮。
 
 默认 manual 骰判；用户可选择 auto，偏好在下一回合接纳时由 Rust 冻结，不热切换正在等待的 plan。UI 只提交 sessionId / roundId / planId 身份，不产生骰值；按钮防连击加 Rust 恰一次保护，取消 / 恢复 / 重生成仍复用已有 dice。重启后的待判定只恢复检查点，不自动掷骰或收费。
 
@@ -145,17 +147,18 @@ v1 普通历史项用 content-visibility: auto + contain-intrinsic-size 降低�
 
 ## 空态与错误
 
-| 情况                      | 表现 / 恢复                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------- |
-| 无对局 / 未载入场景       | 舞台说明 + 载入入口；面板空态，不调用未存在的业务命令                                              |
-| 首次取快照 / 分页         | 有界骨架或加载行；保留已显示事实，单次失败可主动重试                                               |
-| 无记录                    | 中性开场提示；不制造虚构玩家 / 旁白块                                                              |
-| llm.empty-output          | 无空气泡；按 stop / guard / length 显示“空输出 / 被护栏截断 / 输出上限”，与 failed 事件 / 快照一致 |
-| 取消 / 生成失败           | 保留已确认正文、脱敏错误和恢复入口；重生成不自动执行                                               |
-| app.busy / invalid-phase  | 保留草稿 / 当前事实，取快照后重新判断可操作项；busy 轻提示                                         |
-| store.* / needsRecovery   | 琥珀恢复条，禁用修改；显示诊断 / 原始历史导出入口                                                  |
-| app.not-ready（迁移冻结） | 主动查 store_get_migration 诊断；不把它当新安装、版本 0 或空记录                                   |
-| app.event-failed / 断开   | 保留内容，按各流快照恢复；不重发正文、不重掷、不无限重试                                           |
+| 情况                            | 表现 / 恢复                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 无对局 / 未载入场景             | 舞台说明 + 载入入口；面板空态，不调用未存在的业务命令                                              |
+| 首次取快照 / 分页               | 有界骨架或加载行；保留已显示事实，单次失败可主动重试                                               |
+| 无记录                          | 中性开场提示；不制造虚构玩家 / 旁白块                                                              |
+| llm.empty-output                | 无空气泡；按 stop / guard / length 显示“空输出 / 被护栏截断 / 输出上限”，与 failed 事件 / 快照一致 |
+| 取消 / 生成失败                 | 保留已确认正文、脱敏错误和恢复入口；重生成不自动执行                                               |
+| app.busy / engine.invalid-phase | 保留草稿 / 当前事实，取快照后重新判断可操作项；busy 轻提示                                         |
+| engine.no-scene                 | 刷新活动场景 / phase，显示未载入或已结束；禁止发送，不伪造可操作场景                               |
+| store.* / needsRecovery         | 琥珀恢复条，禁用修改；显示诊断 / 原始历史导出入口                                                  |
+| app.not-ready（迁移冻结）       | 主动查 store_get_migration 诊断；不把它当新安装、版本 0 或空记录                                   |
+| app.event-failed / 断开         | 保留内容，按各流快照恢复；不重发正文、不重掷、不无限重试                                           |
 
 错误按 code 分支；message / finishReason 只在已有契约允许时显示，旧快照与 cancelled 不残留上一终态原因。任何原始 prompt、凭据、reasoning 或文件路径都不进入 toast / 工作状态。
 
@@ -163,11 +166,11 @@ v1 普通历史项用 content-visibility: auto + contain-intrinsic-size 降低�
 
 拟新增 Rust 拥有的 UiPreferences：version=1、panelPinned=false、diceMode=manual；只保存这两个产品偏好，不持久化焦点 / 滚动 DOM / 草稿。通过 store_get_ui_preferences / store_set_ui_preferences 薄命令读写；SQLite / 受控原子配置存储按 011 既有迁移与文件规则选用，具体 schema 在实现中定型。偏好写入使用应用级单队列，发送时合并两字段的最新意图，至多一个请求在飞，防止完整替换覆盖另一次设置。响应按设置代次处理，失败保留上次确认值并提示，不把乐观状态当已保存；钉住保存失败撤回至已确认偏好，但不清草稿。初始化恢复只应用一次，迟到快照不得覆盖用户已操作的状态。
 
-窗口位置 / 尺寸使用 tauri-plugin-window-state 的 Rust 装配，插件只负责窗口，不负责面板钉住；恢复到已断开的显示器时约束到当前可见工作区。无须为保存窗口状态把文件权限开放给 Webview，确需 JS 插件命令时按官方权限单独登记。[官方插件文档](https://v2.tauri.app/plugin/window-state/)
+窗口位置 / 尺寸复用 026 的受控 main 构建入口，使用 tauri-plugin-window-state 的 Rust 装配，插件只负责窗口，不负责面板钉住；恢复到已断开的显示器时约束到当前可见工作区。无须为保存窗口状态把文件权限开放给 Webview，确需 JS 插件命令时按官方权限单独登记。[官方插件文档](https://v2.tauri.app/plugin/window-state/)
 
 ts-rs 仅是未来同型类型生成候选，当前 Rust Serialize 与手写 TS 类型仍同次维护；issue 的“继续 ts-rs”不表示仓库已有它。引入时通过根 Cargo workspace / 锁文件与 CI 验证，不能把生成工具当运行时校验。贴底、IME、hover / 输入预览纯逻辑放 utils 配单测；监听和生命周期放 composable，组件负责编排，不引入全局状态库或组件库。
 
-008 完成设计，[025 界面实现](../task/025-ui-shell-impl.md)承接舞台容器、面板、记录展示、composer 与窗口状态。004 提供样式与 token 底座；021 / 022 / 023 分别提供正文恢复、记录消费与阶段 / 骰判契约，024 验证产品链路；025 消费这些能力，不重复实现恢复、持久化或判定。立绘、地图与主题皮肤不属于 025。
+008 完成设计，[025 界面实现](../task/025-ui-shell-impl.md)承接舞台容器、面板、记录展示、composer 与窗口状态。004 提供样式与 token 底座；021 / 022 / 023 分别提供正文恢复、记录消费与阶段 / 骰判契约，024 验证产品链路；026 提供主题 / 皮肤与首窗 bootstrap；025 消费这些能力，不重复实现恢复、持久化、主题校验或判定。025 的设置视图消费 026；立绘、地图与主题皮肤制作 / 校验不属于 025。
 
 ## 实现验收矩阵
 
