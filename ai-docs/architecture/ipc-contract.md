@@ -309,13 +309,13 @@ else showGenericError(err);
 - 前端分支**反例**：`err.message.includes("rate")`（文案漂移即坏）；`switch (err.code)` 不写 default。
 - 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../standards/comments.md) 为映射器补直测（参照 `mythos-store` 的 `err_*` + stage_mappers 模式）。
 
-007 的[拟实施记忆端口](memory.md#高级设置与跨端接口)尚未注册 Tauri 命令，不改变本目录现有 API。参数 / 过期版本使用 app.bad-request、未知查询身份 app.not-found、门禁 app.busy、持久损坏 store.corrupt，网络错误沿用 llm._；内部候选拒绝 reason 不作为供应商 quota。所需旧策略不可用时，拟端口返回 app.not-ready，保留原数据并开放只读诊断，不用 store.corrupt 指代仅版本不受支持。具体 DTO / 命令由后续实施同 commit 展开到本目录，遵循 Rust / TS 同型，不新增 memory:_ 事件流或持续轮询。
+007 的[拟实施记忆端口](memory.md#高级设置与跨端接口)尚未注册 Tauri 命令，不改变本目录现有 API。参数 / 过期版本使用 app.bad-request、未知查询身份 app.not-found、门禁 app.busy、持久损坏 store.corrupt，网络错误沿用 `llm.*`；内部候选拒绝 reason 不作为供应商 quota。所需旧策略不可用时，拟端口返回 app.not-ready，保留原数据并开放只读诊断，不用 store.corrupt 指代仅版本不受支持。具体 DTO / 命令由后续实施同 commit 展开到本目录，遵循 Rust / TS 同型，不新增 `memory:*` 事件流或持续轮询。
 
 ## 工程纪律（可检查版）
 
 每条 = 怎么做 + 怎么检查；动机见[职责边界](ts-rust-boundary.md)与 [Herta 调查](../research/001-herta.md)。预算数字只维护在本节。
 
-1. **原子写**：普通文件覆写只用 `write_atomic` / `write_text_atomic`。步骤、哪些错误进入退避、目录目标，以及父目录同步失败时目标可能已经更新，以[存储基建](storage.md)为准。不经该 API 的写盘只有三处：SQLite 事务与在线备份、实例锁文件、JSONL 尾行截断。检查：全仓 grep 写目标文件的路径，除这三处外必须调用 `write_atomic`；`atomic` 单测覆盖成功、占用耗尽、目录目标。
+1. **原子写**：普通文件覆写只用 `write_atomic` / `write_text_atomic`。步骤、哪些错误进入退避、目录目标，以及父目录同步失败时目标可能已经更新，以[存储基建](storage.md)为准。原地写例外及 JSONL 受控追加 / 截断的唯一原语，以[存储基建的原子写工具](storage.md#原子写工具全仓唯一实现)为准。检查：全仓搜索写目标文件的路径，普通文件覆写必须调用上述 API，原地写必须属于该清单并复用对应原语；`atomic` 单测覆盖成功、占用耗尽、目录目标。
 2. **看门狗预算表**：
 
 | 阶段                                                       | 预算                 | 超时动作                                                                 |
