@@ -122,13 +122,38 @@ pub fn current_version(path: &Path) -> Result<u32> {
     let path = paths::normalize(path);
     match fs::metadata(&path) {
         Ok(_) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            validate_missing_parent(&path)?;
+            return Ok(0);
+        }
         Err(err) => return Err(StoreError::from_io(err)),
     }
     let conn =
         Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err_open)?;
     conn.busy_timeout(BUSY_TIMEOUT).map_err(err_pragma)?;
     query_user_version(&conn)
+}
+
+// Windows 将“祖先是普通文件”也报告为 NotFound（task 017 / issue #7）；只允许真正缺失的目录链。
+// 从最近父路径向上找到首个存在的目录，不创建目录，也不吞掉权限等错误。
+fn validate_missing_parent(path: &Path) -> Result<()> {
+    for parent in path
+        .ancestors()
+        .skip(1)
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        let metadata = match fs::metadata(parent) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            result => result.map_err(StoreError::from_io)?,
+        };
+        if !metadata.is_dir() {
+            return Err(StoreError::from_io(io::Error::from(
+                io::ErrorKind::NotADirectory,
+            )));
+        }
+        break;
+    }
+    Ok(())
 }
 
 fn enable_wal(conn: &Connection) -> Result<()> {
@@ -291,7 +316,10 @@ pub fn list_backups(db_path: &Path) -> Result<Vec<BackupEntry>> {
     let dir = parent_dir(&db_path).join("backups");
     let listing = match fs::read_dir(&dir) {
         Ok(listing) => listing,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            validate_missing_parent(&dir)?;
+            return Ok(Vec::new());
+        }
         Err(err) => return Err(StoreError::from_io(err)),
     };
     let mut entries: Vec<BackupEntry> = Vec::new();
@@ -718,6 +746,12 @@ INSERT INTO children VALUES (42);";
         let parent = dir.join("blocked");
         fs::write(&parent, b"not a directory").unwrap();
         assert!(current_version(&parent.join("storage.sqlite")).is_err());
+        let nested = parent.join("missing").join("storage.sqlite");
+        assert!(current_version(&nested).is_err());
+        assert!(list_backups(&nested).is_err());
+        // 两种平台错误路径均验证：最近父级是文件，或文件挡住更深的缺失父级。
+        assert!(validate_missing_parent(&parent.join("storage.sqlite")).is_err());
+        assert!(validate_missing_parent(&nested).is_err());
         fs::write(dir.join("backups"), b"not a directory").unwrap();
         assert!(list_backups(&dir.join("storage.sqlite")).is_err());
         fs::remove_dir_all(&dir).unwrap();

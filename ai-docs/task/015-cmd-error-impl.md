@@ -55,7 +55,7 @@ issue #7 修复及 015–017 整体复核（本地 macOS）：
 | 日期       | 命令                    | 实际结果                                         |
 | ---------- | ----------------------- | ------------------------------------------------ |
 | 2026-10-05 | `bun run verify`        | 十项 exit 0；Rust 85 tests，Web 7 tests          |
-| 2026-10-05 | `bun run coverage:rust` | 1811/1811 行（100%），含 commands / events / ipc |
+| 2026-10-05 | `bun run coverage:rust` | 1837/1837 行（100%），含 commands / events / ipc |
 
 ## 风险与回退
 
