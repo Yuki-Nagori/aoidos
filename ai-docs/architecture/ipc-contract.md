@@ -17,7 +17,7 @@
 - 动词约定：`get_` 取单值、`list_` 取列表、`set_` 替换一项配置、`create_ / update_ / delete_ / save_` 写实体、`submit_` 提交长流程、`cancel_` 取消在飞流程。
 - 形参：Rust snake_case；Tauri 默认把前端 camelCase 键映射到 snake_case 形参。**两侧固定「Rust snake_case ↔ 前端 camelCase」**，不使用 `rename` 特例。
 - 分页：可能超过一页的 `list_*` 使用 `{ cursor?, limit? }`，返回 `{ items, nextCursor? }`。省略 `limit` 时为 50，最大 200；`0` 或大于 200 返回 `app.bad-request`。cursor 是不透明字符串，前端只透传不解析。文档写明硬上限不超过 50 的列表可以不带分页，例如 `store_list_backups {}` 返回 `{ items }`。
-- 正例：`llm_set_key`、`engine_submit_input { text }`、`store_list_backups {}`。
+- 正例：`llm_set_key`、`engine_submit_input { sessionId, text }`、`store_list_backups {}`。
 - 反例：`getScriptsData`（无域前缀）、`do_thing`（动词无信息量）、`llm_generate_stream`（流式不是命令——提交用 `llm_submit`，增量走事件）。
 
 ## 已落地的 store 命令
@@ -68,6 +68,71 @@ interface TurnSnapshot {
 
 text 仅包含护栏后的已接纳正文。产品模式已持久化后再更新快照和投递；调试模式为内存结果。缓存只含进行中与最近已结束回合，容量与驱逐规则见 llm.md；驱逐后的旧 turnId 为 app.not-found，持久记录归 006，不靠本命令跨进程恢复。
 
+## 引擎命令与阶段快照（012 设计，尚未实现）
+
+规则以[阶段机](turn-state-machine.md)为准，023 实现；phase、场景和操作终态事件均用 sessionId 分流。roundId 是游戏回合，turnId 是单次 LLM 调用；内部提议不发 llm:turn:*，不出现在公开 llm_get_turn，旁白 / 角色仍沿用上节。
+
+| 命令                | 参数                           | 成功返回 / 接纳                                                      |
+| ------------------- | ------------------------------ | -------------------------------------------------------------------- |
+| engine_submit_input | `{ sessionId, text }`          | `{ operationId, roundId }`；输入与接纳事实提交后返回                 |
+| engine_interrupt    | `{ sessionId, roundId, text }` | `{ operationId }`；接纳取消并换回合的请求，新 round 提交后从快照获取 |
+| engine_cancel_round | `{ sessionId, roundId }`       | `{ roundId, outcome }`；待已开始提交达到一致边界后返回胜出终态       |
+| engine_resume       | `{ sessionId }`                | `{ operationId, roundId }`；从暂停检查点显式恢复                     |
+| engine_regenerate   | `{ sessionId, roundId }`       | `{ operationId, roundId }`；返回新回合身份，默认复用骰值             |
+| engine_rewind       | `{ sessionId, targetSeq }`     | `{ operationId }`；后续控制提交 / 世界重放走事件                     |
+| engine_get_phase    | `{ sessionId }`                | 下方 PhaseSnapshot                                                   |
+
+text 为非空白字符串，最多 32 KiB UTF-8，保留原文，不接受模型 / 骰式 / 状态覆盖参数。所有身份由 Rust 分配，operationId 不是客户端重试幂等键；收到接纳后不自动重发命令。已在飞时新提交 busy；interrupt / cancel 仅控制指定的本 round。其他合法性、错误优先级和 rewind 检查点见阶段机。cancel 的重复返回限于本进程有界缓存，旧 round 驱逐为 not-found；暂停恢复由持久检查点决定，不靠 ring 跨进程恢复。
+
+```ts
+type EnginePhase = "idle" | "generating" | "awaitingCheck" | "settling" | "advancing";
+interface ScenePosition {
+  sceneId: string;
+  path: { kind: string; id: string; title: string }[];
+}
+interface PhaseState {
+  sessionId: string;
+  stateEpoch: string;
+  phaseRevision: number;
+  historyRevision: number;
+  phase: EnginePhase;
+  scene?: ScenePosition;
+  inFlight?: { operationId: string; roundId?: string; turnId?: string };
+  needsRecovery: boolean;
+  resumeRequired: boolean;
+  checkpoint?: {
+    sourceRoundId: string;
+    throughSeq: number;
+    stage: "check" | "narration" | "settle" | "advance";
+  };
+  lastOperation?: {
+    operationId: string;
+    roundId?: string;
+    outcome: "accepted" | "completed" | "cancelled" | "failed";
+    error?: { code: string; message: string };
+  };
+}
+interface PhaseSnapshot extends PhaseState {
+  seq: {
+    phaseChanged: number;
+    sceneAdvanced: number;
+    operationDone: number;
+    operationFailed: number;
+  };
+}
+```
+
+所有可选项省略，不用 null；无活动场景省略 scene，不造空路径。inFlight 表示当前 lease 所有者，rewind 可无 roundId，内部提议可无公开 turnId；resumeRequired 表示暂停且无在飞请求，必须有 checkpoint，不能与 inFlight 同时为真。lastOperation.failed 必有脱敏 error，其他结果省略；新接纳替换上一结果，不保留旧 error。回合终态和当前 phase 独立：骰判后失败可暂停在 settling。needsRecovery 阻止恢复 / 新行动，但 get_phase 与诊断查询可用。PhaseState 的单次事件载荷最多 64 KiB，scene.path 最大深度 16，title 最多 256 字节，脱敏 error.message 最多 512 字节；超限不得预留 / 发布载荷。
+
+stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每次确认可观察状态变化递增；historyRevision 为最新已 applied historyFork 的正式 seq，根为 0。四基线必有，未产生事件为 0；各自对应下文四个事件，不能以 revision 替代信封 seq。同次确认可产生多个不同名字事件并共用 revision，各事件 data 均携带完整 PhaseState；phase 快照不含正文，正文恢复使用 llm_get_turn / record view。
+
+- engine:phase:changed：data 为 PhaseState，仅公开 phase 发生变化时发；同阶段内部步骤由快照 / 对应操作终态描述。
+- engine:scene:advanced：data 为 `{ ...PhaseState, previousSceneId? }`；真实切场或 sessionEnded 时发，结束后的 scene 省略；留场不发。
+- engine:operation:done：data 为 `{ ...PhaseState, operationId, outcome: "completed" | "cancelled" }`，operationId 标识此次完成；lastOperation 仍描述最近接纳操作，旧操作完成不能覆盖新接纳结果。
+- engine:operation:failed：data 为 `{ ...PhaseState, operationId, code, message }`，顶层 code / message 是此次 operation 的脱敏失败；仅当它仍是最近接纳操作时更新 lastOperation/failed 的同值 error。
+
+接纳的长流程 done / failed 二选一恰一次；未接纳只返回 Err。cancel 不另造 operationId，用被取消流程的终态事件；interrupt 接纳后新 operation 负责换回合结果，旧 operation 正常取消收尾。PhaseState 的完整载荷只能在对应事实 / applied 确认后发布，最后事件全部丢失仍需重连或主动 get_phase，不暗加轮询。前端一 session 一个快照请求、最多 32 条缓存；按 seq 对齐，再按 phaseRevision 防止跨事件名乱序倒退。
+
 ## 记录命令与运行期迁移快照（006 设计，尚未实现）
 
 规则与磁盘结构见[记录引擎](record-engine.md)，实现由 022 承接；下列载荷不修改当前 Rust / TS API。本节定稿后，022 在同次实现提交中同步两端类型与调用者，不能只改文档就宣称运行期接口已生效。
@@ -81,7 +146,7 @@ text 仅包含护栏后的已接纳正文。产品模式已持久化后再更新
 
 记录 page / view 默认新到旧；limit 沿用总则，另有每页 512 KiB 上限。items 不含 header / partial journal，每项 `{ recordSeq, kind, createdAt, body?, bodyRef?, turnId?, outcome? }`；已知且单项能放入页时 body 为该 kind 的类型化块内容（不重复公共字段），超大或未知项仅提供元信息与 bodyRef，未知 kind 用兼容提示显示。生成块的 body 含 speakerId?、text、finishReason? / error?，outcome completed / cancelled / failed 同记录规则；其他 kind 的字段按记录引擎块表定型。nextCursor 缺省表示没有更多历史，不能用空字符串；bodyRef 为 Rust 发出的不透明内容引用，不含路径。
 
-lastSeq 是该 session 的 engine:record:appended **事件信封确认基线**；lastRecordSeq 是正式块最高编号（初始 0），两者不可互换。viewEpoch 为本进程打开视图时生成的 UUID，重启 / 重新打开后改变；cursor 绑定它、sessionId、固定读取边界与方向。未知 session 为 app.not-found；坏 cursor / bodyRef、跨会话 / 内容 hash 失配 / 过期身份、分页越界为 app.bad-request；存在损坏为 store.corrupt。
+lastSeq 是该 session 的 engine:record:appended **事件信封确认基线**；lastRecordSeq 是正式块最高编号（初始 0），两者不可互换。viewEpoch 为本进程打开视图时生成的 UUID，重启 / 重新打开后改变；cursor 绑定它、sessionId、固定读取边界与方向；historyFork applied 后更换 viewEpoch，分页读取当前有效因果路径，原始物理历史保留供导出。未知 session 为 app.not-found；有效 bodyRef 指向不存在的 recordSeq 为 app.not-found；坏 cursor / bodyRef、跨会话 / 内容 hash 失配 / 过期身份、分页越界为 app.bad-request；存在损坏为 store.corrupt。
 
 page 只返回一个固定边界页；其 lastSeq 不表示未返回的内容已被 UI 重建。记录流缺口使用 view 替换有界最新窗口，不把 phase 当记录快照。needsRecovery 表示世界状态双写待恢复，inFlight 可选 `{ turnId, recordSeq }`，正文另取 llm_get_turn；header / 整份记录不塞进返回值。先订阅 → 有界缓存 → view → 按基线合并，旧页和新窗口按 recordSeq 去重；相同 viewEpoch 内基线不倒退。
 
@@ -109,17 +174,17 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 
 - `<域>:<对象>:<阶段>`，全小写冒号分隔（Tauri 事件名允许 `:`）。
 - 只有 `src-tauri` 调用 `emit_to("main", …)`。v1 单窗口，不做全局广播，避免未来多窗口时的载荷泄漏面。业务 crate 不得依赖 Tauri，进度经回调或通道交出普通载荷，由命令层发送。
-- 信封统一：`{ seq: u64, data: T }`，序号范围为 1 到 JS 最大安全整数（2^53−1），超过上限报 `app.event-failed`，不回绕。`seq` 在「事件名 + 流标识」内单调递增。`llm:turn:chunk` 与 `llm:turn:done` 各有自己的序号，互不占号。流标识：`llm:turn:*` 用 `turnId`；一次存储打开用 migrationId 标识迁移流；引擎阶段流的标识由 012 定。
+- 信封统一：`{ seq: u64, data: T }`，序号范围为 1 到 JS 最大安全整数（2^53−1），超过上限报 `app.event-failed`，不回绕。`seq` 在「事件名 + 流标识」内单调递增。`llm:turn:chunk` 与 `llm:turn:done` 各有自己的序号，互不占号。流标识：`llm:turn:*` 用 `turnId`；一次存储打开用 migrationId 标识迁移流；引擎阶段 / 场景 / 操作终态流用 sessionId，跨 roundId 连续。
 - 序号键由事件名和流标识两个独立字符串构成，空流标识仅在同一事件名下共用计数。当前条目存活到进程退出，空间随流数量增长；LLM 首个发送方接入时须按 llm.md 在回合驱逐且生产者退出后清退，旧 turnId 永不复用。同一流由发送方串行投递；分配器仅保证序号分配，不保证并发投递顺序。data 序列化失败不占号，构造成功后投递失败会留下序号缺口。
 - 以下为真实事件消费方接入时必须满足的快照规则，当前还没有真实发送方：
 - 监听者先注册监听并有界缓存事件，再取该流的快照，应用快照后按基线消费缓存，随后转为实时处理；同一流的快照请求串行，缓存溢出合并恢复请求；过期响应不覆盖新回合或更高基线。先取快照再注册监听会漏掉中间事件。快照给出其一致状态涵盖的每个事件名各自的最后 `seq`，监听者只取自己订阅的名字作为基线。之后该名字上 `seq <= 基线` 的事件丢掉；`seq == 基线 + 1` 才应用；出现更大的缺口就再取快照，不重放。没有基线时，第一条事件也按缺口处理，不从 0 推断。快照里的状态必须足够重绘，不能只给出最后一条 `delta`。
 
-| 事件                                            | 快照命令                 | 状态至少包括                                                    |
-| ----------------------------------------------- | ------------------------ | --------------------------------------------------------------- |
-| `llm:turn:*`                                    | `llm_get_turn`           | 该 turn 已累积的文本、outcome（completed / cancelled / failed） |
-| `store:migration:*`                             | `store_get_migration`    | MigrationSnapshot：流身份、目标 / 当前版本、阶段及每事件基线    |
-| `engine:phase:changed`、`engine:scene:advanced` | `engine_get_phase`       | 当前阶段与场景                                                  |
-| `engine:record:appended`                        | `engine_get_record_view` | 最新窗口、record / 事件位置、viewEpoch、恢复 / 在飞提示         |
+| 事件                                                                  | 快照命令                 | 状态至少包括                                                    |
+| --------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------- |
+| `llm:turn:*`                                                          | `llm_get_turn`           | 该 turn 已累积的文本、outcome（completed / cancelled / failed） |
+| `store:migration:*`                                                   | `store_get_migration`    | MigrationSnapshot：流身份、目标 / 当前版本、阶段及每事件基线    |
+| `engine:phase:changed`、`engine:scene:advanced`、`engine:operation:*` | `engine_get_phase`       | PhaseSnapshot：阶段、场景、检查点、操作结果及四基线             |
+| `engine:record:appended`                                              | `engine_get_record_view` | 最新窗口、record / 事件位置、viewEpoch、恢复 / 在飞提示         |
 
 记录流对齐使用 `engine_get_record_view`，见上节；`engine_get_record_page` 仍只做历史分页。
 
@@ -131,14 +196,14 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
   - `store:migration:progress`，data `{ migrationId, from, to, current, target }`；from / to 是本步骤版本，current == to，target 是流目标版本。
   - `store:migration:done`，data `{ migrationId, from, to, current }`；from / to 是整个流初始 / 目标版本，current == to；无步骤时 from == to。
   - `store:migration:failed`，data `{ migrationId, from?, to, current?, failedStep?, code, message }`；to 是目标版本，current 是最后成功提交版本；code 为 store.*，不发送原始 SQLite / IO 错误。失败不发 done，已提交步骤保留。open_with_progress 回调在每步提交后发生，022 必须接入运行期状态和发送；当前仍无真实发送方。
-  - `engine:scene:advanced` / `engine:phase:changed`（012 冻结 data）
+  - `engine:scene:advanced` / `engine:phase:changed` / `engine:operation:done` / `engine:operation:failed`：data 见上方引擎阶段快照，流标识 sessionId，012 已定稿、023 待实现。
 - 流式期间发生错误：以 `*:failed` 事件收尾；命令本身的 `Err` 只表示「提交被拒绝」，两者不重复携带同一错误。
 
 ## 错误码目录
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
 - 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`llm.*` 与 `engine.*` 的码名在本文预留（映射随 018、022、023 等实现任务落地），触发条件由 005 / 006 / 012 按域冻结。`app.*` 属于命令层。
-- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（存储尚未初始化——早于 setup 的调用；桌面正常流程不会出现）。存储路径或文件缺失只用 `store.not-found`。
+- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（所需业务存储未开放：初始化尚未完成，或运行期迁移失败后被冻结；后一种为 022 待实现行为。普通业务命令拒绝，但 store_get_migration 诊断仍可用；前端主动取该快照展示脱敏迁移失败，不持续轮询）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - llm 预留（005 已评审设计，映射尚未实现）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
@@ -158,7 +223,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 
 HTTP 200 中的合法 usage-only / 空 choices 不属于 bad-response。未带合法 finish / 结束标记的提前 EOF 按网络中断及首交付边界分类；已解析完成的正文后还需检查终止协议。TLS 类型和供应商错误细分按 llm.md 的 fixture 标定，不解析中文 message。诊断 detail 最多携带 providerId / status / 脱敏类别，不包含 key、代理凭据、完整 endpoint、prompt 或供应商原始错误正文。
 
-- engine 预留：`engine.no-scene` / `engine.invalid-phase` 的触发由 012 冻结；006 定义 `engine.interrupted`，仅为重开时已提交生成正文的中断记录错误，不代替实时 llm.aborted，不恢复旧 turnId。
+- engine 预留（012 已冻结，023 待实现）：`engine.no-scene` 为未载入 / 已结束而无活动场景；`engine.invalid-phase` 为命令不适用于当前阶段、无合法恢复检查点或 pending 世界 / 控制意图未修复；与其他在飞 lease 冲突仍为 app.busy。详见阶段机的错误优先级。006 定义 `engine.interrupted`，仅为重开时已提交生成正文的中断记录错误，不代替实时 llm.aborted，不恢复旧 turnId。
 - 前端分支**正例**：
 
 ```ts

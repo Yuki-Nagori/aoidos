@@ -3,7 +3,7 @@
 - 状态：planned
 - 依赖：012、020、022
 - 优先级：P0
-- 创建 / 更新：2026-10-05 / 2026-10-05
+- 创建 / 更新：2026-10-05 / 2026-10-06
 
 ## 目标与背景
 
@@ -11,19 +11,20 @@
 
 ## 必读
 
-[LLM 规则与结构](../architecture/llm.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
+[阶段机定稿](../architecture/turn-state-machine.md) · [LLM 规则与结构](../architecture/llm.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
 
 ## 范围与非目标
 
 - 状态枚举与转移表、engine_submit_input、阶段 / 场景事件及 engine_get_phase。
-- 成功 / 失败骰判、steer、rewind、取消和崩溃恢复，记录追加时机与生成调用点。
+- PbtA 三档与 CheckPlan / RNG 元数据、内部提议、steer / resume / regenerate / historyFork、取消和崩溃恢复，记录追加时机与生成调用点。
+- scene / phase / operation 四事件及快照一致确认，暂停检查点、世界因果重放与失效 recap / viewEpoch；未知世界解释器明确拒绝。
 - 复用 020 的门禁 / UUID / 快照和 022 的记录投影；记忆只提供 007 定义的接口位置。
 
 非目标：不实现 NPC 自主排期、记忆蒸馏或完整游戏界面。
 
 ## 前置条件与待决策
 
-012 的状态 / 事件载荷 / 中断恢复规则评审通过；022 记录语法与持久化实现可用。不能另建第二套在飞回合管理。
+012 已定稿；020 / 022 尚未完成，保持 planned。022 的持久化 / 因果路径基础与已注册世界重放解释器可用后再接入。不能另建第二套在飞回合管理。
 
 ## 实施步骤
 
@@ -40,6 +41,7 @@
 - [ ] 每个设计转移及非法分支有测试，no-scene / invalid-phase / busy 触发符合契约。
 - [ ] 产品与调试调用共用一个门禁；骰判成功 / 失败均按设计推进，不把失败伪装为终点。
 - [ ] 取消 / steer / rewind / 重启恢复保持已提交记录和阶段一致，不自动重新收费续跑。
+- [ ] PbtA 三档及非法计划、过期 effect、部分结算与 fork 各崩溃点有断言；恢复只补缺步骤，旧操作终态不覆盖新操作，场景 / 阶段跨事件乱序不倒退。
 - [ ] 阶段快照可重绘，事件投递失败可按契约恢复，记录追加点与终态恰一次。
 - [ ] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十项通过。
 
@@ -58,6 +60,7 @@
 ## 决策与工作记录
 
 - 2026-10-05：按用户要求规划 LLM 相关实现任务，明确依赖、范围和失败路径；本次只登记计划，不实施代码。
+- 2026-10-06：012 定稿，接收完整转移表、共享 lease / 内部提议 / PbtA 三档、historyFork 重放、四事件与快照及故障矩阵；020 / 022 依赖未满足，仍 planned，不标成已实现。
 
 ## 完成摘要
 
