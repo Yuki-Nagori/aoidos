@@ -52,6 +52,7 @@ ai-docs/
 | 010  | [通信契约与工程纪律](task/010-ipc-contract-design.md)     | **底层·契约**         | 002                | done        |
 | 011  | [存储与文件基建](task/011-storage-design.md)              | **底层·存储**         | 002                | done        |
 | 012  | [回合与阶段状态机](task/012-turn-state-machine-design.md) | **底层·状态机**       | 005、006           | done        |
+| 028  | [界面国际化与本地化](task/028-i18n-design.md)             | 界面·语言             | 003、010           | ready       |
 
 ### 实现任务
 
