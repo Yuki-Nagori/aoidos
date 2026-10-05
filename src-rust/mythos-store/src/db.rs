@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, DatabaseName, TransactionBehavior};
+use rusqlite::{Connection, DatabaseName, OpenFlags, TransactionBehavior};
 
 use super::atomic;
 use super::error::{Result, StoreError};
@@ -31,19 +31,23 @@ pub fn open(path: &Path, migrations: &[&str]) -> Result<Connection> {
     open_with_progress(path, migrations, &mut |_| {})
 }
 
-/// 迁移进度：从 `from` 迁到 `to`（每个迁移一步）。
+/// 已提交的迁移步：`from` 是提交前版本，`to` 是提交后版本。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MigrationProgress {
     pub from: u32,
     pub to: u32,
 }
 
-/// 同 [`open`]，并把每个迁移步（from → to）交给 `on_progress`。
-/// 回调只收纯数据，无 Tauri 类型（职责边界：业务 crate 不得依赖 Tauri）。
+/// 同 [`open`]，每步事务成功提交后同步调用 `on_progress`；失败的步骤不回调，
+/// 已成功的步骤仍保留。无需迁移时不回调。回调不能递归执行同一库的迁移。
 ///
 /// # Errors
 ///
 /// 与 [`open`] 相同。
+///
+/// # Panics
+///
+/// 回调 panic 会向调用方传播，此时当前步骤已经提交；回调应自行处理可恢复失败。
 pub fn open_with_progress(
     path: &Path,
     migrations: &[&str],
@@ -66,11 +70,11 @@ pub fn open_with_progress(
         if version > 0 {
             backup(&conn, &path, version)?;
         }
+        apply_migration(&mut conn, version, migrations[version as usize])?;
         on_progress(MigrationProgress {
             from: version,
             to: version + 1,
         });
-        apply_migration(&mut conn, version, migrations[version as usize])?;
         version += 1;
     }
     Ok(conn)
@@ -108,13 +112,22 @@ fn query_user_version(conn: &Connection) -> Result<u32> {
     }
 }
 
-/// 只读打开并返回 user_version（不执行迁移；文件不存在时创建空库，版本 0）。
+/// 只读打开并返回 user_version，不创建数据库、数据目录或执行迁移。
+/// 文件或父目录不存在时返回 0；已有文件使用与 [`open`] 相同的路径归一化和 busy 预算。
 ///
 /// # Errors
 ///
-/// 打开失败或版本为负时返回。
+/// 元数据不可读、数据库无法打开 / 损坏、读取超时或版本为负时返回。
 pub fn current_version(path: &Path) -> Result<u32> {
-    let conn = Connection::open(path).map_err(err_open)?;
+    let path = paths::normalize(path);
+    match fs::metadata(&path) {
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(StoreError::from_io(err)),
+    }
+    let conn =
+        Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err_open)?;
+    conn.busy_timeout(BUSY_TIMEOUT).map_err(err_pragma)?;
     query_user_version(&conn)
 }
 
@@ -267,23 +280,30 @@ pub struct BackupEntry {
 }
 
 /// 列出 `backups/` 下的迁移备份，新到旧排序；只认 `storage-v{v}-{nanos}.sqlite`，
-/// 其余文件（含无法解析的同前缀文件）跳过。目录不存在视为空。
+/// 其余文件（含无法解析的同前缀文件）、目录及符号链接跳过。目录不存在视为空。
+/// 只读枚举已有备份；保留份数上限仅由迁移写入时的清理保证，不限制人工放入的文件数。
 ///
 /// # Errors
 ///
 /// 目录或条目元数据不可读时返回。
 pub fn list_backups(db_path: &Path) -> Result<Vec<BackupEntry>> {
-    let dir = parent_dir(db_path).join("backups");
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
+    let db_path = paths::normalize(db_path);
+    let dir = parent_dir(&db_path).join("backups");
+    let listing = match fs::read_dir(&dir) {
+        Ok(listing) => listing,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(StoreError::from_io(err)),
+    };
     let mut entries: Vec<BackupEntry> = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(StoreError::from_io)? {
+    for entry in listing {
         let entry = entry.map_err(StoreError::from_io)?;
         let path = entry.path();
         let Some((nanos, version)) = backup_rank(&path) else {
             continue;
         };
+        if !entry.file_type().map_err(StoreError::from_io)?.is_file() {
+            continue;
+        }
         let size = entry.metadata().map_err(StoreError::from_io)?.len();
         entries.push(BackupEntry {
             path,
@@ -641,6 +661,13 @@ INSERT INTO children VALUES (42);";
         fs::write(backups.join("storage-v1-200.sqlite"), b"bb").unwrap();
         fs::write(backups.join("storage-v2-150.sqlite"), b"ccc").unwrap();
         fs::write(backups.join("notes.sqlite"), b"skip").unwrap();
+        fs::create_dir(backups.join("storage-v9-999.sqlite")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            backups.join("storage-v1-100.sqlite"),
+            backups.join("storage-v9-1000.sqlite"),
+        )
+        .unwrap();
 
         let items = list_backups(&path).unwrap();
         assert_eq!(items.len(), 3, "非迁移备份命名不入选");
@@ -656,6 +683,61 @@ INSERT INTO children VALUES (42);";
         let dir = tdir("db-list-missing");
         let items = list_backups(&dir.join("storage.sqlite")).unwrap();
         assert!(items.is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn current_version_missing_paths_have_no_side_effects() {
+        let dir = tdir("db-version-missing");
+        assert_eq!(current_version(&dir.join("storage.sqlite")).unwrap(), 0);
+        let parent = dir.join("not-created");
+        assert_eq!(current_version(&parent.join("storage.sqlite")).unwrap(), 0);
+        assert!(!dir.join("storage.sqlite").exists());
+        assert!(!parent.exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn current_version_is_read_only_and_sees_wal_state() {
+        let dir = tdir("db-version-read");
+        let path = dir.join("storage.sqlite");
+        let conn = open(&path, &[V1]).unwrap();
+        assert_eq!(current_version(&path).unwrap(), 1);
+        conn.execute_batch("PRAGMA user_version = -1;").unwrap();
+        assert_eq!(current_version(&path).unwrap_err().code(), "corrupt");
+        drop(conn);
+        let contents = fs::read(&path).unwrap();
+        assert_eq!(current_version(&path).unwrap_err().code(), "corrupt");
+        assert_eq!(fs::read(&path).unwrap(), contents);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn snapshot_and_backup_listing_report_invalid_parent() {
+        let dir = tdir("db-read-invalid");
+        let parent = dir.join("blocked");
+        fs::write(&parent, b"not a directory").unwrap();
+        assert!(current_version(&parent.join("storage.sqlite")).is_err());
+        fs::write(dir.join("backups"), b"not a directory").unwrap();
+        assert!(list_backups(&dir.join("storage.sqlite")).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_migration_does_not_report_uncommitted_progress() {
+        let dir = tdir("db-progress-failure");
+        let path = dir.join("storage.sqlite");
+        let steps = RefCell::new(Vec::new());
+        let mut record = |step| steps.borrow_mut().push(step);
+        assert!(open_with_progress(&path, &[V1, "CREATE TABLE broken(;"], &mut record).is_err());
+        assert_eq!(*steps.borrow(), [MigrationProgress { from: 0, to: 1 }]);
+        assert_eq!(current_version(&path).unwrap(), 1);
+        steps.borrow_mut().clear();
+        drop(open_with_progress(&path, &[V1], &mut record).unwrap());
+        assert!(
+            steps.borrow().is_empty(),
+            "reopening must not repeat committed steps"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

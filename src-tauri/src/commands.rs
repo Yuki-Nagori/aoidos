@@ -2,6 +2,7 @@
 
 use crate::ipc::CmdError;
 use mythos_store::db;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -16,6 +17,7 @@ pub fn greet(name: &str) -> Result<String, CmdError> {
 
 // 应用数据目录下的业务库路径：lib.rs setup 注入（OnceLock 单例，进程内只设一次）。
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
+const MAX_BACKUP_ITEMS: usize = 50;
 
 /// setup 注入业务库路径；重复注入忽略。
 pub(crate) fn init_db_path(db: PathBuf) {
@@ -31,36 +33,81 @@ fn not_ready() -> CmdError {
     CmdError::new("app.not-ready", "存储尚未初始化", None)
 }
 
-/// 列出迁移备份（新到旧）。契约正例：`store_list_backups {}` → `{ items }`。
+/// IPC 备份条目；nanos 是 Unix epoch 纳秒的十进制字符串，避免 JS number 丢失精度。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupItem {
+    path: String,
+    version: u32,
+    nanos: String,
+    size: u64,
+}
+
+/// 最多返回最新 50 个备份；按时间戳、版本从新到旧排序。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupList {
+    items: Vec<BackupItem>,
+}
+
+/// 当前未运行迁移任务的版本快照，不提供在飞流程状态或事件 seq 基线。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationSnapshot {
+    from: u32,
+    to: u32,
+    phase: MigrationPhase,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum MigrationPhase {
+    Idle,
+}
+
+/// 列出最新迁移备份，最多 50 项；备份目录不存在时 items 为空。
+///
+/// # Errors
+///
+/// 路径尚未注入时返回 app.not-ready；枚举失败返回对应 store.* 错误。
 #[tauri::command]
-pub fn store_list_backups() -> Result<serde_json::Value, CmdError> {
+pub fn store_list_backups() -> Result<BackupList, CmdError> {
     list_backups_payload(db_path()?)
 }
 
-fn list_backups_payload(db_path: &Path) -> Result<serde_json::Value, CmdError> {
-    let items: Vec<serde_json::Value> = db::list_backups(db_path)
+fn list_backups_payload(db_path: &Path) -> Result<BackupList, CmdError> {
+    let items = db::list_backups(db_path)
         .map_err(CmdError::from)?
-        .iter()
-        .map(|backup| {
-            serde_json::json!({
-                "path": backup.path.display().to_string(),
-                "version": backup.version,
-                "size": backup.size,
-            })
+        .into_iter()
+        .take(MAX_BACKUP_ITEMS)
+        .map(|backup| BackupItem {
+            path: backup.path.display().to_string(),
+            version: backup.version,
+            nanos: backup.nanos.to_string(),
+            size: backup.size,
         })
         .collect();
-    Ok(serde_json::json!({ "items": items }))
+    Ok(BackupList { items })
 }
 
-/// 当前迁移版本快照（from == to == user_version）。
+/// 只读版本快照：from == to == user_version，phase 为 idle；新安装返回版本 0。
+/// 不创建数据库或目录。006 接入真实迁移流时再提供运行阶段与各事件的 seq 基线。
+///
+/// # Errors
+///
+/// 路径尚未注入时返回 app.not-ready；读取失败返回对应 store.* 错误。
 #[tauri::command]
-pub fn store_get_migration() -> Result<serde_json::Value, CmdError> {
+pub fn store_get_migration() -> Result<MigrationSnapshot, CmdError> {
     migration_snapshot(db_path()?)
 }
 
-fn migration_snapshot(db_path: &Path) -> Result<serde_json::Value, CmdError> {
+fn migration_snapshot(db_path: &Path) -> Result<MigrationSnapshot, CmdError> {
     let version = db::current_version(db_path).map_err(CmdError::from)?;
-    Ok(serde_json::json!({ "from": version, "to": version }))
+    Ok(MigrationSnapshot {
+        from: version,
+        to: version,
+        phase: MigrationPhase::Idle,
+    })
 }
 
 #[cfg(test)]
@@ -100,11 +147,15 @@ mod tests {
         let db_path = dir.join("storage.sqlite");
         init_db_path(db_path.clone());
 
-        let empty = store_list_backups().unwrap();
+        let empty = serde_json::to_value(store_list_backups().unwrap()).unwrap();
         assert_eq!(empty["items"].as_array().unwrap().len(), 0);
-        let snapshot = store_get_migration().unwrap();
+        let snapshot = serde_json::to_value(store_get_migration().unwrap()).unwrap();
         assert_eq!(snapshot["from"], 0);
-        assert_eq!(snapshot["to"], 0);
+        assert_eq!(
+            snapshot,
+            serde_json::json!({ "from": 0, "to": 0, "phase": "idle" })
+        );
+        assert!(!db_path.exists(), "snapshot must not create the database");
 
         let migrations = ["CREATE TABLE heroes(id INTEGER PRIMARY KEY);"];
         let conn = db::open(&db_path, &migrations).unwrap();
@@ -114,18 +165,57 @@ mod tests {
         std::fs::write(backups.join("storage-v1-100.sqlite"), b"a").unwrap();
         std::fs::write(backups.join("storage-v1-200.sqlite"), b"bb").unwrap();
 
-        let listed = store_list_backups().unwrap();
+        let listed = serde_json::to_value(store_list_backups().unwrap()).unwrap();
         let items = listed["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["size"], 2);
-        let snapshot = store_get_migration().unwrap();
+        assert_eq!(items[0]["nanos"], "200");
+        assert_eq!(items[0]["version"], 1);
+        let snapshot = serde_json::to_value(store_get_migration().unwrap()).unwrap();
         assert_eq!(snapshot["from"], 1);
 
         // 重复注入忽略：仍读原库（OnceLock 单例语义）。
         init_db_path(dir.join("other.sqlite"));
-        let snapshot = store_get_migration().unwrap();
+        let snapshot = serde_json::to_value(store_get_migration().unwrap()).unwrap();
         assert_eq!(snapshot["from"], 1);
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    #[test]
+    fn snapshot_of_fresh_install_does_not_create_data_directory() {
+        let dir = tdir("fresh-install");
+        let parent = dir.join("missing");
+        let value =
+            serde_json::to_value(migration_snapshot(&parent.join("storage.sqlite")).unwrap())
+                .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "from": 0, "to": 0, "phase": "idle" })
+        );
+        assert!(!parent.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn backup_payload_preserves_nanos_and_limits_results() {
+        let dir = tdir("limit");
+        let backups = dir.join("backups");
+        std::fs::create_dir(&backups).unwrap();
+        let base = 1_700_000_000_000_000_000_u128;
+        for offset in 0..51 {
+            std::fs::write(
+                backups.join(format!("storage-v1-{}.sqlite", base + offset)),
+                b"x",
+            )
+            .unwrap();
+        }
+        let value =
+            serde_json::to_value(list_backups_payload(&dir.join("storage.sqlite")).unwrap())
+                .unwrap();
+        let items = value["items"].as_array().unwrap();
+        assert_eq!(items.len(), 50);
+        assert_eq!(items[0]["nanos"], (base + 50).to_string());
+        assert_eq!(items[49]["nanos"], (base + 1).to_string());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

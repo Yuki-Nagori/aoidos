@@ -15,7 +15,7 @@
 
 ## 当前状态
 
-Mythos 是 AI 驱动的剧情跑团桌面应用（产品定位见根 README）。当前为可运行的工程骨架：前端只有 `App.vue` 与 `utils/greet.ts`，Rust 侧只有一个 `greet` 命令，用于演示 `invoke` 往返。状态管理、路由、业务 crate 均未引入，本文档不把它们写成已有能力。路线图见[任务索引](../task-index.md)。
+Mythos 是 AI 驱动的剧情跑团桌面应用（产品定位见根 README）。当前前端界面仍为 greet 占位，已提供 store 命令的薄调用和 TS 类型。Rust 已落地 mythos-store 业务 crate、统一命令错误、事件信封 / 每流序号，以及备份列表和静态迁移快照命令。真实事件发送、运行期快照和业务 UI 尚未接入；状态管理与路由尚未引入。路线图见[任务索引](../task-index.md)。
 
 ## 分层和依赖方向
 
@@ -25,7 +25,7 @@ src-web（Vue + TypeScript，UI 编排与展示逻辑）
   ▼
 src-tauri（#[tauri::command] 命令层，保持薄）
   ▼
-业务 crate（规划：出现真实业务时加入 Cargo workspace members，命令层只做转发）
+src-rust/mythos-store（已落地；后续业务 crate 按需加入 workspace）
 ```
 
 可复用的前端逻辑放 `src-web/utils/` 并配单测；组件只做编排。跨端类型在 Rust 定型后由 TS 侧同步声明，`invoke` 本身不做校验。

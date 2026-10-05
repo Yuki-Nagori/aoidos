@@ -15,34 +15,26 @@
 
 ## 范围与非目标
 
-交付（`src-tauri/src/events.rs`）：
+已实现：事件名 / 流标识二元键、每流序号、可失败信封构造及 lib.rs 平台发送适配。data 序列化失败不占号；序号上限、锁中毒或投递失败统一为 app.event-failed。完整形状和范围见[通信契约](../architecture/ipc-contract.md)，不在本任务维护第二份参数表。
 
-1. 每流 seq 分配器：`Mutex<HashMap<String, u64>>`，键为 `"{event}:{stream_id}"`；同流单调递增，异流互不占号。
-2. 信封构造：`envelope(event, stream_id, data) -> serde_json::Value`，形状 `{ seq, data }`（无版本号，契约总则）。
-3. emit 装配胶水：lib.rs `emit_event`（契约信封 + `emit_to("main")`，错误映射 `app.event-failed`）。
+未实现：真实发送方、流状态保存、序号基线快照、监听者恢复与流清退。发送适配尚无消费方，随 005 / 006 首个真实流程接入；调用方必须串行投递同一流。
 
-非目标：具体事件与快照命令（005 / 006 / 012 / 017）；业务 crate 的回调 trait 形态（随第一个真实发送方在 005 定，本任务只保证命令层一侧就绪）。
+## 实施步骤与改动
 
-**范围修订（实现期）**：tauri `test` feature 在 Windows 让测试二进制加载即崩（STATUS_ENTRYPOINT_NOT_FOUND，wry DLL 依赖链）——mock 方案不可用。改判：seq / 信封纯逻辑留 events.rs 直测；真实 `emit_to` 收敛为 lib.rs 装配层一行胶水 `emit_event`（该文件在覆盖率口径外，与 Builder 同类），带 `TODO(task 017)` 的 `allow(dead_code)`——017 的命令层将成为首个调用方。dev-dep 的 test feature 移除。
-
-## 实施步骤
-
-1. `events.rs`：seq 分配器 + 信封；单测覆盖「同流递增 / 异流独立 / 信封形状」。
-2. lib.rs 装配胶水 `emit_event`（契约错误码 `app.event-failed`）。
-3. 契约错误码目录补 `app.event-failed` 行。
-
-## 预计改动
-
-新建 `src-tauri/src/events.rs`；修改 `src-tauri/src/lib.rs`（挂模块 + 胶水）、`ai-docs/architecture/ipc-contract.md`（错误码目录 +1 行）。
+1. events.rs 提供序号与信封纯逻辑，并直测。
+2. lib.rs 仅保留依赖 AppHandle 的实际 emit_to；ipc.rs 负责可测的错误上下文映射。
+3. 同步通信契约与原任务记录，验证全部门禁。
 
 ## 验收标准
 
-- [x] 同流 seq 单调、异流互不占号（单测断言）。
-- [x] 信封形状 `{ seq, data }` 且无版本号（单测断言）。
-- [x] `app.event-failed` 登记进契约错误码目录。
-- [x] `bun run verify` 十项 exit 0（行覆盖含 events.rs 100%）。
+- [x] 同流递增，不同事件 / 流独立，空标识和含冒号标识不会混流。
+- [x] 信封恰为 seq / data，失败不会 panic 或让序号回绕。
+- [x] app.event-failed 覆盖序列化、序号分配及平台投递失败。
+- [x] 新逻辑在 Rust 100% 行覆盖口径内，验证结果见下。
 
 ## 验证计划与结果
+
+初次完成记录：
 
 | 日期       | 命令                                             | 预期        | 实际结果                                        |
 | ---------- | ------------------------------------------------ | ----------- | ----------------------------------------------- |
@@ -50,15 +42,23 @@
 | 2026-10-05 | `bun run coverage:rust`                          | 行覆盖 100% | 1481/1481 行；events.rs 纯逻辑全覆盖            |
 | 2026-10-05 | `cargo fmt --all --check` / clippy `-D warnings` | exit 0      | 均通过                                          |
 
+issue #7 修复及 015–017 整体复核（本地 macOS）：
+
+| 日期       | 命令                    | 实际结果                                         |
+| ---------- | ----------------------- | ------------------------------------------------ |
+| 2026-10-05 | `bun run verify`        | 十项 exit 0；Rust 85 tests，Web 7 tests          |
+| 2026-10-05 | `bun run coverage:rust` | 1811/1811 行（100%），含 commands / events / ipc |
+
 ## 风险与回退
 
-真实投递路径（`emit_to`）落在覆盖率口径外的装配层，无自动化覆盖——首次真实使用（017 / 005）时人工验证一次投递；事件名与信封形状的纯逻辑已全覆盖。回退：摘除 events.rs 与 lib.rs 胶水即还原。
+真实 emit_to 适配位于覆盖率外的装配层，首次接入发送方须验证 main 窗口实际收到载荷。序号条目随进程存活，空间随流数增长；未来清退须与快照生命周期一起设计，不能孤立重置序号。撤销本模块时同时清理装配和消费者。
 
 ## 决策与工作记录
 
-- 2026-10-05：创建任务（ready）。emit 适配的测试走 tauri mock 而非闭包注入——真实 `emit_to` 路径被覆盖比注入纯函数更有价值；seq / 信封保持纯函数。
-- 2026-10-05：实现完成，**范围修订**：tauri `test` feature 在 Windows 让测试二进制加载即崩（STATUS_ENTRYPOINT_NOT_FOUND，wry DLL 依赖链，社区已知问题）——mock 方案放弃；纯逻辑留 events.rs 直测，真实 `emit_to` 收敛为 lib.rs 装配层一行胶水（覆盖率口径外，带 `TODO(task 017)` 的 allow 与移除条件）。契约错误码目录补 `app.event-failed`。
+- 2026-10-05：原计划使用 Tauri mock 测试真实 emit_to，初次实现记录表明 Windows test feature 加载失败，因此改为直测纯逻辑、实际发送留在装配层。
+- 2026-10-05：017 将 store 事件适配推迟到 006，原 TODO(task 017) 已失效；首次发送方随 005 / 006 接入。此变化不等于事件已在应用中发送。
+- 2026-10-05：整体复核将冒号拼接键改为二元键；序号限制为 JS 安全整数，序列化先于分配，失败返回 CmdError。新增碰撞、空流、边界与失败不占号测试，去掉“内存增长可忽略”等无依据保证。
 
 ## 完成摘要
 
-事件基建落地：`events.rs`（每流 seq + 信封，纯逻辑直测）、lib.rs `emit_event` 装配胶水（覆盖率口径外，017 起使用）、契约 `app.event-failed` 登记。验证：65 测试全过、行覆盖 100%、fmt / clippy 过。限制：真实投递路径无自动化覆盖（Windows DLL 约束），首次真实使用（017 / 005）时人工验证一次投递。
+纯逻辑基建已完成，实际投递适配可调用但尚无发送方。序号分配保证每流计数，不保证并发发送顺序；监听方的快照恢复规则尚待真实流程接入后验证。
