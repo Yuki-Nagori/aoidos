@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-05。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。业务记录、记忆与导入导出仍按各自任务规划；工程纪律前提见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-06。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。业务记录、记忆与导入导出仍按各自任务规划；工程纪律前提见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -25,12 +25,12 @@ SQLite 是完整的关系数据库——join、递归 CTE、窗口函数、JSON 
 - **引擎内存结构（运行时领域状态，Rust 所有）**：把剧本规则实例化后的图（技能树 / 关系网；图结构候选库如 petgraph，**仅在需求真实出现时经 task 引入，当前不预置**）、索引与缓存（派生数值、分配历史）。复杂关系的建模、遍历与派生计算全部发生在这一层，内存是运行期的唯一高速真相。
 - **SQLite + 文件（持久层）**：只做持久化与查询——把内存状态的变更事实落盘，启动时从持久层重建内存结构。数据库不存「算出来的真相」，也不承担遍历逻辑。
 
-落库的是「事实」（谁在何时把点分给了谁），内存里算的是「现状」（当前属性面板）；两者以 006 的记录与回放规则衔接。
+落库的是「事实」（谁在何时把点分给了谁），内存里算的是「现状」（当前属性面板）；两者以[记录引擎](record-engine.md)的事实意图、applied 标记与恢复规则衔接；JSONL 和 SQLite 不是跨文件原子事务。
 
 职责三分法，以「加点」为例：
 
 - **静态规则数据**（技能树形状、每点加成、成长曲线）→ 剧本包文件，不进库。
-- **运行时状态**（玩家把点分到哪、何时）→ SQLite 窄表，分配记录即事实源：
+- **运行时状态**（玩家把点分到哪、何时）→ SQLite 窄表，保存已应用分配事实的查询投影；关键变更的因果事实源是记录引擎的 worldMutation 块，不形成两份独立真相。以下仅为点位建模示意，不是已实现 schema；实际事务还须带 applied 幂等标记：
 
 ```sql
 CREATE TABLE point_allocations (
@@ -52,7 +52,7 @@ CREATE TABLE point_allocations (
 - Schema 迁移：`PRAGMA user_version` + 按版本号排列的内嵌 SQL 切片；每次迁移用 IMMEDIATE 事务，执行或提交失败由 RAII 回滚，`user_version` 与 schema 同事务推进。SQL 不得自行 BEGIN / COMMIT / ROLLBACK；每个迁移配套回填测试。
 - 业务 crate 不依赖 tauri：数据根路径由装配层（src-tauri）解析后注入。
 
-`current_version` 使用 READ_ONLY 打开读取已持久化版本，缺失库或父目录为 0，不创建数据目录 / 库。缺失分支检查现存祖先是否为目录，避免 Windows 把文件挡住父路径的 NotFound 当成新安装。读取与迁移打开共用路径归一化和 busy 预算。`open_with_progress` 在每步事务提交成功后回调 `{ from, to }`，失败步骤不回调；之前成功步骤不撤销，无需迁移时无回调。回调是同步纯数据出口，迁移事件 / 运行期快照协议由 006 设计，命令层发送及状态保存由 [022](../task/022-record-engine-impl.md) 在设计定稿后落地。备份的 IPC 字段与限制统一见[通信契约](ipc-contract.md)。
+`current_version` 使用 READ_ONLY 打开读取已持久化版本，缺失库或父目录为 0，不创建数据目录 / 库。缺失分支检查现存祖先是否为目录，避免 Windows 把文件挡住父路径的 NotFound 当成新安装。读取与迁移打开共用路径归一化和 busy 预算。`open_with_progress` 在每步事务提交成功后回调 `{ from, to }`，失败步骤不回调；之前成功步骤不撤销，无需迁移时无回调。回调是同步纯数据出口，迁移事件 / 运行期快照协议见[记录引擎](record-engine.md)与[通信契约](ipc-contract.md)，命令层发送及状态保存由 [022](../task/022-record-engine-impl.md) 在设计定稿后落地。备份的 IPC 字段与限制统一见[通信契约](ipc-contract.md)。
 
 ## 目录与路径规范
 
@@ -62,6 +62,7 @@ CREATE TABLE point_allocations (
 ├── migrations/…                  # SQL 迁移（编译期内嵌，目录仅调试导出）
 ├── workspaces/<script-id>/       # 每剧本一个工作区
 │   ├── transcript/<session-id>.jsonl
+│   ├── transcript/<session-id>.<turn-id>.partial.jsonl  # 唯一活跃安全增量日志（022 待实现）
 │   ├── memory/                   # 007 记忆文件（若走文件载体）
 │   └── exports/                  # 导出物（唯一允许被 shell 打开的目录）
 └── backups/                      # 迁移 / 覆写前的自动备份
@@ -72,9 +73,9 @@ CREATE TABLE point_allocations (
 
 ## 原子写工具（全仓唯一实现）
 
-- API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8）。普通文件覆写经此二函数。SQLite 事务与在线备份、实例锁文件、JSONL 尾行截断由各自模块原地写，不经这里。
+- API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8）。普通文件覆写经此二函数。SQLite 事务与在线备份、实例锁文件、JSONL 受控追加 / 尾行截断由各自模块原地写，不经这里。JSONL 追加原语由 022 在 store 中实现，全仓复用，不在 engine 再写一套 IO。
 - 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。重试次数与退避见[通信契约](ipc-contract.md)看门狗表。三端的 `WouldBlock`、`ResourceBusy`、`ExecutableFileBusy` 进入退避。Windows 上原始码 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）同样算占用；Unix 上同号是 EIO / EPIPE，保持 `io`，不重试。目录目标三端立即 `io`，不进入退避：Windows 把「文件 rename 到目录」也报成 ACCESS_DENIED，若先按占用重试，目录会在 Windows 上等满退避。耗尽报 `locked` 并清理本次 tmp。父目录同步只吞掉 `PermissionDenied`、`InvalidInput`、`Unsupported`；其它同步错误在 rename 已经发布后仍返回，调用方不能把该错误当成「目标未更新」。
-- 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行（对局恢复语义，006 引用）。
+- 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行；完整行仍须校验 JSON / 身份，中间损坏不得删。partial 不是 .tmp，不由通用临时清理删除；保留已提交前文并封中断块的恢复及 buffered / high 耐久边界见[记录引擎](record-engine.md)。
 - 并发与锁：单写者约定；打开数据库前持有 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
 
 ## shell 与进程边界

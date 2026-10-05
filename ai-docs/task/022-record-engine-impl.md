@@ -3,7 +3,7 @@
 - 状态：planned
 - 依赖：006、013、020
 - 优先级：P0
-- 创建 / 更新：2026-10-05 / 2026-10-05
+- 创建 / 更新：2026-10-05 / 2026-10-06
 
 ## 目标与背景
 
@@ -11,12 +11,12 @@ LLM 安全文本需要真正持久化；017 推迟的迁移事件与快照也需
 
 ## 必读
 
-[LLM 规则与结构](../architecture/llm.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
+[记录引擎](../architecture/record-engine.md) · [LLM 规则与结构](../architecture/llm.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
 
 ## 范围与非目标
 
-- 记录块语法与同源 GuardSpec、JSONL / 会话结构、原子追加、崩溃截断恢复和持久化 OutputSink。
-- 上下文投影、稳定前缀、折叠 / recap、token 估算标定与记录分页。
+- 记录块语法与同源 GuardSpec、JSONL / 会话结构、受控追加、partial sidecar / 封口、中断前文保留和持久化 OutputSink。
+- 上下文投影、稳定前缀、折叠 / recap、token 估算标定与记录 page / view / body、按身份替换预览及缺口恢复；前端消费纯逻辑 / 有界缓存进 utils，监听生命周期进 composable，不借此实现完整游戏 UI。
 - 迁移 flow 标识、progress / done / failed、运行期状态与 store_get_migration 快照；复用 store 回调及事件设施。
 
 非目标：不提前冻结 006 未定的字段，不实现记忆蒸馏或完整阶段流转。
@@ -38,8 +38,9 @@ LLM 安全文本需要真正持久化；017 推迟的迁移事件与快照也需
 ## 验收标准
 
 - [ ] 产品路径事件拼接、快照文本与已提交正文逐字节一致；写入失败不发未提交增量，崩溃恢复不把半行当记录。
+- [ ] 世界状态意图 / applied 协议覆盖跨文件崩溃、SQL 失败与条件冲突；pending 禁止继续推进，恢复不重新掷骰。具体世界属性 schema 未设计前只验证协议夹具，不擅自扩展产品数据模型。
 - [ ] 投影不改记录基底，缓存前缀字节稳定；预算、长块和 recap 按 006 样例验证，token 估算有标定证据。
-- [ ] 分页 cursor / limit 行为与跨端类型符合契约；损坏记录有明确失败 / 恢复行为。
+- [ ] 分页 cursor / limit 行为与跨端类型符合契约，事件缓存、历史页 / bodyRef 缓存及旧响应均有上界和淘汰测试；损坏记录有明确失败 / 恢复行为。
 - [ ] 迁移成功、失败、无待迁移和投递失败均有测试；快照包含足够重绘的阶段及每事件基线。
 - [ ] 回写 016 / 017 承接完成证据，移除已失效的待实现描述。
 - [ ] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十项通过。
@@ -59,6 +60,7 @@ LLM 安全文本需要真正持久化；017 推迟的迁移事件与快照也需
 ## 决策与工作记录
 
 - 2026-10-05：按用户要求规划 LLM 相关实现任务，明确依赖、范围和失败路径；本次只登记计划，不实施代码。
+- 2026-10-06：006 补齐规则与结构稿，明确 sidecar 与耐久等级、未知 kind 只读、同源 GuardSpec、纯投影 / 付费压缩门槛、page / view / body 和迁移版本 / 序号语义。实现需覆盖写入不确定性与双写故障点，不能把窗口失败当数据库回滚。
 
 ## 完成摘要
 

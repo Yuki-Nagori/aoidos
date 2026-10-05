@@ -1,9 +1,9 @@
 # 007 — 设计：记忆系统规则
 
-- 状态：planned（依赖 005、006 设计、011 存储选型）
+- 状态：ready（005 / 006 / 011 已完成；P2 远期设计尚未开始）
 - 依赖：005、006、011
 - 优先级：P2
-- 创建 / 更新：2026-10-05 / 2026-10-05
+- 创建 / 更新：2026-10-05 / 2026-10-06
 
 ## 目标与背景
 
@@ -11,7 +11,7 @@ Memory / Growth 承诺「世界会记住、角色会成长」。借鉴 Herta 生
 
 ## 必读
 
-[Herta 调查](../research/001-herta.md) · [构想 001](../ideas/001-context-state-decoupling.md) · [职责边界](../architecture/ts-rust-boundary.md)。
+[Herta 调查](../research/001-herta.md) · [构想 001](../ideas/001-context-state-decoupling.md) · [职责边界](../architecture/ts-rust-boundary.md) · [记录引擎](../architecture/record-engine.md)（方案 A 的 recap 与事实边界，v1 不接记忆检索）。
 
 ## 产出物
 
@@ -47,6 +47,7 @@ Memory / Growth 承诺「世界会记住、角色会成长」。借鉴 Herta 生
 ## 决策与工作记录
 
 - 2026-10-05：创建设计任务（由原实现向 007 改设）。依据可借鉴处评估：「适合但远期」。
+- 2026-10-06：006 设计定稿，依赖满足转 ready；记忆仍是 P2 远期范围，不把记录 recap 当作记忆系统已落地。
 
 ## 完成摘要
 
