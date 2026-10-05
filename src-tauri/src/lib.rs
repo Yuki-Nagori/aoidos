@@ -15,7 +15,7 @@ use ipc::CmdError;
 ///
 /// 序列化、序号分配或平台投递失败时返回 `app.event-failed`。
 /// 同一流由调用方串行发送；失败不代表前端已收到，序号也可能已被保留。
-// TODO(task 005): 005 / 006 首个真实发送方接入后移除 dead_code 允许，并验证 main 窗口投递。
+// TODO(task 020): 020 / 022 首个真实发送方接入后移除 dead_code 允许，并验证 main 窗口投递。
 #[allow(dead_code)]
 pub(crate) fn emit_event<R: Runtime, T: serde::Serialize + ?Sized>(
     app: &AppHandle<R>,
