@@ -144,7 +144,7 @@ Completion 将上述完整文本作为 prompt，最后的 LF 也属于输入；�
 
 sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、createdAt、grammarVersion；元信息的 kind 是目标业务块 kind，不是窗口事件。随后每行是 `{ partSeq, delta, chunkSeq }`，partSeq 从 1 连续递增，chunkSeq 是事件适配预留的位置，只用于本进程一致性确认，不跨重启重放。只有经过 005 护栏的文本可以写入。文件创建用排他创建并同步目录；全文覆写仍使用 store 原子工具，追加 / 已知坏尾截断是显式例外，由 store 的唯一追加原语实现。
 
-一次提交按 005 的“准备载荷 / 预留 seq → 写文件 → 快照 → 投递”顺序。安全增量批次最多 8 KiB UTF-8 或等待 50ms，以先到为准；等待不允许超过看门狗剩余时间，正常 EOF / guard 收尾立即提交已判定安全的待提交文本；cancel / error 丢弃尚未开始写入的批次，已开始的原子边界完成后再收尾，不启动新的正文写入。批次输出按 005 的 chunk 边界切分，逐行完整序列化后 write_all + flush，确认完整 LF 后才更新快照。事件拼接、快照和 sidecar 的已确认 delta 拼接逐字节一致。
+一次提交按 005 的“准备载荷 / 预留 seq → 写文件 → 快照 → 投递”顺序。安全增量批次最多 8 KiB UTF-8 或等待 50ms，以先到为准；等待不允许超过看门狗剩余时间，正常 EOF / guard 收尾立即提交已判定安全的待提交文本；cancel / error 丢弃尚未开始写入的批次，已开始的原子边界完成后再收尾，不启动新的正文写入。批次输出按 005 的 chunk 边界切分，逐行完整序列化后 write_all + flush，确认完整 LF 后才更新快照。生成端已确认的 chunk 序列、快照和 sidecar 的已确认 delta 拼接逐字节一致；窗口漏事件时先恢复快照，再达到相同正文，不承诺漏事件窗口的即时文本已完整。
 
 默认 buffered 模式的“提交”表示完整行交给 OS 后返回，不承诺突然断电不丢失；它与业务缓冲中尚未提交的内容不同。high 模式每批 sync_all，sealed 和会话正常关闭两种模式都 sync_all；同步错误不宣称耐久成功。默认值不提高为每 token fsync，不把进程崩溃、系统崩溃和电源故障说成同一保证。
 
@@ -166,7 +166,7 @@ sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、
 
 因果记录先于 SQLite 当前状态。v1 不引入世界状态表 schema，本节冻结交付协议：012 发出类型化 WorldMutation，store 负责实际 SQL；操作必须有不可复用 mutationId、基于旧状态的条件与可重放的结果。既定骰结果写入记录，不在恢复时重新掷骰。
 
-关键状态变更以同一 system 块记录 code=worldMutation、mutationId、版本化 mutation 数据和关联 seq；SQLite 事务同时更新窄表与 applied mutation 标记。具体属性键 / 数据 schema 由后续世界状态设计定义，未定义的操作不得写入；LLM 正文不会自动解析成 SQL / 状态补丁。
+关键状态变更以同一 system 块记录 code=worldMutation、mutationId、版本化 mutation 数据和关联 seq；记录 message 使用中性的变更意图说明，不先宣称成功；SQLite 事务同时更新窄表与 applied mutation 标记。具体属性键 / 数据 schema 由后续世界状态设计定义，未定义的操作不得写入；LLM 正文不会自动解析成 SQL / 状态补丁。
 
 ```text
 准备带 mutationId 的事实块和事件载荷
@@ -201,7 +201,7 @@ sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、
 | foldingThreshold   | 2048；仅对不在逐字尾部的长正文产生有界头尾摘要视图         |
 | responseReserve    | 使用 profile.maxTokens，不再维护第二个输出 token 默认值    |
 
-预算结果必须为正，必要字段 / 前缀放不下时本地拒绝配置。以上子预算是上限，不能全数相加后突破 inputHardLimit。先保留静态前缀、当前玩家完整输入、目标 open tag、必要场景字段；再选覆盖旧区间的 recap，最后从最新向旧选择完整块直到 tailBudget / 总硬限。不得切断 JSON / 标记或只留玩家台词的一半。最新单块过大不能放入时返回本地 projection-budget 错误，不提交 HTTP；对外映射 app.bad-request，用户需明确缩短输入或修改配置，不能静默遗漏最新上下文。
+预算结果必须为正，必要字段 / 前缀放不下时本地拒绝配置。以上子预算是上限，不能全数相加后突破 inputHardLimit。先保留静态前缀、当前玩家完整输入、目标 open tag、必要场景字段；再选覆盖旧区间的 recap，最后从最新向旧选择完整块直到 tailBudget / 总硬限。不得切断 JSON / 标记或只留玩家台词的一半。最新单块过大不能放入时返回本地 ProjectionError::BudgetExceeded，不提交 HTTP；对外映射 app.bad-request，用户需明确缩短输入或修改配置，不能静默遗漏最新上下文。
 
 recap 追加的 fromSeq..throughSeq 为此前未覆盖的连续逻辑区间（允许预留 seq 空洞），只能覆盖已封口、投影有效且不在逐字尾部的块；fromSeq 高于上一个接受 recap 的 throughSeq，不能改写旧 recap。sourceHash 为按 recordSeq 顺序拼接所覆盖源块的原始完整 UTF-8 行（含 LF、无 header）的 SHA-256；输入、区间、目标会话或版本在生成中变化则丢弃候选，不落库。所有现存 recap 文本永久保留，prompt 只能从最新向旧装入 recapBudget；更早摘要可能退出上下文，因此方案 A 不承诺无限时长下无信息损失。
 
@@ -232,6 +232,8 @@ recap 追加的 fromSeq..throughSeq 为此前未覆盖的连续逻辑区间（�
 一页的完整 JSON 载荷限制 512 KiB；即使没达到 limit，也在完整块边界返回 nextCursor。单块加封装超过页预算时返回摘要行和 bodyRef，由 engine_get_record_body 受限分段读取完整正文；原样导出从 Rust 文件完成，不向 IPC 发整文件。bodyRef 不含磁盘路径，绑定 sessionId / seq / 内容 hash，失效或不存在分别返回 app.bad-request / app.not-found；分段界限为有效 UTF-8 边界，每段最多 32 KiB。
 
 普通 page 的 lastSeq 不足以恢复已加载面板中的所有缺失块。engine_get_record_view 返回 items（最新窗口）、lastRecordSeq、needsRecovery、inFlight? 和 record 事件基线，窗口受同一页字节 / 条数上限；UI 以它替换“最新窗口”，保留旧页缓存但标记为旧边界，按 seq 合并，不把窗口外历史当丢失。先订阅并有界缓存事件，再取 view，再按基线消费；缺口取 view，不把 engine_get_phase 当记录快照。
+
+记录监听缓存最多 32 个事件，每个 session 最多一个 view 恢复请求；溢出合并恢复标记，沿用契约的旧响应 / 基线规则。前端缓存限最新窗口加最多 4 页历史，超限按 LRU 淘汰；单次正文查看仅缓存当前 bodyRef、上限为磁盘行上限，切换时取消或忽略旧响应。缓存淘汰不删除事实文件，需要历史时重新取页，不把“有界单页”误当作“无限分页缓存也有界”。打开时内存索引仍随正式块数线性增长，v1 接受这一成本，不能宣称整个应用内存与会话长度完全解耦；超大局索引翻转另按 storage 条件评估。
 
 partial 的 inFlight 仅含 turnId / recordSeq，实时正文从 llm_get_turn 对齐；重启后的中断块是正式历史，旧 turnId 不再可查询。未知 kind 以有界兼容提示行显示，原始字段不散发到 UI；正文查看 / 导出仍由 Rust 提供。需跨会话全文查询时按 storage 翻转条件增加 SQLite FTS 索引，JSONL 仍是事实源；本任务不提前引入 FTS。
 
