@@ -29,7 +29,7 @@ Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 
 | `store_list_backups`  | 无   | `{ items: [{ path, version, nanos, size }] }` | 最新 50 项，新到旧；目录不存在为空；nanos 为 Unix epoch 纳秒字符串，size 为字节数    |
 | `store_get_migration` | 无   | `{ from, to, phase: "idle" }`                 | from == to == 持久化 user_version；库或父目录不存在为 0，不创建目录 / 库，不运行迁移 |
 
-快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。006 负责设计真实迁移流的状态、阶段和每事件序号快照，[022](../task/022-record-engine-impl.md) 在设计定稿后负责一并落地，再按下节规则对齐监听者。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
+快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。真实迁移流的状态、阶段与每事件序号快照已由 006 定稿，见下文“记录命令与运行期迁移快照”；实际状态与发送由 [022](../task/022-record-engine-impl.md) 实现，监听者按该节规则对齐。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
 
 ## LLM 命令与快照（005 已评审设计，尚未实现）
 
@@ -335,5 +335,5 @@ else showGenericError(err);
 已在本文冻结的预算、错误形状、信封、密钥规则和取消分界，下游任务只引用，不另写一套。
 
 - **005**：[task 005 — LLM 接入与护栏](../task/005-llm-design.md)：规则与结构见 [LLM 已评审设计](llm.md)；本文集中维护每个 llm.* 的触发条件和 IPC 载荷，模式 / 护栏与重试例外见该文档。
-- **006**：[task 006 — 对局记录与上下文](../task/006-record-design.md)：定义记录追加事件、记录 page / body 与有界 view 恢复，以及 engine.interrupted 的持久记录触发。它们不是阶段快照。另承接存储迁移流的 progress / done / failed、流标识、阶段、失败上下文和 store_get_migration 的每事件 seq 基线设计；实际发送与运行期状态由 [022](../task/022-record-engine-impl.md) 在设计定稿后提供。
+- **006**：[task 006 — 对局记录与上下文](../task/006-record-design.md)：定义记录追加事件、记录 page / body 与有界 view 恢复，以及 engine.interrupted 的持久记录触发。它们不是阶段快照。存储迁移流的 progress / done / failed、流标识、阶段、失败上下文和 store_get_migration 每事件 seq 基线已定稿；实际发送与运行期状态由 [022](../task/022-record-engine-impl.md) 实现。
 - **012**：[task 012 — 回合与阶段状态机](../task/012-turn-state-machine-design.md)：冻结 `engine.no-scene`、`engine.invalid-phase` 的触发条件，阶段事件的 data，以及 `engine_get_phase` 的快照载荷。单回合拒绝码用本文的 `app.busy`。

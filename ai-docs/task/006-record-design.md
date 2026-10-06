@@ -66,6 +66,7 @@
 - 2026-10-06：issue #26 把 narration 与 characterSpeech 分行映射，指向已定稿 008 / ui-shell；移除“008 未完成”的过期描述，未改变记录事实粒度。
 - 2026-10-06：同步 007 确认的统一调用额度，移除后台账单独立额度歧义：按任务诊断用量、共同计入总预算，必要请求不足暂停、可选后台跳过。原 recap 门槛 / 授权、投影硬限、单在飞和回合请求次数上限保持既有规则。
 - 2026-10-06：issue #35 对齐 012 已注册因果事实：WorldMutation 为载荷，由 settlementPlanned / sceneAdvanced / sessionEnded 承载，不新增日志码；投影不折叠承载 mutation 的块，SQLite applied 游标与暂停 checkpoint 分开，invalid-phase 引用定稿映射。文档修复，代码与任务状态不变。
+- 2026-10-06：issue #36 将迁移流状态 / 快照说明对齐为 006 已定稿、022 待实现，静态查询不冒充运行期迁移；不改协议或代码。
 
 ## 完成摘要
 
