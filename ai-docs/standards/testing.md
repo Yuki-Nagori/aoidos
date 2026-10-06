@@ -1,6 +1,6 @@
 # 测试规范
 
-更新日期：2026-10-05。均为项目约定。
+更新日期：2026-10-06。均为项目约定。
 
 ## 测试位置与写法
 
@@ -9,7 +9,7 @@
 ## 覆盖率门槛（verify 两项）
 
 - 前端 `bun run test:coverage`：v8 provider，只统计逻辑层——`src-web/{utils,stores,composables}` 与组件旁 `use*.ts`；行 / 分支 / 函数 / 语句四项 100%。`main.ts` 是装配、api 是薄封装、`bench/` 是基准，均不入门槛。
-- Rust `bun run coverage:rust`：实际参数以根 `package.json` 为唯一来源，统计 workspace 的 lib 目标，要求行覆盖 100%，并输出未覆盖行号；`lib.rs`（Builder 装配，事件循环不可测）经忽略正则不计，`commands.rs` 与业务 crate 的逻辑文件必须足额。前置组件与安装见[构建与开发](../architecture/build-and-development.md)。
+- Rust `bun run coverage:rust`：实际参数以根 `package.json` 为唯一来源，统计 workspace 的 lib 目标，要求行覆盖 100%，并输出未覆盖行号；忽略正则 `lib\.rs$` 对所有 crate 生效，不限于 Tauri 装配入口；因此每个 `lib.rs` 只放模块声明 / 薄装配，不放业务逻辑。src-tauri 的 commands / events / ipc 等非忽略文件及业务 crate 的逻辑文件均须足额覆盖。前置组件与安装见[构建与开发](../architecture/build-and-development.md)。
 
 改门槛口径（include 白名单、忽略正则、阈值数字）属于门禁变更：先在 task 里给出理由与新口径的验证结果，再动配置。
 

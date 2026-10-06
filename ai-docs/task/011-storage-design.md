@@ -55,6 +55,8 @@
 - 2026-10-06：006 定稿后统一事实源口径：JSONL 因果事实与 SQLite 已应用状态投影，SQL 点位表仅作建模示例，新增 schema 须带幂等标记；普通文件原子覆写与 JSONL 受控追加例外保持一致。没有改变已实现 store 基建。
 - 2026-10-06：issue #30 对照已实现 store 修正文档：目录树补 storage.lock 与规范 SQLite 备份命名 / 保留 3 份；007 manifest + 文件正文及 runs / cycle 规划明确；通信契约引用唯一原子写例外清单，包含 JSONL 受控追加 / 截断。未改变代码或任务状态。
 - 2026-10-06：issue #33 按 007 定稿路径补记忆 entries 版本文件和 batches 结果文件，区分 029 / 030 / 032 待实现目录；未改变现有 store 行为。
+- 2026-10-06：issue #35 对齐 012 已注册因果事实：WorldMutation 为载荷，由 settlementPlanned / sceneAdvanced / sessionEnded 承载，不新增日志码；投影不折叠承载 mutation 的块，SQLite applied 游标与暂停 checkpoint 分开，invalid-phase 引用定稿映射。文档修复，代码与任务状态不变。
+- 2026-10-06：issue #36 将迁移流状态 / 快照说明对齐为 006 已定稿、022 待实现，静态查询不冒充运行期迁移；不改协议或代码。
 
 ## 完成摘要
 

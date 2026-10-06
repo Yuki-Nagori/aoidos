@@ -40,4 +40,4 @@
 
 ## 命名
 
-仓库 / 包名 `mythos`，Rust package 同名、lib 名为下划线形态的 `mythos_lib`；产品显示名 `Mythos`（`tauri.conf.json` 的 productName 与窗口标题）。
+仓库 / 包名 `mythos`（`bun.lock` 的根 workspace 名同型），Rust package 同名、lib 名为下划线形态的 `mythos_lib`；产品显示名 `Mythos`（`tauri.conf.json` 的 productName 与窗口标题）。

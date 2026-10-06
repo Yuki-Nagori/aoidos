@@ -176,7 +176,7 @@ sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、
 
 因果记录先于 SQLite 当前状态。v1 不引入世界状态表 schema，本节冻结交付协议：012 发出类型化 WorldMutation，store 负责实际 SQL；操作必须有不可复用 mutationId、基于旧状态的条件与可重放的结果。既定骰结果写入记录，不在恢复时重新掷骰。
 
-关键状态变更以同一 system 块记录 code=worldMutation、mutationId、版本化 mutation 数据和关联 seq；记录 message 使用中性的变更意图说明，不先宣称成功；SQLite 事务同时更新窄表与 applied mutation 标记。具体属性键 / 数据 schema 由后续世界状态设计定义，未定义的操作不得写入；LLM 正文不会自动解析成 SQL / 状态补丁。
+WorldMutation 是类型化变更载荷，不是独立 system.code。结算变更随 012 注册的 settlementPlanned 保存有序 mutationId / 版本化 data，场景切换 / 结束变更由 sceneAdvanced / sessionEnded 的登记类型和 mutationId 承载；关联 seq 与字段以[阶段机的因果事实表](turn-state-machine.md#因果事实与重启投影)为准。记录 message 使用中性的变更意图说明，不先宣称成功；SQLite 事务同时更新窄表与 applied mutation 标记。具体属性键 / 数据 schema 由后续世界状态设计定义，未定义的操作不得写入；LLM 正文不会自动解析成 SQL / 状态补丁。
 
 ```text
 准备带 mutationId 的事实块和事件载荷
@@ -190,7 +190,7 @@ sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、
 
 这里的“同成败”是成功对外确认之前两边均已完成，故障期间允许有明确 pending 状态并阻止后续游戏推进；不是跨文件事务。如果 SQLite 提交后进程崩溃，重开读取 applied 标记即可结束，不重复加点。JSONL fsync 错误导致状态不确定时冻结并重新核验，也不先写 SQLite。
 
-记录 API 在 pending 世界意图存在时不把该意图渲染成“变更成功”；恢复快照标明 needsRecovery，产品提交拒绝 engine.invalid-phase（012 负责冻结具体触发映射）。SQLite 当前状态失配时以有序事实和幂等标记核验 / 修复，热路径不做全量回放，checkpoint 保存最后应用 mutation 位置。未知或无重放解释器的 mutation 不自动执行。
+记录 API 在 pending 世界意图存在时不把该意图渲染成“变更成功”；恢复快照标明 needsRecovery，产品提交拒绝 engine.invalid-phase（触发条件见[阶段机的错误映射](turn-state-machine.md#ipc错误与消费)）。SQLite 当前状态失配时以有序事实和幂等标记核验 / 修复，热路径不做全量回放，SQLite 的 applied 游标保存最后确认的 mutation 位置；它不是 012 的暂停 checkpoint（stage / throughSeq），pending 世界意图未修复时仍省略暂停 checkpoint。未知或无重放解释器的 mutation 不自动执行。
 
 ## 投影、预算与 recap
 
@@ -215,7 +215,7 @@ sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、
 
 recap 追加的 fromSeq..throughSeq 为此前未覆盖的连续逻辑区间（允许预留 seq 空洞），只能覆盖已封口、投影有效且不在逐字尾部的块；fromSeq 高于上一个接受 recap 的 throughSeq，不能改写旧 recap。sourceHash 为按 recordSeq 顺序拼接所覆盖源块的原始完整 UTF-8 行（含 LF、无 header）的 SHA-256；输入、区间、目标会话或版本在生成中变化则丢弃候选，不落库。所有现存 recap 文本永久保留，prompt 只能从最新向旧装入 recapBudget；更早摘要可能退出上下文，因此方案 A 不承诺无限时长下无信息损失。
 
-折叠只在静态前缀之后，纯视图处理，原记录与已写 recap 不变。长块折叠使用首尾完整段落与明确省略标记，不伪装完整叙事；骰判、玩家最新输入和 worldMutation 不折叠。未覆盖的历史若因预算退出必须出现在 PromptPlan 的 omittedRanges，不能把它说成已被 recap 完整代表；当前玩家已提交输入仍留在事实记录，即使生成因预算被拒绝。
+折叠只在静态前缀之后，纯视图处理，原记录与已写 recap 不变。长块折叠使用首尾完整段落与明确省略标记，不伪装完整叙事；骰判、玩家最新输入以及承载 mutation 的 settlementPlanned / sceneAdvanced / sessionEnded system 块不折叠。未覆盖的历史若因预算退出必须出现在 PromptPlan 的 omittedRanges，不能把它说成已被 recap 完整代表；当前玩家已提交输入仍留在事实记录，即使生成因预算被拒绝。
 
 ### 压缩触发与失败行为
 

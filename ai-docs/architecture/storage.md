@@ -30,7 +30,7 @@ SQLite 是完整的关系数据库——join、递归 CTE、窗口函数、JSON 
 职责三分法，以「加点」为例：
 
 - **静态规则数据**（技能树形状、每点加成、成长曲线）→ 剧本包文件，不进库。
-- **运行时状态**（玩家把点分到哪、何时）→ SQLite 窄表，保存已应用分配事实的查询投影；关键变更的因果事实源是记录引擎的 worldMutation 块，不形成两份独立真相。以下仅为点位建模示意，不是已实现 schema；实际事务还须带 applied 幂等标记：
+- **运行时状态**（玩家把点分到哪、何时）→ SQLite 窄表，保存已应用分配事实的查询投影；关键变更的因果事实源是 012 注册的 settlementPlanned / sceneAdvanced / sessionEnded system 块，WorldMutation 是其承载的类型化变更，不是另一个日志码，不形成两份独立真相。以下仅为点位建模示意，不是已实现 schema；实际事务还须带 applied 幂等标记：
 
 ```sql
 CREATE TABLE point_allocations (
@@ -52,7 +52,7 @@ CREATE TABLE point_allocations (
 - Schema 迁移：`PRAGMA user_version` + 按版本号排列的内嵌 SQL 切片；每次迁移用 IMMEDIATE 事务，执行或提交失败由 RAII 回滚，`user_version` 与 schema 同事务推进。SQL 不得自行 BEGIN / COMMIT / ROLLBACK；每个迁移配套回填测试。
 - 业务 crate 不依赖 tauri：数据根路径由装配层（src-tauri）解析后注入。
 
-`current_version` 使用 READ_ONLY 打开读取已持久化版本，缺失库或父目录为 0，不创建数据目录 / 库。缺失分支检查现存祖先是否为目录，避免 Windows 把文件挡住父路径的 NotFound 当成新安装。读取与迁移打开共用路径归一化和 busy 预算。`open_with_progress` 在每步事务提交成功后回调 `{ from, to }`，失败步骤不回调；之前成功步骤不撤销，无需迁移时无回调。回调是同步纯数据出口，迁移事件 / 运行期快照协议见[记录引擎](record-engine.md)与[通信契约](ipc-contract.md)，命令层发送及状态保存由 [022](../task/022-record-engine-impl.md) 在设计定稿后落地。备份的 IPC 字段与限制统一见[通信契约](ipc-contract.md)。
+`current_version` 使用 READ_ONLY 打开读取已持久化版本，缺失库或父目录为 0，不创建数据目录 / 库。缺失分支检查现存祖先是否为目录，避免 Windows 把文件挡住父路径的 NotFound 当成新安装。读取与迁移打开共用路径归一化和 busy 预算。`open_with_progress` 在每步事务提交成功后回调 `{ from, to }`，失败步骤不回调；之前成功步骤不撤销，无需迁移时无回调。回调是同步纯数据出口，迁移事件 / 运行期快照协议见[记录引擎](record-engine.md)与[通信契约](ipc-contract.md)，命令层发送及状态保存由 [022](../task/022-record-engine-impl.md) 按 006 定稿协议落地。备份的 IPC 字段与限制统一见[通信契约](ipc-contract.md)。
 
 ## 目录与路径规范
 
