@@ -76,6 +76,7 @@ Rust 工具链升级可能引入新的 clippy 门禁。需要回退时同步修�
 - 2026-10-05：CI 将格式 / 前端 / knip 快速门禁前置，Linux 系统依赖安装和 Rust 编译后置；失败也保存 Rust 依赖缓存，token 仅需 `contents: read`，每 job 30 分钟超时。三平台验证通过，证据补入本任务，不新增 task。
 - 2026-10-05：按用户要求收窄 CI 触发范围，main push / pull request 仅改 `ai-docs/**` 或 Markdown 时跳过全量检查；其余改动保留三平台门禁。代码 PR 的累计 diff 含代码时仍触发，文档格式由本地检查与 husky 保证。
 - 2026-10-06：issue #37 明确桌面版本唯一来源为 workspace.package，package / Tauri 配置未设 version；Bun 锁文件刷新未更新根名，校正旧 excel 元数据为 mythos 并检查 frozen-lockfile，依赖解析版本不变。
+- 2026-10-06：issue #38 对齐技术栈当前 Rust 工作区 / 工具链、测试依赖版本和 CI 等价合并门禁；不改变配置。
 
 ## 完成摘要
 
