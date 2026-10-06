@@ -427,14 +427,11 @@ mod tests {
     #[tokio::test]
     async fn tls_abort_disconnects_the_client() {
         crate::install_ring_provider();
-        // 可信根 + Abort 脚本：握手成功后立即 RST，覆盖 TLS 连接的底层断开路径。
-        let server = ScriptedServer::start_tls(vec![
-            Segment::Status(200),
-            Segment::Header("Connection: close".into()),
-            Segment::Header(String::new()),
-            Segment::Abort,
-        ])
-        .await;
+        // 可信根 + 空脚本仅 Abort：握手成功、读走请求后立即 RST，客户端 send 必然失败，
+        // 覆盖 TLS 连接的底层断开路径。不先写响应头——头部与 RST 的到达顺序存在平台
+        // 竞态（run 37484507331 的 macOS 失败：头部先到使 send 成功）；TLS 写路径由
+        // trusted_tls_exchange 覆盖。
+        let server = ScriptedServer::start_tls(vec![Segment::Abort]).await;
         let cert = reqwest::tls::Certificate::from_der(
             server
                 .certificate()
@@ -451,7 +448,7 @@ mod tests {
             .body("q")
             .send()
             .await;
-        assert!(result.is_err(), "connection should be reset");
+        assert!(result.is_err(), "RST 必须在任何响应前到达客户端");
     }
 
     #[tokio::test]
