@@ -78,6 +78,7 @@ Rust 工具链升级可能引入新的 clippy 门禁。需要回退时同步修�
 - 2026-10-06：issue #37 明确桌面版本唯一来源为 workspace.package，package / Tauri 配置未设 version；Bun 锁文件刷新未更新根名，校正旧 excel 元数据为 mythos 并检查 frozen-lockfile，依赖解析版本不变。
 - 2026-10-06：issue #38 对齐技术栈当前 Rust 工作区 / 工具链、测试依赖版本和 CI 等价合并门禁；不改变配置。
 - 2026-10-06：issue #41 补 workspace.package 与 api 层归属规范；serde_json / tauri-build 版本移入 workspace 并在成员继承，版本 / features 不变，不新增运行时行为。
+- 2026-10-06：issue #42 明确覆盖忽略正则作用于所有 crate 的 lib.rs，入口只放模块声明 / 薄装配，commands / events / ipc 与业务逻辑均受门槛约束；不改变覆盖配置或阈值。
 
 ## 完成摘要
 

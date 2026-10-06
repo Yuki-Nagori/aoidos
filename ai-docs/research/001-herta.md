@@ -63,5 +63,5 @@ pnpm monorepo，十个包：`gui`（Electron 桌面，主产品）、`cli`（终
 ## 边界与注意
 
 - 只借设计语言与机制，**不取任何游戏素材**（立绘 / 语音 / 文本不在 MIT 授权内）。
-- Herta 的 CSS 大量使用 Chromium-only 特性（`@property`、`@starting-style`、`color-mix`）；对本仓库的可用性结论见 [UI 风格规范](../standards/ui.md) 的「平台风险」。
+- Herta 的 CSS 大量使用需较新内核的现代特性（`@property`、`@starting-style`、`color-mix()`）；对本仓库的可用性结论见 [UI 风格规范](../standards/ui.md) 的「平台风险」。
 - Windows 文件语义（杀软 / OneDrive 锁、rename 竞争）逼出了它整套原子写 + 自愈层——持久化设计的参照。

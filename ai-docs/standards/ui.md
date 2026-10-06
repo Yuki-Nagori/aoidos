@@ -74,14 +74,14 @@
 - 记录面板本身玻璃化（`--panel` + hairline + 顶高光），收起 / 展开参数以[界面交互规范](../architecture/ui-shell.md)为准；面板内记录列保留 `max-width: 880px` 上限的 measure。
 - 气泡与机器行共享同一左缘 token（如 `--record-left: 8px`），视觉上同一条记录线。
 - 密度慷慨：行距 ~26px，气泡 `border-radius: 18px`，内边距 15–24px；chrome 用微字号，内容用正文字号。
-- 滚动列：自定义贴底跟随 + 边缘雾化渐隐 + 「跳到最新」浮标；长列表考虑 `content-visibility`。
+- 滚动列：自定义贴底跟随 + 边缘雾化渐隐 + 「跳到最新」浮标；v1 普通历史项使用 `content-visibility: auto` + `contain-intrinsic-size`，行为及降级见[界面架构](../architecture/ui-shell.md)；它不替代有界分页、inert 或内存上限。
 
 ## 视觉语法（按行类型）
 
 - **玩家**：右对齐，冷灰玻璃气泡，15px，无光晕。
 - **角色**：左侧白玻璃气泡与名牌，16px，多段落拆叠层气泡，悬停浮现复制 / 时间戳。
 - **旁白**：左侧通栏叠层，无名牌 / 引号，比角色泡更浅；段落与事实身份以[界面结构](../architecture/ui-shell.md)为准。
-- **机器（骰子、判定、系统、脱敏工作状态）**：通栏 12px 等宽行 + 7px LED 圆点（活动 `#8b7cf6` 脉冲 / 静止灰），运行中的行用文字 shimmer 渐变；结果类行（如 `命中 · 伤害 12`）静态 LED + 等宽汇总。
+- **机器（骰子、判定、系统、脱敏工作状态）**：通栏 12px 等宽行 + 7px LED 圆点（活动 `var(--led-active)` 脉冲 / 静止灰），运行中的行用文字 shimmer 渐变；结果类行（如 `命中 · 伤害 12`）静态 LED + 等宽汇总。
 - 状态徽章克制：警示琥珀是唯一高饱和强调，diff 绿红刻意去饱和，不让机器行盖过台词。
 
 记录块、生成预览、recap、中断和未知 kind 的语义映射见[记录引擎](../architecture/record-engine.md#ui-映射与验收)；一个事实块可渲染多段气泡，不能反向改变持久记录粒度。面板四态、舞台缩放、输入、骰判与异常交互以已定稿的[界面交互规范](../architecture/ui-shell.md)为准，尚未实现。
@@ -101,4 +101,8 @@
 
 ## 平台风险
 
-Herta 的 CSS 依赖 Chromium-only 特性（`@property`、`@starting-style`、`color-mix()`、`:has()`、`content-visibility`）。目标包含 Windows WebView2、macOS WKWebView 与 Linux webkit2gtk，上述特性按 ui-shell 的三平台矩阵逐项验证并提供降级——落地首个界面时在本节记录实测结论。
+Herta 使用现代 CSS 特性（`@property`、`@starting-style`、`color-mix()`、`:has()`、`content-visibility`），并非 Chromium 专属；较新 WebKit 已实现支持，旧内核仍可能缺失。风险在实际 WebView 版本：macOS WKWebView 随系统，Linux webkit2gtk 随发行版，Windows WebView2 取已安装运行时。
+
+004 / 025 落地时记录目标最低系统 / WebView 或 webkit2gtk 版本及实测结果，基础样式须在该最低内核可用，增强特性提供受测降级；不以新版 Safari 支持推断所有 WKWebView 已支持，也不承诺任意旧系统都可完整降级。content-visibility 不可用时回退普通渲染，有界分页与焦点 / inert 规则保持。
+
+官方支持依据（2026-10-06 核验）：[Safari 15.4 的 :has()](https://webkit.org/blog/12445/new-webkit-features-in-safari-15-4/)、[Safari 16.4 的 @property](https://webkit.org/blog/13966/webkit-features-in-safari-16-4/)、[Safari 17.5 的 @starting-style](https://webkit.org/blog/15383/webkit-features-in-safari-17-5/)、[Safari 18.0 的 content-visibility](https://webkit.org/blog/15865/webkit-features-in-safari-18-0/)、[Safari 26.2 的 color-mix() 说明](https://webkit.org/blog/17640/webkit-features-for-safari-26-2/)。这些是引擎支持依据，不是本应用已完成的平台验收。

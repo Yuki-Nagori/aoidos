@@ -36,7 +36,7 @@ CI 先完成格式、前端与 knip 等快速门禁，再安装 Linux 系统依�
 
 触发范围：main push 与 pull request 仅修改 `ai-docs/**` 或 Markdown 文件时跳过全量 CI；代码、依赖、脚本、工作流及其他配置改动仍跑三平台。PR 按相对 base 的累计 diff 判断，代码 PR 后续补文档仍可能触发；新建的纯文档 PR 与合并后的纯文档 push 会跳过。文档提交保留本地 / husky 格式检查。
 
-覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `cargo llvm-cov --workspace --lib` 要求行 100%，`lib.rs` 是装配（事件循环不可测）经 `--ignore-filename-regex` 不计，命令与业务文件必须足额。改口径属于门禁变更，先登记 task。
+覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `cargo llvm-cov --workspace --lib` 要求行 100%，忽略正则 `lib\.rs$` 排除所有 crate 的 lib.rs，入口只放模块声明 / 薄装配，逻辑不得借此绕过门槛；src-tauri 的 commands / events / ipc 等非忽略文件与业务逻辑均须足额。改口径属于门禁变更，先登记 task。
 
 首次 `cargo check` 或改动 `[profile.*]` 后的全量重编译是一次性成本，属正常现象。
 
