@@ -13,6 +13,7 @@ Mythos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScri
 | 通信契约（命令 / 事件 / 错误码）          | [ai-docs/architecture/ipc-contract.md](ai-docs/architecture/ipc-contract.md)                   |
 | 数据目录、SQLite、实例锁、原子写与迁移    | [ai-docs/architecture/storage.md](ai-docs/architecture/storage.md)                             |
 | LLM Provider、护栏、请求策略、凭据边界    | [ai-docs/architecture/llm.md](ai-docs/architecture/llm.md)                                     |
+| LLM 计价、费用额度、账本与预算周期        | [ai-docs/architecture/billing.md](ai-docs/architecture/billing.md)                             |
 | 记录块、投影预算、持久化与恢复            | [ai-docs/architecture/record-engine.md](ai-docs/architecture/record-engine.md)                 |
 | 记忆三域、门控、回写与待决策项            | [ai-docs/architecture/memory.md](ai-docs/architecture/memory.md)                               |
 | 记忆算法候选、正确性约束与标定实验        | [ai-docs/architecture/memory-algorithms.md](ai-docs/architecture/memory-algorithms.md)         |
