@@ -1,7 +1,7 @@
 # 001 — Herta（黑塔）调查：UI 风格、LLM 配置与记忆系统
 
 - 日期：2026-10-05
-- 对象：本地仓库 `C:\Users\26221\game\Herta`（开源版 github.com/PersonaCLI/Herta，代码 MIT；星穹铁道黑塔同人，游戏素材不在 MIT 内）
+- 对象：[PersonaCLI/Herta](https://github.com/PersonaCLI/Herta)（代码 MIT；星穹铁道黑塔同人，游戏素材不在 MIT 内），调查基于本地克隆
 - 目的：吸收其 UI 风格与 LLM 配置思路；UI 提炼为 [UI 风格规范](../standards/ui.md)，记忆与上下文思路回灌[构想 001](../ideas/001-context-state-decoupling.md)
 
 ## 一句话
