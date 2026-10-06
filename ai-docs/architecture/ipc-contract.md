@@ -13,7 +13,7 @@
 
 ## 命令命名
 
-- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine` / `theme`（026 待实现）/ `locale`（034 待实现）。
+- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine` / `theme`（026 待实现）/ `locale`（034 待实现）/ `budget`（035 待实现）。
 - 动词约定：`get_` 取单值、`list_` 取列表、`set_` 替换一项配置、`create_ / update_ / delete_ / save_` 写实体、`submit_` 提交长流程、`cancel_` 取消在飞流程。
 - 形参：Rust snake_case；Tauri 默认把前端 camelCase 键映射到 snake_case 形参。**两侧固定「Rust snake_case ↔ 前端 camelCase」**，不使用 `rename` 特例。
 - 分页：可能超过一页的 `list_*` 使用 `{ cursor?, limit? }`，返回 `{ items, nextCursor? }`。省略 `limit` 时为 50，最大 200；`0` 或大于 200 返回 `app.bad-request`。cursor 是不透明字符串，前端只透传不解析。文档写明硬上限不超过 50 的列表可以不带分页，例如 `store_list_backups {}` 返回 `{ items }`。
@@ -23,6 +23,10 @@
 ## 语言偏好命令（028 已评审，034 待实现）
 
 `locale_get_preference {}` / `locale_set_preference { preference }` 的同型载荷、nativeStatus 与失败语义见[国际化架构](i18n.md)。单项写入不替换主题 / UiPreferences；非法参数为 app.bad-request，持久化 / 迁移沿用 store.* / app.not-ready。原生应用失败返回 pending，不冒充持久保存失败；当前未注册这些命令。
+
+## 费用与预算接口（027 已评审，035 待实现）
+
+命令族、精确金额、设置 revision、查询 / 补价、物理请求身份与两作用域结算见[计价架构](billing.md)。金额一律十进制字符串 + 明确币种，不用 JS number / f64；列表复用默认 50 / 最大 200 分页。当前未注册这些 API；035 同 commit 定型 Rust / TS 载荷，不扩张现有回合事件。
 
 ## 已落地的 store 命令
 
@@ -284,6 +288,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - theme 预留（009 设计，026 待实现）：`theme.invalid-skin` 表示存在的皮肤结构 / 硬预算不合法；缺文件为成功 missing、单条语义失败为 warnings、读取失败为 store.*，不自动重试。
+- budget 预留（027 已评审，035 待实现）：`budget.exceeded`（本地费用不足）、`budget.price-missing`（未登记 / 必需价格缺失）、`budget.fx-missing`（无有效换汇）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）；结构化 detail 与触发语义见[计价架构](billing.md)。不自动重试，不冒充供应商 llm.quota；旧配置 / 游标使用 app.bad-request + detail.reason=staleRevision，存储失败沿用 store.*。
 - llm 预留（005 已评审设计，映射尚未实现）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
 
 | 码               | 触发条件                                                                                                                                                                                            | 自动重试边界                                                      |
