@@ -28,7 +28,7 @@
     "format:rust": "cargo fmt --all",
     "format:rust:check": "cargo fmt --all --check",
     "knip": "knip",
-    "verify": "bun run typecheck && bun run typecheck:rust && bun run lint && bun run lint:rust && bun run format:check && bun run format:rust:check && bun run test:coverage && bun run test:rust && bun run coverage:rust && bun run knip",
+    "verify": "bun run typecheck && bun run typecheck:rust && bun run lint && bun run lint:rust && bun run format:check && bun run format:rust:check && bun run test:coverage && bun run test:rust && bun run coverage:rust && bun run knip && bun run bench",
     "prepare": "husky"
   },
   "devDependencies": {
