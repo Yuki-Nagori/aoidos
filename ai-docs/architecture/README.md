@@ -16,6 +16,7 @@ Mythos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定   |
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；已评审，待实现   |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；已评审，待实现             |
+| 国际化       | [界面国际化](i18n.md)                  | 语言、单源资源、首窗与原生文案、精确格式化；已评审，待实现       |
 | 主题与皮肤   | [主题架构](theming.md)                 | token 目录、偏好防闪、CSS 子集与失败回退；已评审，待实现         |
 | 存储基建     | [存储基建](storage.md)                 | 数据目录、SQLite、实例锁与原子写                                 |
 | 开发与交付   | [构建与开发](build-and-development.md) | 本地命令、质量门禁、打包与图标                                   |
@@ -40,17 +41,18 @@ LLM、记录引擎和阶段机设计均已定稿，实现由 018–024 承接，
 | [记忆算法与标定](memory-algorithms.md) | [007](../task/007-memory-design.md)             | 与记忆系统共同定稿；033 承接标定和运行期验证                                                 |
 | [回合与阶段机](turn-state-machine.md)  | [012](../task/012-turn-state-machine-design.md) | [023](../task/023-turn-state-machine-impl.md) 产品入口、判定与恢复                           |
 | [界面结构与交互](ui-shell.md)          | [008](../task/008-ui-shell-design.md)           | [004](../task/004-tailwind-v4.md) 样式底座，[025](../task/025-ui-shell-impl.md) 完整界面     |
+| [界面国际化](i18n.md)                  | [028](../task/028-i18n-design.md)               | [034](../task/034-i18n-impl.md) 底座 / 原生，025 / 031 消费                                  |
 | [主题与剧本皮肤](theming.md)           | [009](../task/009-theming-design.md)            | [004](../task/004-tailwind-v4.md) 默认样式 / 映射，[026](../task/026-theming-impl.md) 运行时 |
 
 LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护栏 → [019](../task/019-llm-profile-credentials-impl.md) 配置 / 凭据 → [020](../task/020-llm-turn-ipc-impl.md) 回合协调；[021](../task/021-llm-web-recovery-impl.md) 承接前端恢复，[024](../task/024-llm-engine-integration.md) 在记录与阶段机完成后验证产品链路。
 
-025 依赖 004、008、024、026，024 经 021 / 023 覆盖业务依赖；024 保留最小提交链路和故障联调范围，完整界面验收归 025。026 提供受控 main 构建与主题 bootstrap，025 在该入口接窗口几何恢复；面板 / 骰判偏好存储归 022，回合冻结骰判偏好归 023，避免重复接线。
+025 依赖 004、008、024、026、034，024 经 021 / 023 覆盖业务依赖；024 保留最小提交链路和故障联调范围，完整界面验收归 025。026 提供受控 main 构建与主题 bootstrap，025 在该入口接窗口几何恢复；面板 / 骰判偏好存储归 022，回合冻结骰判偏好归 023，避免重复接线。
 
-007 已完成设计评审，实施由 [029 存储恢复](../task/029-memory-storage-recovery-impl.md) → [030 门控批次](../task/030-memory-gates-batches-impl.md) 承接，[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md) 在此基础上接入，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数；费用 / 国际化实施前置尚待 027 / 028 定稿后登记，不提前开工。
+007 已完成设计评审，实施由 [029 存储恢复](../task/029-memory-storage-recovery-impl.md) → [030 门控批次](../task/030-memory-gates-batches-impl.md) 承接，[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md) 在此基础上接入，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数；031 已登记 034 国际化实施前置；费用实施前置待 027 定稿后登记，不提前开工。
 
-后续 [027](../task/027-llm-cost-control-design.md) 承接金额额度与独立计价设计，007 已明确统一预算边界，等待 [028 国际化设计](../task/028-i18n-design.md) 的语言 / 格式化契约定型；周目 / 自然月均按金额控制，默认金额来自参考 Token 用量与模型计价；当前只记录规划，不表示费用控制已实现。
+后续 [027](../task/027-llm-cost-control-design.md) 承接金额额度与独立计价设计，007 已明确统一预算边界，消费已定稿的 [国际化契约](i18n.md)；周目 / 自然月均按金额控制，默认金额来自参考 Token 用量与模型计价；当前只记录规划，不表示费用控制已实现。
 
-028 筹备界面语言、资源、偏好及金额 / 日期格式化，首批 locale 和实施任务待评审；语言不隐式改写玩家原文或计价币种。027 消费其契约，025 正式界面接入依赖在设计定稿后同步。
+028 已定稿 zh-Hans / en、单源资源、独立偏好与精确格式化；034 复用 026 首窗入口交付底座与原生界面，025 / 031 消费，尚未实现。语言不隐式改写玩家原文或计价币种。
 
 ## 分层和依赖方向
 
