@@ -30,7 +30,7 @@ SQLite 是完整的关系数据库——join、递归 CTE、窗口函数、JSON 
 职责三分法，以「加点」为例：
 
 - **静态规则数据**（技能树形状、每点加成、成长曲线）→ 剧本包文件，不进库。
-- **运行时状态**（玩家把点分到哪、何时）→ SQLite 窄表，保存已应用分配事实的查询投影；关键变更的因果事实源是记录引擎的 worldMutation 块，不形成两份独立真相。以下仅为点位建模示意，不是已实现 schema；实际事务还须带 applied 幂等标记：
+- **运行时状态**（玩家把点分到哪、何时）→ SQLite 窄表，保存已应用分配事实的查询投影；关键变更的因果事实源是 012 注册的 settlementPlanned / sceneAdvanced / sessionEnded system 块，WorldMutation 是其承载的类型化变更，不是另一个日志码，不形成两份独立真相。以下仅为点位建模示意，不是已实现 schema；实际事务还须带 applied 幂等标记：
 
 ```sql
 CREATE TABLE point_allocations (

@@ -65,6 +65,7 @@
 - 2026-10-06：issue #24 把 planId / rng / modifiers 写回 dice 块表、check.planId 改为必有；黄金例同步计划身份与确定性 RNG / total，不保留不存在旧存档的兼容口径。
 - 2026-10-06：issue #26 把 narration 与 characterSpeech 分行映射，指向已定稿 008 / ui-shell；移除“008 未完成”的过期描述，未改变记录事实粒度。
 - 2026-10-06：同步 007 确认的统一调用额度，移除后台账单独立额度歧义：按任务诊断用量、共同计入总预算，必要请求不足暂停、可选后台跳过。原 recap 门槛 / 授权、投影硬限、单在飞和回合请求次数上限保持既有规则。
+- 2026-10-06：issue #35 对齐 012 已注册因果事实：WorldMutation 为载荷，由 settlementPlanned / sceneAdvanced / sessionEnded 承载，不新增日志码；投影不折叠承载 mutation 的块，SQLite applied 游标与暂停 checkpoint 分开，invalid-phase 引用定稿映射。文档修复，代码与任务状态不变。
 
 ## 完成摘要
 
