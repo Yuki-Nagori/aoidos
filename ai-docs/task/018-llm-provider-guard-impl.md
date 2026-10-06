@@ -82,4 +82,4 @@ LLM 设计已冻结，但仓库尚无供应商调用与安全输出流水线。�
 
 ## 完成摘要
 
-已交付 `src-rust/mythos-llm`：不依赖 tauri 的纯 Rust crate，含增量 UTF-8 解码、有界 SSE 解析、GuardSpec 编译与跨分片护栏、结构化错误分类（含 TLS 链下钻标定）、Provider 抽象与 DeepSeek 适配层（completion / chat / prefix，能力表按官方文档登记）、单层请求调度器（互斥重试、看门狗、可取消背压、预算端口）。全部行为由本地夹具验证：150 个测试、100% 行覆盖、clippy / fmt 干净、`bun run verify` 十项通过；消融验证确认 8/9 安全机制可被套件捕捉（reqwest 隐式重试禁用归 024 联调）。凭据持久化、代理、命令层接线与产品联调按任务索引归 019–024。
+已交付 `src-rust/mythos-llm`：不依赖 tauri 的纯 Rust crate，含增量 UTF-8 解码、有界 SSE 解析、GuardSpec 编译与跨分片护栏、结构化错误分类（含 TLS 链下钻标定）、Provider 抽象与 DeepSeek 适配层（completion / chat / prefix，能力表按官方文档登记）、单层请求调度器（互斥重试、看门狗、可取消背压、预算端口）。全部行为由本地夹具验证：行覆盖 100%、clippy / fmt 干净、`bun run verify` 全项通过（测试数与门禁项数随后续消融 / 门禁扩张增长，以 CI 为准）；消融验证确认 8/9 安全机制可被套件捕捉（reqwest 隐式重试禁用归 024 联调）。凭据持久化、代理、命令层接线与产品联调按任务索引归 019–024。
