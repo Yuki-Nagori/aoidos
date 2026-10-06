@@ -65,6 +65,10 @@ jobs:
         run: bun run knip
       - name: bench（tinybench 链路可用）
         run: bun run bench
+      - name: build（vite 生产构建）
+        run: bun run build:web
+      - name: doc（rustdoc 拒绝警告）
+        run: bun run doc:rust
       # 快速门禁先完成，避免格式 / 前端错误消耗 Linux 系统依赖安装和 Rust 编译时间。
       - name: 安装 Tauri Linux 依赖
         if: matrix.os == 'ubuntu-latest'

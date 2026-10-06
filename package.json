@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "bun run typecheck && vite build",
+    "build": "bun run typecheck && bun run build:web",
     "preview": "vite preview",
     "postinstall": "bun scripts/setup.mts",
     "setup": "bun scripts/setup.mts",
@@ -16,8 +16,10 @@
     "test:coverage": "vitest run --coverage",
     "test:rust": "cargo test --workspace",
     "coverage:rust": "cargo llvm-cov --workspace --lib --show-missing-lines --fail-under-lines 100 --ignore-filename-regex \"lib\\.rs$\"",
+    "doc:rust": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps --workspace",
     "bench": "bun run bench:web",
     "bench:web": "bun src-web/bench/greet.ts",
+    "build:web": "vite build",
     "typecheck": "vue-tsc --noEmit",
     "typecheck:rust": "cargo check --workspace",
     "lint": "eslint . --max-warnings 0",
@@ -28,7 +30,7 @@
     "format:rust": "cargo fmt --all",
     "format:rust:check": "cargo fmt --all --check",
     "knip": "knip",
-    "verify": "bun run typecheck && bun run typecheck:rust && bun run lint && bun run lint:rust && bun run format:check && bun run format:rust:check && bun run test:coverage && bun run test:rust && bun run coverage:rust && bun run knip && bun run bench",
+    "verify": "bun run typecheck && bun run typecheck:rust && bun run lint && bun run lint:rust && bun run format:check && bun run format:rust:check && bun run test:coverage && bun run test:rust && bun run coverage:rust && bun run knip && bun run bench && bun run build:web && bun run doc:rust",
     "prepare": "husky"
   },
   "devDependencies": {

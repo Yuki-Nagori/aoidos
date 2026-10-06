@@ -19,4 +19,4 @@
 
 ## 基准
 
-`bun run bench` 跑 `src-web/bench/` 下的 tinybench 示例，用于验证基准链路可用，已纳入 verify（第十一项，秒级）。性能结论要可靠对比（同机器、同口径、多次采样），临时性结论写进对应 task，不进规范；需要持续跟踪性能时再登记专门 task 扩建基准集。
+`bun run bench` 跑 `src-web/bench/` 下的 tinybench 示例，用于验证基准链路可用，已纳入 verify（秒级）。性能结论要可靠对比（同机器、同口径、多次采样），临时性结论写进对应 task，不进规范；需要持续跟踪性能时再登记专门 task 扩建基准集。
