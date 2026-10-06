@@ -6,8 +6,8 @@
 ├── index.html                 # Vite 入口 HTML（挂载点 #app）
 ├── src-web/                   # 前端：Vue 3 + TypeScript
 │   ├── main.ts                # 应用入口：挂载根组件
-│   ├── App.vue                # 根组件：greet 示例（IPC 往返 + 浏览器回退）
-│   ├── app.css                # 全局样式（无 UI 框架）
+│   ├── App.vue                # 根组件：greet 示例（IPC 往返 + 浏览器回退 + 主题切换）
+│   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
 │   ├── utils/                 # 纯逻辑函数，配单测（计入覆盖率门槛）
 │   └── bench/                 # tinybench 基准示例

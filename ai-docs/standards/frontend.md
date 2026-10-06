@@ -25,3 +25,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 ## 排版分工
 
 Prettier 独占排版，ESLint 只管质量规则：Vue 排版类规则（`max-attributes-per-line` 等）已关闭，`eslint-config-prettier` 兜底关停冲突项。格式争议以 `bun run format` 的输出为准，不手调。
+
+## 样式分工
+
+组件样式用 Tailwind 工具类 + `@layer components` 小组件类；token 真源与 app.css 分层结构见[UI 风格](ui.md)禁则与[主题架构](../architecture/theming.md)目录。不在组件里写色值 / 时长魔法数，改样式统一动 token 或组件类；`tests/web/appcss.test.ts` 互校目录与 app.css 防漂移。

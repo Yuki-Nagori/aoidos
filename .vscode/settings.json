@@ -6,5 +6,12 @@
   },
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
+  // Tailwind v4（task 004）：@theme 等是 Tailwind 指令，内置 CSS 语言服务
+  // 不认识会报「未知 at 规则」；关掉后由 Tailwind IntelliSense 扩展接管校验。
+  "css.lint.unknownAtRules": "ignore",
+  // 模板 class 字符串内的工具类自动补全（Tailwind 官方推荐配置）。
+  "editor.quickSuggestions": {
+    "strings": "on"
   }
 }

@@ -1,78 +1,155 @@
-/* 示例页样式，可整文件替换。 */
-:root {
-  --accent: #1f6feb;
-  --bg: #f5f6f8;
-  --fg: #1f2328;
-  --card: #ffffff;
-  --border: #d0d7de;
+/*
+ * Tailwind v4 + 设计 token 接线（task 004）。
+ * 分层：语义真源（:root[data-theme] 双主题值，目录见 theming.md）→
+ * `@theme inline` 映射（只做别名，清掉默认色板防误用）→ 原语层（white / black，
+ * static 强制发射）→ base（星云背景 / 字体栈 / reduced-motion 保底）→
+ * components（玻璃面板 / LED 指示）。
+ * 真源永远是下面的 custom properties，改样式统一动 token 或组件层，不动映射。
+ */
+@import "tailwindcss";
+
+@theme {
+  /* 清默认颜色命名空间，旧调色板类（text-blue-500 等）不再可用；
+   * 不重设整个 --* 命名空间，排版 / 响应式默认值保留。 */
+  --color-*: initial;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --fg: #e6e8eb;
-    --card: #161b22;
-    --border: #30363d;
+@theme static {
+  /* 只保留 white / black 两个原语：强调底上的恒定文字色等不随主题切换的
+   * 场景（正式 on-accent 语义 token 待目录扩展时登记，004 不私增目录项）。
+   * 用 static：@theme 默认按使用量裁剪变量定义，未引用的原语不进产物。 */
+  --color-white: #ffffff;
+  --color-black: #000000;
+}
+
+@theme inline {
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-violet: var(--accent-violet);
+  --color-accent-warm: var(--accent-warm);
+  --color-panel: var(--panel);
+  --color-bubble-user: var(--bubble-user);
+  --color-bubble-persona: var(--bubble-persona);
+  --color-hairline: var(--hairline);
+  --color-led-active: var(--led-active);
+  --color-diff-add: var(--diff-add);
+  --color-diff-remove: var(--diff-remove);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --spacing-record-left: var(--record-left);
+}
+
+/* 语义真源：默认深色（ui.md），data-theme 单属性切换，不跟随系统。
+ * 值与 ai-docs/standards/ui.md 色板表 / 星云渐变初值一致。 */
+:root,
+:root[data-theme="dark"] {
+  --ink: #e6ebf1;
+  --muted: #7e8894;
+  --accent: #5cc8b4;
+  --accent-violet: #a88bff;
+  --accent-warm: #f0924a;
+  --panel: rgba(22, 28, 36, 0.72);
+  --bubble-user: rgba(40, 48, 58, 0.78);
+  --bubble-persona: rgba(26, 32, 40, 0.72);
+  --hairline: rgba(226, 236, 246, 0.09);
+  --led-active: #8b7cf6;
+  --diff-add: #6fa86f;
+  --diff-remove: #c4736b;
+  --warning: #d99a4e;
+  --danger: #ff9d92;
+  --record-left: 8px;
+  --ease-signature: cubic-bezier(0.2, 0.85, 0.2, 1);
+  --dur-micro: 140ms;
+  --app-bg:
+    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.14) 0% 10%, transparent 30%),
+    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.14) 0% 8%, transparent 28%),
+    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.08) 0% 9%, transparent 26%),
+    linear-gradient(135deg, #0c1a1d 0%, #0a1520 46%, #081018 100%);
+}
+
+:root[data-theme="light"] {
+  --ink: #111417;
+  --muted: #6f7782;
+  --accent: #1f7a68;
+  --accent-violet: #6d4fd4;
+  --accent-warm: #e8762d;
+  --panel: rgba(255, 255, 255, 0.72);
+  --bubble-user: rgba(236, 238, 240, 0.76);
+  --bubble-persona: rgba(255, 255, 255, 0.64);
+  --hairline: rgba(17, 20, 23, 0.08);
+  --led-active: #8b7cf6;
+  --diff-add: #3f7d50;
+  --diff-remove: #a4544c;
+  --warning: #b45309;
+  --danger: #9a5b5b;
+  --app-bg:
+    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.12) 0% 10%, transparent 30%),
+    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.1) 0% 8%, transparent 28%),
+    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.06) 0% 9%, transparent 26%),
+    linear-gradient(135deg, #eef6f4 0%, #f2f4f7 100%);
+}
+
+@layer base {
+  body {
+    min-height: 100vh;
+    font-family:
+      Inter,
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      "PingFang SC",
+      "Microsoft YaHei",
+      sans-serif;
+    /* 星云渐变直接画在 body（渐变本身即软边），不逐帧 backdrop-filter（ui.md 性能决策）。 */
+    background: var(--app-bg) fixed;
+    color: var(--ink);
+  }
+
+  /* 全局 reduced-motion 保底：组件层不必逐动效重复声明降级
+   * （ui.md 要求每条动效可降级，这里一次性覆盖全部动画与过渡）。 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
+@layer components {
+  /* 示例页玻璃面板：工具类之外沉淀的第一个小组件类（ui.md 禁则约定）。 */
+  .glass-panel {
+    display: grid;
+    gap: 16px;
+    justify-items: center;
+    padding: 40px 48px;
+    border: 1px solid var(--hairline);
+    border-radius: 18px;
+    background: var(--panel);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 18px 48px rgba(4, 10, 16, 0.35);
+    text-align: center;
+  }
+
+  .led-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 9999px;
+    background: var(--led-active);
+    animation: led-pulse 1.6s ease-in-out infinite;
+  }
 }
 
-body {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  font-family:
-    "Segoe UI",
-    system-ui,
-    -apple-system,
-    "PingFang SC",
-    "Microsoft YaHei",
-    sans-serif;
-  background: var(--bg);
-  color: var(--fg);
-}
-
-.shell {
-  display: grid;
-  gap: 16px;
-  justify-items: center;
-  padding: 40px 48px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--card);
-  text-align: center;
-}
-
-.subtitle,
-.greeting {
-  opacity: 0.7;
-}
-
-.row {
-  display: flex;
-  gap: 8px;
-}
-
-input {
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-}
-
-button {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  cursor: pointer;
+@keyframes led-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }

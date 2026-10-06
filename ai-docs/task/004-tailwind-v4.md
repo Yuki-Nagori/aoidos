@@ -1,6 +1,6 @@
 # 004 — 引入 Tailwind CSS v4 并接线设计 token
 
-- 状态：ready（009 已定稿，尚未实施）
+- 状态：done
 - 依赖：002、009
 - 优先级：P1
 - 创建 / 更新：2026-10-05 / 2026-10-06
@@ -43,16 +43,19 @@
 
 ## 验收标准
 
-- [ ] `bun run build` 与 `tauri:dev` 正常，工具类与 token 均生效。
-- [ ] 语义 token 与 ui.md / 009 目录一致，inline 映射、默认 CSS 与设计目录夹具互校（026 落地后补 Rust 侧，不阻塞本任务）；`data-theme="light"` 切换可见生效（手动检查一次）。
-- [ ] vitest 套件全过；`bun run verify` 十项 exit 0。
+- [x] `bun run build` 与 `tauri:dev` 正常，工具类与 token 均生效。
+- [x] 语义 token 与 ui.md / 009 目录一致，`tests/web/appcss.test.ts` 互校目录 18 项（语义真源双主题定义 / inline 映射一一对应且无私增 / 直接消费项不进 @theme / 默认深色 / 清默认色板）；`data-theme="light"` 切换经示例页按钮手动验证生效（深浅两主题截图核对）。Rust 侧互校待 026。
+- [x] vitest 套件全过（4 文件 12 测试，含新增目录互校）；`bun run verify` 全项 exit 0。
 - [x] ui.md 已按本次决策修订：色板按立绘微调（青绿 / 紫 / 橙）、默认深色主题、剧本皮肤 = token-only 覆盖契约、禁则改写为 Tailwind 选型（2026-10-05 完成）。
 
 ## 验证计划与结果
 
-| 日期 | 命令         | 预期 | 实际结果 |
-| ---- | ------------ | ---- | -------- |
-| —    | 待实现时填写 | —    | 未执行   |
+| 日期       | 命令                             | 预期                      | 实际结果                                                                                       |
+| ---------- | -------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
+| 2026-10-07 | `bun run test` / `test:coverage` | 全过 + 覆盖率口径不受影响 | 4 文件 12 测试全过；coverage 只统计逻辑层，类名字符串不影响口径                                |
+| 2026-10-07 | `bun run build` + 产物断言       | 工具类编译为语义 var 消费 | text-ink / bg-accent / hover 变体均编译为 var(--ink) 等；旧调色板类（.text-blue 等）不在产物中 |
+| 2026-10-07 | `bun run tauri:dev`              | 窗口正常、token 生效      | 深浅双主题截图核对（发现并修复按钮文字对比度：text-ink → 保留的 white 原语）                   |
+| 2026-10-07 | `bun run verify`                 | 全项通过                  | 十三项全部通过；前端套件连续 6 轮 12/12                                                        |
 
 ## 风险与回退
 
@@ -64,7 +67,8 @@ Tailwind v4 要求现代浏览器内核——WebView2（Chromium）满足；跨�
 - 2026-10-06：008 已定稿界面规范；本任务仍只承接 Tailwind / token 与示例基线，不扩大为完整舞台 / 面板实现，不预安装窗口状态或类型生成候选。
 - 2026-10-06：按 009 / issue #12 回写方案 B：语义真源 + inline 映射 + 清默认色板，目录三方互校；持久化 / 皮肤运行时仍归 026。设计依赖改为 009，避免先实现再冻结目录。
 - 2026-10-06：issue #28 澄清接线：默认渐变使用 0% stop，状态色按双主题值；M01 / M02 直接由组件消费，不进入 @theme 或生成同名缓动别名。
+- 2026-10-07：实现完成。用户截图核对发现按钮文字对比度问题（ink 随主题变导致浅色底上不可读），按用户要求改恒白；white 以唯一保留原语进 @theme 并注释原因（on-accent 语义 token 待目录扩展登记，004 不私增目录项）。同轮 verify 间歇失败定位为 byte_split 测试的端口耗尽（与前端无关的存量抖动），改直驱 AdapterStream 消除，连带修正第七轮"21 轮零抖动"结论的适用条件（当时无并发 dev server / 端口压力）。
 
 ## 完成摘要
 
-未完成。实现并验证后填写。
+Tailwind v4（4.3.3）+ `@tailwindcss/vite` 落地：app.css 分层改造为「`@import "tailwindcss"` → 清默认色板（保留唯一 white 原语作强调底上的恒白文字，正式 on-accent token 待目录扩展登记）→ `@theme inline` 按目录映射 15 个语义 token → `:root[data-theme]` 双主题语义真源（值与 ui.md 色板 / 星云渐变一致）→ base（星云背景 fixed 预渲染、字体栈、reduced-motion 全局降级）→ components（glass-panel 玻璃面板、led-dot 脉冲指示）」。App.vue 换工具类写法并内置主题切换按钮。`tests/web/appcss.test.ts` 互校 theming.md 首版目录 18 项（Rust 侧待 026）。knip 登记 tailwindcss（CSS @import 不被追踪，任务风险节预案）。过程中发现并修复前端无关的存量抖动：byte_split 重放测试直驱 AdapterStream（不经 HTTP），消除约 200 连接 / 轮的临时端口消耗（Windows TIME_WAIT 累积导致 connect 间歇失败）。浅色主题精调、皮肤运行时与首窗防闪归 026/025。

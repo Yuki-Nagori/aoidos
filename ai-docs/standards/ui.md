@@ -1,6 +1,6 @@
 # UI 风格规范
 
-更新日期：2026-10-06。定义 Mythos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Mythos 品牌调整）。状态：**规划**——当前 `src-web/app.css` 仍是示例样式，尚未按本规范实现；首个真实界面落地时以本规范为准，并把偏差回写进来。
+更新日期：2026-10-06。定义 Mythos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Mythos 品牌调整）。状态：**基线已接线**——task 004 已把 app.css 按本规范落地（token 真源 + Tailwind v4 映射 + 双主题 + 星云背景），首个真实界面（025）以本规范为准，偏差回写。
 
 ## 设计基调
 

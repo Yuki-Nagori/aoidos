@@ -1061,6 +1061,22 @@ mod tests {
         );
     }
 
+    /// 直驱 [`AdapterStream`] 收集全部增量：不建 socket，供字节切割重放测试使用
+    /// （每个切割位一个连接会在 Windows 上耗尽临时端口，TIME_WAIT 累积导致
+    /// connect 间歇性失败；本测试的被测对象是字节切割重放而非 HTTP 传输）。
+    fn replay_stream<S>(body: S) -> crate::provider::ProviderStream
+    where
+        S: futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Unpin + Send + 'static,
+    {
+        // 与 start() 相同的 unfold 驱动：字节切割重放测试不经 HTTP 层
+        // （每个切割位一个连接会在 Windows 上耗尽临时端口，TIME_WAIT 累积导致
+        // connect 间歇性失败；本测试的被测对象是字节切割重放而非 HTTP 传输）。
+        futures::stream::unfold(AdapterStream::new(body), |mut state| async move {
+            state.step().await.map(|item| (item, state))
+        })
+        .boxed()
+    }
+
     #[tokio::test]
     async fn byte_split_streaming_replays_identically() {
         let body = format!(
@@ -1068,36 +1084,16 @@ mod tests {
             sse_text_frame("风渡🌉"),
             sse_finish_frame("stop"),
         );
-        let whole = {
-            let server = ScriptedServer::start(sse_ok_script(&body)).await;
-            let deepseek = adapter(&server);
-            format_deltas(
-                &collect(
-                    deepseek
-                        .start(completion_request(vec![]), CancellationToken::new())
-                        .await
-                        .unwrap(),
-                )
-                .await,
-            )
+        let chunks = |cut: usize| {
+            vec![
+                Ok(bytes::Bytes::from(body.as_bytes()[..cut].to_vec())),
+                Ok(bytes::Bytes::from(body.as_bytes()[cut..].to_vec())),
+            ]
         };
+        let whole =
+            format_deltas(&collect(replay_stream(futures::stream::iter(chunks(body.len())))).await);
         for cut in 1..body.len() {
-            let segments = vec![
-                Segment::Status(200),
-                Segment::Header("Content-Type: text/event-stream".into()),
-                Segment::Header("Connection: close".into()),
-                Segment::BodyChunk(body.as_bytes()[..cut].to_vec()),
-                Segment::BodyChunk(body.as_bytes()[cut..].to_vec()),
-            ];
-            let server = ScriptedServer::start(segments).await;
-            let deepseek = adapter(&server);
-            let deltas = collect(
-                deepseek
-                    .start(completion_request(vec![]), CancellationToken::new())
-                    .await
-                    .unwrap(),
-            )
-            .await;
+            let deltas = collect(replay_stream(futures::stream::iter(chunks(cut)))).await;
             assert_eq!(format_deltas(&deltas), whole, "cut at {cut}");
         }
     }
