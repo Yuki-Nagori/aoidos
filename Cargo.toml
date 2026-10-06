@@ -14,6 +14,23 @@ tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
 mythos-store = { path = "src-rust/mythos-store" }
+mythos-llm = { path = "src-rust/mythos-llm" }
+# 密钥存储：v1 默认特性 = Windows Credential Manager / macOS Keychain / Linux Secret Service（019）。
+keyring = "4"
+url = "2"
+# Windows 原生能力（019）：CredUI 凭据输入 + 降级文件 DACL。虚拟 manifest 不允许
+# target 段，按 crate 形态放各成员（见 src-rust/mythos-llm）。
+windows-sys = { version = "0.60", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Memory",
+  "Win32_System_Threading",
+  "Win32_Security_Credentials",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_WindowsAndMessaging",
+] }
 # rustls-tls 显式关闭默认特性：不要 native-tls / 自动解压；TLS backend 锁定 rustls(ring) 便于错误链分类。
 # reqwest 0.13 的 rustls feature 绑定 aws-lc-rs（Windows 需 CMake+NASM），改用 no-provider + 显式安装 ring。
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider"] }

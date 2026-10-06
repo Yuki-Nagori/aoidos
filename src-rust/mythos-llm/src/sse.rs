@@ -50,6 +50,7 @@ impl Default for IncrementalSse {
 }
 
 impl IncrementalSse {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             line: String::new(),
@@ -125,9 +126,8 @@ impl IncrementalSse {
             if self.has_data {
                 events.push(self.dispatch());
             }
-        } else if let Some(rest) = line.strip_prefix(':') {
-            // 注释行：不产出字段。
-            let _ = rest;
+        } else if line.starts_with(':') {
+            // 注释行（`: keep-alive` 等）：不产出字段。
         } else if let Some(value) = line.strip_prefix("data:") {
             let value = value.strip_prefix(' ').unwrap_or(value);
             // 规范：多条 data 行以 LF 连接，派发时剥掉最后一个换行。

@@ -83,6 +83,7 @@ CREATE TABLE point_allocations (
 - 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。重试次数与退避见[通信契约](ipc-contract.md)看门狗表。三端的 `WouldBlock`、`ResourceBusy`、`ExecutableFileBusy` 进入退避。Windows 上原始码 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）同样算占用；Unix 上同号是 EIO / EPIPE，保持 `io`，不重试。目录目标三端立即 `io`，不进入退避：Windows 把「文件 rename 到目录」也报成 ACCESS_DENIED，若先按占用重试，目录会在 Windows 上等满退避。耗尽报 `locked` 并清理本次 tmp。父目录同步只吞掉 `PermissionDenied`、`InvalidInput`、`Unsupported`；其它同步错误在 rename 已经发布后仍返回，调用方不能把该错误当成「目标未更新」。
 - 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行；完整行仍须校验 JSON / 身份，中间损坏不得删。partial 不是 .tmp，不由通用临时清理删除；保留已提交前文并封中断块的恢复及 buffered / high 耐久边界见[记录引擎](record-engine.md)。
 - 并发与锁：单写者约定；打开数据库前持有数据根 `storage.lock` 上的 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
+- 逻辑读改写：原子写只保证单次覆写的物理完整，**不串行化读-改-写周期**——同一文件的此类周期（如 profile 集合的增删改、降级凭据的设置 / 清除）由调用方在命令层持进程内锁串行（019：llm profile 与 key 各一把；等待用户交互的原生输入不得持锁）。进程间互斥已由 InstanceLock 覆盖。
 
 ## shell 与进程边界
 

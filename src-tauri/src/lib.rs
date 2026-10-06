@@ -1,14 +1,15 @@
 mod commands;
 pub mod events;
 pub mod ipc;
+pub mod llm_commands;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use ipc::CmdError;
 
 /// 事件发送装配胶水：契约信封（events 模块）+ `emit_to("main")`。
-/// 本文件在覆盖率口径外（装配代码需要活的 AppHandle，tauri::test 的 mock
-/// 在 Windows 触发 STATUS_ENTRYPOINT_NOT_FOUND）——事件名与载荷形状的
+/// 本文件在覆盖率口径外（装配代码需要活的 `AppHandle，tauri::test` 的 mock
+/// 在 Windows 触发 `STATUS_ENTRYPOINT_NOT_FOUND）——事件名与载荷形状的`
 /// 纯逻辑在 events / ipc 模块内有直测，这里只适配平台投递。
 ///
 /// # Errors
@@ -36,12 +37,18 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             commands::init_db_path(dir.join("storage.sqlite"));
+            llm_commands::init_llm_dir(dir.join("llm"));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::greet,
             commands::store_list_backups,
-            commands::store_get_migration
+            commands::store_get_migration,
+            llm_commands::llm_list_profiles,
+            llm_commands::llm_save_profile,
+            llm_commands::llm_delete_profile,
+            llm_commands::llm_get_key_status,
+            llm_commands::llm_set_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

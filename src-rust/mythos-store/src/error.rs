@@ -14,7 +14,7 @@ pub enum StoreError {
     AlreadyRunning { lock_path: PathBuf },
     /// 目标被占用，重试耗尽后放弃（tmp 已清理）。
     LockedTimeout { path: PathBuf },
-    /// 迁移执行失败；事务已回滚，user_version 未推进。
+    /// `迁移执行失败；事务已回滚，user_version` 未推进。
     Migration {
         version: u32,
         source: rusqlite::Error,
@@ -30,6 +30,7 @@ pub enum StoreError {
 
 impl StoreError {
     /// 判别码，命名空间 `store` 由调用方约定前缀。
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::InvalidPath(_) => "invalid-path",
@@ -41,8 +42,10 @@ impl StoreError {
         }
     }
 
-    /// 磁盘满、权限、找不到各有稳定码。其它 Kind 收成 `io`，避免把平台专有 Kind 漏到前端。
-    pub(crate) fn from_io(source: io::Error) -> Self {
+    /// 磁盘满、权限、找不到各有稳定码。其它 Kind 收成 `io`，避免把平台专有
+    /// Kind 漏到前端。全仓唯一的 io → `StoreError` 映射，业务 crate 复用。
+    #[must_use]
+    pub fn from_io(source: io::Error) -> Self {
         let code = match source.kind() {
             io::ErrorKind::StorageFull => "disk-full",
             io::ErrorKind::PermissionDenied => "permission",
@@ -147,7 +150,7 @@ mod tests {
             StoreError::from_io(io::Error::from(io::ErrorKind::Other)),
         ];
         for e in &errors {
-            assert!(!e.to_string().is_empty());
+            assert_ne!(e.to_string(), "");
         }
     }
 

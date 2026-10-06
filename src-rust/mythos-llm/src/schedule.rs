@@ -103,6 +103,9 @@ pub enum AttemptOutcome {
 /// 预算端口；035 落地前用 [`AllowAll`]，测试注入记账或拒绝实现。
 pub trait BudgetPort: Send + Sync {
     /// 发请求前按估算预留；拒绝则本次物理请求不发出。
+    ///
+    /// # Errors
+    /// 本地额度不足或预算状态异常时返回 [`BudgetDenial`]（code 属 budget 命名空间）。
     fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial>;
     /// 每次成功预留的尝试恰结算一次。
     fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome);
@@ -134,6 +137,7 @@ pub struct GenerationRequest {
 }
 
 /// 退避延迟：基准 × 2^(retry-1) × (1 + jitter)，jitter ∈ [-0.25, 0.25]。
+#[must_use]
 pub fn backoff_delay(base: Duration, retry: u32, jitter: f64) -> Duration {
     let factor = 1u64 << (retry - 1).min(30);
     let scaled = jitter.clamp(-0.25, 0.25) + 1.0;
@@ -145,9 +149,8 @@ pub fn backoff_delay(base: Duration, retry: u32, jitter: f64) -> Duration {
 fn clock_jitter() -> f64 {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    (nanos % 1000) as f64 / 1000.0 * 0.5 - 0.25
+        .map_or(0, |d| d.subsec_nanos());
+    f64::from(nanos % 1000) / 1000.0 * 0.5 - 0.25
 }
 
 /// 单回合生成主流程。`output` 是调用方构造的有界通道（契约容量 32）：
@@ -316,8 +319,8 @@ async fn wait_backoff(cancel: &CancellationToken, policy: &RunPolicy, retry: u32
     let delay = backoff_delay(policy.backoff_base, retry, clock_jitter());
     tokio::select! {
         biased;
-        _ = cancel.cancelled() => false,
-        _ = sleep_until(Instant::now() + delay) => true,
+        () = cancel.cancelled() => false,
+        () = sleep_until(Instant::now() + delay) => true,
     }
 }
 
@@ -400,8 +403,8 @@ async fn attempt(
     let head_deadline = Instant::now() + policy.head_budget;
     let mut stream = tokio::select! {
         biased;
-        _ = cancel.cancelled() => return AttemptEnd::Cancelled { usage: Usage::default() },
-        _ = sleep_until(head_deadline) => return AttemptEnd::StalledHead,
+        () = cancel.cancelled() => return AttemptEnd::Cancelled { usage: Usage::default() },
+        () = sleep_until(head_deadline) => return AttemptEnd::StalledHead,
         started = provider.start(provider_request, child.clone()) => match started {
             Ok(stream) => stream,
             Err(error) => return AttemptEnd::Failed { error, usage: Usage::default() },
@@ -413,12 +416,12 @@ async fn attempt(
     loop {
         let item = tokio::select! {
             biased;
-            _ = cancel.cancelled() => {
+            () = cancel.cancelled() => {
                 guard.discard();
                 return AttemptEnd::Cancelled { usage };
             }
-            _ = sleep_until(head_deadline), if !*delivered => return AttemptEnd::StalledHead,
-            _ = sleep_until(idle_deadline), if *delivered => {
+            () = sleep_until(head_deadline), if !*delivered => return AttemptEnd::StalledHead,
+            () = sleep_until(idle_deadline), if *delivered => {
                 return AttemptEnd::Failed {
                     error: ProviderError::Network { source: TransportClass::Timeout },
                     usage,
@@ -524,9 +527,9 @@ async fn emit(
 ) -> EmitEnd {
     tokio::select! {
         biased;
-        _ = cancel.cancelled() => EmitEnd::Cancelled,
-        _ = sleep_until(head_deadline), if !delivered => EmitEnd::StalledHead,
-        _ = sleep_until(idle_deadline), if delivered => EmitEnd::Idle,
+        () = cancel.cancelled() => EmitEnd::Cancelled,
+        () = sleep_until(head_deadline), if !delivered => EmitEnd::StalledHead,
+        () = sleep_until(idle_deadline), if delivered => EmitEnd::Idle,
         sent = output.send(text) => {
             if sent.is_ok() {
                 EmitEnd::Sent
@@ -539,7 +542,7 @@ async fn emit(
 
 /// 永不触发的时刻；仅在未交付前充当空闲计时的占位（该分支由 `if delivered` 守卫禁用）。
 fn far_future() -> Instant {
-    Instant::now() + Duration::from_secs(60 * 60 * 24 * 365 * 100)
+    Instant::now() + Duration::from_hours(876000)
 }
 
 #[cfg(test)]
@@ -582,7 +585,7 @@ mod tests {
                 input: crate::provider::ProviderInput::Completion(
                     crate::provider::CompletionInput { prompt: "P".into() },
                 ),
-                sampling: crate::provider::Sampling {
+                sampling: crate::sampling::Sampling {
                     temperature: 1.0,
                     max_tokens: 64,
                 },
@@ -626,7 +629,7 @@ mod tests {
         (server, provider, tx, rx)
     }
 
-    async fn drain(rx: &mut mpsc::Receiver<String>) -> String {
+    fn drain(rx: &mut mpsc::Receiver<String>) -> String {
         let mut text = String::new();
         while let Ok(chunk) = rx.try_recv() {
             text.push_str(&chunk);
@@ -669,7 +672,7 @@ mod tests {
                 },
             })
         );
-        assert_eq!(drain(&mut rx).await, "风吹过。");
+        assert_eq!(drain(&mut rx), "风吹过。");
         assert_eq!(server.request_count(), 1);
     }
 
@@ -700,7 +703,7 @@ mod tests {
                 usage: Usage::default(),
             })
         );
-        assert_eq!(drain(&mut rx).await, "尾声");
+        assert_eq!(drain(&mut rx), "尾声");
         assert_eq!(server.request_count(), 1);
     }
 
@@ -729,7 +732,7 @@ mod tests {
                 usage: Usage::default(),
             })
         );
-        assert_eq!(drain(&mut rx).await, "A\n");
+        assert_eq!(drain(&mut rx), "A\n");
     }
 
     #[tokio::test]
@@ -758,7 +761,7 @@ mod tests {
                 usage: Usage::default(),
             })
         );
-        assert_eq!(drain(&mut rx).await, "尾声");
+        assert_eq!(drain(&mut rx), "尾声");
     }
 
     #[tokio::test]
@@ -796,7 +799,7 @@ mod tests {
                 usage: Usage::default(),
             })
         );
-        assert_eq!(drain(&mut rx).await, "重试后");
+        assert_eq!(drain(&mut rx), "重试后");
         let requests = server.requests();
         assert_eq!(requests.len(), 2);
         // 重试沿用冻结的 prompt / stop / 模型与温度。
@@ -915,7 +918,7 @@ mod tests {
         .unwrap_err();
         let source = provider_error(&error).expect("provider failure");
         assert_eq!(source.code_at_boundary(true), "aborted");
-        assert_eq!(drain(&mut rx).await, "前文");
+        assert_eq!(drain(&mut rx), "前文");
         // 首字节后 5xx / 断线都不再重试。
         assert_eq!(server.request_count(), 1);
     }
@@ -981,7 +984,7 @@ mod tests {
                 usage: Usage::default(),
             })
         );
-        assert_eq!(drain(&mut rx).await, "阶梯后");
+        assert_eq!(drain(&mut rx), "阶梯后");
         let requests = server.requests();
         assert_eq!(requests.len(), 2);
         assert_eq!(request_temperature(&requests[0]), 1.0);
@@ -1035,7 +1038,7 @@ mod tests {
                 },
             })
         );
-        assert_eq!(drain(&mut rx).await, "续");
+        assert_eq!(drain(&mut rx), "续");
     }
 
     #[tokio::test]
@@ -1207,7 +1210,7 @@ mod tests {
                 usage: Usage::default(),
             })
         );
-        assert_eq!(drain(&mut rx).await, "无温");
+        assert_eq!(drain(&mut rx), "无温");
         assert_eq!(server.request_count(), 1);
     }
 
@@ -1281,7 +1284,7 @@ mod tests {
         .unwrap_err();
         let source = provider_error(&error).expect("provider failure");
         assert_eq!(source.code_at_boundary(true), "aborted");
-        assert_eq!(drain(&mut rx).await, "首段");
+        assert_eq!(drain(&mut rx), "首段");
         assert_eq!(server.request_count(), 1);
     }
 
@@ -1322,7 +1325,7 @@ mod tests {
                 usage: Usage::default()
             }
         );
-        assert_eq!(drain(&mut rx).await, "");
+        assert_eq!(drain(&mut rx), "");
         assert_eq!(server.request_count(), 1);
     }
 
@@ -1553,7 +1556,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, RunError::Stalled);
         assert_eq!(server.request_count(), 3);
-        assert_eq!(drain(&mut rx).await, "占位");
+        assert_eq!(drain(&mut rx), "占位");
     }
 
     #[tokio::test]
@@ -1580,7 +1583,7 @@ mod tests {
         .unwrap_err();
         let source = provider_error(&error).expect("provider failure");
         assert_eq!(source.code_at_boundary(true), "aborted");
-        assert_eq!(drain(&mut rx).await, "A");
+        assert_eq!(drain(&mut rx), "A");
     }
 
     #[tokio::test]
@@ -1934,7 +1937,7 @@ mod tests {
                 usage: Usage::default(),
             })
         );
-        assert_eq!(drain(&mut rx).await, "嗨");
+        assert_eq!(drain(&mut rx), "嗨");
     }
 
     #[test]

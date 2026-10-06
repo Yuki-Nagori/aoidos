@@ -19,14 +19,14 @@ pub enum ProviderError {
     Network { source: TransportClass },
     /// TLS 证书 / 握手失败，不重试、不关闭校验。
     Tls,
-    /// 协议或能力拒绝：非成功状态、SSE / JSON / UTF-8 损坏、未知 finish、content_filter 等。
+    /// 协议或能力拒绝：非成功状态、SSE / JSON / UTF-8 损坏、未知 `finish、content_filter` 等。
     BadResponse {
         reason: &'static str,
         status: Option<u16>,
     },
     /// 流提前结束且未带合法 finish / 结束标记；按交付边界映射 network / aborted。
     Interrupted,
-    /// 服务端 aborted / insufficient_system_resource；按交付边界映射 bad-response / aborted。
+    /// 服务端 aborted / `insufficient_system_resource；按交付边界映射` bad-response / aborted。
     ServerAborted,
 }
 
@@ -51,6 +51,7 @@ pub enum RequestPhase {
 }
 
 impl TransportClass {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::Connect => "connect",
@@ -63,20 +64,21 @@ impl TransportClass {
 impl ProviderError {
     /// 判别码（命名空间 `llm` 由调用方前缀）。交付边界相关的两类见
     /// [`code_at_boundary`](Self::code_at_boundary)。
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::Auth => "auth",
             Self::Quota => "quota",
             Self::RateLimited => "rate-limited",
-            Self::Network { .. } => "network",
+            // Interrupted / ServerAborted 在首交付边界另有映射，见 code_at_boundary。
+            Self::Network { .. } | Self::Interrupted => "network",
             Self::Tls => "tls",
-            Self::BadResponse { .. } => "bad-response",
-            Self::Interrupted => "network",
-            Self::ServerAborted => "bad-response",
+            Self::BadResponse { .. } | Self::ServerAborted => "bad-response",
         }
     }
 
     /// 按首交付边界定码：首字节后发生的中断 / 服务端中止归 `aborted`，保留前文不重试。
+    #[must_use]
     pub fn code_at_boundary(&self, delivered: bool) -> &'static str {
         if delivered {
             match self {
@@ -89,6 +91,7 @@ impl ProviderError {
     }
 
     /// 是否属于传输重试路径（仅首交付前生效；TLS 永不重试）。
+    #[must_use]
     pub fn transport_retryable(&self) -> bool {
         matches!(
             self,
@@ -99,6 +102,7 @@ impl ProviderError {
     /// 对 reqwest 错误做结构分类：TLS 走 source 链下钻（reqwest 0.13 的传输错误
     /// kind 多为 Request，不能据此判本地构造失败），其余按调用部位归网络。
     /// `phase` 区分 send 阶段（连接 / 头，归 Connect）与响应体阶段（归 Body）。
+    #[must_use]
     pub fn from_reqwest(error: &reqwest::Error, phase: RequestPhase) -> Self {
         let mut source: Option<&(dyn StdError + 'static)> = Some(error);
         while let Some(node) = source {
@@ -116,6 +120,7 @@ impl ProviderError {
     }
 
     /// 从 HTTP 状态码分类非 200 响应（响应正文不读取、不携带）。
+    #[must_use]
     pub fn from_status(status: u16) -> Self {
         match status {
             401 => Self::Auth,
@@ -132,8 +137,8 @@ impl ProviderError {
     }
 }
 
-/// 判断错误节点（含 io::Error 的 get_ref 内嵌链）是否携带 rustls 错误。
-/// 标定过的真实链形如 reqwest → hyper_util → io(Other) → io(InvalidData) → rustls。
+/// 判断错误节点（含 `io::Error` 的 `get_ref` 内嵌链）是否携带 rustls 错误。
+/// 标定过的真实链形如 reqwest → `hyper_util` → io(Other) → io(InvalidData) → rustls。
 fn node_downcast_contains_tls(node: &(dyn StdError + 'static)) -> bool {
     if node.downcast_ref::<rustls::Error>().is_some() {
         return true;

@@ -10,6 +10,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::error::ProviderError;
+use crate::sampling::Sampling;
 
 /// 调用形态；prefix 属于 Chat 的能力分支，由 [`ProviderCapabilities::prefix`] 声明。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,15 +75,8 @@ pub enum ProviderInput {
     Chat(ChatInput),
 }
 
-/// 采样参数；thinking 与 temperature 冲突时由调用方禁用阶梯并省略无效参数。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Sampling {
-    pub temperature: f64,
-    pub max_tokens: u32,
-}
-
 /// 一次物理请求的全部输入：模式已选定，只带适用的服务端 stop 子集；
-/// GuardSpec 匹配状态不进 adapter（护栏归调用方）。
+/// `GuardSpec` 匹配状态不进 adapter（护栏归调用方）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderRequest {
     pub model: String,
@@ -93,6 +87,7 @@ pub struct ProviderRequest {
 
 impl ProviderRequest {
     /// 请求的调用形态，由已选定的 [`ProviderInput`] 决定。
+    #[must_use]
     pub fn mode(&self) -> RequestMode {
         match self.input {
             ProviderInput::Completion(_) => RequestMode::Completion,
@@ -101,6 +96,7 @@ impl ProviderRequest {
     }
 
     /// 传输重试 / 温度阶梯复用同一冻结输入，仅改 temperature。
+    #[must_use]
     pub fn with_temperature(&self, temperature: f64) -> Self {
         Self {
             model: self.model.clone(),
@@ -128,7 +124,7 @@ impl Usage {
     }
 }
 
-/// 服务端 finish 的合法取值；content_filter / 未知 finish / 工具调用按 bad-response 失败。
+/// 服务端 finish `的合法取值；content_filter` / 未知 finish / 工具调用按 bad-response 失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderFinish {
     Stop,
@@ -158,11 +154,11 @@ pub trait Provider: Send + Sync {
     fn capabilities(&self, model: &str, mode: RequestMode) -> ProviderCapabilities;
 
     /// 发起一次 HTTP 尝试；`cancellation` 触发时中止传输，不产生额外请求。
-    fn start<'a>(
-        &'a self,
+    fn start(
+        &self,
         request: ProviderRequest,
         cancellation: tokio_util::sync::CancellationToken,
-    ) -> StartFuture<'a>;
+    ) -> StartFuture<'_>;
 }
 
 /// 凭据引用：Rust 内部持有，Debug 不泄漏明文，不参与任何序列化。

@@ -1,6 +1,6 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-06。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调；018 已落地 `mythos-llm` crate（供应商适配、流式护栏、单层请求调度；传输类 7 码由 crate 内 `ProviderError` 产出，调度层的 `stalled` / `empty-output` 由 `RunError` 变体承载，码值见错误码目录）。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐由 020–023 实现任务承接，`llm.` 前缀的命令层映射随 020。
+更新日期：2026-10-07。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调；018 已落地 `mythos-llm` crate（供应商适配、流式护栏、单层请求调度；传输类 7 码由 crate 内 `ProviderError` 产出，调度层的 `stalled` / `empty-output` 由 `RunError` 变体承载，码值见错误码目录）；019 已落地 LLM 配置与凭据命令（`llm_list_profiles` / `llm_save_profile` / `llm_delete_profile` / `llm_get_key_status` / `llm_set_key`，凭据明文不进 Webview；原生输入平台验证进行中——未验证平台显式拒绝）。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐由 020–023 实现任务承接，`llm.` 前缀的回合命令与错误映射随 020。
 
 ## 总则
 
@@ -39,16 +39,49 @@ Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 
 
 快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。真实迁移流的状态、阶段与每事件序号快照已由 006 定稿，见下文“记录命令与运行期迁移快照”；实际状态与发送由 [022](../task/022-record-engine-impl.md) 实现，监听者按该节规则对齐。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
 
-## LLM 命令与快照（005 已评审设计，尚未实现）
+## LLM 命令与快照（005 已评审设计；019 已落地配置与凭据命令，回合命令随 020）
 
 产品使用 engine_submit_input，llm_submit 只在开发构建注册，并与产品回合共用单在飞门禁。provider / model / 代理 / stop 由 Rust 已保存 profile 与记录语法决定，不作为随意覆盖的 invoke 参数。
 
-| 命令         | 参数                                       | 成功返回                                                      |
-| ------------ | ------------------------------------------ | ------------------------------------------------------------- |
-| llm_submit   | `{ profileId, input, guardSpecId }`        | `{ turnId }`，已创建空快照后才响应                            |
-| llm_cancel   | `{ turnId }`                               | `{ turnId, outcome }`，outcome 为已胜出的终态                 |
-| llm_get_turn | `{ turnId }`                               | 下方 TurnSnapshot                                             |
-| llm_set_key  | `{ providerId, action: "set" 或 "clear" }` | `{ set, hint }`；set 发起 Rust 原生输入，用户取消时保留旧状态 |
+已落地（019）：profile 管理与凭据命令；`LlmProfile` 的 TS 同型见 `src-web/api/llm.ts`。
+
+| 命令               | 参数                                       | 成功返回                  | 边界                                                                                                                                         |
+| ------------------ | ------------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| llm_list_profiles  | 无                                         | `{ items: LlmProfile[] }` | 硬上限 50 个、无分页；目录缺失为空列表                                                                                                       |
+| llm_save_profile   | `{ profile: LlmProfile }`                  | 已持久化的 LlmProfile     | 同 id 覆盖、不存在追加；结构非法（空 id / model、代理 URL 形态）或数量超 50 为 app.bad-request；能力匹配不在此校验（020 提交时）             |
+| llm_delete_profile | `{ profileId }`                            | `{ deleted: true }`       | 幂等，不存在也成功                                                                                                                           |
+| llm_get_key_status | `{ providerId }`                           | `{ set, hint }`           | 只报设置状态，不读明文；凭据后端不可读为 store.*                                                                                             |
+| llm_set_key        | `{ providerId, action: "set" 或 "clear" }` | `{ set, hint }`           | set 发起 Rust 原生凭据输入（Windows CredUI 已验证；未验证平台显式拒绝 app.bad-request，不降级为 Webview 明文）；用户取消保留旧值；clear 幂等 |
+
+```ts
+type ProfileMode = "completion" | "chat";
+
+interface Sampling {
+  temperature: number;
+  maxTokens: number;
+}
+
+type ProxyConfig =
+  { mode: "system" } | { mode: "none" } | { mode: "manual"; url: string; authRef?: string };
+
+interface LlmProfile {
+  profileId: string;
+  providerId: string;
+  model: string;
+  mode: ProfileMode;
+  thinking: boolean;
+  sampling: Sampling;
+  proxy: ProxyConfig;
+}
+```
+
+待实现（020）：`llm_submit` / `llm_cancel` / `llm_get_turn`。
+
+| 命令         | 参数                                | 成功返回                                      |
+| ------------ | ----------------------------------- | --------------------------------------------- |
+| llm_submit   | `{ profileId, input, guardSpecId }` | `{ turnId }`，已创建空快照后才响应            |
+| llm_cancel   | `{ turnId }`                        | `{ turnId, outcome }`，outcome 为已胜出的终态 |
+| llm_get_turn | `{ turnId }`                        | 下方 TurnSnapshot                             |
 
 input 是带 kind 的联合类型：`{ kind: "completion", prompt }`，或 `{ kind: "chat", messages: [{ role, content }], assistantPrefix? }`。role 仅 system / user / assistant；非空、能力相容和 GuardSpec 校验在 Rust 完成，失败为 app.bad-request，未知 profile / guardSpec / provider / turn 为 app.not-found。调试 prompt 不进入日志。凭据输入命令属于显式用户交互，可等待原生输入结束；它不承担 LLM 长流程，也不接受明文 key 的 IPC 参数。凭据读取 / 写入失败按 store.* 映射，不伪装为已设置。
 
@@ -336,7 +369,7 @@ else showGenericError(err);
 | rename 目标占用                                            | 5 次 / 25ms 指数退避 | 报 `store.locked`，清理本次 tmp                                          |
 
 3. **重试单层化**：传输层只对尚未交付任何字节的请求重试网络错误、429 和 5xx，不重试 `llm.tls`。次数是 1 次初始请求加 2 次重试，间隔 500ms 指数、±25% 抖动。第一个已交付字节（或第一条已持久化的 delta）之后，5xx、429 和断线都不再重试。业务循环不得对同一请求再包一层重试。005 的设计启用正常空输出温度重试，触发条件见 llm.md；它与传输重试互斥，每回合共享最多 3 次物理 HTTP 请求，不能各自计数后叠加。首个安全字符被共享输出写入方接纳（与窗口有无监听者无关）或增量持久化，两者任一发生即禁止重发；keep-alive / reasoning 不计交付。模式选择在提交前完成，不在预算之外试探降级。底层 reqwest 重试和 SSE 自动重连必须禁用。检查：评审计数同一请求的最大重试层数；测试断言请求次数上限，并断言首字节之后的 5xx 不再发起下一次请求。
-4. **密钥隔离**：优先 OS 凭据库。凭据库不可用时，写入仅当前用户可读的文件：Unix 模式 `0600`；Windows 用只含当前用户的 ACL，不把 `0600` 当成 Windows 权限。IPC 只暴露 `{ set, hint }`，`hint` 是密钥末尾 4 个字符；短于 4 个字符时 `hint` 为空，只报告已设置。明文不进前端状态、日志、错误 `detail`。检查：序列化载荷与日志的测试不含明文；文件模式或 ACL 由写入降级文件的存储测试断言。
+4. **密钥隔离**：优先 OS 凭据库。凭据库不可用时，写入仅当前用户可读的文件：Unix 模式 `0600`；Windows 用只含当前用户的 ACL，不把 `0600` 当成 Windows 权限。IPC 只暴露 `{ set, hint }`，`hint` 是密钥末尾 4 个字符；短于 4 个字符时 `hint` 为空，只报告已设置。明文不进前端状态、日志、错误 `detail`。读取顺序：OS 库优先，未命中或读取失败再查降级文件（OS 库瞬断不丢已降级保存的密钥）；OS 库写或读成功时单向清除降级文件里的旧副本，清理失败不回滚、下次成功即重试——OS 瞬断期间可能读到过期副本，只影响鉴权，不涉泄密，窗口由读路径重试压到最短。检查：序列化载荷与日志的测试不含明文；文件模式或 ACL 由写入降级文件的存储测试断言。
 5. **后台任务门槛**：默认关闭；显式开启后须同时满足「闲置时长 + 距上次尝试冷却 + 素材量」门槛；用户返回时在任务边界让位；进度走事件。检查：每个后台任务在文档中列出门槛参数表。
 
 ## 与设计任务的对接位

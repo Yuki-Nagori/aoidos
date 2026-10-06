@@ -49,6 +49,7 @@ fn is_reserved_stem(stem: &str) -> bool {
 /// 连字符转连字符（折叠连续）、其余字符剔除；剔除后为空回退 `script-{hash8}`；
 /// 超过 64 字符时保留前 55 位再追加 `-{hash8}`（原始名 FNV-1a 的低 32 位）。
 /// Windows 保留设备名追加 `-0`，使标识与 [`join_under_root`] 消毒后的目录名相同。
+#[must_use]
 pub fn script_id_from_name(name: &str) -> String {
     let mut kebab = String::new();
     let mut last_was_dash = true;
@@ -105,10 +106,11 @@ fn short_hash(data: &[u8]) -> String {
 }
 
 /// 归一化路径分隔符：拼接而来的路径可能混合 `/` 与 `\`，交给 SQLite 等
-/// C 库前在 Windows 将 `/` 转为 `\`（混合分隔符会报 PATH_NOT_FOUND）。
+/// C 库前在 Windows 将 `/` 转为 `\`（混合分隔符会报 `PATH_NOT_FOUND`）。
 ///
 /// 保留操作系统原始路径编码；Unix 的 `\` 是合法文件名字符，不转换。
 #[cfg(windows)]
+#[must_use]
 pub fn normalize(path: &Path) -> PathBuf {
     use std::ffi::OsString;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};

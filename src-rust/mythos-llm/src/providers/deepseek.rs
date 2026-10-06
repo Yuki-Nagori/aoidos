@@ -1,4 +1,4 @@
-//! DeepSeek adapter：Completion（/beta/completions，FIM）与 Chat / Prefix（(/beta/)chat/completions）。
+//! `DeepSeek` adapter：Completion（/beta/completions，FIM）与 Chat / Prefix（(/beta/)chat/completions）。
 //!
 //! 能力表按官方文档登记（核验 2026-10-05）：completion 端点输出上限 4K（不能拿通用模型上限替代）、
 //! 服务端 stop 上限 16、chat 默认启用 thinking（叙事 adapter 显式关闭）。
@@ -26,7 +26,7 @@ const COMPLETION_MAX_OUTPUT: u32 = 4096;
 /// chat 端点输出上限（v1 初值，黄金样例联调后核验）。
 const CHAT_MAX_OUTPUT: u32 = 8192;
 
-/// DeepSeek 供应商适配器。`base` 形如 `https://api.deepseek.com`，测试注入回环地址。
+/// `DeepSeek` 供应商适配器。`base` 形如 `https://api.deepseek.com`，测试注入回环地址。
 pub struct DeepSeek {
     base: String,
     key: Credential,
@@ -34,16 +34,21 @@ pub struct DeepSeek {
 }
 
 impl DeepSeek {
-    /// 构建 adapter；显式关闭 reqwest 默认的协议 NACK 重试（契约：禁用隐式重试）。
+    /// 构建 adapter：传输客户端由 [`crate::proxy::build_client`] 统一定型
+    /// （`retry(never)` + 禁自动重定向；默认空快照 = 直连，代理配置由装配层
+    /// 从冻结 profile 解析后经 [`Self::with_client`] 注入）。
     ///
     /// # Errors
     /// HTTP 客户端构建失败（TLS provider / backend 初始化异常）时返回 reqwest 错误。
     pub fn new(base: String, key: Credential) -> reqwest::Result<Self> {
-        crate::install_ring_provider();
-        let client = reqwest::Client::builder()
-            .retry(reqwest::retry::never())
-            .build()?;
-        Ok(Self { base, key, client })
+        let client = crate::proxy::default_transport()?;
+        Ok(Self::with_client(base, key, client))
+    }
+
+    /// 使用装配层构造好的客户端（代理模式 / 信任根已定）。
+    #[must_use]
+    pub fn with_client(base: String, key: Credential, client: reqwest::Client) -> Self {
+        Self { base, key, client }
     }
 
     fn endpoint(&self, prefix_mode: bool, mode: RequestMode) -> String {
@@ -79,11 +84,11 @@ impl Provider for DeepSeek {
         }
     }
 
-    fn start<'a>(
-        &'a self,
+    fn start(
+        &self,
         request: ProviderRequest,
         cancellation: tokio_util::sync::CancellationToken,
-    ) -> StartFuture<'a> {
+    ) -> StartFuture<'_> {
         Box::pin(async move {
             let prefix_mode = matches!(&request.input, crate::provider::ProviderInput::Chat(chat) if chat.assistant_prefix.is_some());
             let url = self.endpoint(prefix_mode, request.mode());
@@ -95,9 +100,7 @@ impl Provider for DeepSeek {
                 .json(&body)
                 .send()
                 .await
-                .map_err(|error| {
-                    ProviderError::from_reqwest(&error, crate::error::RequestPhase::Send)
-                })?;
+                .map_err(err_send)?;
             let status = response.status().as_u16();
             if status != 200 {
                 return Err(ProviderError::from_status(status));
@@ -110,6 +113,19 @@ impl Provider for DeepSeek {
             });
             Ok(deltas.take_until(cancellation.cancelled_owned()).boxed())
         })
+    }
+}
+
+/// send 阶段传输错误 → 结构化分类（对 error source 链下钻识别 TLS）。
+fn err_send(error: reqwest::Error) -> ProviderError {
+    ProviderError::from_reqwest(&error, crate::error::RequestPhase::Send)
+}
+
+/// data 载荷不是合法 JSON：协议损坏按 bad-response，不重试。
+fn err_chunk_json(_: serde_json::Error) -> ProviderError {
+    ProviderError::BadResponse {
+        reason: "json",
+        status: None,
     }
 }
 
@@ -231,11 +247,7 @@ where
             self.done_marker = true;
             return Ok(());
         }
-        let chunk: StreamChunk =
-            serde_json::from_str(data).map_err(|_| ProviderError::BadResponse {
-                reason: "json",
-                status: None,
-            })?;
+        let chunk: StreamChunk = serde_json::from_str(data).map_err(err_chunk_json)?;
         if let Some(usage) = chunk.usage {
             self.queue.push_back(ProviderDelta::Usage(Usage {
                 prompt_tokens: usage.prompt_tokens,
@@ -251,7 +263,7 @@ where
             None => {}
             Some("stop") => self.finish = Some(ProviderFinish::Stop),
             Some("length") => self.finish = Some(ProviderFinish::Length),
-            Some("aborted") | Some("insufficient_system_resource") => {
+            Some("aborted" | "insufficient_system_resource") => {
                 return Err(ProviderError::ServerAborted);
             }
             // content_filter、未启用的 tool_calls 与未知 finish 不伪装成功。
@@ -315,15 +327,12 @@ where
             }
             match self.advance().await {
                 Some(Ok(bytes)) => {
-                    let text = match self.decode.feed(&bytes) {
-                        Ok(text) => text,
-                        Err(_) => {
-                            self.finished = true;
-                            return Some(Err(ProviderError::BadResponse {
-                                reason: "utf8",
-                                status: None,
-                            }));
-                        }
+                    let Ok(text) = self.decode.feed(&bytes) else {
+                        self.finished = true;
+                        return Some(Err(ProviderError::BadResponse {
+                            reason: "utf8",
+                            status: None,
+                        }));
                     };
                     if !text.is_empty()
                         && let Err(error) = self.ingest_text(&text)
@@ -402,6 +411,17 @@ mod tests {
     use secrecy::SecretString;
     use tokio_util::sync::CancellationToken;
 
+    #[test]
+    fn with_client_uses_injected_transport() {
+        // 装配层构造的客户端原样持有；base 独立于客户端注入。
+        let adapter = DeepSeek::with_client(
+            "https://api.deepseek.com".into(),
+            SecretString::from(String::from("sk-x")),
+            reqwest::Client::new(),
+        );
+        assert_eq!(adapter.base, "https://api.deepseek.com");
+    }
+
     fn adapter(server: &ScriptedServer) -> DeepSeek {
         DeepSeek::new(
             format!("http://{}", server.addr),
@@ -425,7 +445,7 @@ mod tests {
             input: crate::provider::ProviderInput::Completion(crate::provider::CompletionInput {
                 prompt: "<narration>".into(),
             }),
-            sampling: crate::provider::Sampling {
+            sampling: crate::sampling::Sampling {
                 temperature: 1.0,
                 max_tokens: 2048,
             },
@@ -570,7 +590,7 @@ mod tests {
                 }],
                 assistant_prefix: Some("夜色".into()),
             }),
-            sampling: crate::provider::Sampling {
+            sampling: crate::sampling::Sampling {
                 temperature: 1.0,
                 max_tokens: 512,
             },
@@ -621,7 +641,7 @@ mod tests {
                 ],
                 assistant_prefix: None,
             }),
-            sampling: crate::provider::Sampling {
+            sampling: crate::sampling::Sampling {
                 temperature: 1.0,
                 max_tokens: 64,
             },
@@ -741,7 +761,7 @@ mod tests {
                 }],
                 assistant_prefix: None,
             }),
-            sampling: crate::provider::Sampling {
+            sampling: crate::sampling::Sampling {
                 temperature: 1.0,
                 max_tokens: 64,
             },

@@ -175,7 +175,7 @@ fn is_replace_busy(err: &io::Error) -> bool {
 fn is_windows_sharing_violation(err: &io::Error) -> bool {
     matches!(
         err.raw_os_error(),
-        Some(WINDOWS_ACCESS_DENIED) | Some(WINDOWS_SHARING_VIOLATION)
+        Some(WINDOWS_ACCESS_DENIED | WINDOWS_SHARING_VIOLATION)
     )
 }
 

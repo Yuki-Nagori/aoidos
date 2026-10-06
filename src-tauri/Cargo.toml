@@ -16,6 +16,8 @@ serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
 mythos-store.workspace = true
+mythos-llm.workspace = true
+secrecy.workspace = true
 
 [dev-dependencies]
 rusqlite.workspace = true

@@ -90,7 +90,7 @@ fn list_backups_payload(db_path: &Path) -> Result<BackupList, CmdError> {
     Ok(BackupList { items })
 }
 
-/// 只读版本快照：from == to == user_version，phase 为 idle；新安装返回版本 0。
+/// 只读版本快照：from == to == `user_version，phase` 为 idle；新安装返回版本 0。
 /// 不创建数据库或目录。006 接入真实迁移流时再提供运行阶段与各事件的 seq 基线。
 ///
 /// # Errors
