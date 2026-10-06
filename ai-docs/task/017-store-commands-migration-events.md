@@ -66,6 +66,7 @@ READ_ONLY 保证不写入业务库和不执行迁移；SQLite WAL 读锁仍由 S
 - 2026-10-05：用户要求规划 LLM 相关实现任务；020 承接事件准备 / 投递与清退，022 承接迁移发送、运行期状态及恢复，设计与实现边界保持不变。
 - 2026-10-06：006 已定稿迁移身份、阶段、current / 目标版本、每事件基线及投递失败诊断；实际代码仍由 022 接入，当前静态查询和回调行为不变。
 - 2026-10-06：issue #41 补 workspace.package 与 api 层归属规范；serde_json / tauri-build 版本移入 workspace 并在成员继承，版本 / features 不变，不新增运行时行为。
+- 2026-10-06：第三轮整体 review：`src-web/api/store.ts` 注释与透传结构无需改动。消融验证 2 项契约（变异源码 → `bun run test` → 还原）：listBackups 改为复制对象并把 nanos 经 Number 转换（精度丢失 + 破坏恒等透传）→ 「保留备份时间戳原始精度」失败；getMigration 改为 catch 后返回默认 idle 快照 → 「保持命令错误形状，不将读取失败转换为空快照」失败——2/2 被捕捉。
 
 ## 完成摘要
 

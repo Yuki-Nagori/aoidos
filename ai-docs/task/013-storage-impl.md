@@ -77,6 +77,9 @@
 - 2026-10-05：提交 `9c75d9e` 共享非泛型重试实现，补测 busy 耗尽与非 busy 立即失败，验证次数、错误路径、原文件保留和 tmp 清理。三平台 CI 通过，已用 gh 评论并关闭 issue #1；门槛和忽略口径未改。
 - 2026-10-05：按用户要求整体 review 五模块。临时文件改排他创建，仅清理本次成功创建的文件；临时名和归一化路径保留 OS 原始编码；迁移改为 RAII IMMEDIATE 事务；修正幂等测试检查错误备份目录的断言。
 - 2026-10-05：公开注释明确实例锁、可信 SQL、数据根所有权与 rename 后错误语义，清理重复及失效说明。`error` 无需修改，`lock` 保留 OS 锁和中断重试，并改用确定更长的 PID 测试数据。内容补入本任务，不新增 task。
+- 2026-10-06：第二轮整体 review（含注释逐条核对）：atomic / paths / db / lock 四模块无需代码或注释改动。消融验证 10 项安全机制（单点摘除 → `cargo test -p mythos-store` → 还原，零残留）：Windows 保留名消毒、路径穿越 / 分隔符拒绝、rename 占用退避重试（4 失败）、失败后 tmp 清理、JSONL 半行截断自愈、迁移 SQL 失败回滚上报（2 失败）、备份保留份数（2 失败）、WAL 模式强制、新库版本拒绝、实例锁独占检测——**10/10 全部被既有测试捕捉**，无一漏网。
+- 2026-10-06：第五轮子不变量消融前排查发现 `PRAGMA foreign_keys` 无断言（打开路径必须带外键约束），补入 `migrations_apply_in_order_and_are_idempotent`。消融 6 项：foreign_keys 开启（1 失败）、首装不做迁移备份（3 失败，既有 backs-up-once 断言已钉）、备份按解析整数排序（1 失败）、保留名检查前先去尾点空格（3 失败）、script_id CJK 哈希回退（2 失败）——5/5 捕捉；锁 Drop 的显式 `unlock` 变异后套件仍绿，属**非承重防御**：guard drop 时 File 句柄关闭，内核即释放锁，「Drop 释放锁」行为本身由 `second_acquire_fails_release_allows_retry` 钉住，显式调用保留作表达明确性。
+- 2026-10-06：第八轮补角消融补记 paths 项：script_id 超 64 字符的截断+哈希后缀（`script_id_truncates_long_names_with_hash` 钉住，变异 keep 边界即失败）。
 
 平台处理保持以下决策：目录目标立即报 `io`；通用 busy 错误报 `locked`；Windows rename 的 5 / 32 作为共享冲突，而 Unix 同号 EIO / EPIPE 保持 `io`。Windows 目录 flush 使用带写权限及 BACKUP_SEMANTICS 的句柄；权限拒绝或卷不支持 flush 时保留已发布的替换结果。
 

@@ -122,6 +122,25 @@ mod tests {
     }
 
     #[test]
+    fn store_messages_are_display_chinese_not_codes() {
+        // message 是可展示中文，不参与前端分支；新增码须按注释先登记契约再补行。
+        let cases = [
+            ("invalid-path", "路径不合法"),
+            ("already-running", "应用已在运行"),
+            ("locked", "目标被占用，请稍后重试"),
+            ("migration", "数据库迁移失败"),
+            ("disk-full", "磁盘空间不足"),
+            ("permission", "没有操作权限"),
+            ("not-found", "文件或目录不存在"),
+            ("corrupt", "存储数据损坏"),
+            ("io", "存储读写失败"),
+        ];
+        for (code, text) in cases {
+            assert_eq!(store_message(code), text, "code {code}");
+        }
+    }
+
+    #[test]
     fn from_store_error_prefixes_and_maps_all_codes() {
         for code in [
             "invalid-path",

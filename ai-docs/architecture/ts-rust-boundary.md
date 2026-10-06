@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-06。均为项目约定。状态：**部分落地**——业务 crate `src-rust/mythos-store`（013）与 IPC 基座（015–017）已按本文分工落地并通过质量门禁（业务 crate 不依赖 tauri、装配 `lib.rs` 不计覆盖、域逻辑 100% 行覆盖）；后续 crate 与域落地时继续按本文检验并回写。工程纪律部分借鉴 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-06。均为项目约定。状态：**部分落地**——业务 crate `src-rust/mythos-store`（013）、`src-rust/mythos-llm`（018，供应商适配层在 `providers/` 目录按厂商拆分）与 IPC 基座（015–017）已按本文分工落地并通过质量门禁（业务 crate 不依赖 tauri、装配 `lib.rs` 不计覆盖、域逻辑 100% 行覆盖）；后续 crate 与域落地时继续按本文检验并回写。工程纪律部分借鉴 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 

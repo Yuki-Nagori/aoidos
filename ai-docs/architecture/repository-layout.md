@@ -20,14 +20,14 @@
 │   ├── capabilities/          # IPC 权限声明
 │   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）
 │   └── build.rs               # tauri-build
-├── src-rust/                  # 业务 crate（mythos-store：存储与文件基建，不依赖 tauri）
+├── src-rust/                  # 业务 crate，不依赖 tauri（mythos-store 存储；mythos-llm 供应商适配 / 护栏 / 调度，providers/ 按厂商拆 adapter）
 ├── tests/web/                 # Vitest 单测（目录镜像 src-web）
 ├── scripts/                   # 仓库脚本（setup.mts 环境配置，bun install 的 postinstall 调用）
 ├── .github/workflows/ci.yml   # 三平台 CI
 ├── .husky/pre-commit          # 提交前查双端格式（全量门禁在 CI）
 ├── ai-docs/                   # 本文档体系
 ├── public/                    # Vite 静态资产（icon.png 作 favicon）
-├── eslint.config.js / knip.json / vite.config.ts / vitest.config.ts
+├── eslint.config.ts / knip.json / vite.config.ts / vitest.config.ts
 ├── rust-toolchain.toml        # Rust 工具链锁定
 └── Cargo.toml                 # 虚拟工作区根（members 与 profile 调优）
 ```

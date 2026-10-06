@@ -1,6 +1,6 @@
 # LLM 接入与护栏
 
-更新日期：2026-10-06；供应商资料核验日期：2026-10-05。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/mythos/issues/8) 的初步方案补齐边界；用户授权整体复核后定稿。本文描述拟实现规则，仓库尚未引入 mythos-llm。跨端载荷、错误码和看门狗 / 重试预算以[通信契约](ipc-contract.md)为唯一来源。
+更新日期：2026-10-06；供应商资料核验日期：2026-10-05。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/mythos/issues/8) 的初步方案补齐边界；用户授权整体复核后定稿。018 已落地 `src-rust/mythos-llm`（供应商适配层、流式护栏、单层请求调度与本地夹具验证）；命令注册、回合协调与产品联调归 019–024。跨端载荷、错误码和看门狗 / 重试预算以[通信契约](ipc-contract.md)为唯一来源。
 
 ## 架构与职责
 
@@ -269,7 +269,7 @@ SSE adapter 需要接受 content / reasoning 分离、usage-only chunk 和合法
 
 ## 实现验收与待标定项
 
-建议依赖 reqwest、eventsource-stream、tokio-util 的 CancellationToken、secrecy 与 wiremock；SSE 解析器只接收既有字节流，自动重连禁用。优先验证 eventsource-stream 的跨 UTF-8 分片与缓冲上限，若其内部无法施加 event 上限，先在输入边界限流或换解析器，不能靠输出检查补救已失控的内存。[解析器接口](https://docs.rs/eventsource-stream/latest/eventsource_stream/)
+018 实测选型（探测结论，不把候选当已选定）：reqwest 0.13（`retry(never)` 关闭默认协议 NACK 重试）+ tokio-util CancellationToken + secrecy 已采用；**eventsource-stream 0.2 无事件大小上限且事件边界无法从外部观测，无法在输入侧可靠限流，按预案换成 crate 内自建的有界增量 SSE 解析器**（单事件 1 MiB 上限、CRLF / CR / LF 统一、字节级可重放）；**reqwest 0.13 的 `rustls` feature 绑定 aws-lc-rs（Windows 需 CMake + NASM），改用 `rustls-no-provider` 并在构造客户端前显式安装 ring provider**；**wiremock 无法表达字节级分片与中途断连，改为自建 tokio TcpListener 夹具**（脚本化响应段、按连接轮换、RST 断连、自签名 TLS）。SSE 解析器只接收既有字节流，自动重连禁用；错误链 TLS 分类以 reqwest → hyper_util → io → rustls 的实测链形为标定依据，不做字符串匹配。
 
 | 验收              | 方法 / 必须覆盖的断言                                                                                               |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -283,11 +283,11 @@ SSE adapter 需要接受 content / reasoning 分离、usage-only chunk 和合法
 | 凭据 / 代理 / TLS | 三平台权限与 hint、取消设置保留旧值、代理 fixture、TLS source 分类，无明文日志                                      |
 | 模型质量          | 两候选模型、两调用形态、固定黄金剧本；记录格式违规率、人设一致性、首字符延迟和账单用量                              |
 
-TLS source 分类、原生凭据输入适配、SSE 解析器兼容性与模型质量是“实现时标定”，上表给出方法；失败必须修正 adapter / profile 或显式拒绝能力，不以未经证实的降级掩盖。005 只交付此设计与契约，不创建实现 crate；实现计划见下节；006 的[记录引擎](record-engine.md)承接 GuardSpec / 输出写入方约束并定义正式记录语法，012 定义引擎阶段与产品输入规则。
+TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地（自签名证书、连接拒绝、中途断连、异常 EOF、字节级分片重放）；原生凭据输入适配（019）与模型质量（024）仍为待标定项，上表给出方法；失败必须修正 adapter / profile 或显式拒绝能力，不以未经证实的降级掩盖。006 的[记录引擎](record-engine.md)承接 GuardSpec / 输出写入方约束并定义正式记录语法，012 定义引擎阶段与产品输入规则。
 
 ## 实现承接
 
-实现顺序与状态以[任务索引](../task-index.md)为准。本次只完成设计与任务规划，没有实现 crate 或发布产品能力。
+实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `mythos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具 147 测试与 100% 行覆盖）；本节其余任务未开始。
 
 | 任务                                                          | 承接边界                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------- |

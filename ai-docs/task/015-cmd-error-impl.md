@@ -67,6 +67,7 @@ issue #7 修复及 015–017 整体复核（本地 macOS）：
 - 2026-10-05：第一次 review 扩展 detail：AlreadyRunning 带 lockPath，Corrupt 带 reason，Migration 带 version / reason；缺省字段用 Io 变体验证。
 - 2026-10-05：issue #6 同步状态与已落地映射描述。事件纯逻辑由 016 负责，真实发送适配仍未接入。
 - 2026-10-05：issue #7 整体复核，将平台事件错误上下文从 lib.rs 移入可测映射器，补测序列化形状和原始非法路径保留；TS CmdError 同型声明。错误码目录保持不变，完整验证见本次复核记录。
+- 2026-10-06：第六轮消融发现 `store_message` 九条中文映射无任何断言（变异为回传裸码后套件全绿），补 `store_messages_are_display_chinese_not_codes` 直测全部映射与 `io` 兜底。同轮 commands / ipc 子不变量消融 5/5 捕捉：备份 50 项上限、not-ready 专用码、`store.` 前缀（2 失败）、迁移原因进 detail。
 
 ## 完成摘要
 

@@ -21,6 +21,7 @@
     "src-web/**/*.vue",
     "tests/web",
     "vite.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "eslint.config.ts"
   ]
 }

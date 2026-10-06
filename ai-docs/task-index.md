@@ -64,7 +64,7 @@ ai-docs/
 | 015  | [CmdError 与命令错误形状](task/015-cmd-error-impl.md)                         | **底层·契约**     | 010、013                          | done    |
 | 016  | [IPC 事件基建](task/016-ipc-events-infra.md)                                  | **底层·契约**     | 010、015                          | done    |
 | 017  | [store 域命令与迁移事件](task/017-store-commands-migration-events.md)         | **底层·存储**     | 016、013                          | done    |
-| 018  | [实现：LLM Provider、流式护栏与请求策略](task/018-llm-provider-guard-impl.md) | **底层·LLM 链路** | 005                               | ready   |
+| 018  | [实现：LLM Provider、流式护栏与请求策略](task/018-llm-provider-guard-impl.md) | **底层·LLM 链路** | 005                               | done    |
 | 019  | [实现：LLM 配置、原生凭据与代理](task/019-llm-profile-credentials-impl.md)    | **底层·LLM 链路** | 005、013、018                     | planned |
 | 020  | [实现：LLM 回合协调与 IPC 发送端](task/020-llm-turn-ipc-impl.md)              | **底层·LLM 链路** | 018、019、016                     | planned |
 | 021  | [实现：前端 LLM 调用与快照恢复](task/021-llm-web-recovery-impl.md)            | **底层·LLM 链路** | 020                               | planned |

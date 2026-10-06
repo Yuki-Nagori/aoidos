@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "src-rust/mythos-store"]
+members = ["src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,18 @@ tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
 mythos-store = { path = "src-rust/mythos-store" }
+# rustls-tls 显式关闭默认特性：不要 native-tls / 自动解压；TLS backend 锁定 rustls(ring) 便于错误链分类。
+# reqwest 0.13 的 rustls feature 绑定 aws-lc-rs（Windows 需 CMake+NASM），改用 no-provider + 显式安装 ring。
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+secrecy = "0.10"
+bytes = "1"
+# rustls 作为直接依赖仅为错误链下钻分类；provider 与 reqwest / 夹具统一用 ring。
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
 
 # 依赖用行表级调试信息 + O1：tauri 系依赖 O0 下运行卡顿；改动本节会使依赖缓存整体失效。
 [profile.dev.package."*"]

@@ -1,0 +1,21 @@
+[package]
+name = "mythos-llm"
+description = "LLM 供应商适配、流式护栏与单层请求策略（不依赖 tauri）"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rustls = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tokio-rustls = { workspace = true }
+rcgen = { workspace = true }

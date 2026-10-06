@@ -2,9 +2,10 @@ import eslint from "@eslint/js";
 import eslintConfigPrettier from "eslint-config-prettier";
 import tseslint from "typescript-eslint";
 import pluginVue from "eslint-plugin-vue";
+import type { Linter } from "eslint";
 
 // .ts 与 .vue 的 <script setup> 共用同一套 TS 规则。
-const tsRules = {
+const tsRules: Linter.RulesRecord = {
   "@typescript-eslint/consistent-type-imports": [
     "error",
     { prefer: "type-imports", fixStyle: "inline-type-imports" },
@@ -21,7 +22,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   { files: ["**/*.ts"], rules: tsRules },
   // SFC 脚本块由 TS 解析器接管；no-undef 读不懂 TS 类型，真值检查归 vue-tsc。
-  ...pluginVue.configs["flat/recommended"].map((config) => ({
+  ...pluginVue.configs["flat/recommended"].map((config): Linter.Config => ({
     ...config,
     files: ["**/*.vue"],
     rules: {

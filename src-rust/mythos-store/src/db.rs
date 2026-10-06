@@ -489,6 +489,11 @@ CREATE TABLE items(id INTEGER PRIMARY KEY);";
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 2);
+        // 打开路径必须带上外键约束（迁移 SQL 依赖它拒绝脏引用）。
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(foreign_keys, 1);
         let mode: String = conn
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
