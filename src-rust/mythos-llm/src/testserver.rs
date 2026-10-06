@@ -469,6 +469,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn split_body_reads_continue_until_content_length() {
+        // 平台无关地钉住正文续读循环：Unix 回环上头与正文常合并在首次 read 到达，
+        // 该循环不执行会造成覆盖率缺口（CI run 37482413333 的 ubuntu / macOS 失败）。
+        // CL 设为 4 且首写只给 2 字节：无论头与首段是否合并，循环必然再读一次；
+        // 以「请求被记录」为完成信号轮询，不用固定 sleep。
+        let server = ScriptedServer::start(sse_ok_script("data: [DONE]\n\n")).await;
+        let mut client = tokio::net::TcpStream::connect(server.addr)
+            .await
+            .expect("connect");
+        client
+            .write_all(b"POST /split HTTP/1.1\r\nContent-Length: 4\r\n\r\nab")
+            .await
+            .expect("write head with partial body");
+        client.flush().await.expect("flush");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        client.write_all(b"cd").await.expect("write rest");
+        client.flush().await.expect("flush rest");
+        for _ in 0..200 {
+            if server.request_count() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            server.request_count(),
+            1,
+            "request must complete via body loop"
+        );
+        let recorded = &server.requests()[0];
+        assert_eq!(recorded.path, "/split");
+        assert_eq!(recorded.body, b"abcd");
+    }
+
+    #[tokio::test]
     async fn malformed_clients_do_not_break_the_fixture() {
         let server = ScriptedServer::start(sse_ok_script("data: [DONE]\n\n")).await;
 
