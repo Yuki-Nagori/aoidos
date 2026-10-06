@@ -79,6 +79,8 @@ UI：沿用 bootstrap 的主题 → 订阅 / 查询业务状态 → 按需加载
 
 Tauri 的 initialization_script 在 HTML 解析前运行，documentElement 可能不存在。脚本只注入封闭的 dark / light bootstrap 值和可选 fallbackReason 枚举（storageUnavailable / invalidPreference）；HTML head 的首个受信任脚本在根节点创建后、任何应用 CSS / module 前设置 data-theme 与 color-scheme。不能对 null 根直接赋值后就宣称浅色防闪，也不能等 Vue mounted / 异步 invoke 才修色。[Tauri Builder 文档](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html#method.initialization_script)
 
+034 在同一初始化脚本内追加独立 LocaleBootstrap，语言 / 主题各自版本，不二次创建 main；细节见[国际化架构](i18n.md)。026 保留主题主责，不自行实现翻译。
+
 bootstrap 只接受 Rust 枚举常量，来源 / 主 frame 按实际应用协议与精确 dev origin 核验，不把主题文件、路径或任意字符串拼入 JS。Windows 的子 frame 行为也需防护；生产不加载第三方 frame。普通浏览器开发没有 Rust bootstrap 时确定性用 dark，不读旧网页偏好。
 
 首窗防闪不自动覆盖任意文档导航：生产外部导航拒绝，允许的显式重载须先由 Rust 重新读偏好再重建 main；不能在新文档继续用创建时的旧枚举。开发 HMR 保留文档，开发 full reload 的差异单独记录，不伪装为生产防闪已通过。

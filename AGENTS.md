@@ -18,6 +18,7 @@ Mythos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScri
 | 记忆算法候选、正确性约束与标定实验        | [ai-docs/architecture/memory-algorithms.md](ai-docs/architecture/memory-algorithms.md)         |
 | 回合阶段、骰判、场景推进与因果回退        | [ai-docs/architecture/turn-state-machine.md](ai-docs/architecture/turn-state-machine.md)       |
 | 舞台、面板四态、输入与骰判交互            | [ai-docs/architecture/ui-shell.md](ai-docs/architecture/ui-shell.md)                           |
+| 界面语言、原生文案、语言偏好与精确格式化  | [ai-docs/architecture/i18n.md](ai-docs/architecture/i18n.md)                                   |
 | 主题 token、偏好防闪、皮肤校验与回退      | [ai-docs/architecture/theming.md](ai-docs/architecture/theming.md)                             |
 | 命令、verify 构成、覆盖率口径、打包、图标 | [ai-docs/architecture/build-and-development.md](ai-docs/architecture/build-and-development.md) |
 | 工程规范总览与官方依据                    | [ai-docs/standards/README.md](ai-docs/standards/README.md)                                     |
