@@ -46,7 +46,7 @@ CI 先完成格式、前端与 knip 等快速门禁，再安装 Linux 系统依�
 $ bun run tauri:build
 ```
 
-内部顺序：`bun run build` → cargo release 编译（LTO / strip）→ bundle。产物在 `target/release/bundle/`：Windows 为 `msi/*.msi` 与 `nsis/*-setup.exe`；macOS、Linux 走同一命令出 dmg / deb / rpm / AppImage（本仓库的验证口径是 Windows，首次跨平台发布请在目标平台实测）。升级版本改两处定义——`package.json` 与根 `Cargo.toml` 的 `[workspace.package] version`——再由 `bun install` / `cargo check` 刷新锁文件一并提交。
+内部顺序：`bun run build` → cargo release 编译（LTO / strip）→ bundle。产物在 `target/release/bundle/`：Windows 为 `msi/*.msi` 与 `nsis/*-setup.exe`；macOS、Linux 走同一命令出 dmg / deb / rpm / AppImage（本仓库的验证口径是 Windows，首次跨平台发布请在目标平台实测）。当前桌面版本号只在根 `Cargo.toml` 的 `[workspace.package] version` 定义，成员 Cargo manifest 继承；`package.json` 和 `tauri.conf.json` 未设置 version，Tauri 按 Cargo 版本打包。升级时修改该定义，运行 `bun run typecheck:rust` 刷新根 `Cargo.lock`，提交相应变化；不为不存在的 package version 维护第二份版本号。
 
 ## 图标与示例命令
 

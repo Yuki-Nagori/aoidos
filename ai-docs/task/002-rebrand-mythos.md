@@ -68,6 +68,7 @@ identifier 变更影响安装包升级路径（Windows 按 product 判别）—�
 - 2026-10-05：创建任务。产品定位与状态设计方向由产品构想落档；命名采用 mythos / mythos_lib / com.yuki.mythos。
 - 2026-10-05：完成全局改名与文档改写。`cargo check` 首跑失败：`target/` 内有从 kairos 复制来的过期构建缓存（权限文件路径指向旧仓库），`cargo clean` 后重编通过——与改名无关，属迁移残留。
 - 2026-10-05：应用户要求增设 `ai-docs/ideas/` 构想类别，状态记忆构想移入 ideas/001；AGENTS 路由、task-index 目录树、architecture 文档边界、documentation / 规范索引职责表同步，README 摘要改指 ideas。
+- 2026-10-06：issue #37 明确桌面版本唯一来源为 workspace.package，package / Tauri 配置未设 version；Bun 锁文件刷新未更新根名，校正旧 excel 元数据为 mythos 并检查 frozen-lockfile，依赖解析版本不变。
 
 ## 完成摘要
 
