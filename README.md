@@ -38,7 +38,7 @@ $ bun run dev            # 或：浏览器纯前端预览（无 IPC，示例命�
 
 | 命令                                | 作用                                                 |
 | ----------------------------------- | ---------------------------------------------------- |
-| `bun run verify`                    | 提交门禁（十项，CI 逐步执行同一组检查）              |
+| `bun run verify`                    | 提交门禁（CI 逐步执行同一组检查）                    |
 | `bun run tauri:dev` / `tauri:build` | 桌面开发 / 打包安装包（`target/release/bundle/`）    |
 | `bun run build`                     | 类型检查 + 前端构建                                  |
 | `bun run test` / `test:coverage`    | 测试 / 测试 + 覆盖率门槛                             |

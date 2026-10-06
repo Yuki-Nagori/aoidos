@@ -42,12 +42,12 @@ LLM 设计已冻结，但仓库尚无供应商调用与安全输出流水线。�
 - [x] 心跳 / reasoning 不延寿；连接、读流、退避和满队列都能取消；正文与 SSE 缓冲有上界。（`head_stall_with_heartbeat_and_reasoning...`、`no_response_at_all_stalls...`、`cancel_during_backoff...` / `cancel_during_stalled_backoff...`、`full_queue_cancel...`；SSE 1 MiB 上限、护栏扣留 ≤ 最长规则 + CR）
 - [x] HTTP、TLS、损坏协议、服务端终止及空输出分类均有失败夹具，不依赖错误字符串匹配。（401/402/429/404/5xx 状态表、自签名证书 / 主机名不符 → `Tls`（error source 链类型下钻，实测链形 reqwest → hyper_util → io → io → rustls）、RST 断连、干净 EOF 无 [DONE]、`[DONE]` 缺 finish、未知 finish、SSE/JSON/UTF-8 损坏、guard / length / stop 空输出）
 - [x] 正常 stop 空输出可按条件进入阶梯；guard / length 空输出不重试，调度结果保留最终实际 finishReason。（`empty_stop_enters_ladder_and_recovers`、`guard_empty_output_never_enters_ladder`、`length_empty_output_never_enters_ladder`、`transport_retry_used_then_empty...`；`RunOutcome::Completed` 携带实际 finish，`EmptyOutput` 携带 stop/guard/length）
-- [x] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十项通过。
+- [x] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 全项通过。
 
 ## 验证计划与结果
 
 使用本地 HTTP / TLS fixture、虚拟时钟与黄金样例；不需要真实 API key 或付费请求。
-看门狗语义不依赖绝对时长：测试用缩短的真实预算（80ms 级）驱动全部超时 / 取消路径，契约默认值（30s / 90s / 500ms / 1+2 / 32 / 3）由 `policy_defaults_match_contract` 单测钉死；未用 tokio paused 虚拟时钟——暂停时钟在真实 IO 等待期间会空转推进时间，可能误触发计时器。
+看门狗语义不依赖绝对时长：测试用缩短的真实预算（初值 80ms，第七轮加固为 250ms，现值见 `fast_policy`）驱动全部超时 / 取消路径，契约默认值（30s / 90s / 500ms / 1+2 / 32 / 3）由 `policy_defaults_match_contract` 单测钉死；未用 tokio paused 虚拟时钟——暂停时钟在真实 IO 等待期间会空转推进时间，可能误触发计时器。
 
 | 日期       | 环境 / 命令                                                             | 预期        | 实际结果                                                                        |
 | ---------- | ----------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------- |

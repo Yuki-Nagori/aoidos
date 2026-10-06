@@ -1,6 +1,6 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-06。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调；018 已落地 `mythos-llm` crate（供应商适配、流式护栏、单层请求调度，错误类别即下表 llm.* 触发条件的 crate 内实现）。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐由 020–023 实现任务承接，`llm.` 前缀的命令层映射随 020。
+更新日期：2026-10-06。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调；018 已落地 `mythos-llm` crate（供应商适配、流式护栏、单层请求调度；传输类 7 码由 crate 内 `ProviderError` 产出，调度层的 `stalled` / `empty-output` 由 `RunError` 变体承载，码值见错误码目录）。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐由 020–023 实现任务承接，`llm.` 前缀的命令层映射随 020。
 
 ## 总则
 
@@ -283,13 +283,13 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 ## 错误码目录
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
-- 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`theme.*`（026）、`engine.*` 的码名在本文预留（映射随 022、023 等实现任务落地）；`llm.*` 的触发条件已由 018 的 `mythos-llm::ProviderError` 类别落地（`code()` 返回裸码，交付边界定码见 `code_at_boundary`），命令层加 `llm.` 前缀的接线随 020。`app.*` 属于命令层。
+- 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`theme.*`（026）、`engine.*` 的码名在本文预留（映射随 022、023 等实现任务落地）。`llm.*` 十码分工：传输类 7 码（auth / quota / rate-limited / network / tls / bad-response / aborted）已由 018 的 `mythos-llm::ProviderError` 落地，`code()` 返回裸码、交付边界定码见 `code_at_boundary`；`stalled` / `empty-output` 由调度层 `RunError::Stalled` / `RunError::EmptyOutput` 变体承载（无 `code()`，020 映射时补码）；`missing-key` 是提交前未保存密钥的命令层判定，不在 crate 内。命令层加 `llm.` 前缀的接线随 020。`app.*` 属于命令层。
 - 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（所需业务存储未开放：初始化尚未完成，或运行期迁移失败后被冻结；后一种为 022 待实现行为。普通业务命令拒绝，但 store_get_migration 诊断仍可用；前端主动取该快照展示脱敏迁移失败，不持续轮询）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - theme 预留（009 设计，026 待实现）：`theme.invalid-skin` 表示存在的皮肤结构 / 硬预算不合法；缺文件为成功 missing、单条语义失败为 warnings、读取失败为 store.*，不自动重试。
 - budget 预留（027 已评审，035 待实现）：`budget.exceeded`（本地费用不足）、`budget.price-missing`（未登记 / 必需价格缺失）、`budget.fx-missing`（无有效换汇）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）；结构化 detail 与触发语义见[计价架构](billing.md)。不自动重试，不冒充供应商 llm.quota；旧配置 / 游标使用 app.bad-request + detail.reason=staleRevision，存储失败沿用 store.*。
-- llm 预留（005 已评审设计，映射尚未实现）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
+- llm 预留（005 已评审设计；crate 侧类别 018 已落地，命令层映射随 020）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
 
 | 码               | 触发条件                                                                                                                                                                                            | 自动重试边界                                                      |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
