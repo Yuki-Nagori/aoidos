@@ -30,6 +30,7 @@ pub struct IncrementalUtf8 {
 }
 
 impl IncrementalUtf8 {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -55,17 +56,14 @@ impl IncrementalUtf8 {
             }
         } else {
             self.pending.extend_from_slice(chunk);
-            let valid = match std::str::from_utf8(&self.pending) {
-                Ok(_) => {
-                    let taken = std::mem::take(&mut self.pending);
-                    return Ok(String::from_utf8(taken).expect("pending validated as utf-8"));
-                }
-                Err(error) => error,
+            let Err(error) = std::str::from_utf8(&self.pending) else {
+                let taken = std::mem::take(&mut self.pending);
+                return Ok(String::from_utf8(taken).expect("pending validated as utf-8"));
             };
-            let valid_up_to = valid.valid_up_to();
+            let valid_up_to = error.valid_up_to();
             let decoded = decode_prefix(&self.pending[..valid_up_to]);
             self.pending.drain(..valid_up_to);
-            match valid.error_len() {
+            match error.error_len() {
                 None => Ok(decoded),
                 Some(_) => Err(InvalidUtf8),
             }

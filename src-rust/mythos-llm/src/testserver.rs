@@ -4,9 +4,11 @@
 //! `Abort` 用 SO_LINGER(0) 制造 RST 断连，`Hold` 挂起连接用于看门狗 / 取消测试。
 //! TLS 模式用 rcgen 自签名证书服务 `localhost`，配合客户端证书校验失败做 TLS 分类夹具。
 
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 /// 一段响应脚本；每个连接独立完整执行一遍。
@@ -174,6 +176,20 @@ enum Conn {
     Tls(Box<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>),
 }
 
+impl tokio::io::AsyncRead for Conn {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            Self::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            // Box<TlsStream<..>> 经 DerefMut 得到底层流（Unpin）。
+            Self::Tls(tls) => Pin::new(&mut **tls).poll_read(cx, buf),
+        }
+    }
+}
+
 impl Conn {
     fn underlying(&self) -> &tokio::net::TcpStream {
         match self {
@@ -193,13 +209,6 @@ impl Conn {
         match self {
             Self::Plain(stream) => stream.flush().await,
             Self::Tls(tls) => tls.flush().await,
-        }
-    }
-
-    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Plain(stream) => stream.read(buf).await,
-            Self::Tls(tls) => tls.read(buf).await,
         }
     }
 }
@@ -226,8 +235,12 @@ async fn handle_connection(
     run_script(&mut conn, &script, &cancel).await;
 }
 
-/// 读取并解析一个 HTTP/1.1 请求（含 Content-Length 正文）。
-async fn read_request(conn: &mut Conn, cancel: &CancellationToken) -> Option<RecordedRequest> {
+/// 读取并解析一个 HTTP/1.1 请求（含 Content-Length 正文）；接受任何异步
+/// 读取端（`Conn` / 裸 `TcpStream`，代理夹具需要保留 owned 流做中继）。
+async fn read_request<R: tokio::io::AsyncReadExt + Unpin>(
+    reader: &mut R,
+    cancel: &CancellationToken,
+) -> Option<RecordedRequest> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 4096];
     // 头部上限 64 KiB，防御畸形请求占住夹具。
@@ -240,7 +253,7 @@ async fn read_request(conn: &mut Conn, cancel: &CancellationToken) -> Option<Rec
         }
         let read = tokio::select! {
             _ = cancel.cancelled() => return None,
-            read = conn.read(&mut chunk) => match read {
+            read = reader.read(&mut chunk) => match read {
                 Ok(0) | Err(_) => return None,
                 Ok(n) => n,
             },
@@ -272,7 +285,7 @@ async fn read_request(conn: &mut Conn, cancel: &CancellationToken) -> Option<Rec
     while body.len() < content_length {
         let read = tokio::select! {
             _ = cancel.cancelled() => return None,
-            read = conn.read(&mut chunk) => match read {
+            read = reader.read(&mut chunk) => match read {
                 Ok(0) | Err(_) => return None,
                 Ok(n) => n,
             },
@@ -331,6 +344,157 @@ async fn run_script(conn: &mut Conn, script: &[Segment], cancel: &CancellationTo
             }
         }
     }
+}
+
+// ---- 本地正向代理夹具：验证代理三模式（llm.md「本地代理 fixture 验证」）。----
+
+/// 代理行为预期：Allow 放行一切；BasicAuth 要求 `Proxy-Authorization` 精确相等，
+/// 否则回 407。
+#[derive(Clone)]
+pub(crate) enum ProxyExpectation {
+    Allow,
+    BasicAuth(String),
+}
+
+impl ProxyExpectation {
+    /// 纯判断，供夹具与直测共用。
+    pub(crate) fn satisfied(&self, received: Option<&str>) -> bool {
+        match self {
+            Self::Allow => true,
+            Self::BasicAuth(expected) => received == Some(expected.as_str()),
+        }
+    }
+}
+
+/// 代理记录到的一次请求。
+#[derive(Clone, Debug)]
+pub(crate) struct ProxyRecord {
+    /// CONNECT 的目标 `host:port`（HTTPS 隧道）；明文绝对 URI 请求为 `None`。
+    pub connect: Option<String>,
+    /// 请求行目标（明文代理为绝对 URI）。
+    pub target: String,
+    pub proxy_authorization: Option<String>,
+}
+
+/// 脚本化正向代理：明文请求直接应答 200（记录绝对 URI 足以证明流量走了
+/// 代理），CONNECT 建立隧道后向 `127.0.0.1:<port>` 双向拷贝。
+pub(crate) struct ScriptedProxy {
+    pub addr: std::net::SocketAddr,
+    records: Arc<Mutex<Vec<ProxyRecord>>>,
+    cancel: CancellationToken,
+    handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl ScriptedProxy {
+    /// 启动代理夹具。
+    pub async fn start(expectation: ProxyExpectation) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local address");
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let cancel = CancellationToken::new();
+        let handle = tokio::spawn(proxy_accept_loop(
+            listener,
+            records.clone(),
+            expectation.clone(),
+            cancel.clone(),
+        ));
+        Self {
+            addr,
+            records,
+            cancel,
+            handle: Mutex::new(Some(handle)),
+        }
+    }
+
+    /// 供客户端配置的代理 URL。
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    pub fn records(&self) -> Vec<ProxyRecord> {
+        self.records.lock().expect("proxy records lock").clone()
+    }
+
+    /// 停止接收并等待循环退出；重复调用为空操作。
+    pub async fn shutdown(&self) {
+        self.cancel.cancel();
+        let handle = self.handle.lock().expect("handle").take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
+    }
+}
+
+async fn proxy_accept_loop(
+    listener: tokio::net::TcpListener,
+    records: Arc<Mutex<Vec<ProxyRecord>>>,
+    expectation: ProxyExpectation,
+    cancel: CancellationToken,
+) {
+    loop {
+        let (stream, _) = tokio::select! {
+            _ = cancel.cancelled() => break,
+            accepted = listener.accept() => accepted.expect("proxy fixture accept"),
+        };
+        tokio::spawn(handle_proxy_connection(
+            stream,
+            records.clone(),
+            expectation.clone(),
+            cancel.clone(),
+        ));
+    }
+}
+
+async fn handle_proxy_connection(
+    mut stream: tokio::net::TcpStream,
+    records: Arc<Mutex<Vec<ProxyRecord>>>,
+    expectation: ProxyExpectation,
+    cancel: CancellationToken,
+) {
+    let Some(request) = read_request(&mut stream, &cancel).await else {
+        return;
+    };
+    let auth = request.header("Proxy-Authorization");
+    let is_connect = request.method == "CONNECT";
+    let record = ProxyRecord {
+        connect: is_connect.then(|| request.path.clone()),
+        target: request.path.clone(),
+        proxy_authorization: auth.clone(),
+    };
+    records.lock().expect("proxy records lock").push(record);
+    if !expectation.satisfied(auth.as_deref()) {
+        let _ = stream
+            .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nConnection: close\r\n\r\n")
+            .await;
+        return;
+    }
+    if !is_connect {
+        // 明文代理：记录即目的，回一个最小 200 JSON。
+        let _ = stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            )
+            .await;
+        return;
+    }
+    // CONNECT：应答建立隧道，然后与 127.0.0.1:<port> 双向拷贝。
+    let _ = stream
+        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        .await;
+    let port: Option<u16> = request
+        .path
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.parse().ok());
+    let Some(port) = port else {
+        return;
+    };
+    let Ok(mut origin) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
+        return;
+    };
+    let _ = tokio::io::copy_bidirectional(&mut stream, &mut origin).await;
 }
 
 // ---- SSE 帧构造助手：与 DeepSeek adapter 的解析形状一一对应，多个测试模块共用。----
@@ -558,5 +722,84 @@ mod tests {
         server.shutdown().await;
         assert_eq!(server.request_count(), 0);
         drop(stalled);
+    }
+
+    /// 代理夹具的防御路径：空连接、无端口 CONNECT、连不上的隧道目标都只
+    /// 丢弃该连接，不影响后续请求。
+    #[tokio::test]
+    async fn proxy_fixture_survives_malformed_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let proxy = ScriptedProxy::start(ProxyExpectation::Allow).await;
+
+        // 连上即断：不产生记录。
+        drop(
+            tokio::net::TcpStream::connect(proxy.addr)
+                .await
+                .expect("connect"),
+        );
+
+        // CONNECT 目标没有可解析端口：夹具静默断开（读端读到即 EOF）。
+        let mut no_port = tokio::net::TcpStream::connect(proxy.addr)
+            .await
+            .expect("connect");
+        no_port
+            .write_all(b"CONNECT nonsense HTTP/1.1\r\n\r\n")
+            .await
+            .expect("write connect");
+        no_port.flush().await.expect("flush");
+        let mut eof = Vec::new();
+        no_port.read_to_end(&mut eof).await.expect("read eof");
+
+        // 端口存在但无人监听：先收「建立」应答，中继失败后连接关闭。
+        let mut dead_target = tokio::net::TcpStream::connect(proxy.addr)
+            .await
+            .expect("connect");
+        dead_target
+            .write_all(b"CONNECT 127.0.0.1:1 HTTP/1.1\r\n\r\n")
+            .await
+            .expect("write connect");
+        dead_target.flush().await.expect("flush");
+        let mut refused = Vec::new();
+        dead_target
+            .read_to_end(&mut refused)
+            .await
+            .expect("read refused");
+        assert!(refused.starts_with(b"HTTP/1.1 200"), "{refused:?}");
+
+        // 两侧 read_to_end 即完成信号：夹具已处理并记录两条 CONNECT。
+        let records = proxy.records();
+        assert_eq!(records.len(), 2, "空连接不记录，CONNECT 各记录一次");
+        assert_eq!(records[0].target, "nonsense");
+        assert_eq!(records[1].connect.as_deref(), Some("127.0.0.1:1"));
+        // 重复关停为空操作。
+        proxy.shutdown().await;
+        proxy.shutdown().await;
+    }
+
+    /// 代理夹具的 407 路径：凭据不符时按 BasicAuth 预期拒绝。
+    #[tokio::test]
+    async fn proxy_fixture_rejects_wrong_credentials_with_407() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let proxy = ScriptedProxy::start(ProxyExpectation::BasicAuth("Basic good".into())).await;
+        let mut client = tokio::net::TcpStream::connect(proxy.addr)
+            .await
+            .expect("connect");
+        client
+            .write_all(b"GET http://example.test/x HTTP/1.1\r\nHost: example.test\r\n\r\n")
+            .await
+            .expect("write request");
+        client.flush().await.expect("flush");
+        let mut response = Vec::new();
+        client
+            .read_to_end(&mut response)
+            .await
+            .expect("read response");
+        assert!(
+            response.starts_with(b"HTTP/1.1 407"),
+            "应答 407：{response:?}"
+        );
+        assert_eq!(proxy.records().len(), 1);
+        assert_eq!(proxy.records()[0].proxy_authorization, None);
+        proxy.shutdown().await;
     }
 }

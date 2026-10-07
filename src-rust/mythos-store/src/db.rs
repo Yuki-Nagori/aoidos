@@ -2,6 +2,7 @@
 //! pending 迁移前经 SQLite backup API 做一致快照到同级 `backups/`（保留 3 份）。
 //! 热 WAL 连接上直接拷主文件会丢掉尚未 checkpoint 的提交。
 
+use crate::paths::validate_missing_parent;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -17,7 +18,7 @@ const BACKUPS_TO_KEEP: usize = 3;
 // 迁移备份或尚未退出的读方会短暂占库。等待 5 秒，而不是把启动立刻报成失败（task 013）。
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 打开（必要时创建）数据库并推进迁移。`migrations[v]` 把 user_version 从 v
+/// 打开（必要时创建）数据库并推进迁移。`migrations[v]` 把 `user_version` 从 v
 /// 推到 v+1；失败步骤回滚并上抛，此前已提交步骤保留，版本停在失败步骤开始前。
 ///
 /// 比当前二进制新的库在改日志模式之前就拒绝，避免把只读打开写成 WAL。
@@ -112,7 +113,7 @@ fn query_user_version(conn: &Connection) -> Result<u32> {
     }
 }
 
-/// 只读打开并返回 user_version，不创建数据库、数据目录或执行迁移。
+/// 只读打开并返回 `user_version，不创建数据库、数据目录或执行迁移`。
 /// 文件或父目录不存在时返回 0；已有文件使用与 [`open`] 相同的路径归一化和 busy 预算。
 ///
 /// # Errors
@@ -132,28 +133,6 @@ pub fn current_version(path: &Path) -> Result<u32> {
         Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err_open)?;
     conn.busy_timeout(BUSY_TIMEOUT).map_err(err_pragma)?;
     query_user_version(&conn)
-}
-
-// Windows 将“祖先是普通文件”也报告为 NotFound（task 017 / issue #7）；只允许真正缺失的目录链。
-// 从最近父路径向上找到首个存在的目录，不创建目录，也不吞掉权限等错误。
-fn validate_missing_parent(path: &Path) -> Result<()> {
-    for parent in path
-        .ancestors()
-        .skip(1)
-        .filter(|p| !p.as_os_str().is_empty())
-    {
-        let metadata = match fs::metadata(parent) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            result => result.map_err(StoreError::from_io)?,
-        };
-        if !metadata.is_dir() {
-            return Err(StoreError::from_io(io::Error::from(
-                io::ErrorKind::NotADirectory,
-            )));
-        }
-        break;
-    }
-    Ok(())
 }
 
 fn enable_wal(conn: &Connection) -> Result<()> {

@@ -30,7 +30,7 @@ pub struct GuardRule {
     pub server_eligible: bool,
 }
 
-/// GuardSpec 编译失败。
+/// `GuardSpec` 编译失败。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardSpecError {
     EmptyPattern { id: String },
@@ -134,15 +134,18 @@ impl GuardSpec {
         Ok(Self { rules: compiled })
     }
 
+    #[must_use]
     pub fn rules(&self) -> &[CompiledRule] {
         &self.rules
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
 
     /// 最长规则的字节长度；扣留上界由此决定。
+    #[must_use]
     pub fn max_pattern_len(&self) -> usize {
         self.rules
             .iter()
@@ -151,8 +154,9 @@ impl GuardSpec {
             .unwrap_or(0)
     }
 
-    /// 服务端 stop 子集：server_eligible 规则按优先级取不重复 pattern 的前 `limit` 项。
+    /// 服务端 stop `子集：server_eligible` 规则按优先级取不重复 pattern 的前 `limit` 项。
     /// 锚定语义不进服务端，调用方须已知服务端只按子串 stop。
+    #[must_use]
     pub fn server_stops(&self, limit: usize) -> Vec<String> {
         let mut stops: Vec<String> = Vec::new();
         for rule in &self.rules {
@@ -199,6 +203,7 @@ pub struct Guard {
 }
 
 impl Guard {
+    #[must_use]
     pub fn new(spec: GuardSpec) -> Self {
         Self {
             spec,
@@ -207,6 +212,7 @@ impl Guard {
         }
     }
 
+    #[must_use]
     pub fn spec(&self) -> &GuardSpec {
         &self.spec
     }
@@ -286,8 +292,7 @@ impl Guard {
                 from = combined[start..]
                     .char_indices()
                     .nth(1)
-                    .map(|(offset, _)| start + offset)
-                    .unwrap_or(combined.len());
+                    .map_or(combined.len(), |(offset, _)| start + offset);
             }
         }
         best

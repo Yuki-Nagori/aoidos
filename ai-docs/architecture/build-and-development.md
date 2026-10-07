@@ -10,36 +10,43 @@
 
 全部命令经根 `package.json` 的 bun scripts 进出，不绕开 bun。
 
-| 命令                                   | 作用                                                                       |
-| -------------------------------------- | -------------------------------------------------------------------------- |
-| `bun install`                          | 安装依赖（同时启用 husky pre-commit）                                      |
-| `bun run tauri:dev`                    | 桌面窗口开发（Vite HMR + cargo 增量编译）                                  |
-| `bun run dev`                          | 浏览器纯前端预览（无 IPC，命令走前端回退）                                 |
-| `bun run build`                        | typecheck + Vite 生产构建 → `dist/`（`build:web` 为纯构建段，verify 复用） |
-| `bun run verify`                       | 提交门禁，构成见下                                                         |
-| `bun run test` / `test:coverage`       | Vitest / Vitest + 覆盖率门槛                                               |
-| `bun run test:rust` / `coverage:rust`  | cargo test / cargo-llvm-cov 行覆盖门槛                                     |
-| `bun run lint` / `lint:rust`           | ESLint / clippy（`lint:fix` 自动修 TS 侧）                                 |
-| `bun run format` / `format:rust`       | Prettier / rustfmt（`:check` 为只读检查）                                  |
-| `bun run typecheck` / `typecheck:rust` | vue-tsc / cargo check                                                      |
-| `bun run bench`                        | tinybench 基准示例                                                         |
-| `bun run doc:rust`                     | rustdoc 构建并拒绝警告（文档内链契约）                                     |
-| `bun run knip`                         | 死依赖 / 死导出检查                                                        |
-| `bun run tauri:build`                  | 发布打包                                                                   |
+| 命令                                   | 作用                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `bun install`                          | 安装依赖（同时启用 husky pre-commit）                                                              |
+| `bun run tauri:dev`                    | 桌面窗口开发（Vite HMR + cargo 增量编译）                                                          |
+| `bun run dev`                          | 浏览器纯前端预览（无 IPC，命令走前端回退）                                                         |
+| `bun run build`                        | typecheck + Vite 生产构建 → `dist/`（`build:web` 为纯构建段，verify 复用）                         |
+| `bun run verify`                       | 提交门禁，构成见下                                                                                 |
+| `bun run test:native`                  | 三平台真实密码输入 / OS 凭据集成测试，需桌面会话；不输出合成密钥                                   |
+| `bun run test` / `test:coverage`       | Vitest / Vitest + 覆盖率门槛                                                                       |
+| `bun run test:rust` / `coverage:rust`  | cargo test / cargo-llvm-cov 行覆盖门槛                                                             |
+| `bun run lint` / `lint:rust`           | ESLint / clippy（`lint:fix` 自动修 TS 侧，`lint:rust:fix` 自动修 Rust 侧：clippy --fix + rustfmt） |
+| `bun run format` / `format:rust`       | Prettier / rustfmt（`:check` 为只读检查）                                                          |
+| `bun run typecheck` / `typecheck:rust` | vue-tsc / cargo check                                                                              |
+| `bun run bench`                        | tinybench 基准示例                                                                                 |
+| `bun run doc:rust`                     | rustdoc 构建并拒绝警告（文档内链契约）                                                             |
+| `bun run knip`                         | 死依赖 / 死导出检查                                                                                |
+| `bun run tauri:build`                  | 发布打包                                                                                           |
 
 ## verify 构成
 
-`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `format:check` · `format:rust:check` · `test:coverage` · `test:rust` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十三项，任一失败即失败。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。husky 在每次 commit 前只跑双端格式检查（秒级反馈，拦住排版噪音）；lint、测试与覆盖率交给推送前自查与 CI——CI 把十三项拆成具名步骤逐步执行，不聚合调用，失败直接定位。失败处理：格式挂了跑对应 format，lint 能自动修的走 `lint:fix`，测试挂了用 `test:watch` 本地复现。
+`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `format:check` · `format:rust:check` · `test:coverage` · `test:rust` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十三项，任一失败即失败。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。husky 在每次 commit 前只跑双端格式检查（秒级反馈，拦住排版噪音）；lint、测试与覆盖率交给推送前自查与 CI——CI 把十三项拆成具名步骤逐步执行，不聚合调用，失败直接定位。失败处理：格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`（修完必须重跑 verify），测试挂了用 `test:watch` 本地复现。
 
-CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两次全量 Rust 编译）：`cargo check` 不单跑（clippy 已含类型检查）；`cargo test` 不单跑（llvm-cov 先执行同一套测试，单次插桩编译同时验证测试与覆盖率门槛）。纯文档改动（`ai-docs/**`、`**/*.md`）不触发 CI。见 ci.yml 顶部注释。
+CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两次全量 Rust 编译）：`cargo check` 不单跑（clippy 已含类型检查）；`cargo test` 不单跑（llvm-cov 先执行同一套测试，单次插桩编译同时验证测试与覆盖率门槛）。触发范围见下文。
 
-CI 先完成格式、前端、knip、基准与 rustdoc 等快速门禁（rustdoc 只编译本仓 crate，不需系统依赖），再安装 Linux 系统依赖并编译 Rust，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
+CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原生依赖并执行 rustdoc / clippy / Rust 覆盖率，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
 
 触发范围：main push 与 pull request 仅修改 `ai-docs/**` 或 Markdown 文件时跳过全量 CI；代码、依赖、脚本、工作流及其他配置改动仍跑三平台。PR 按相对 base 的累计 diff 判断，代码 PR 后续补文档仍可能触发；新建的纯文档 PR 与合并后的纯文档 push 会跳过。文档提交保留本地 / husky 格式检查。
 
-覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件与视图旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `cargo llvm-cov --workspace --lib` 要求行 100%，忽略正则 `lib\.rs$` 排除所有 crate 的 lib.rs，入口只放模块声明 / 薄装配，逻辑不得借此绕过门槛；src-tauri 的 commands / events / ipc 等非忽略文件与业务逻辑均须足额。改口径属于门禁变更，先登记 task。
+覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件与视图旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `coverage:rust` 由根目录 `coverage-rust.config.mts` 声明、`scripts/coverage-rust.mts` 执行——逐文件未覆盖行预算，缺省 0（必须 100%），`lib.rs` 与 `platform/windows.rs` 等确属装配或无法注入的文件在配置登记豁免与理由，详见[测试规范](../standards/testing.md)；src-tauri 的 commands / events / ipc 等非忽略文件与业务逻辑均须足额。改口径属于门禁变更，先登记 task。
 
 首次 `cargo check` 或改动 `[profile.*]` 后的全量重编译是一次性成本，属正常现象。
+
+## 原生能力集成验证
+
+`bun run test:native` 是独立于本地 verify 十三项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
+
+CI 每个平台额外执行该测试，单步超时 3 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)，实际结果归 [019](../task/019-llm-profile-credentials-impl.md)。原生能力实测不代替目标平台安装包验证。
 
 ## 打包与版本
 

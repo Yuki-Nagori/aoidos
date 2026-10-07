@@ -18,10 +18,11 @@
 交付（`src-rust/mythos-store`）：
 
 1. `paths`：组件消毒（非法字符 / Windows 保留名 / 尾点尾空格）、`script_id_from_name`（`[a-z0-9-]{1,64}`，截断 + FNV-1a 短 hash，CJK 回退）、`join_under_root`（拒 `..` / 分隔符 / 盘符）。
-2. `atomic`：`write_atomic` / `write_text_atomic`（唯一 tmp + fsync + rename，Windows 锁定退避重试，失败上抛并清理 tmp）、`clean_temp_files`（`.tmp` 自愈）、`truncate_incomplete_jsonl`（尾行截断恢复）。
+2. `atomic`：`write_atomic` / `write_text_atomic` / `write_atomic_private`（唯一 tmp + fsync + rename，Windows 锁定退避重试，失败上抛并清理 tmp）、`clean_temp_files`（`.tmp` 自愈）、`truncate_incomplete_jsonl`（尾行截断恢复）。
 3. `lock`：`InstanceLock`（fs4 独占锁，进程退出自动释放，写 PID），二次获取报 `already-running`。
 4. `db`：`open(path, migrations)`——rusqlite bundled、WAL、`PRAGMA user_version` 顺序迁移（事务包裹，失败回滚拒启）、迁移前文件备份（保留 3 份）、库新于二进制时报 `corrupt`。
-5. `error`：`StoreError` 与 `code()` 命名空间 `store`（invalid-path / already-running / locked / migration / disk-full / permission / not-found / corrupt / io）。
+5. `read`：`read_text_bounded`，先判字节上限再解码 UTF-8，真正缺失与非法祖先路径分开处理；业务 JSON / 版本仍由消费方校验。
+6. `error`：`StoreError` 与 `code()` 命名空间 `store`（invalid-path / already-running / locked / migration / disk-full / permission / not-found / corrupt / io）。
 
 标定初值（设计留白在此落定）：WAL 日志模式；备份保留 3 份；rename 重试 5 次、25ms 指数退避；多开用 OS 级独占锁（进程死亡自动释放，无需 PID 存活探测）。
 
@@ -31,15 +32,15 @@
 
 1. 根 `Cargo.toml`：`members` 增 `src-rust/mythos-store`，workspace 依赖增 rusqlite（bundled、backup）、fs4。
 2. 按 `error → paths → atomic → lock → db` 顺序实现，每模块带单测（含错误路径）。
-3. `cargo fmt / clippy / test / coverage:rust`（新 crate 纳入 workspace 100% 行覆盖），`bun run verify` 十项。
+3. `cargo fmt / clippy / test / coverage:rust`（新 crate 纳入 workspace 100% 行覆盖），初次交付时 `bun run verify` 为十项；后续补充使用当前十三项门禁。
 
 ## 预计改动
 
-新建 `src-rust/mythos-store/`（Cargo.toml、lib.rs、五个模块）；修改根 `Cargo.toml`、`Cargo.lock`、`repository-layout.md`（目录树补 src-rust 实体）。
+新建 `src-rust/mythos-store/`（Cargo.toml、lib.rs、原交付模块）；修改根 `Cargo.toml`、`Cargo.lock`、`repository-layout.md`（目录树补 src-rust 实体）。
 
 ## 验收标准
 
-- [x] `bun run verify` 十项 exit 0；`coverage:rust` 对新 crate 行覆盖 100%。
+- [x] 初次交付 `bun run verify` 十项 exit 0；`coverage:rust` 对新 crate 行覆盖 100%。
 - [x] 原子写：崩溃模拟（tmp 残留）可自愈；目标被占用时重试后报 `locked` 且 tmp 已清理。
 - [x] 迁移：顺序执行幂等，失败回滚且 `user_version` 不变，备份文件生成且保留 3 份；库新于二进制报 `corrupt`。
 - [x] 多开：二次获取报 `already-running`，释放后可重取。
@@ -81,10 +82,16 @@
 - 2026-10-06：第五轮子不变量消融前排查发现 `PRAGMA foreign_keys` 无断言（打开路径必须带外键约束），补入 `migrations_apply_in_order_and_are_idempotent`。消融 6 项：foreign_keys 开启（1 失败）、首装不做迁移备份（3 失败，既有 backs-up-once 断言已钉）、备份按解析整数排序（1 失败）、保留名检查前先去尾点空格（3 失败）、script_id CJK 哈希回退（2 失败）——5/5 捕捉；锁 Drop 的显式 `unlock` 变异后套件仍绿，属**非承重防御**：guard drop 时 File 句柄关闭，内核即释放锁，「Drop 释放锁」行为本身由 `second_acquire_fails_release_allows_retry` 钉住，显式调用保留作表达明确性。
 - 2026-10-06：第八轮补角消融补记 paths 项：script_id 超 64 字符的截断+哈希后缀（`script_id_truncates_long_names_with_hash` 钉住，变异 keep 边界即失败）。
 
-平台处理保持以下决策：目录目标立即报 `io`；通用 busy 错误报 `locked`；Windows rename 的 5 / 32 作为共享冲突，而 Unix 同号 EIO / EPIPE 保持 `io`。Windows 目录 flush 使用带写权限及 BACKUP_SEMANTICS 的句柄；权限拒绝或卷不支持 flush 时保留已发布的替换结果。
+### 平台处理决策
+
+目录目标立即报 `io`；通用 busy 错误报 `locked`；Windows rename 的 5 / 32 作为共享冲突，而 Unix 同号 EIO / EPIPE 保持 `io`。Windows 目录 flush 使用带写权限及 BACKUP_SEMANTICS 的句柄；权限拒绝或卷不支持 flush 时保留已发布的替换结果。
+
+### 后续维护
 
 - 2026-10-07：issue #61 同步更新日期与既有消融工作记录；本次为文档元数据修正，未重做历史消融或改动存储实现。
+- 2026-10-07：019 评审补全仓共用 write_atomic_private：空 tmp 先收紧权限，再写正文 / fsync / 发布；权限失败保留旧文件并清理空 tmp，有顺序与失败回归测试。不复写第二套原子 IO。
+- 2026-10-07：019 独立评审后提取 `read::read_text_bounded`，先判字节上限再解码 UTF-8，配置 / 凭据共用；SQLite 的现存祖先检查移至 `paths` 复用，保持存储错误语义。覆盖真实缺失、文件占据祖先、目录目标、非法 UTF-8 与截断多字节字符，不提高覆盖预算。
 
 ## 完成摘要
 
-`mythos-store` 已提供路径消毒、原子写与文件自愈、独占实例锁、SQLite WAL 迁移和在线备份，以及统一存储错误码。整体复核后的本地十项验证和三平台 CI 全部通过，Rust 行覆盖均为 100%。crate 不依赖 Tauri；业务 schema 与消费命令随 006 / 007 接入，使用边界见「风险与回退」。
+`mythos-store` 已提供路径消毒、原子 / 私有文件发布、有界文本读取与文件自愈、独占实例锁、SQLite WAL 迁移和在线备份，以及统一存储错误码。原交付十项门禁与三平台 CI 均通过；019 补充能力的十三项验证与消融证据见 [019](019-llm-profile-credentials-impl.md)。存储逻辑仍要求逐文件行覆盖 100%。crate 不依赖 Tauri；业务 schema 与消费命令随 006 / 007 接入，使用边界见「风险与回退」。

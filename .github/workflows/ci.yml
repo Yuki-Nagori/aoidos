@@ -67,16 +67,30 @@ jobs:
         run: bun run bench
       - name: build（vite 生产构建）
         run: bun run build:web
-      - name: doc（rustdoc 拒绝警告）
-        run: bun run doc:rust
-      # 快速门禁先完成，避免格式 / 前端错误消耗 Linux 系统依赖安装和 Rust 编译时间。
+      # 前端快速门禁先完成；rustdoc / clippy 前先补齐 Linux 原生依赖。
       - name: 安装 Tauri Linux 依赖
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
+            xvfb dbus-x11 gnome-keyring
+      - name: doc（rustdoc 拒绝警告）
+        run: bun run doc:rust
       - name: lint（clippy + cargo check）
         run: bun run lint:rust
       - name: test + coverage 门槛（cargo-llvm-cov）
         run: bun run coverage:rust
+
+      - name: 原生密码输入与 OS 凭据库真实会话验证（macOS / Windows）
+        if: matrix.os != 'ubuntu-latest'
+        timeout-minutes: 3
+        run: bun run test:native
+      - name: 原生密码输入与 Secret Service 真实会话验证（Linux）
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 3
+        run: |
+          dbus-run-session -- bash -c '
+            printf "mythos-session-fixture" | gnome-keyring-daemon --unlock --components=secrets
+            xvfb-run -a bun run test:native
+          '

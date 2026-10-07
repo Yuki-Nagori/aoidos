@@ -1,14 +1,22 @@
 # Rust / Tauri 约定
 
-更新日期：2026-10-06。除标注官方依据外均为项目约定。
+更新日期：2026-10-07。除标注官方依据外均为项目约定。
 
 ## 命令层
 
-`#[tauri::command]` 只做解参数、调逻辑、回包，命令集中在 `src-tauri/src/commands.rs`；单个命令超过一屏就把逻辑抽成普通函数或独立 crate。新命令三步：定义 → `generate_handler![]`（`lib.rs`）注册 → 用到插件 / 系统能力时在 `capabilities/default.json` 加权限（当前只有 `core:default`）。
+`#[tauri::command]` 只做解参数、调逻辑、回包，命令按域放 `src-tauri/src/commands.rs` / `llm_commands.rs`；单个命令超过一屏就把逻辑抽成普通函数或独立 crate。新命令三步：定义 → `generate_handler![]`（`lib.rs`）注册 → 用到插件 / 系统能力时在 `capabilities/default.json` 加权限（当前只有 `core:default`）。
 
 invoke 的 args 对象按 camelCase 匹配 Rust snake_case 形参（[Tauri 命令文档](https://tauri.app/develop/calling-rust/)，2026-10-04 查阅）：单词形参无感，多词形参（`case_dir` ↔ `caseDir`）留意。参数与返回类型在 Rust 定型后，TS 侧在 `src-web/api/` 立即声明同型并提供薄调用（归属见[前端规范](frontend.md#逻辑归属)）——`invoke` 是无校验透传，两端口径漂移是最常见的静默 bug。
 
 错误形状以[通信契约](../architecture/ipc-contract.md)为准：命令返回 `Result<T, CmdError>`，序列化为 `{ code, message, detail? }`。前端按 `code` 分支，不匹配 `message`。
+
+## 平台能力封装
+
+Windows / macOS / Linux 的原生能力由平台模块分别实现，通过 `#[cfg]` 导出同型接口；共享 Unix 权限规则放 unix 模块。平台判断集中于适配层，命令层和业务使用点只调用接口，不以操作系统 `if / else` 或散落的 `#[cfg]` 组织功能。原生输入缺少桌面会话、权威 OS 后端读取失败均按接口错误返回；OS 写入失败的私有文件降级遵循[通信契约](../architecture/ipc-contract.md#工程纪律可检查版)，不能回退到 Webview 明文输入或伪装未设置。
+
+原生交互统一经平台壳调度到 UI 主线程，等待用户期间不持业务锁；保存逻辑与 UI 生命周期分开，便于用注入器验证确认 / 取消 / 失败。平台模块实现存在不等于已验证：每个平台的真实 UI 与 OS 服务结果分别记录，纯逻辑或模拟测试不替代平台验收。
+
+模块封装按业务职责，标准库的通用类型不需要统一转发。共享存储规则归 `mythos-store`，业务 schema 留在消费 crate；具体归属见[目录规划](../architecture/repository-layout.md#归属规则)。
 
 ## Cargo 工作区
 

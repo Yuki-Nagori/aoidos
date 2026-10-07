@@ -17,6 +17,7 @@ pub struct CmdError {
 
 impl CmdError {
     /// 判别码（含域前缀），与序列化后的 `code` 字段一致。
+    #[must_use]
     pub fn code(&self) -> &str {
         &self.code
     }

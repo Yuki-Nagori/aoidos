@@ -15,6 +15,7 @@ pub enum ProviderId {
 }
 
 impl ProviderId {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::DeepSeek => "deepseek",
@@ -22,6 +23,7 @@ impl ProviderId {
     }
 
     /// 生产端点（HTTPS）；测试与显式配置经装配层注入回环地址。
+    #[must_use]
     pub fn default_base(&self) -> &'static str {
         match self {
             Self::DeepSeek => "https://api.deepseek.com",
@@ -29,6 +31,7 @@ impl ProviderId {
     }
 
     /// 按持久身份解析；未知 id 返回 `None`，由上层映射 app.not-found。
+    #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "deepseek" => Some(Self::DeepSeek),

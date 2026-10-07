@@ -13,6 +13,7 @@
 | 桌面壳            | Tauri                                                      | ^2                                   | 窗口、系统集成、跨平台打包                                                            | `src-tauri/tauri.conf.json`                                         |
 | 系统语言          | Rust                                                       | 1.99.0（`rust-toolchain.toml` 锁定） | 命令层（src-tauri）与业务 crate（src-rust：mythos-store、mythos-llm）                 | 根 `Cargo.toml`、`rust-toolchain.toml`、`src-tauri/` 与 `src-rust/` |
 | LLM 传输          | reqwest（rustls-no-provider + ring）                       | ^0.13                                | 流式响应；显式 `retry(never)` 禁用隐式重试                                            | `src-rust/mythos-llm/`                                              |
+| OS 凭据库         | keyring（默认特性三平台各自实现）                          | ^4                                   | API 密钥存储；权威后端指针 / 墓碑与私有文件降级见通信契约                             | `src-rust/mythos-llm/src/credentials.rs`                            |
 | 异步运行时        | tokio / tokio-util / futures                               | ^1 / ^0.7 / ^0.3                     | mythos-llm 调度、取消与流                                                             | 根 `Cargo.toml`                                                     |
 | 前端测试          | Vitest + @vitest/coverage-v8 + happy-dom + @vue/test-utils | ^5 / ^5 / ^20 / ^2                   | 单测与覆盖率门槛                                                                      | `vitest.config.ts`                                                  |
 | Rust 测试         | cargo test / cargo-llvm-cov                                | 工具链 + 独立子命令                  | 单测与覆盖率门槛                                                                      | `package.json`                                                      |
@@ -24,10 +25,12 @@
 
 TypeScript 停在 5.x：TypeScript 7 尚无 typescript-eslint 支持，等工具链跟上再升。npm 镜像可能缺失部分包的 `latest` dist-tag，`bun update --latest` 报 tag not found 时按 `bun outdated` 的具体版本号手动写入 `package.json`。
 
+原生密钥输入使用 Windows CredUI、macOS AppKit（objc2）和 Linux GTK 3（gtk-rs）；依赖按目标平台声明，使用点经同型接口调用。平台验证记录归 [019 配置与凭据](../task/019-llm-profile-credentials-impl.md)，不把原生输入可用等同于安装包已验证。
+
 ## IPC 通道
 
 前端 `@tauri-apps/api/core` 的 `invoke(name, args)` ↔ Rust `#[tauri::command]`，命令注册在 `src-tauri/src/lib.rs` 的 `generate_handler![]`；插件与系统能力经 `src-tauri/capabilities/default.json` 声明权限，当前只有 `core:default`。可运行示例：`commands::greet` ↔ `src-web/App.vue`。命令名、事件、错误形状与看门狗预算见[通信契约](ipc-contract.md)。
 
 ## CI
 
-`.github/workflows/ci.yml` 在 push main 与 PR 时于三平台（macOS / Windows / Ubuntu）执行与本地 verify 等价的具名门禁；cargo check 并入 clippy，cargo test 并入 llvm-cov，编译形态合并与触发范围见[构建与开发](build-and-development.md#verify-构成)；Linux 额外安装 Tauri 系统依赖，三平台均安装 cargo-llvm-cov。
+`.github/workflows/ci.yml` 在 push main 与 PR 时于三平台（macOS / Windows / Ubuntu）执行与本地 verify 等价的具名门禁；cargo check 并入 clippy，cargo test 并入 llvm-cov，编译形态合并与触发范围见[构建与开发](build-and-development.md#verify-构成)；Linux 在 Rust 门禁前安装 Tauri / GTK 系统依赖，三平台均安装 cargo-llvm-cov；另执行真实原生输入与 OS 凭据集成，环境及覆盖边界见[构建与开发](build-and-development.md#原生能力集成验证)。
