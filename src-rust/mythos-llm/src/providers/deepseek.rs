@@ -208,9 +208,9 @@ struct StreamDelta {
 #[derive(Deserialize)]
 struct StreamUsage {
     #[serde(default)]
-    prompt_tokens: u64,
+    prompt_tokens: Option<u64>,
     #[serde(default)]
-    completion_tokens: u64,
+    completion_tokens: Option<u64>,
 }
 
 /// 传输适配流：字节 → 增量 UTF-8 → 增量 SSE → JSON → 规范化增量。
@@ -248,10 +248,14 @@ where
             return Ok(());
         }
         let chunk: StreamChunk = serde_json::from_str(data).map_err(err_chunk_json)?;
-        if let Some(usage) = chunk.usage {
+        if let Some(StreamUsage {
+            prompt_tokens: Some(prompt_tokens),
+            completion_tokens: Some(completion_tokens),
+        }) = chunk.usage
+        {
             self.queue.push_back(ProviderDelta::Usage(Usage {
-                prompt_tokens: usage.prompt_tokens,
-                completion_tokens: usage.completion_tokens,
+                prompt_tokens,
+                completion_tokens,
             }));
         }
         // 只抽 index=0（契约：不启用 n>1）；其余下标一律忽略。
@@ -1168,5 +1172,46 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("|")
+    }
+    #[tokio::test]
+    async fn missing_usage_fields_are_not_synthesized_as_zero_tokens() {
+        for usage in [
+            serde_json::json!({}),
+            serde_json::json!({"prompt_tokens":0}),
+            serde_json::json!({"completion_tokens":0}),
+            serde_json::json!({"prompt_tokens":0,"completion_tokens":0}),
+        ] {
+            let frame = serde_json::json!({"choices":[{"index":0,"text":"正文","finish_reason":"stop"}],"usage":usage});
+            let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+            let server = ScriptedServer::start(sse_ok_script(&body)).await;
+            let provider = DeepSeek::new(
+                format!("http://{}", server.addr),
+                SecretString::from("fixture".to_owned()),
+            )
+            .unwrap();
+            let events = collect(
+                provider
+                    .start(completion_request(vec![]), CancellationToken::new())
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            let reported = events
+                .iter()
+                .filter(|event| matches!(event, Ok(ProviderDelta::Usage(_))))
+                .count();
+            assert_eq!(
+                reported,
+                usize::from(
+                    usage.get("prompt_tokens").is_some()
+                        && usage.get("completion_tokens").is_some()
+                )
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Ok(ProviderDelta::Finish(ProviderFinish::Stop))))
+            );
+        }
     }
 }

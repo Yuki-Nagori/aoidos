@@ -7,12 +7,29 @@ publish = false
 [features]
 desktop-session = []
 
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+tauri.workspace = true
+
 [dev-dependencies]
+mythos.workspace = true
+mythos-engine.workspace = true
+mythos-store.workspace = true
+serde_json.workspace = true
+
 mythos-llm = { workspace = true, features = ["native-smoke"] }
 secrecy.workspace = true
 
 [[test]]
 name = "native-platform"
 path = "native-platform.rs"
+harness = false
+required-features = ["desktop-session"]
+
+[[test]]
+name = "ipc-platform"
+path = "ipc-platform.rs"
 harness = false
 required-features = ["desktop-session"]

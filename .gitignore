@@ -21,6 +21,7 @@ Thumbs.db
 /target/
 src-tauri/target/
 src-tauri/gen/schemas/
+tests/rust/native-platform/gen/schemas/
 cov.info
 
 # zcode

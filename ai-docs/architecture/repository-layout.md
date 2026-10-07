@@ -14,18 +14,20 @@
 ├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
 │   ├── src/commands.rs        # #[tauri::command] 命令层、类型化载荷与命令单测
+│   ├── src/turn_commands/     # 回合服务 / 事件适配，mod.rs 与 tests.rs 并列
 │   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；平台原生输入经 mythos-llm 分发
 │   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
-│   ├── src/events.rs          # 每流序号与事件信封，实际发送在 lib.rs
+│   ├── src/events.rs          # 每流序号与事件信封，窗口投递由 turn_commands 适配
 │   ├── tauri.conf.json        # 窗口 / 打包 / 开发服务器
 │   ├── capabilities/          # IPC 权限声明
 │   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）
 │   └── build.rs               # tauri-build
 ├── src-rust/                  # 不依赖 tauri 的业务 crate
+│   ├── mythos-engine/         # 协调 / lease / 输出端口，src/turn/{mod.rs,tests.rs}
 │   ├── mythos-store/          # 路径、原子发布、有界读取、实例锁与 SQLite 基建
 │   └── mythos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
-├── tests/rust/native-platform/ # 原生主线程 UI / OS 凭据集成测试 crate（显式桌面会话）
+├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
 ├── tests/web/                 # Vitest 单测（目录镜像 src-web）
 ├── scripts/                   # 仓库脚本（setup.mts 环境配置；coverage-rust.mts 跑覆盖率门禁）
 ├── coverage-rust.config.mts   # Rust 覆盖率门禁的忽略清单与逐文件预算（scripts/coverage-rust.mts 消费）
@@ -43,6 +45,8 @@
 组件只做编排与渲染，可复用逻辑进 `utils/` 并配单测；`commands.rs` 只做解参数、调逻辑、回包，业务长大后在 `src-rust/` 下拆独立 crate（加入 `members`，依赖方向与工程纪律见[职责边界](ts-rust-boundary.md)），命令层只做转发。全局状态、路由、UI 组件库在需求真实出现前不引入，也不建占位目录。
 
 标准库类型与调用不按 import 集中封装：各模块可直接使用 `Path`、`Duration`、`io::Error` 等。带有项目统一存储规则的能力（原子写、私有权限发布、有界读取、缺失路径判断、实例锁）归 `mythos-store`；业务 JSON / 版本校验归消费 crate，原生输入和权限适配归 `mythos-llm::platform`，请求超时归 LLM 调度。只提取真实共用的规则，不为统一调用外观增加转发层。
+
+Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../standards/rust.md#rust-模块目录)。
 
 新增文件的归属按职责判断，不按语言堆放；访问私有实现的测试贴近源码（如 `commands.rs` 的 `mod tests`），前端公开行为的测试放 `tests/web/` 并镜像目录结构。
 

@@ -12,8 +12,10 @@ use crate::provider::{
     Provider, ProviderDelta, ProviderFinish, ProviderRequest, RequestMode, Usage,
 };
 use futures::StreamExt;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
@@ -47,8 +49,24 @@ impl Default for RunPolicy {
     }
 }
 
+impl RunPolicy {
+    /// 默认阶梯只保留高于初始温度且供应商支持的步长；显式策略仍严格校验。
+    #[must_use]
+    pub fn default_for(initial: f64, capabilities: &crate::provider::ProviderCapabilities) -> Self {
+        let mut policy = Self::default();
+        policy.ladder.retain(|step| {
+            capabilities.temperature_effective
+                && *step > initial
+                && *step >= capabilities.temperature_min
+                && *step <= capabilities.temperature_max
+        });
+        policy
+    }
+}
+
 /// 对外收尾原因（契约 `llm:turn:*` 的 finishReason）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum FinishReason {
     Stop,
     Guard,
@@ -72,6 +90,10 @@ pub enum RunOutcome {
 /// 一次物理尝试的身份；035 账本按此预留 / 结算（同一回合请求身份持久保存）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttemptIdentity {
+    /// 每次物理尝试唯一；035 不以重试序号代替请求身份。
+    pub request_id: String,
+    /// 协调器提供的回合身份；独立调度夹具为空，不用于生产计费。
+    pub turn_id: String,
     /// 本回合第几次物理请求，从 1 起。
     pub attempt: u32,
     pub kind: AttemptKind,
@@ -109,6 +131,27 @@ pub trait BudgetPort: Send + Sync {
     fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial>;
     /// 每次成功预留的尝试恰结算一次。
     fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome);
+}
+
+// 每次成功预留的尝试只收尾一次；Future 被丢弃也登记消耗未确认，不按零退款。
+struct AttemptReservation<'a> {
+    budget: &'a dyn BudgetPort,
+    identity: &'a AttemptIdentity,
+    settled: bool,
+}
+impl AttemptReservation<'_> {
+    fn settle(&mut self, outcome: AttemptOutcome) {
+        self.settled = true;
+        self.budget.settle(self.identity, &outcome);
+    }
+}
+impl Drop for AttemptReservation<'_> {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.budget
+                .settle(self.identity, &AttemptOutcome::Cancelled);
+        }
+    }
 }
 
 /// 预留拒绝（code 属 budget 命名空间，由 035 细分）。
@@ -153,6 +196,42 @@ fn clock_jitter() -> f64 {
     f64::from(nanos % 1000) / 1000.0 * 0.5 - 0.25
 }
 
+/// 安全增量提交端口；true 表示消费方已接纳，而不是仅排进待写队列。
+pub trait OutputPort: Send + Sync {
+    /// 提交确认端口在写入中超时后不得重发；所有者仍等待已开始的提交。
+    fn requires_confirmation(&self) -> bool {
+        false
+    }
+    fn send(&self, text: String) -> Pin<Box<dyn Future<Output = bool> + Send + '_>>;
+}
+
+impl OutputPort for mpsc::Sender<String> {
+    fn send(&self, text: String) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move { self.send(text).await.is_ok() })
+    }
+}
+
+/// 待消费增量；所有者完成提交后发送确认。消费方关闭 / 不确认按取消收尾。
+pub struct PendingText {
+    pub text: String,
+    pub accepted: oneshot::Sender<()>,
+}
+
+impl OutputPort for mpsc::Sender<PendingText> {
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
+    fn send(&self, text: String) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move {
+            let (accepted, receipt) = oneshot::channel();
+            if self.send(PendingText { text, accepted }).await.is_err() {
+                return false;
+            }
+            receipt.await.is_ok()
+        })
+    }
+}
+
 /// 单回合生成主流程。`output` 是调用方构造的有界通道（契约容量 32）：
 /// 队列满时背压等待（可取消 / 可被看门狗打断）；接收端提前关闭视作消费方放弃，按取消收尾。
 ///
@@ -165,6 +244,22 @@ pub async fn run_generation(
     policy: &RunPolicy,
     budget: &dyn BudgetPort,
     output: mpsc::Sender<String>,
+) -> Result<RunOutcome, RunError> {
+    run_generation_with_output(provider, request, cancel, policy, budget, &output, "").await
+}
+
+/// 协调器使用的提交确认入口；重试和看门狗与通道夹具共用同一实现。
+///
+/// # Errors
+/// 与 [`run_generation`] 相同；输出写入失败由所有者停止确认并映射域错误。
+pub async fn run_generation_with_output(
+    provider: &dyn Provider,
+    request: GenerationRequest,
+    cancel: CancellationToken,
+    policy: &RunPolicy,
+    budget: &dyn BudgetPort,
+    output: &dyn OutputPort,
+    turn_id: &str,
 ) -> Result<RunOutcome, RunError> {
     let mode = request.provider_request.mode();
     let caps = provider.capabilities(&request.provider_request.model, mode);
@@ -182,6 +277,12 @@ pub async fn run_generation(
     let mut delivered = false;
 
     loop {
+        if cancel.is_cancelled() {
+            return Ok(RunOutcome::Cancelled {
+                requests,
+                usage: total_usage,
+            });
+        }
         let kind = match (transport_used, ladder_pos) {
             (0, 0) => AttemptKind::Initial,
             (0, _) => AttemptKind::TemperatureStep,
@@ -194,6 +295,8 @@ pub async fn run_generation(
         };
         let provider_request = request.provider_request.with_temperature(temperature);
         let identity = AttemptIdentity {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            turn_id: turn_id.to_owned(),
             attempt: requests + 1,
             kind,
             model: provider_request.model.clone(),
@@ -206,6 +309,11 @@ pub async fn run_generation(
                 reason: denial.reason,
             });
         }
+        let mut reservation = AttemptReservation {
+            budget,
+            identity: &identity,
+            settled: false,
+        };
         requests += 1;
         match attempt(
             provider,
@@ -213,14 +321,14 @@ pub async fn run_generation(
             request.guard.clone(),
             &cancel,
             policy,
-            &output,
+            output,
             &mut delivered,
         )
         .await
         {
             AttemptEnd::Completed { finish, usage } => {
-                total_usage.merge(usage);
-                budget.settle(&identity, &AttemptOutcome::Settled { usage: Some(usage) });
+                total_usage.merge(usage.unwrap_or_default());
+                reservation.settle(AttemptOutcome::Settled { usage });
                 if !delivered
                     && ladder_entry_allowed(
                         policy,
@@ -243,16 +351,16 @@ pub async fn run_generation(
                 });
             }
             AttemptEnd::Cancelled { usage } => {
-                total_usage.merge(usage);
-                budget.settle(&identity, &AttemptOutcome::Cancelled);
+                total_usage.merge(usage.unwrap_or_default());
+                reservation.settle(AttemptOutcome::Cancelled);
                 return Ok(RunOutcome::Cancelled {
                     requests,
                     usage: total_usage,
                 });
             }
             AttemptEnd::Failed { error, usage } => {
-                total_usage.merge(usage);
-                budget.settle(&identity, &AttemptOutcome::Failed);
+                total_usage.merge(usage.unwrap_or_default());
+                reservation.settle(AttemptOutcome::Failed);
                 if transport_retry_allowed(
                     &error,
                     policy,
@@ -273,8 +381,12 @@ pub async fn run_generation(
                 // 首字节后的中断 / 空闲超时按交付边界映射 aborted，保留前文不重试。
                 return Err(RunError::Provider(error));
             }
+            AttemptEnd::DeliveryStalled => {
+                reservation.settle(AttemptOutcome::Failed);
+                return Err(RunError::Stalled);
+            }
             AttemptEnd::StalledHead => {
-                budget.settle(&identity, &AttemptOutcome::Failed);
+                reservation.settle(AttemptOutcome::Failed);
                 if transport_retry_allowed(
                     &ProviderError::Interrupted,
                     policy,
@@ -325,13 +437,21 @@ async fn wait_backoff(cancel: &CancellationToken, policy: &RunPolicy, retry: u32
 }
 
 /// 阶梯配置校验：最多两步、严格递增、高于初始温度且在模型合法范围内。
-fn validate_ladder(policy: &RunPolicy, initial: f64, min: f64, max: f64) -> Result<(), RunError> {
+///
+/// # Errors
+/// 非法阶梯返回 `InvalidPolicy`；接纳前与调度器共用同一校验。
+pub fn validate_ladder(
+    policy: &RunPolicy,
+    initial: f64,
+    min: f64,
+    max: f64,
+) -> Result<(), RunError> {
     if policy.ladder.len() > 2 {
         return Err(RunError::InvalidPolicy("ladder exceeds two steps".into()));
     }
     let mut previous = initial;
     for step in &policy.ladder {
-        if *step <= previous {
+        if !step.is_finite() || *step <= previous {
             return Err(RunError::InvalidPolicy(format!(
                 "ladder must strictly increase above {previous}"
             )));
@@ -362,10 +482,19 @@ fn ladder_entry_allowed(
 }
 
 enum AttemptEnd {
-    Completed { finish: FinishReason, usage: Usage },
-    Cancelled { usage: Usage },
-    Failed { error: ProviderError, usage: Usage },
+    Completed {
+        finish: FinishReason,
+        usage: Option<Usage>,
+    },
+    Cancelled {
+        usage: Option<Usage>,
+    },
+    Failed {
+        error: ProviderError,
+        usage: Option<Usage>,
+    },
     StalledHead,
+    DeliveryStalled,
 }
 
 async fn attempt(
@@ -374,10 +503,10 @@ async fn attempt(
     guard_spec: GuardSpec,
     cancel: &CancellationToken,
     policy: &RunPolicy,
-    output: &mpsc::Sender<String>,
+    output: &dyn OutputPort,
     delivered: &mut bool,
 ) -> AttemptEnd {
-    let mut usage = Usage::default();
+    let mut usage: Option<Usage> = None;
     // 发送失败的统一收尾：取消 / 关闭归取消，头 / 空闲超时归各自错误。
     macro_rules! try_emit {
         ($emit:expr) => {
@@ -386,7 +515,13 @@ async fn attempt(
                 EmitEnd::Cancelled | EmitEnd::Closed => {
                     return AttemptEnd::Cancelled { usage };
                 }
-                EmitEnd::StalledHead => return AttemptEnd::StalledHead,
+                EmitEnd::StalledHead => {
+                    return if output.requires_confirmation() {
+                        AttemptEnd::DeliveryStalled
+                    } else {
+                        AttemptEnd::StalledHead
+                    }
+                }
                 EmitEnd::Idle => {
                     return AttemptEnd::Failed {
                         error: ProviderError::Network {
@@ -403,11 +538,11 @@ async fn attempt(
     let head_deadline = Instant::now() + policy.head_budget;
     let mut stream = tokio::select! {
         biased;
-        () = cancel.cancelled() => return AttemptEnd::Cancelled { usage: Usage::default() },
+        () = cancel.cancelled() => return AttemptEnd::Cancelled { usage: None },
         () = sleep_until(head_deadline) => return AttemptEnd::StalledHead,
         started = provider.start(provider_request, child.clone()) => match started {
             Ok(stream) => stream,
-            Err(error) => return AttemptEnd::Failed { error, usage: Usage::default() },
+            Err(error) => return AttemptEnd::Failed { error, usage: None },
         },
     };
     let mut guard = Guard::new(guard_spec);
@@ -479,7 +614,9 @@ async fn attempt(
                 ProviderDelta::Reasoning(_) => {
                     // 心跳 / reasoning 不重置任何计时器。
                 }
-                ProviderDelta::Usage(chunk) => usage.merge(chunk),
+                ProviderDelta::Usage(chunk) => {
+                    usage.get_or_insert_with(Usage::default).merge(chunk)
+                }
                 ProviderDelta::Finish(provider_finish) => {
                     let flushed = guard.finish();
                     if !flushed.tail.is_empty() {
@@ -518,7 +655,7 @@ enum EmitEnd {
 
 /// 背压发送：队列满时等待，可被取消与看门狗打断。
 async fn emit(
-    output: &mpsc::Sender<String>,
+    output: &dyn OutputPort,
     cancel: &CancellationToken,
     delivered: bool,
     idle_deadline: Instant,
@@ -531,7 +668,7 @@ async fn emit(
         () = sleep_until(head_deadline), if !delivered => EmitEnd::StalledHead,
         () = sleep_until(idle_deadline), if delivered => EmitEnd::Idle,
         sent = output.send(text) => {
-            if sent.is_ok() {
+            if sent {
                 EmitEnd::Sent
             } else {
                 EmitEnd::Closed
@@ -1434,7 +1571,7 @@ mod tests {
         assert_eq!(
             outcome,
             Ok(RunOutcome::Cancelled {
-                requests: 1,
+                requests: 0,
                 usage: Usage::default()
             })
         );
@@ -1974,5 +2111,169 @@ mod tests {
             let jitter = clock_jitter();
             assert!((-0.25..=0.25).contains(&jitter));
         }
+    }
+    #[tokio::test]
+    async fn confirmed_output_needs_receipt_and_closed_queue_is_not_delivery() {
+        let (tx, rx) = mpsc::channel::<PendingText>(1);
+        drop(rx);
+        assert!(!OutputPort::send(&tx, "discarded".into()).await);
+        let (tx, mut rx) = mpsc::channel::<PendingText>(1);
+        let pending =
+            tokio::spawn(async move { OutputPort::send(&tx, "unconfirmed".into()).await });
+        drop(rx.recv().await.unwrap());
+        assert!(!pending.await.unwrap());
+    }
+    #[derive(Default)]
+    struct Outcomes(Mutex<Vec<(AttemptIdentity, AttemptOutcome)>>);
+    impl BudgetPort for Outcomes {
+        fn reserve(&self, _: &AttemptIdentity) -> Result<(), BudgetDenial> {
+            Ok(())
+        }
+        fn settle(&self, identity: &AttemptIdentity, outcome: &AttemptOutcome) {
+            self.0.lock().unwrap().push((identity.clone(), *outcome));
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_and_explicit_zero_usage_remain_distinct_in_budget_lifecycle() {
+        for usage in [None, Some(Usage::default())] {
+            let mut deltas = vec![Ok(ProviderDelta::Text("正文".into()))];
+            if let Some(usage) = usage {
+                deltas.push(Ok(ProviderDelta::Usage(usage)));
+            }
+            deltas.push(Ok(ProviderDelta::Finish(ProviderFinish::Stop)));
+            let provider = FakeProvider { deltas };
+            let port = Outcomes::default();
+            let (tx, _rx) = mpsc::channel(32);
+            run_generation(
+                &provider,
+                generation_request(),
+                CancellationToken::new(),
+                &RunPolicy::default(),
+                &port,
+                tx,
+            )
+            .await
+            .unwrap();
+            let entries = port.0.lock().unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].1, AttemptOutcome::Settled { usage });
+        }
+    }
+
+    struct WaitingProvider {
+        entered: Arc<tokio::sync::Notify>,
+        released: Arc<tokio::sync::Notify>,
+    }
+    impl Provider for WaitingProvider {
+        fn capabilities(
+            &self,
+            model: &str,
+            mode: RequestMode,
+        ) -> crate::provider::ProviderCapabilities {
+            FakeProvider { deltas: vec![] }.capabilities(model, mode)
+        }
+        fn start(
+            &self,
+            _: ProviderRequest,
+            _: CancellationToken,
+        ) -> crate::provider::StartFuture<'_> {
+            Box::pin(async {
+                self.entered.notify_one();
+                self.released.notified().await;
+                Ok(futures::stream::empty().boxed())
+            })
+        }
+    }
+    #[tokio::test]
+    async fn dropping_generation_settles_reserved_attempt_once_as_unconfirmed() {
+        for abort in [true, false] {
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let released = Arc::new(tokio::sync::Notify::new());
+            let provider = Arc::new(WaitingProvider {
+                entered: entered.clone(),
+                released: released.clone(),
+            });
+            let port = Arc::new(Outcomes::default());
+            let observed = port.clone();
+            let task = tokio::spawn(async move {
+                let (tx, _rx) = mpsc::channel(32);
+                let policy = RunPolicy {
+                    transport_retries: 0,
+                    ..RunPolicy::default()
+                };
+                run_generation(
+                    provider.as_ref(),
+                    generation_request(),
+                    CancellationToken::new(),
+                    &policy,
+                    port.as_ref(),
+                    tx,
+                )
+                .await
+            });
+            entered.notified().await;
+            if abort {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                released.notify_one();
+                assert!(task.await.unwrap().is_err());
+            }
+            let entries = observed.0.lock().unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0].1,
+                if abort {
+                    AttemptOutcome::Cancelled
+                } else {
+                    AttemptOutcome::Failed
+                }
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn confirmed_delivery_timeout_is_single_attempt_and_settles_unknown_usage() {
+        let provider = FakeProvider {
+            deltas: vec![
+                Ok(ProviderDelta::Text("text".into())),
+                Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
+            ],
+        };
+        let port = Arc::new(Outcomes::default());
+        let observed = port.clone();
+        let (tx, mut rx) = mpsc::channel::<PendingText>(32);
+        let task = tokio::spawn(async move {
+            run_generation_with_output(
+                &provider,
+                generation_request(),
+                CancellationToken::new(),
+                &RunPolicy::default(),
+                port.as_ref(),
+                &tx,
+                "confirmed-timeout",
+            )
+            .await
+        });
+        let pending = rx.recv().await.unwrap();
+        assert_eq!(task.await.unwrap().unwrap_err(), RunError::Stalled);
+        drop(pending);
+        let settled = observed.0.lock().unwrap();
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].1, AttemptOutcome::Failed);
+    }
+
+    #[test]
+    fn default_ladder_respects_initial_temperature_and_model_capability() {
+        let caps = FakeProvider { deltas: vec![] }.capabilities("m", RequestMode::Completion);
+        assert_eq!(RunPolicy::default_for(1.0, &caps).ladder, vec![1.1, 1.2]);
+        assert!(RunPolicy::default_for(1.2, &caps).ladder.is_empty());
+        let mut ineffective = caps.clone();
+        ineffective.temperature_effective = false;
+        assert!(RunPolicy::default_for(1.0, &ineffective).ladder.is_empty());
+        let mut bounded = caps;
+        bounded.temperature_max = 1.1;
+        assert_eq!(RunPolicy::default_for(1.0, &bounded).ladder, vec![1.1]);
     }
 }

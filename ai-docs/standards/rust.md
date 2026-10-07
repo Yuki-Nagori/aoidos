@@ -4,7 +4,7 @@
 
 ## 命令层
 
-`#[tauri::command]` 只做解参数、调逻辑、回包，命令按域放 `src-tauri/src/commands.rs` / `llm_commands.rs`；单个命令超过一屏就把逻辑抽成普通函数或独立 crate。新命令三步：定义 → `generate_handler![]`（`lib.rs`）注册 → 用到插件 / 系统能力时在 `capabilities/default.json` 加权限（当前只有 `core:default`）。
+`#[tauri::command]` 只做解参数、调逻辑、回包，命令按域组织：`src-tauri/src/commands.rs` / `llm_commands.rs` 承接已有入口，回合服务与事件适配位于 `turn_commands/`，`lib.rs` 仅保留宏注册所需的薄 IPC 装配；单个命令超过一屏就把逻辑抽成普通函数或独立 crate。新命令三步：定义 → `generate_handler![]`（`lib.rs`）注册 → 用到插件 / 系统能力时在 `capabilities/default.json` 加权限（当前只有 `core:default`）。
 
 invoke 的 args 对象按 camelCase 匹配 Rust snake_case 形参（[Tauri 命令文档](https://tauri.app/develop/calling-rust/)，2026-10-04 查阅）：单词形参无感，多词形参（`case_dir` ↔ `caseDir`）留意。参数与返回类型在 Rust 定型后，TS 侧在 `src-web/api/` 立即声明同型并提供薄调用（归属见[前端规范](frontend.md#逻辑归属)）——`invoke` 是无校验透传，两端口径漂移是最常见的静默 bug。
 
@@ -18,9 +18,13 @@ Windows / macOS / Linux 的原生能力由平台模块分别实现，通过 `#[c
 
 模块封装按业务职责，标准库的通用类型不需要统一转发。共享存储规则归 `mythos-store`，业务 schema 留在消费 crate；具体归属见[目录规划](../architecture/repository-layout.md#归属规则)。
 
+## Rust 模块目录
+
+小模块保留单文件与内联 `#[cfg(test)] mod tests`。当测试体拆成 `tests.rs` 或实现拆成子模块、已经形成模块目录时，入口统一放该目录的 `mod.rs`，与子模块并列；适用于 `src-tauri` 和业务 crate。例如 `mythos-engine/src/turn/{mod.rs,tests.rs}`、`src-tauri/src/turn_commands/{mod.rs,tests.rs}`。迁移不改变对外模块名，同时更新目录文档与路径引用，不给单文件模块预建目录。
+
 ## Cargo 工作区
 
-根 `Cargo.toml` 是虚拟 manifest：维护工作区配置（resolver / members）、`[workspace.package]`、`[workspace.dependencies]` 与 profile，依赖版本（含 build-dependencies）统一在 workspace 声明、成员以 `xxx.workspace = true` 继承。根 `Cargo.lock` 全工作区唯一，提交并保持同步。业务 crate 加入 `members` 即插即用。
+根 `Cargo.toml` 是虚拟 manifest：维护工作区配置（resolver / members）、`[workspace.package]`、`[workspace.dependencies]` 与 profile，依赖版本（含 build-dependencies）统一在 workspace 声明、成员以 `xxx.workspace = true` 继承。根 `Cargo.lock` 全工作区唯一，提交并保持同步。业务 crate 加入 `members` 并接入既有门禁。新增 crate 或修改 crate 依赖时，同步检查 Cargo 实际依赖图、更新[架构总览的工作区链路](../architecture/README.md#rust-工作区依赖图)及职责边界；生产依赖必须无环，测试 crate 不得成为生产依赖。task 的先后关系与 crate 依赖分别校验，不能混为一张图。
 
 ## 性能 profile（改前先读）
 

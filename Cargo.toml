@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm", "tests/rust/native-platform"]
+members = ["src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm", "src-rust/mythos-engine", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,9 @@ rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
 mythos-store = { path = "src-rust/mythos-store" }
 mythos-llm = { path = "src-rust/mythos-llm" }
+mythos-engine = { path = "src-rust/mythos-engine" }
+mythos = { path = "src-tauri" }
+uuid = { version = "1", features = ["v4"] }
 # 密钥存储：v1 默认特性 = Windows Credential Manager / macOS Keychain / Linux Secret Service（019）。
 keyring = "4"
 keyring-core = "1"

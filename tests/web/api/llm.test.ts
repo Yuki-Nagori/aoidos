@@ -2,6 +2,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CmdError } from "../../../src-web/api/store";
 import {
+  cancelTurn,
+  getTurn,
+  submitTurn,
+  type TurnInput,
+  type TurnSnapshot,
+  type TurnEnvelope,
+  type TurnChunk,
+  type TurnDone,
+  type TurnFailed,
+  type FinishReason,
+  type TurnOutcome,
   deleteProfile,
   getKeyStatus,
   listProfiles,
@@ -74,5 +85,62 @@ describe("llm IPC", () => {
     vi.mocked(invoke).mockRejectedValue(error);
     expect(await getKeyStatus("deepseek").catch((reason: unknown) => reason)).toBe(error);
     expect(await setKey("deepseek", "set").catch((reason: unknown) => reason)).toBe(error);
+  });
+  it("回合命令及终态类型同型透传，空失败保留真实收尾原因", async () => {
+    const input: TurnInput = {
+      kind: "chat",
+      messages: [{ role: "user", content: "本地夹具" }],
+      assistantPrefix: "前缀",
+    };
+    const accepted = { turnId: "turn-id" };
+    vi.mocked(invoke).mockResolvedValue(accepted);
+    expect(await submitTurn("profile", input, "debug-fixture-v1")).toBe(accepted);
+    expect(invoke).toHaveBeenCalledWith("llm_submit", {
+      profileId: "profile",
+      input,
+      guardSpecId: "debug-fixture-v1",
+    });
+    const finishReason: FinishReason = "length";
+    const outcome: TurnOutcome = "failed";
+    const snapshot: TurnSnapshot = {
+      turnId: accepted.turnId,
+      text: "",
+      seq: { chunk: 0, done: 0, failed: 1 },
+      outcome,
+      finishReason,
+      error: { code: "llm.empty-output", message: "生成未返回正文" },
+    };
+    vi.mocked(invoke).mockResolvedValue(snapshot);
+    expect(await getTurn(accepted.turnId)).toBe(snapshot);
+    expect(invoke).toHaveBeenLastCalledWith("llm_get_turn", { turnId: accepted.turnId });
+    const cancelled = { turnId: accepted.turnId, outcome: "cancelled" };
+    vi.mocked(invoke).mockResolvedValue(cancelled);
+    expect(await cancelTurn(accepted.turnId)).toBe(cancelled);
+    expect(invoke).toHaveBeenLastCalledWith("llm_cancel", { turnId: accepted.turnId });
+    const failed: TurnEnvelope<TurnFailed> = {
+      seq: 1,
+      data: {
+        turnId: accepted.turnId,
+        code: "llm.empty-output",
+        message: "生成未返回正文",
+        chunkSeq: 0,
+        finishReason,
+      },
+    };
+    const chunk: TurnEnvelope<TurnChunk> = {
+      seq: 1,
+      data: { turnId: accepted.turnId, delta: "text" },
+    };
+    const done: TurnEnvelope<TurnDone> = {
+      seq: 1,
+      data: {
+        turnId: accepted.turnId,
+        outcome: "completed",
+        chunkSeq: chunk.seq,
+        finishReason: "stop",
+      },
+    };
+    expect(failed.data.finishReason).toBe(snapshot.finishReason);
+    expect(done.data.chunkSeq).toBe(chunk.seq);
   });
 });

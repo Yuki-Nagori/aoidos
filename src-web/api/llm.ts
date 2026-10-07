@@ -59,3 +59,65 @@ export function getKeyStatus(providerId: string): Promise<KeyStatus> {
 export function setKey(providerId: string, action: "set" | "clear"): Promise<KeyStatus> {
   return invoke("llm_set_key", { providerId, action });
 }
+
+/** 已冻结配置的开发输入；生产构建不注册 llm_submit。 */
+export type TurnInput =
+  | { kind: "completion"; prompt: string }
+  | {
+      kind: "chat";
+      messages: { role: "system" | "user" | "assistant"; content: string }[];
+      assistantPrefix?: string;
+    };
+
+export type TurnOutcome = "completed" | "cancelled" | "failed";
+export type FinishReason = "stop" | "guard" | "length";
+
+/** 已提交正文、终态和三基线的一致副本；未发生的终态字段省略。 */
+export interface TurnSnapshot {
+  turnId: string;
+  text: string;
+  seq: { chunk: number; done: number; failed: number };
+  outcome?: TurnOutcome;
+  finishReason?: FinishReason;
+  error?: { code: string; message: string };
+}
+
+/** 接纳后空快照已可读取；调试入口只运行 Rust 内建本地夹具。 */
+export function submitTurn(
+  profileId: string,
+  input: TurnInput,
+  guardSpecId: string,
+): Promise<{ turnId: string }> {
+  return invoke("llm_submit", { profileId, input, guardSpecId });
+}
+
+/** 读取内存回合；已驱逐的 UUID 返回 app.not-found。 */
+export function getTurn(turnId: string): Promise<TurnSnapshot> {
+  return invoke("llm_get_turn", { turnId });
+}
+
+/** 等待当前提交结束，返回取消与完成竞争后已胜出的终态。 */
+export function cancelTurn(turnId: string): Promise<{ turnId: string; outcome: TurnOutcome }> {
+  return invoke("llm_cancel", { turnId });
+}
+
+/** 事件的共同信封，各事件种类独立计数。 */
+export interface TurnEnvelope<T> {
+  seq: number;
+  data: T;
+}
+export interface TurnChunk {
+  turnId: string;
+  delta: string;
+}
+export type TurnDone =
+  | { turnId: string; outcome: "completed"; chunkSeq: number; finishReason: FinishReason }
+  | { turnId: string; outcome: "cancelled"; chunkSeq: number };
+/** empty-output 的 finishReason 必有，其余错误按真实已知原因携带。 */
+export interface TurnFailed {
+  turnId: string;
+  code: string;
+  message: string;
+  chunkSeq: number;
+  finishReason?: FinishReason;
+}

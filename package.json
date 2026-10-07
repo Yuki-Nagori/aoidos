@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:native": "cargo test -p mythos-native-tests --test native-platform --features desktop-session",
+    "test:native": "cargo test -p mythos-native-tests --features desktop-session",
     "test:rust": "cargo test --workspace",
     "coverage:rust": "bun scripts/coverage-rust.mts",
     "doc:rust": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps --workspace",

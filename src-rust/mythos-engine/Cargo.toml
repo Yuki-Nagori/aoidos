@@ -1,0 +1,17 @@
+[package]
+name = "mythos-engine"
+description = "回合协调、共享 lease 与输出提交边界（不依赖 tauri）"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mythos-llm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

@@ -82,13 +82,13 @@ jobs:
       - name: test + coverage 门槛（cargo-llvm-cov）
         run: bun run coverage:rust
 
-      - name: 原生密码输入与 OS 凭据库真实会话验证（macOS / Windows）
+      - name: 原生 UI / 凭据与主 Webview IPC 验证（macOS / Windows）
         if: matrix.os != 'ubuntu-latest'
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: bun run test:native
-      - name: 原生密码输入与 Secret Service 真实会话验证（Linux）
+      - name: 原生 UI / Secret Service 与主 Webview IPC 验证（Linux）
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: |
           dbus-run-session -- bash -c '
             printf "mythos-session-fixture" | gnome-keyring-daemon --unlock --components=secrets
