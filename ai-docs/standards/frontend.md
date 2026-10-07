@@ -1,6 +1,6 @@
 # 前端约定
 
-更新日期：2026-10-06。除标注官方依据外均为项目约定。
+更新日期：2026-10-07。除标注官方依据外均为项目约定。
 
 ## 逻辑归属
 
@@ -8,9 +8,13 @@ IPC 薄调用与 Rust 同型的 TS 载荷类型放 `src-web/api/`，不在组件
 
 组件只做编排与渲染；可复用、可测试的逻辑放 `src-web/utils/` 并配单测，`<script setup>` 顶层不堆过程式逻辑，超过十行就抽函数。全局状态与路由在需求真实出现前不引入（当前无 pinia / vueuse / vue-router）。
 
+Composable 遵循 [Vue 官方约定](https://vuejs.org/guide/reusability/composables.html#conventions-and-best-practices)：`use` 前缀、接受 ref / getter、用 watch 跟踪输入、返回包含 refs 的普通对象。必须在 setup 或活动 effectScope 中同步调用；资源通过 [onScopeDispose](https://vuejs.org/api/reactivity-advanced.html#onscopedispose) 清理。桌面事件订阅不读取挂载后的 DOM，不增加 SSR 承诺或无需求的全局 store。
+
+回合消费者通过 `useLlmTurn` 管理已知 turnId 的订阅与重连；消费和恢复规则在 utils，通过注入端口独立测试。`recoveryError` 表示读取失败，不能覆盖 Rust 回合 outcome / error；产品界面由后续任务接入。
+
 ## SFC 与类型
 
-组件一律 `<script setup lang="ts">`；类型导入用 inline 形态 `import { type Foo }`（ESLint `consistent-type-imports` 强制）；函数写显式返回类型，ref 给显式初值。模板内避免 `<img src="/...">` 这类运行时资产解析——happy-dom 测试环境会踩 vite 资产解析错误，需要图形就用内联 SVG。
+组件一律 `<script setup lang="ts">`；类型导入用 inline 形态 `import { type Foo }`（ESLint `consistent-type-imports` 强制）；局部类型标注允许 `import("module").Type`，规则显式设置 `disallowTypeAnnotations: false`（[官方选项](https://typescript-eslint.io/rules/consistent-type-imports/#disallowtypeannotations)）；函数写显式返回类型，ref 给显式初值。模板内避免 `<img src="/...">` 这类运行时资产解析——happy-dom 测试环境会踩 vite 资产解析错误，需要图形就用内联 SVG。
 
 ## 测试
 

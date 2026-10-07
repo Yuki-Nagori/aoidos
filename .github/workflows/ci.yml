@@ -51,7 +51,7 @@ jobs:
           tool: cargo-llvm-cov
       - name: 安装依赖（postinstall 做环境自检）
         run: bun install --frozen-lockfile
-      - name: typecheck（vue-tsc）
+      - name: typecheck（前端 + 仓库脚本）
         run: bun run typecheck
       - name: lint（eslint）
         run: bun run lint

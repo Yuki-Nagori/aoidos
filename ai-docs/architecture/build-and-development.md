@@ -22,11 +22,13 @@
 | `bun run test:rust` / `coverage:rust`  | cargo test / cargo-llvm-cov 行覆盖门槛                                                             |
 | `bun run lint` / `lint:rust`           | ESLint / clippy（`lint:fix` 自动修 TS 侧，`lint:rust:fix` 自动修 Rust 侧：clippy --fix + rustfmt） |
 | `bun run format` / `format:rust`       | Prettier / rustfmt（`:check` 为只读检查）                                                          |
-| `bun run typecheck` / `typecheck:rust` | vue-tsc / cargo check                                                                              |
+| `bun run typecheck` / `typecheck:rust` | vue-tsc + 仓库脚本 tsc / cargo check                                                               |
 | `bun run bench`                        | tinybench 基准示例                                                                                 |
 | `bun run doc:rust`                     | rustdoc 构建并拒绝警告（文档内链契约）                                                             |
 | `bun run knip`                         | 死依赖 / 死导出检查                                                                                |
 | `bun run tauri:build`                  | 发布打包                                                                                           |
+
+前端与夹具源代码按根 `tsconfig.json` 检查；仓库 `.mts` 脚本使用 `scripts/tsconfig.json`，继承严格检查并单独启用 Bun / Node 类型及 `allowImportingTsExtensions`，保持 `noEmit`。`typecheck` 聚合两项，前端配置不增加脚本运行环境类型。`@types/bun` / `@types/node` 作为直接开发依赖，版本由 `bun.lock` 固定。
 
 ## verify 构成
 
@@ -46,9 +48,9 @@ CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原
 
 `bun run test:native` 是独立于本地 verify 十三项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
 
-入口一次执行 `mythos-native-tests` 的全部桌面会话目标，新增目标只登记 Cargo，不追加根脚本。定向排查可用 `bun run test:native --test ipc-platform`。`ipc-platform` 使用真实主 Webview 注册产品相同命令，验证订阅、提交、正文 / 终态、快照、重复取消与非法输入；只运行本地夹具，不调用收费 API。测试的 `webview/` 与 `tauri.conf.json` 是手写夹具，须入库；`gen/` 是 Tauri 生成 schema，已忽略。
+入口一次执行 `mythos-native-tests` 的全部桌面会话目标，新增目标只登记 Cargo，不追加根脚本。定向排查可用 `bun run test:native --test ipc-platform`。入口先用 Bun 构建手写 `webview/main.ts` 到 `gen/webview/`；测试配置加载这一生成目录，因此必须经根脚本运行。`ipc-platform` 使用真实主 Webview 注册产品相同命令并装载实际 `useLlmTurn`，验证订阅、提交、正文 / 终态、快照、重复取消、非法输入、重连、全事件丢失后的主动恢复与卸载清理；只运行本地夹具，不调用收费 API。测试的 `webview/` 与 `tauri.conf.json` 是手写夹具，须入库；整个 `gen/` 包含 Tauri schema 与打包后的 Webview 资产，Git / ESLint 均排除，不能把第三方打包代码当自有源码检查。
 
-CI 每个平台额外执行该聚合测试，单步超时 5 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)，原生凭据结果归 [019](../task/019-llm-profile-credentials-impl.md)，IPC 结果归 [020](../task/020-llm-turn-ipc-impl.md)。原生能力实测不代替目标平台安装包验证。
+CI 每个平台额外执行该聚合测试，单步超时 5 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)，原生凭据结果归 [019](../task/019-llm-profile-credentials-impl.md)，发送端结果归 [020](../task/020-llm-turn-ipc-impl.md)，实际消费者验证归 [021](../task/021-llm-web-recovery-impl.md)。原生能力实测不代替目标平台安装包验证。
 
 ## 打包与版本
 

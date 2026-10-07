@@ -2,7 +2,7 @@
   "productName": "Mythos IPC fixture",
   "identifier": "com.yuki.mythos.ipcfixture",
   "build": {
-    "frontendDist": "webview"
+    "frontendDist": "gen/webview"
   },
   "app": {
     "windows": [],

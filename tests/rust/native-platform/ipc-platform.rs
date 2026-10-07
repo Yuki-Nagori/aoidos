@@ -35,10 +35,51 @@ async fn report_smoke(
     app.state::<Arc<WindowEvents>>().close();
     let cleaned = std::fs::remove_dir_all(&report.dir).is_ok();
     if passed && cleaned {
-        println!("main Webview submit / chunk / done / snapshot / cancel: PASS");
+        println!(
+            "main Webview submit / events / consumer / reconnect / recovery / listener release: PASS"
+        );
     }
     app.exit(if passed && cleaned { 0 } else { 1 });
     Ok(())
+}
+
+// 测试专用同步屏障不取消回合、不轮询；用于验证最后事件全丢后的主动恢复。
+#[tauri::command]
+async fn wait_smoke(service: tauri::State<'_, TurnService>, turn_id: String) -> Result<(), String> {
+    service
+        .coordinator
+        .wait(&turn_id)
+        .await
+        .map_err(smoke_snapshot_error)?;
+    Ok(())
+}
+
+// 卸载后以真实窗口事件确认 JS 监听器已释放；此标记不写入业务快照。
+#[tauri::command]
+fn emit_smoke(
+    app: AppHandle,
+    service: tauri::State<'_, TurnService>,
+    turn_id: String,
+) -> Result<(), String> {
+    let snapshot = service
+        .coordinator
+        .snapshot(&turn_id)
+        .map_err(smoke_snapshot_error)?;
+    app.emit_to(
+        "main",
+        "llm:turn:chunk",
+        serde_json::json!({
+            "seq": snapshot.seq.chunk + 1,
+            "data": { "turnId": turn_id, "delta": "unmounted" }
+        }),
+    )
+    .map_err(smoke_emit_error)
+}
+fn smoke_snapshot_error(error: Fault) -> String {
+    error.code
+}
+fn smoke_emit_error(_: tauri::Error) -> String {
+    "fixture-emit-failed".into()
 }
 
 fn delivery_failed(_: tauri::Error) -> Fault {
@@ -102,7 +143,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mythos_lib::turn_ipc::llm_submit,
             mythos_lib::turn_ipc::llm_get_turn,
             mythos_lib::turn_ipc::llm_cancel,
-            report_smoke
+            report_smoke,
+            wait_smoke,
+            emit_smoke
         ])
         .build(tauri::generate_context!("tauri.conf.json", test = true))?;
     app.run(|_, _| {});
@@ -113,6 +156,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         passed.load(Ordering::Acquire),
         "real main Webview IPC did not pass"
     );
-    println!("main Webview submit / chunk / done / snapshot / cancel: PASS");
+    println!(
+        "main Webview submit / events / consumer / reconnect / recovery / listener release: PASS"
+    );
     Ok(())
 }

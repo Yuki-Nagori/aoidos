@@ -115,6 +115,8 @@ interface TurnSnapshot {
 
 text 仅包含护栏后的已接纳正文。产品模式已持久化后再更新快照和投递；调试模式为内存结果。缓存只含进行中与最近已结束回合，容量与驱逐规则见 llm.md；驱逐后的旧 turnId 为 app.not-found，持久记录归 006，不靠本命令跨进程恢复。
 
+021 的 `useLlmTurn` 消费上述载荷；读取错误保存在独立 recoveryError，不改写回合 error。subscribe / snapshot 竞态、终态补正文和最后全事件丢失的实际边界见 [LLM 恢复规则](llm.md)。
+
 ## 引擎命令与阶段快照（012 设计，尚未实现）
 
 规则以[阶段机](turn-state-machine.md)为准，023 实现；phase、场景和操作终态事件均用 sessionId 分流。roundId 是游戏回合，turnId 是单次 LLM 调用；内部提议不发 llm:turn:*，不出现在公开 llm_get_turn，旁白 / 角色仍沿用上节。

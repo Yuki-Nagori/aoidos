@@ -15,7 +15,7 @@ LLM 安全文本需要真正持久化；017 推迟的迁移事件与快照也需
 
 ## 范围与非目标
 
-- 记录块语法与同源 GuardSpec、JSONL / 会话结构、受控追加、partial sidecar / 封口、中断前文保留和持久化 OutputSink。
+- 记录块语法与同源 GuardSpec、JSONL / 会话结构、受控追加、partial sidecar / 封口、中断前文保留和持久化 OutputWriter。
 - 上下文投影、稳定前缀、折叠 / recap、token 估算标定与记录 page / view / body、按身份替换预览及缺口恢复；前端消费纯逻辑 / 有界缓存进 utils，监听生命周期进 composable，不借此实现完整游戏 UI。
 - 迁移 flow 标识、progress / done / failed、运行期状态与 store_get_migration 快照；复用 store 回调及事件设施。
 
@@ -35,7 +35,7 @@ LLM 安全文本需要真正持久化；017 推迟的迁移事件与快照也需
 
 ## 预计改动
 
-扩展待创建的 `src-rust/mythos-engine/` 记录模块；现存 store、Tauri 命令与前端 API 按需扩展，新增记录结构专题文档由 006 先产出。以上为规划，不表示目录或接口已经实现。
+扩展已存在的 `src-rust/mythos-engine/` 记录模块；现存 store、Tauri 命令与前端 API 按需扩展，新增记录结构专题文档由 006 先产出。以上为规划，不表示目录或接口已经实现。
 
 ## 验收标准
 

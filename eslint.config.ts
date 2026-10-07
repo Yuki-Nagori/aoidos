@@ -8,7 +8,7 @@ import type { Linter } from "eslint";
 const tsRules: Linter.RulesRecord = {
   "@typescript-eslint/consistent-type-imports": [
     "error",
-    { prefer: "type-imports", fixStyle: "inline-type-imports" },
+    { prefer: "type-imports", fixStyle: "inline-type-imports", disallowTypeAnnotations: false },
   ],
   "@typescript-eslint/no-unused-vars": [
     "error",
@@ -17,7 +17,16 @@ const tsRules: Linter.RulesRecord = {
 };
 
 export default tseslint.config(
-  { ignores: ["dist/**", "coverage/**", "src-tauri/**", "target/**", "node_modules/**"] },
+  {
+    ignores: [
+      "dist/**",
+      "coverage/**",
+      "src-tauri/**",
+      "tests/rust/native-platform/gen/**",
+      "target/**",
+      "node_modules/**",
+    ],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   { files: ["**/*.ts"], rules: tsRules },

@@ -1,3 +1,4 @@
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CmdError } from "../../../src-web/api/store";
@@ -143,4 +144,17 @@ describe("llm IPC", () => {
     expect(failed.data.finishReason).toBe(snapshot.finishReason);
     expect(done.data.chunkSeq).toBe(chunk.seq);
   });
+});
+
+it("turn events unwrap the shared envelope and return the platform unlistener", async () => {
+  const { listen } = await import("@tauri-apps/api/event");
+  const { listenTurnEvent } = await import("../../../src-web/api/llm");
+  const unlisten = vi.fn();
+  const listener = vi.fn();
+  vi.mocked(listen).mockResolvedValueOnce(unlisten);
+  expect(await listenTurnEvent("llm:turn:chunk", listener)).toBe(unlisten);
+  const handler = vi.mocked(listen).mock.calls.at(-1)![1];
+  const payload = { seq: 1, data: { turnId: "a", delta: "正文" } };
+  handler({ event: "llm:turn:chunk", id: 1, payload });
+  expect(listener).toHaveBeenCalledWith(payload);
 });
