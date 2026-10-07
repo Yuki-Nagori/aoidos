@@ -1,6 +1,11 @@
 {
   "$schema": "https://cdn.jsdelivr.net/npm/knip@6/schema.json",
-  "entry": ["index.html", "tests/web/**/*.test.ts", "src-web/bench/*.ts"],
+  "entry": [
+    "index.html",
+    "tests/web/**/*.test.ts",
+    "src-web/bench/*.ts",
+    "tests/rust/native-platform/webview/main.ts"
+  ],
   "project": ["src-web/**/*.ts", "src-web/**/*.vue"],
   "ignoreDependencies": ["tailwindcss"]
 }

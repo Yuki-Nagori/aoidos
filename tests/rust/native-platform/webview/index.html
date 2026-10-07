@@ -5,77 +5,7 @@
     <title>Mythos IPC fixture</title>
   </head>
   <body>
-    <script>
-      (async () => {
-        const api = window.__TAURI_INTERNALS__;
-        const received = [];
-        const unsubscribers = [];
-        let finish;
-        const terminal = new Promise((resolve) => {
-          finish = resolve;
-        });
-        try {
-          for (const event of ["llm:turn:chunk", "llm:turn:done", "llm:turn:failed"]) {
-            const handler = api.transformCallback(({ payload }) => {
-              received.push({ event, ...payload });
-              if (event !== "llm:turn:chunk") finish();
-            });
-            const id = await api.invoke("plugin:event|listen", {
-              event,
-              target: { kind: "AnyLabel", label: "main" },
-              handler,
-            });
-            unsubscribers.push({ event, eventId: id });
-          }
-          let rejected = false;
-          try {
-            await api.invoke("llm_submit", {
-              profileId: "ipc-fixture",
-              input: { kind: "chat", messages: [{ role: "tool", content: "invalid" }] },
-              guardSpecId: "debug-fixture-v1",
-            });
-          } catch (error) {
-            rejected = error.code === "app.bad-request";
-          }
-          if (!rejected) throw { code: "invalid-input-not-rejected" };
-          const { turnId } = await api.invoke("llm_submit", {
-            profileId: "ipc-fixture",
-            input: { kind: "completion", prompt: "本地夹具" },
-            guardSpecId: "debug-fixture-v1",
-          });
-          await terminal;
-          const snapshot = await api.invoke("llm_get_turn", { turnId });
-          const cancelled = await api.invoke("llm_cancel", { turnId });
-          const chunks = received.filter((event) => event.event === "llm:turn:chunk");
-          const done = received.filter((event) => event.event === "llm:turn:done");
-          const valid =
-            snapshot.turnId === turnId &&
-            snapshot.text === "本地夹具正文。" &&
-            snapshot.outcome === "completed" &&
-            snapshot.finishReason === "stop" &&
-            snapshot.seq.chunk === 1 &&
-            snapshot.seq.done === 1 &&
-            snapshot.seq.failed === 0 &&
-            chunks.length === 1 &&
-            chunks[0].data.turnId === turnId &&
-            chunks[0].data.delta === snapshot.text &&
-            done.length === 1 &&
-            done[0].data.turnId === turnId &&
-            done[0].data.chunkSeq === snapshot.seq.chunk &&
-            done[0].data.finishReason === snapshot.finishReason &&
-            cancelled.outcome === "completed";
-          for (const listener of unsubscribers) await api.invoke("plugin:event|unlisten", listener);
-          await api.invoke("report_smoke", {
-            passed: valid,
-            diagnostic: valid ? "" : "event-snapshot-mismatch",
-          });
-        } catch (error) {
-          await api.invoke("report_smoke", {
-            passed: false,
-            diagnostic: String(error.code ?? "ipc-error"),
-          });
-        }
-      })();
-    </script>
+    <div id="app"></div>
+    <script type="module" src="./main.js"></script>
   </body>
 </html>

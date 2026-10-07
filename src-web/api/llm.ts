@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
 /** 对应 Rust Sampling；temperature 与 thinking 能力冲突时由 Rust 侧省略参数。 */
@@ -120,4 +121,24 @@ export interface TurnFailed {
   message: string;
   chunkSeq: number;
   finishReason?: FinishReason;
+}
+
+/** 三种回合事件的载荷映射，事件名与 Rust TurnEvent::name 保持一致。 */
+type TurnEventMap = {
+  "llm:turn:chunk": TurnChunk;
+  "llm:turn:done": TurnDone;
+  "llm:turn:failed": TurnFailed;
+};
+
+/** 只解包共同信封；订阅顺序、恢复与释放由消费者生命周期负责。 */
+export function listenTurnEvent<K extends keyof TurnEventMap>(
+  name: K,
+  handler: (payload: TurnEnvelope<TurnEventMap[K]>) => void,
+): Promise<import("@tauri-apps/api/event").UnlistenFn> {
+  return listen(
+    name,
+    (event: import("@tauri-apps/api/event").Event<TurnEnvelope<TurnEventMap[K]>>) =>
+      handler(event.payload),
+    { target: { kind: "AnyLabel", label: "main" } },
+  );
 }

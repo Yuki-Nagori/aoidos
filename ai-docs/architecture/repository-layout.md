@@ -9,7 +9,8 @@
 │   ├── App.vue                # 根组件：greet 示例（IPC 往返 + 浏览器回退 + 主题切换）
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
-│   ├── utils/                 # 纯逻辑函数，配单测（计入覆盖率门槛）
+│   ├── utils/                 # 纯消费规则 / 恢复协调及其他纯逻辑，配单测
+│   ├── composables/           # Vue 身份、监听与 scope 清理，消费 utils
 │   └── bench/                 # tinybench 基准示例
 ├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
@@ -29,7 +30,7 @@
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
 ├── tests/web/                 # Vitest 单测（目录镜像 src-web）
-├── scripts/                   # 仓库脚本（setup.mts 环境配置；coverage-rust.mts 跑覆盖率门禁）
+├── scripts/                   # 仓库脚本（环境 / 覆盖率 / 原生前端夹具构建；独立 tsconfig）
 ├── coverage-rust.config.mts   # Rust 覆盖率门禁的忽略清单与逐文件预算（scripts/coverage-rust.mts 消费）
 ├── .github/workflows/ci.yml   # 三平台 CI
 ├── .husky/pre-commit          # 提交前查双端格式（全量门禁在 CI）
