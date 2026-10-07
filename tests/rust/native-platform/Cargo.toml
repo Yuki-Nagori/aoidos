@@ -1,0 +1,18 @@
+[package]
+name = "mythos-native-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+desktop-session = []
+
+[dev-dependencies]
+mythos-llm = { workspace = true, features = ["native-smoke"] }
+secrecy.workspace = true
+
+[[test]]
+name = "native-platform"
+path = "native-platform.rs"
+harness = false
+required-features = ["desktop-session"]

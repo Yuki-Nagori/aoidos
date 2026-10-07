@@ -6,7 +6,7 @@ export interface Sampling {
   maxTokens: number;
 }
 
-/** 调用形态；叙事固定 completion，chat 留给非叙事调用。 */
+/** 调用形态；能力与正式降级由 Rust 提交层检查。 */
 export type ProfileMode = "completion" | "chat";
 
 /**
@@ -48,14 +48,13 @@ export function deleteProfile(profileId: string): Promise<{ deleted: boolean }> 
   return invoke("llm_delete_profile", { profileId });
 }
 
-/** 查询凭据状态（只返回 set + hint，不读取明文）。 */
+/** 查询凭据状态（Rust 派生 set + hint，明文不进入 IPC）。 */
 export function getKeyStatus(providerId: string): Promise<KeyStatus> {
   return invoke("llm_get_key_status", { providerId });
 }
 
 /**
- * 设置 / 清除密钥。action="set" 发起 Rust 原生输入（Windows CredUI，
- * 未验证平台拒绝），用户取消保留旧值；明文不接受 IPC 参数。
+ * 设置 / 清除密钥。action="set" 发起 Rust 原生输入（Windows CredUI、macOS AppKit、Linux GTK），用户取消保留旧值；明文不接受 IPC 参数。
  */
 export function setKey(providerId: string, action: "set" | "clear"): Promise<KeyStatus> {
   return invoke("llm_set_key", { providerId, action });

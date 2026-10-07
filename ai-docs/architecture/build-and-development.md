@@ -17,6 +17,7 @@
 | `bun run dev`                          | 浏览器纯前端预览（无 IPC，命令走前端回退）                                                         |
 | `bun run build`                        | typecheck + Vite 生产构建 → `dist/`（`build:web` 为纯构建段，verify 复用）                         |
 | `bun run verify`                       | 提交门禁，构成见下                                                                                 |
+| `bun run test:native`                  | 三平台真实密码输入 / OS 凭据集成测试，需桌面会话；不输出合成密钥                                   |
 | `bun run test` / `test:coverage`       | Vitest / Vitest + 覆盖率门槛                                                                       |
 | `bun run test:rust` / `coverage:rust`  | cargo test / cargo-llvm-cov 行覆盖门槛                                                             |
 | `bun run lint` / `lint:rust`           | ESLint / clippy（`lint:fix` 自动修 TS 侧，`lint:rust:fix` 自动修 Rust 侧：clippy --fix + rustfmt） |
@@ -33,7 +34,7 @@
 
 CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两次全量 Rust 编译）：`cargo check` 不单跑（clippy 已含类型检查）；`cargo test` 不单跑（llvm-cov 先执行同一套测试，单次插桩编译同时验证测试与覆盖率门槛）。纯文档改动（`ai-docs/**`、`**/*.md`）不触发 CI。见 ci.yml 顶部注释。
 
-CI 先完成格式、前端、knip、基准与 rustdoc 等快速门禁（rustdoc 只编译本仓 crate，不需系统依赖），再安装 Linux 系统依赖并编译 Rust，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
+CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原生依赖并执行 rustdoc / clippy / Rust 覆盖率，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
 
 触发范围：main push 与 pull request 仅修改 `ai-docs/**` 或 Markdown 文件时跳过全量 CI；代码、依赖、脚本、工作流及其他配置改动仍跑三平台。PR 按相对 base 的累计 diff 判断，代码 PR 后续补文档仍可能触发；新建的纯文档 PR 与合并后的纯文档 push 会跳过。文档提交保留本地 / husky 格式检查。
 
@@ -54,3 +55,5 @@ $ bun run tauri:build
 1. 换图标：替换 `src-tauri/icons/icon.png`（1024×1024 方形）后执行 `bun run tauri icon src-tauri/icons/icon.png`，全套生成到 `src-tauri/icons/`（含 android / ios 子目录，纯桌面项目可删）；浏览器 favicon 用 `public/icon.png`，随手同步一份。
 2. 替换 greet 示例为第一个真实命令：`commands.rs` 定义 → `generate_handler![]` 注册 → 需要插件能力时在 `capabilities/default.json` 加权限 → TS 声明同型并 `invoke` → 照 `tests/web/App.test.ts` mock 测试。示例 `greet` 被替换后删除。
 3. 工作方式登记：非平凡改动从[任务索引](../task-index.md)建 task 开始。
+
+019 原生能力有额外的 `test:native` 三平台集成门禁：Windows CredUI、macOS AppKit / Keychain、Linux Xvfb + 独立 D-Bus / Secret Service，均验证确认 / 取消与凭据读写清。它需要桌面会话且显式开启 `desktop-session`，不计入无 UI 的本地 verify 十三项；CI 每平台另跑，超时 3 分钟。平台模块不以例外隐藏业务逻辑，具体覆盖边界见测试规范。

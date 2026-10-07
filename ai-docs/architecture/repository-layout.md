@@ -22,6 +22,7 @@
 │   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）
 │   └── build.rs               # tauri-build
 ├── src-rust/                  # 业务 crate，不依赖 tauri（mythos-store 存储；mythos-llm 供应商适配 / 护栏 / 调度 / 配置凭据代理，providers/ 按厂商拆 adapter，platform/ 按平台拆原生能力）
+├── tests/rust/native-platform/ # 原生主线程 UI / OS 凭据集成测试 crate（显式桌面会话）
 ├── tests/web/                 # Vitest 单测（目录镜像 src-web）
 ├── scripts/                   # 仓库脚本（setup.mts 环境配置；coverage-rust.mts 跑覆盖率门禁）
 ├── coverage-rust.config.mts   # Rust 覆盖率门禁的忽略清单与逐文件预算（scripts/coverage-rust.mts 消费）

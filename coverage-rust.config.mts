@@ -2,7 +2,7 @@
 //
 // llvm-cov 对「同一 crate 同时作为其他测试二进制的依赖被重复插桩」做跨二进制
 // 合并时，会对内联副本与 serde derive 派生产生少量幽灵未覆盖行——`llvm-cov show`
-// 显示全覆盖而 `llvm-cov report` 计 miss，无法经测试触达（019 实测共 5 行）。
+// 显示全覆盖而 `llvm-cov report` 计 miss，无法经测试触达（实际额度以本文件台账为准）。
 // 因此行覆盖门槛不设全局百分比，而是逐文件声明未覆盖行预算：
 // 缺省 0（所有文件默认必须 100%），确属工具伪影的文件在此登记理由与额度；
 // 真实回归会推高某文件的未覆盖数，照样拦截。
@@ -16,7 +16,9 @@ export default {
     // 内存分配 / CopySid 失败、合法 SID 的空值防御）无法在健康进程注入，整文件
     // 出门槛；可注入行为仍直测（空 / 非法句柄、非法 SID、坏路径、DACL 结构、
     // CredUI 对话框取消路径与返回码映射），依据见 testing.md。
-    /windows\.rs$/,
+    /platform[\\/]windows\.rs$/,
+    // 真实 AppKit / GTK 主线程原生 UI，由 test:native 桌面烟测验证；不含存储业务。
+    /platform[\\/](macos|linux)\.rs$/,
   ],
   /** 缺省每文件未覆盖行上限；0 表示必须 100%。 */
   defaultMaxUncoveredLines: 0,

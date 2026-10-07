@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm"]
+members = ["src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,7 +17,14 @@ mythos-store = { path = "src-rust/mythos-store" }
 mythos-llm = { path = "src-rust/mythos-llm" }
 # 密钥存储：v1 默认特性 = Windows Credential Manager / macOS Keychain / Linux Secret Service（019）。
 keyring = "4"
+keyring-core = "1"
 url = "2"
+# 原生密码输入：各目标仅链接自身 UI 库。
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSSecureTextField", "NSTextField", "NSControl", "NSResponder", "NSView", "NSButton", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSRunLoop", "NSTimer", "block2"] }
+block2 = "0.6"
+gtk = "0.18"
 # Windows 原生能力（019）：CredUI 凭据输入 + 降级文件 DACL。虚拟 manifest 不允许
 # target 段，按 crate 形态放各成员（见 src-rust/mythos-llm）。
 windows-sys = { version = "0.60", features = [
@@ -33,7 +40,7 @@ windows-sys = { version = "0.60", features = [
 ] }
 # rustls-tls 显式关闭默认特性：不要 native-tls / 自动解压；TLS backend 锁定 rustls(ring) 便于错误链分类。
 # reqwest 0.13 的 rustls feature 绑定 aws-lc-rs（Windows 需 CMake+NASM），改用 no-provider + 显式安装 ring。
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider", "socks"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"

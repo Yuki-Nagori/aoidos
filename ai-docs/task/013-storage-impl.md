@@ -84,6 +84,7 @@
 平台处理保持以下决策：目录目标立即报 `io`；通用 busy 错误报 `locked`；Windows rename 的 5 / 32 作为共享冲突，而 Unix 同号 EIO / EPIPE 保持 `io`。Windows 目录 flush 使用带写权限及 BACKUP_SEMANTICS 的句柄；权限拒绝或卷不支持 flush 时保留已发布的替换结果。
 
 - 2026-10-07：issue #61 同步更新日期与既有消融工作记录；本次为文档元数据修正，未重做历史消融或改动存储实现。
+- 2026-10-07：019 评审补全仓共用 write_atomic_private：空 tmp 先收紧权限，再写正文 / fsync / 发布；权限失败保留旧文件并清理空 tmp，有顺序与失败回归测试。不复写第二套原子 IO。
 
 ## 完成摘要
 

@@ -9,12 +9,13 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use secrecy::{ExposeSecret, SecretString};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use mythos_store::atomic::write_text_atomic;
+use mythos_store::atomic::write_atomic_private;
 use mythos_store::error::{Result, StoreError};
 
 /// 凭据库按 provider 存取密钥；句柄可克隆共享，019 内由命令层持有。
@@ -65,27 +66,32 @@ pub struct KeyStatus {
 
 /// hint 规则：末 4 个字符；短于 4 返回 `None`（只报告已设置）。
 pub(crate) fn hint_of(secret: &str) -> Option<String> {
-    let chars: Vec<char> = secret.chars().collect();
+    let mut chars: Vec<char> = secret.chars().rev().take(4).collect();
     if chars.len() < 4 {
         None
     } else {
-        Some(chars[chars.len() - 4..].iter().collect())
+        chars.reverse();
+        Some(chars.iter().collect())
     }
 }
 
 /// OS 凭据库（keyring 默认特性，见 tech-stack）。service 固定为应用名，user 为 providerId。
 pub struct OsKeyring {
     service: &'static str,
+    entry_factory: fn(&str, &str) -> keyring::Result<keyring::Entry>,
 }
 
 impl OsKeyring {
     #[must_use]
     pub fn new() -> Self {
-        Self { service: "mythos" }
+        Self {
+            service: "mythos",
+            entry_factory: keyring::Entry::new,
+        }
     }
 
     fn entry(&self, provider_id: &str) -> Result<keyring::Entry> {
-        keyring::Entry::new(self.service, provider_id).map_err(keyring_error)
+        (self.entry_factory)(self.service, provider_id).map_err(keyring_error)
     }
 }
 
@@ -153,7 +159,7 @@ fn err_credentials_serialize(_: serde_json::Error) -> StoreError {
 }
 
 /// 降级文件：`<dir>/credentials.json`，键为 providerId。整文件经
-/// [`write_text_atomic`] 覆写；文件权限在创建时收紧为仅当前用户（Unix 0600 /
+/// [`write_atomic_private`] 覆写；空临时文件先收紧为仅当前用户（Unix 0600 /
 /// Windows 仅当前用户的受保护 DACL），已存在的宽松文件也会被重新收紧。
 pub struct CredentialFile {
     path: PathBuf,
@@ -167,49 +173,113 @@ impl CredentialFile {
         }
     }
 
-    fn read_map(&self) -> Result<BTreeMap<String, String>> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(text) => serde_json::from_str(&text).map_err(err_credentials_json),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+    fn read_data(&self) -> Result<CredentialData> {
+        match std::fs::File::open(&self.path) {
+            Ok(file) => {
+                let mut text = String::new();
+                file.take(524_289)
+                    .read_to_string(&mut text)
+                    .map_err(StoreError::from_io)?;
+                if text.len() > 524_288 {
+                    return Err(StoreError::Corrupt("credentials file too large".into()));
+                }
+                let decoded: CredentialEncoding =
+                    serde_json::from_str(&text).map_err(err_credentials_json)?;
+                match decoded {
+                    CredentialEncoding::Current(data) if data.version == 2 => Ok(data),
+                    CredentialEncoding::Current(_) => Err(StoreError::Corrupt(
+                        "unsupported credentials version".into(),
+                    )),
+                    CredentialEncoding::Legacy(map) => Ok(CredentialData {
+                        version: 2,
+                        entries: map
+                            .into_iter()
+                            .map(|(id, value)| (id, CredentialEntry::File { value }))
+                            .collect(),
+                    }),
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(CredentialData::default()),
             Err(err) => Err(StoreError::from_io(err)),
         }
     }
 
-    fn write_map(&self, map: &BTreeMap<String, String>) -> Result<()> {
-        // parent 为 None 仅在路径是根时出现，落盘会在写入时报错，这里统一建目录。
-        std::fs::create_dir_all(self.path.parent().unwrap_or(Path::new(".")))
-            .map_err(StoreError::from_io)?;
-        let text = serde_json::to_string(map).map_err(err_credentials_serialize)?;
-        // 先写后收紧：原子写完成发布，再压权限；中途崩溃最坏留下默认权限文件，
-        // 下一次写入会重新收紧。密码正文永不经过日志。
-        write_text_atomic(&self.path, &text)?;
-        crate::platform::restrict_to_current_user(&self.path)
+    fn write_data(&self, data: &CredentialData) -> Result<()> {
+        let text = serde_json::to_string(data).map_err(err_credentials_serialize)?;
+        if text.len() > 524_288 {
+            return Err(StoreError::Corrupt("credentials file too large".into()));
+        }
+        write_atomic_private(
+            &self.path,
+            text.as_bytes(),
+            crate::platform::restrict_to_current_user,
+        )
+    }
+
+    fn mark(&self, provider_id: &str, entry: CredentialEntry) -> Result<()> {
+        let mut data = self.read_data()?;
+        data.entries.insert(provider_id.to_owned(), entry);
+        self.write_data(&data)
     }
 }
 
 impl CredentialStore for CredentialFile {
     fn set_key(&self, provider_id: &str, secret: SecretString) -> Result<()> {
-        let mut map = self.read_map()?;
-        map.insert(provider_id.to_owned(), secret.expose_secret().to_owned());
-        self.write_map(&map)
+        self.mark(
+            provider_id,
+            CredentialEntry::File {
+                value: secret.expose_secret().to_owned(),
+            },
+        )
     }
 
     fn get_key(&self, provider_id: &str) -> Result<Option<SecretString>> {
-        Ok(self
-            .read_map()?
-            .get(provider_id)
-            .map(|raw| SecretString::from(raw.clone())))
+        Ok(match self.read_data()?.entries.remove(provider_id) {
+            Some(CredentialEntry::File { value }) => Some(SecretString::from(value)),
+            _ => None,
+        })
     }
 
     fn clear_key(&self, provider_id: &str) -> Result<()> {
-        let mut map = self.read_map()?;
-        map.remove(provider_id);
-        if map.is_empty() {
+        let mut data = self.read_data()?;
+        data.entries.remove(provider_id);
+        if data.entries.is_empty() {
             clear_file(&self.path)
         } else {
-            self.write_map(&map)
+            self.write_data(&data)
         }
     }
+}
+
+/// 不含明文的 OS 指针与删除墓碑，和降级密钥在同一次原子发布中提交。
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "backend", rename_all = "camelCase", deny_unknown_fields)]
+enum CredentialEntry {
+    Os,
+    File { value: String },
+    Deleted,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialData {
+    version: u32,
+    entries: BTreeMap<String, CredentialEntry>,
+}
+impl Default for CredentialData {
+    fn default() -> Self {
+        Self {
+            version: 2,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CredentialEncoding {
+    Current(CredentialData),
+    Legacy(BTreeMap<String, String>),
 }
 
 /// 删除降级文件：缺失视为已删除（幂等）；其余失败如实上报。
@@ -221,13 +291,11 @@ fn clear_file(path: &Path) -> Result<()> {
     }
 }
 
-/// 优先 OS 凭据库、失败降级私有文件的组合存储。
-///
-/// 语义：写操作先尝试 OS 库，成功后清除降级文件里的同名旧副本（单向迁移，
-/// OS 库恢复可用后不残留明文副本）；OS 库不可用时写降级文件。读操作先 OS 库，
-/// 未命中或读取失败再查降级文件（OS 库瞬断不能把已降级保存的密钥读丢）；
-/// OS 读命中时顺带重试迁移清理，把「清理失败 + OS 瞬断」期间读到过期副本的
-/// 窗口压到最短。
+/// 写入优先 OS 凭据库；原子保存每个条目的当前权威后端。
+/// OS 写入成功后文件只保留指针，写失败则保存文件值；读取按指针取值，
+/// 不用 OS 的旧值删除新降级值。删除先保存墓碑，再尽力清 OS 条目，
+/// 后端删除失败仍报告错误，但旧值不会复活。
+/// 旧版无版本字典按文件值读取，下次写入升级，不猜测另一后端是否更新。
 pub struct CredentialVault {
     os: Box<dyn CredentialStore>,
     file: CredentialFile,
@@ -252,37 +320,23 @@ impl CredentialVault {
 impl CredentialStore for CredentialVault {
     fn set_key(&self, provider_id: &str, secret: SecretString) -> Result<()> {
         match self.os.set_key(provider_id, secret.clone()) {
-            Ok(()) => {
-                // 迁移清理：文件副本若存在则删除，失败不回滚 OS 库写入
-                //（下次写入会再试清理，删除失败不构成密钥丢失）。
-                let _ = self.file.clear_key(provider_id);
-                Ok(())
-            }
+            Ok(()) => self.file.mark(provider_id, CredentialEntry::Os),
             Err(_) => self.file.set_key(provider_id, secret),
         }
     }
 
     fn get_key(&self, provider_id: &str) -> Result<Option<SecretString>> {
-        match self.os.get_key(provider_id) {
-            Ok(Some(secret)) => {
-                // OS 库确认持有该密钥：顺带重试此前可能失败的迁移清理。
-                // 只在 OS 读成功时清——OS 写失败过的 provider（文件是唯一
-                // 副本）走 Ok(None) / Err 分支，不会被误删。
-                let _ = self.file.clear_key(provider_id);
-                Ok(Some(secret))
-            }
-            // 未命中或读取失败都回落降级文件（语义见 struct 文档）。
-            Ok(None) | Err(_) => self.file.get_key(provider_id),
+        match self.file.read_data()?.entries.remove(provider_id) {
+            Some(CredentialEntry::File { value }) => Ok(Some(SecretString::from(value))),
+            Some(CredentialEntry::Deleted) => Ok(None),
+            Some(CredentialEntry::Os) | None => self.os.get_key(provider_id),
         }
     }
 
     fn clear_key(&self, provider_id: &str) -> Result<()> {
-        // 两边都清：任一边失败即报错（清除未确认完整，OS 库可能仍持有同名
-        // 条目）；文件副本的清除已在报错前尽力执行。
-        let os_result = self.os.clear_key(provider_id);
-        let file_result = self.file.clear_key(provider_id);
-        os_result?;
-        file_result
+        // 先提交墓碑，防止 OS 删除失败或进程中断后旧密钥再次被读出。
+        self.file.mark(provider_id, CredentialEntry::Deleted)?;
+        self.os.clear_key(provider_id)
     }
 }
 
@@ -323,6 +377,113 @@ impl CredentialStore for MemoryStore {
 mod tests {
     use super::*;
     use crate::temp_test_dir;
+
+    struct ReadOnlyOldKey;
+    impl CredentialStore for ReadOnlyOldKey {
+        fn set_key(&self, _: &str, _: SecretString) -> Result<()> {
+            FailingKeys::fail()
+        }
+        fn get_key(&self, _: &str) -> Result<Option<SecretString>> {
+            Ok(Some(SecretString::from("sk-old-os".to_owned())))
+        }
+        fn clear_key(&self, _: &str) -> Result<()> {
+            FailingKeys::fail()
+        }
+    }
+
+    #[test]
+    fn os_adapter_operations_are_testable_without_a_desktop_service() {
+        fn entry(service: &str, user: &str) -> keyring::Result<keyring::Entry> {
+            let credential = keyring_core::mock::Cred {
+                specifiers: (service.into(), user.into()),
+                inner: std::sync::Mutex::new(std::cell::RefCell::new(
+                    keyring_core::mock::CredData::default(),
+                )),
+            };
+            Ok(keyring::Entry {
+                inner: keyring_core::Entry::new_with_credential(std::sync::Arc::new(credential)),
+            })
+        }
+        let defaults = OsKeyring::default();
+        assert_eq!(defaults.service, "mythos");
+        let mut store = OsKeyring {
+            entry_factory: entry,
+            ..defaults
+        };
+        store
+            .set_key("p", SecretString::from("fixture".to_owned()))
+            .unwrap();
+        assert!(store.get_key("p").unwrap().is_none());
+        store.clear_key("p").unwrap();
+        store.entry_factory = |_, _| Err(keyring::Error::NoDefaultStore);
+        assert!(
+            store
+                .set_key("p", SecretString::from("fixture".to_owned()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn fallback_update_and_delete_never_resurrect_old_os_key() {
+        let dir = temp_test_dir("authority");
+        let vault =
+            CredentialVault::with_backends(Box::new(ReadOnlyOldKey), CredentialFile::new(&dir));
+        assert_eq!(
+            vault.get_key("p").unwrap().unwrap().expose_secret(),
+            "sk-old-os"
+        );
+        vault
+            .set_key("p", SecretString::from("sk-new-file".to_owned()))
+            .unwrap();
+        assert_eq!(
+            vault.get_key("p").unwrap().unwrap().expose_secret(),
+            "sk-new-file"
+        );
+        assert!(vault.clear_key("p").is_err());
+        let reopened =
+            CredentialVault::with_backends(Box::new(ReadOnlyOldKey), CredentialFile::new(&dir));
+        assert!(reopened.get_key("p").unwrap().is_none());
+        assert!(
+            !std::fs::read_to_string(dir.join("credentials.json"))
+                .unwrap()
+                .contains("sk-new-file")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn os_error_is_not_missing_and_legacy_files_keep_their_value() {
+        let dir = temp_test_dir("legacy-authority");
+        let vault =
+            CredentialVault::with_backends(Box::new(FailingBackend), CredentialFile::new(&dir));
+        assert!(vault.get_key("p").is_err());
+        std::fs::write(dir.join("credentials.json"), r#"{"p":"sk-legacy"}"#).unwrap();
+        assert_eq!(
+            vault.get_key("p").unwrap().unwrap().expose_secret(),
+            "sk-legacy"
+        );
+        vault.file.mark("p", CredentialEntry::Os).unwrap();
+        assert!(vault.get_key("p").is_err());
+        std::fs::write(
+            dir.join("credentials.json"),
+            r#"{"version":3,"entries":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(vault.get_key("p").unwrap_err().code(), "corrupt");
+        std::fs::write(dir.join("credentials.json"), " ".repeat(524_289)).unwrap();
+        assert_eq!(vault.get_key("p").unwrap_err().code(), "corrupt");
+        let data = CredentialData {
+            version: 2,
+            entries: BTreeMap::from([(
+                "p".into(),
+                CredentialEntry::File {
+                    value: "x".repeat(524_289),
+                },
+            )]),
+        };
+        assert!(vault.file.write_data(&data).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn hint_rules_match_contract() {
@@ -559,7 +720,7 @@ mod tests {
         // 报错让用户知道 OS 侧可能仍持有条目；文件副本的清除已尽力完成。
         assert!(vault.clear_key("deepseek").is_err());
         assert!(vault.get_key("deepseek").unwrap().is_none());
-        assert!(!dir.join("credentials.json").exists());
+        assert!(dir.join("credentials.json").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -580,8 +741,10 @@ mod tests {
             "sk-new"
         );
         assert!(
-            !dir.join("credentials.json").exists(),
-            "OS 库可用后不得残留明文文件副本"
+            !std::fs::read_to_string(dir.join("credentials.json"))
+                .unwrap()
+                .contains("sk-"),
+            "OS 库可用后文件只保留后端指针，不得残留明文"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -602,9 +765,8 @@ mod tests {
     }
 
     #[test]
-    fn vault_retries_pending_cleanup_on_successful_os_read() {
-        // 上次「OS 写成功 + 文件清理失败」遗留的过期副本：OS 读命中时顺带
-        // 重试清理，收窄「OS 瞬断读到过期副本」的时间窗。
+    fn vault_keeps_confirmed_file_value_when_os_contains_another_key() {
+        // 文件是最近确认的权威值；另一后端仍可读不意味着它更晚。
         let dir = temp_test_dir("vault-cleanup-retry");
         let file = CredentialFile::new(&dir);
         file.set_key("deepseek", SecretString::from(String::from("sk-stale")))
@@ -615,11 +777,11 @@ mod tests {
         let vault = CredentialVault::with_backends(Box::new(os), file);
         assert_eq!(
             vault.get_key("deepseek").unwrap().unwrap().expose_secret(),
-            "sk-os"
+            "sk-stale"
         );
         assert!(
-            !dir.join("credentials.json").exists(),
-            "OS 读成功必须重试清理过期副本"
+            dir.join("credentials.json").exists(),
+            "读取不以另一后端的旧值删除已确认文件条目"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

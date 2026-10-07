@@ -1,82 +1,45 @@
-//! 平台适配层：原生凭据输入与降级文件的权限收紧。
-//!
-//! 每个平台一个模块，行为都有确定性的编译期分发（`#[cfg]`），不做运行期
-//! 探测；三平台的支持状态（019 实测口径，「未验证」不得宣称支持）：
-//!
-//! | 能力                          | Windows            | macOS / Linux（unix）        |
-//! | ----------------------------- | ------------------ | ---------------------------- |
-//! | 原生密钥输入                  | CredUI（已验证）   | 未验证 → [`NativePrompt::Unverified`] |
-//! | 降级文件权限                  | 受保护 DACL        | 0600                         |
-//! | OS 凭据库                     | Credential Manager | keyring 默认特性，未验证     |
-//!
-//! OS 凭据库本身无需平台代码：keyring 默认特性在 macOS / Linux 走 Keychain /
-//! Secret Service，不可用或无会话时由 [`crate::credentials::CredentialVault`]
-//! 降级为仅当前用户可读的私有文件。原生输入在 macOS / Linux 的具体方案
-//! （Keychain 授权对话框 / 无标准安全输入）尚未验证——任务 019 前置条件要求
-//! 记录阻塞并修订设计后才能更换入口，因此分发显式返回
-//! [`NativePrompt::Unverified`]，由命令层以 `app.bad-request` 拒绝，不静默
-//! 降级为 Webview 明文表单。
-
-use std::path::Path;
+//! 原生密码输入与私有权限：平台差异只在此按编译目标分发。
+//! 命令层统一在 UI 主线程调用，不接触 Webview 密钥，也不按 OS 分支。
+//! Windows 用 CredUI，macOS 用 NSSecureTextField / NSAlert，Linux 用 GTK 密码 Entry。
 
 use mythos_store::error::Result;
-
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 pub(crate) mod windows;
 
-/// 原生密钥输入的平台可用性。
-#[derive(Debug, Clone, Copy)]
-pub enum NativePrompt {
-    /// 平台实现就绪（Windows：CredUI 对话框）。
-    Ready(fn(&str) -> Result<Option<String>>),
-    /// 平台尚未验证；调用方必须显式拒绝，不得降级为 Webview 明文输入。
-    Unverified,
-}
+#[cfg(target_os = "linux")]
+use linux::prompt_native_key;
+#[cfg(target_os = "macos")]
+use macos::prompt_native_key;
+#[cfg(unix)]
+pub(crate) use unix::restrict_to_current_user;
+#[cfg(windows)]
+use windows::prompt_native_key;
+#[cfg(windows)]
+pub(crate) use windows::restrict_to_current_user;
 
-/// 按编译目标分发原生输入能力；每个平台都有确定性结果（直测断言）。
+/// 同型原生输入入口；调用方需在 UI 主线程执行。取消为 None，失败是 store.*。
+pub type NativePrompt = fn(&str) -> Result<Option<String>>;
+
+/// 返回本平台原生输入器；不把运行期平台差异暴露给使用点。
+#[must_use]
 pub fn platform_prompt() -> NativePrompt {
-    #[cfg(windows)]
-    {
-        NativePrompt::Ready(windows::prompt_native_key)
-    }
-    #[cfg(not(windows))]
-    {
-        NativePrompt::Unverified
-    }
+    prompt_native_key
 }
 
-/// 把降级凭据文件收紧为仅当前用户可读：Windows 用受保护 DACL，
-/// Unix 用 0600（不把 0600 当 Windows 权限）。
+#[cfg(all(feature = "native-smoke", target_os = "linux"))]
+pub use linux::verify_native_input;
+/// 真实原生 UI 确认 / 取消烟测，仅显式测试特性提供，不进入默认发布产物。
 ///
 /// # Errors
-/// 平台权限 API 失败时返回 store 域 `io` 错误（文件已写入成功，失败只意味
-/// 权限仍是默认继承——下次写入会重试收紧）。
-pub(crate) fn restrict_to_current_user(path: &Path) -> Result<()> {
-    #[cfg(windows)]
-    {
-        windows::restrict_to_current_user(path)
-    }
-    #[cfg(unix)]
-    {
-        unix::restrict_to_current_user(path)
-    }
-}
+/// 缺桌面会话、主线程不匹配或真实 UI 结果不符时失败。
+#[cfg(all(feature = "native-smoke", target_os = "macos"))]
+pub use macos::verify_native_input;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_dispatches_to_credui() {
-        assert!(matches!(platform_prompt(), NativePrompt::Ready(_)));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn unverified_platforms_dispatch_explicitly() {
-        assert!(matches!(platform_prompt(), NativePrompt::Unverified));
-    }
-}
+#[cfg(all(feature = "native-smoke", windows))]
+pub use windows::verify_native_input;

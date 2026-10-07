@@ -73,8 +73,19 @@ pub(crate) fn default_transport() -> reqwest::Result<reqwest::Client> {
     build_client(&ProxyConfig::System, &SystemProxySnapshot::default(), None)
 }
 
+impl std::fmt::Debug for SystemProxySnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SystemProxySnapshot { [REDACTED] }")
+    }
+}
+impl std::fmt::Debug for ProxyAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProxyAuth { [REDACTED] }")
+    }
+}
+
 /// manual 代理认证：凭据条目解析后的用户名 + 密码句柄。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProxyAuth {
     pub username: String,
     pub password: SecretString,
@@ -126,7 +137,7 @@ fn err_proxy_auth_shape() -> StoreError {
 /// 环境代理快照：应用启动时一次性读取（llm.md「启动时形成快照」），之后
 /// 不再读环境。快照可注入（测试传入确定值，装配层传
 /// [`SystemProxySnapshot::capture`] 的结果）。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct SystemProxySnapshot {
     /// `https_proxy` / `HTTPS_PROXY` / `all_proxy` 依序取第一个。
     pub https: Option<String>,
@@ -169,6 +180,30 @@ mod tests {
     }
 
     #[test]
+    fn proxy_debug_never_exposes_environment_or_authentication() {
+        let snapshot = SystemProxySnapshot {
+            https: Some("http://user:secret@proxy:1".into()),
+        };
+        assert!(!format!("{snapshot:?}").contains("secret"));
+        let auth = ProxyAuth {
+            username: "private-user".into(),
+            password: SecretString::from("secret".to_owned()),
+        };
+        let debug = format!("{auth:?}");
+        assert!(!debug.contains("private-user") && !debug.contains("secret"));
+    }
+
+    #[test]
+    fn socks5_configuration_constructs_a_real_transport() {
+        build_client(
+            &manual("socks5://127.0.0.1:1080"),
+            &SystemProxySnapshot::default(),
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn snapshot_prefers_https_proxy_then_all_proxy() {
         let both = getter(BTreeMap::from([
             ("https_proxy", "http://a:1"),
@@ -198,23 +233,10 @@ mod tests {
 
     #[test]
     fn capture_reads_process_environment() {
-        // 注入确定变量验证捕获链路（环境是进程局部资源；仓库内无并发读取方）。
-        unsafe { std::env::set_var("all_proxy", "http://env-capture:9") };
-        assert_eq!(
-            SystemProxySnapshot::capture().https.as_deref(),
-            Some("http://env-capture:9")
-        );
-        unsafe { std::env::remove_var("all_proxy") };
-        // 环境无代理变量时快照为空（有系统级 https_proxy 时与之一致）。
+        // 只读进程环境；不在并行 HTTP/TLS 测试期间用 unsafe 修改全局环境。
         let snapshot = SystemProxySnapshot::capture();
-        let env_has_proxy = ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]
-            .iter()
-            .any(|name| {
-                std::env::var(name)
-                    .map(|value| !value.trim().is_empty())
-                    .unwrap_or(false)
-            });
-        assert_eq!(snapshot.https.is_some(), env_has_proxy);
+        let expected = SystemProxySnapshot::from_getter(|name| std::env::var(name).ok());
+        assert_eq!(snapshot, expected);
     }
 
     #[test]

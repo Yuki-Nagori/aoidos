@@ -2441,16 +2441,23 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
 ]
 
 [[package]]
 name = "mythos-llm"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "bytes",
  "futures",
+ "gtk",
  "keyring",
+ "keyring-core",
  "mythos-store",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "rcgen",
  "reqwest",
  "rustls",
@@ -2462,6 +2469,14 @@ dependencies = [
  "tokio-util",
  "url",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "mythos-native-tests"
+version = "0.1.0"
+dependencies = [
+ "mythos-llm",
+ "secrecy",
 ]
 
 [[package]]

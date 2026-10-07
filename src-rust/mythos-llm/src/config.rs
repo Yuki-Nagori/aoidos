@@ -6,6 +6,7 @@
 //! 设置只影响下一回合）。持久化经 mythos-store 的原子写；文件形状是
 //! `{"version":1,"profiles":[…]}`，后续字段演进走版本迁移，不改写既有存档。
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
@@ -19,7 +20,7 @@ use crate::sampling::Sampling;
 
 /// 持久化文件内的顶层形状；version 字段驱动后续读取迁移。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProfileFile {
     version: u32,
     profiles: Vec<LlmProfile>,
@@ -29,7 +30,7 @@ struct ProfileFile {
 /// 校验只做结构合法性（非空、枚举、URL 形态），能力匹配在提交时对
 /// capabilities 检查（020 的职责，不在保存时拒绝）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LlmProfile {
     pub profile_id: String,
     /// 供应商标识，与 [`crate::providers::ProviderId::as_str`] 同源。
@@ -64,7 +65,7 @@ impl From<ProfileMode> for crate::provider::RequestMode {
 /// 不叠加；manual 禁用系统代理自动叠加）。凭据引用是 OS 凭据库里的条目名，
 /// 不内嵌用户名密码。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case")]
+#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProxyConfig {
     #[default]
     /// 启动时形成的环境代理快照；快照为空等价直连，但语义上保留「跟随系统」。
@@ -118,15 +119,29 @@ impl LlmProfile {
                     message: format!("{field} 不能为空"),
                 });
             }
-            if value.chars().any(char::is_control) {
+            if value.len() > 256 || value.chars().any(char::is_control) {
                 return Err(ProfileError {
                     code: "invalid-profile",
-                    message: format!("{field} 含控制字符"),
+                    message: format!("{field} 过长或含控制字符"),
                 });
             }
         }
-        if let ProxyConfig::Manual { url, .. } = &self.proxy {
+        if !self.sampling.temperature.is_finite() || self.sampling.max_tokens == 0 {
+            return Err(ProfileError {
+                code: "invalid-profile",
+                message: "采样参数必须有限且输出上限为正数".into(),
+            });
+        }
+        if let ProxyConfig::Manual { url, auth_ref } = &self.proxy {
             validate_proxy_url(url)?;
+            if auth_ref.as_ref().is_some_and(|id| {
+                id.trim().is_empty() || id.len() > 128 || id.chars().any(char::is_control)
+            }) {
+                return Err(ProfileError {
+                    code: "invalid-profile",
+                    message: "代理凭据引用非法".into(),
+                });
+            }
         }
         Ok(())
     }
@@ -143,13 +158,19 @@ fn err_proxy_url(_: url::ParseError) -> ProfileError {
 /// 代理 URL 校验：scheme 限 http/https/socks5，host 非空，禁止 userinfo
 ///（内嵌凭据永不进配置文件——凭据经 `auth_ref` 走凭据存储）。
 fn validate_proxy_url(url: &str) -> std::result::Result<(), ProfileError> {
+    if url.len() > 2048 || url.chars().any(char::is_control) {
+        return Err(ProfileError {
+            code: "invalid-profile",
+            message: "代理地址过长或含控制字符".into(),
+        });
+    }
     let parsed = url::Url::parse(url).map_err(err_proxy_url)?;
     match parsed.scheme() {
         "http" | "https" | "socks5" => {}
-        other => {
+        _ => {
             return Err(ProfileError {
                 code: "invalid-profile",
-                message: format!("代理 scheme 不支持：{other}"),
+                message: "代理 scheme 不支持".into(),
             });
         }
     }
@@ -187,8 +208,10 @@ pub fn freeze(profile: &LlmProfile, credentials: &dyn CredentialStore) -> Result
     })
 }
 
-/// profile 集合的持久化读写。目录由装配层注入（app-data 下的 `llm/`），
-/// 文件名固定 `profiles.json`。
+/// 集合硬上限同时用于命令与磁盘校验。
+pub const MAX_PROFILES: usize = 50;
+
+/// profile 集合的持久化读写，固定文件名 profiles.json，读取上限 512 KiB。
 pub struct ProfileStore {
     path: PathBuf,
 }
@@ -207,9 +230,7 @@ impl ProfileStore {
     /// 任一 profile 校验失败（`corrupt`，原因在错误文本）、目录不可建或
     /// 原子写失败时返回对应 store.* 错误。
     pub fn save(&self, profiles: &[LlmProfile]) -> Result<()> {
-        for profile in profiles {
-            profile.validate().map_err(profile_error)?;
-        }
+        validate_profiles(profiles)?;
         // parent 为 None 仅在路径是根时出现，落盘会在写入时报错，这里统一建目录。
         std::fs::create_dir_all(self.path.parent().unwrap_or(Path::new(".")))
             .map_err(StoreError::from_io)?;
@@ -226,15 +247,40 @@ impl ProfileStore {
     /// # Errors
     /// 目录不可读（非缺失）或文件损坏时返回对应 store.* 错误。
     pub fn load(&self) -> Result<Vec<LlmProfile>> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(text) => {
+        match std::fs::File::open(&self.path) {
+            Ok(file) => {
+                let mut text = String::new();
+                file.take(524_289)
+                    .read_to_string(&mut text)
+                    .map_err(StoreError::from_io)?;
+                if text.len() > 524_288 {
+                    return Err(StoreError::Corrupt("profiles file too large".into()));
+                }
                 let file: ProfileFile = serde_json::from_str(&text).map_err(err_profiles_json)?;
+                if file.version != 1 {
+                    return Err(StoreError::Corrupt("unsupported profiles version".into()));
+                }
+                validate_profiles(&file.profiles)?;
                 Ok(file.profiles)
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(err) => Err(StoreError::from_io(err)),
         }
     }
+}
+
+fn validate_profiles(profiles: &[LlmProfile]) -> Result<()> {
+    if profiles.len() > MAX_PROFILES {
+        return Err(StoreError::Corrupt("too many profiles".into()));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for profile in profiles {
+        profile.validate().map_err(profile_error)?;
+        if !ids.insert(&profile.profile_id) {
+            return Err(StoreError::Corrupt("duplicate profile id".into()));
+        }
+    }
+    Ok(())
 }
 
 /// profile 集合序列化失败：字段类型受控，正常不可达（防御性映射）。
@@ -270,6 +316,63 @@ mod tests {
                 max_tokens: 2048,
             },
             proxy: ProxyConfig::System,
+        }
+    }
+
+    #[test]
+    fn loaded_profiles_validate_version_shape_and_set_invariants() {
+        let dir = temp_test_dir("validated-read");
+        let path = dir.join("profiles.json");
+        let store = ProfileStore::new(&dir);
+        let profile = deepseek_profile();
+        for text in [
+            serde_json::json!({"version": 2, "profiles": []}).to_string(),
+            serde_json::json!({"version": 1, "profiles": [profile, profile]}).to_string(),
+            serde_json::json!({"version": 1, "profiles": vec![deepseek_profile(); 51]}).to_string(),
+            serde_json::json!({"version": 1, "profiles": [], "apiKey": "must-not-be-accepted"})
+                .to_string(),
+            " ".repeat(524_289),
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(store.load().unwrap_err().code(), "corrupt");
+        }
+        let mut invalid = deepseek_profile();
+        invalid.model.clear();
+        std::fs::write(
+            &path,
+            serde_json::json!({"version":1,"profiles":[invalid]}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(store.load().unwrap_err().code(), "corrupt");
+        assert!(store.save(&[profile.clone(), profile]).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_sampling_and_credential_references_fail_before_persistence() {
+        let mut profile = deepseek_profile();
+        profile.sampling.temperature = f64::NAN;
+        assert!(profile.validate().is_err());
+        profile.sampling.temperature = 1.0;
+        profile.sampling.max_tokens = 0;
+        assert!(profile.validate().is_err());
+        profile.sampling.max_tokens = 1;
+        profile.model = "x".repeat(257);
+        assert!(profile.validate().is_err());
+        profile.model = "m".into();
+        for url in ["x".repeat(2049), "http://p\n".into()] {
+            profile.proxy = ProxyConfig::Manual {
+                url,
+                auth_ref: None,
+            };
+            assert!(profile.validate().is_err());
+        }
+        for reference in [" ".into(), "x".repeat(129), "a\n".into()] {
+            profile.proxy = ProxyConfig::Manual {
+                url: "http://p:1".into(),
+                auth_ref: Some(reference),
+            };
+            assert!(profile.validate().is_err());
         }
     }
 
@@ -502,14 +605,14 @@ mod tests {
 
     #[test]
     fn load_maps_non_not_found_io_errors() {
-        // profiles.json 是目录：读失败不是 NotFound，走 io_error 映射
+        // 中间路径是普通文件：open 失败不是 NotFound，走 io_error 映射
         //（Windows 上读目录为 PermissionDenied，Linux 侧同断言走各平台码）。
         let dir = temp_test_dir("load-dir");
-        std::fs::create_dir(dir.join("profiles.json")).unwrap();
-        let error = ProfileStore::new(&dir).load().unwrap_err();
+        std::fs::write(dir.join("blocker"), b"x").unwrap();
+        let error = ProfileStore::new(&dir.join("blocker")).load().unwrap_err();
         assert_ne!(error.code(), "not-found");
         assert_ne!(error.code(), "corrupt");
-        std::fs::remove_dir(dir.join("profiles.json")).unwrap();
+        std::fs::remove_file(dir.join("blocker")).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

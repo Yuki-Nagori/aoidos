@@ -30,8 +30,7 @@ const TOKEN_USER: u32 = 1;
 /// 把 `path` 的 DACL 替换为仅当前用户（受保护 DACL，不继承任何继承 ACE）。
 ///
 /// # Errors
-/// 取用户 SID 或应用 DACL 失败时返回 store 域 `io` 错误（文件已写入成功，
-/// 失败只意味着权限仍是默认继承——下次写入会重试收紧）。
+/// 取用户 SID 或应用 DACL 失败时返回 store 域 `io` 错误（失败时私有写入方不写正文或发布文件）。
 pub(crate) fn restrict_to_current_user(path: &Path) -> Result<()> {
     // SAFETY: GetCurrentProcess 无前置条件，返回恒有效的伪句柄。
     let sid = sid_from_process(unsafe { GetCurrentProcess() });
@@ -41,11 +40,17 @@ pub(crate) fn restrict_to_current_user(path: &Path) -> Result<()> {
             source: io::Error::other("resolve current user sid failed"),
         });
     }
-    apply_owner_dacl(path, sid)
+    let result = apply_owner_dacl(path, sid);
+    // SAFETY: sid 来自 sid_from_process 的独立 LocalAlloc，ACL API 只借用；
+    // 无论成功或失败都在此恰好释放一次。
+    unsafe {
+        windows_sys::Win32::Foundation::LocalFree(sid);
+    }
+    result
 }
 
 /// 从进程句柄取主令牌并提取用户 SID。
-/// 返回裸指针（LocalFree 句柄）供 [`apply_owner_dacl`] 消费；失败返回 null。
+/// 返回裸指针（LocalFree 句柄）由调用方释放；[`apply_owner_dacl`] 只借用；失败返回 null。
 fn sid_from_process(process: HANDLE) -> *mut core::ffi::c_void {
     // SAFETY: OpenProcessToken 只写 token 指针；process 由调用方保证有效
     //（生产路径是 GetCurrentProcess 伪句柄，恒有效）。FFI 出参用裸引用
@@ -65,7 +70,7 @@ fn sid_from_process(process: HANDLE) -> *mut core::ffi::c_void {
 fn sid_from_token(token: HANDLE) -> *mut core::ffi::c_void {
     // SAFETY: token 由 sid_from_process 成功打开；两次 GetTokenInformation
     // 先探尺寸再读入；CloseHandle 与打开一一配对；TOKEN_USER 首字段是 PSID，
-    // 以 `needed >= 8` 防御短缓冲后再解引用；CopySid 目标为等长 LocalAlloc。
+    // 以指针实际宽度防御短缓冲后再解引用；CopySid 目标为等长 LocalAlloc。
     unsafe {
         let mut needed = 0u32;
         GetTokenInformation(
@@ -84,11 +89,11 @@ fn sid_from_token(token: HANDLE) -> *mut core::ffi::c_void {
             &raw mut needed,
         );
         windows_sys::Win32::Foundation::CloseHandle(token);
-        if ok == 0 || needed < 8 {
+        if ok == 0 || needed < std::mem::size_of::<*mut core::ffi::c_void>() as u32 {
             return std::ptr::null_mut();
         }
         // TOKEN_USER { User: SID_AND_ATTRIBUTES { Sid: PSID } }：首字段是指针。
-        let token_sid = *buffer.as_ptr().cast::<*mut core::ffi::c_void>();
+        let token_sid = std::ptr::read_unaligned(buffer.as_ptr().cast::<*mut core::ffi::c_void>());
         if token_sid.is_null() {
             return std::ptr::null_mut();
         }
@@ -255,6 +260,72 @@ fn map_cred_ui_result(result: u32, password: &[u16]) -> Result<Option<String>> {
             source: io::Error::other(format!("credential ui failed: {code}")),
         }),
     }
+}
+
+/// Windows 真实确认 / 取消验证：只给当前测试进程的 CredUI 窗口发合成输入。
+#[cfg(feature = "native-smoke")]
+pub fn verify_native_input() -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumChildWindows, FindWindowW, GWL_STYLE, GetWindowLongW, GetWindowThreadProcessId,
+        PostMessageW, SendMessageW, WM_CLOSE, WM_COMMAND, WM_SETTEXT,
+    };
+    static FILLED: AtomicBool = AtomicBool::new(false);
+    unsafe extern "system" fn fill(hwnd: windows_sys::Win32::Foundation::HWND, _: isize) -> i32 {
+        // SAFETY: hwnd 来自当前进程窗口的 EnumChildWindows；只选 ES_PASSWORD
+        // 控件，固定 UTF-16 合成值在 SendMessage 返回前保持有效。
+        unsafe {
+            if GetWindowLongW(hwnd, GWL_STYLE) & 0x20 != 0 {
+                let value: Vec<u16> = "mythos-native-fixture"
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .collect();
+                SendMessageW(hwnd, WM_SETTEXT, 0, value.as_ptr() as isize);
+                FILLED.store(true, Ordering::SeqCst);
+            }
+        }
+        1
+    }
+    for accept in [true, false] {
+        FILLED.store(false, Ordering::SeqCst);
+        let helper = std::thread::spawn(move || {
+            let caption: Vec<u16> = PROMPT_CAPTION.encode_utf16().chain(Some(0)).collect();
+            for _ in 0..600 {
+                // SAFETY: 字符串 NUL 结尾；只操作匹配当前进程 ID 的测试窗口。
+                unsafe {
+                    let hwnd = FindWindowW(std::ptr::null(), caption.as_ptr());
+                    if !hwnd.is_null() {
+                        let mut pid = 0;
+                        GetWindowThreadProcessId(hwnd, &raw mut pid);
+                        if pid == std::process::id() {
+                            if accept {
+                                EnumChildWindows(hwnd, Some(fill), 0);
+                                if FILLED.load(Ordering::SeqCst) {
+                                    PostMessageW(hwnd, WM_COMMAND, 1, 0);
+                                    return true;
+                                }
+                            } else {
+                                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                                return true;
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            false
+        });
+        let result = prompt_native_key("test fixture")?;
+        if !helper.join().unwrap_or(false)
+            || (accept && result.as_deref() != Some("mythos-native-fixture"))
+            || (!accept && result.is_some())
+        {
+            return Err(StoreError::Corrupt(
+                "native input verification failed".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

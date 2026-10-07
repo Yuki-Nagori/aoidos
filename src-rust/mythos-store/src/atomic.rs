@@ -31,11 +31,32 @@ static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 ///
 /// 父目录无法创建、写入失败、重试耗尽，或 rename 遇到非占用错误时返回 [`StoreError`]。
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_prepared(path, bytes, None)
+}
+
+/// 私有文件原子写：空临时文件先由调用方收紧权限，再写入正文与发布。
+/// 权限失败不写明文，也不替换原文件。
+///
+/// # Errors
+/// 与 [`write_atomic`] 相同，另包含权限准备失败。
+pub fn write_atomic_private(
+    path: &Path,
+    bytes: &[u8],
+    restrict: fn(&Path) -> Result<()>,
+) -> Result<()> {
+    write_atomic_prepared(path, bytes, Some(restrict))
+}
+
+fn write_atomic_prepared(
+    path: &Path,
+    bytes: &[u8],
+    restrict: Option<fn(&Path) -> Result<()>>,
+) -> Result<()> {
     // 相对文件名 `file.txt` 的 parent 是空路径，create_dir_all("") 直接成功。
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent).map_err(StoreError::from_io)?;
     let tmp = tmp_sibling(path)?;
-    write_tmp(&tmp, bytes)?;
+    write_tmp(&tmp, bytes, restrict)?;
     rename_with_retry(&tmp, path)
 }
 
@@ -100,14 +121,20 @@ fn tmp_sibling(target: &Path) -> Result<PathBuf> {
     Ok(target.with_file_name(tmp_name))
 }
 
-fn write_tmp(tmp: &Path, bytes: &[u8]) -> Result<()> {
+fn write_tmp(tmp: &Path, bytes: &[u8], restrict: Option<fn(&Path) -> Result<()>>) -> Result<()> {
     // create_new 原子地拒绝既有文件与符号链接；创建失败时不清理，因为该路径不属于本次写入。
     let mut file = File::options()
         .write(true)
         .create_new(true)
         .open(tmp)
         .map_err(StoreError::from_io)?;
-    let result = write_tmp_inner(&mut file, bytes);
+    let result = match restrict {
+        Some(prepare) => match prepare(tmp) {
+            Ok(()) => write_tmp_inner(&mut file, bytes),
+            Err(error) => Err(error),
+        },
+        None => write_tmp_inner(&mut file, bytes),
+    };
     drop(file);
     finish_tmp_write(result, tmp)
 }
@@ -280,6 +307,27 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn private_write_prepares_empty_file_and_failure_keeps_previous_value() {
+        fn fail(path: &Path) -> Result<()> {
+            assert_eq!(fs::metadata(path).unwrap().len(), 0);
+            Err(StoreError::Corrupt("permission preparation failed".into()))
+        }
+        fn ready(path: &Path) -> Result<()> {
+            assert_eq!(fs::metadata(path).unwrap().len(), 0);
+            Ok(())
+        }
+        let dir = tdir("private-write");
+        let target = dir.join("private.json");
+        write_atomic(&target, b"old").unwrap();
+        assert!(write_atomic_private(&target, b"secret", fail).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        write_atomic_private(&target, b"new", ready).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -476,7 +524,7 @@ mod tests {
     #[test]
     fn write_tmp_cleans_up_when_create_fails() {
         let dir = tdir("atomic-tmp-fail");
-        let err = write_tmp(&dir, b"x").unwrap_err();
+        let err = write_tmp(&dir, b"x", None).unwrap_err();
         assert_ne!(err.code(), "locked");
         assert!(dir.is_dir());
         fs::remove_dir_all(&dir).unwrap();
@@ -487,7 +535,7 @@ mod tests {
         let dir = tdir("atomic-tmp-conflict");
         let tmp = dir.join("existing.tmp");
         fs::write(&tmp, b"keep").unwrap();
-        assert_eq!(write_tmp(&tmp, b"new").unwrap_err().code(), "io");
+        assert_eq!(write_tmp(&tmp, b"new", None).unwrap_err().code(), "io");
         assert_eq!(fs::read(&tmp).unwrap(), b"keep");
         fs::remove_dir_all(&dir).unwrap();
     }

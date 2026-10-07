@@ -1,23 +1,40 @@
 use crate::ipc::CmdError;
-use mythos_llm::config::{LlmProfile, ProfileError, ProfileStore};
+use mythos_llm::config::{LlmProfile, MAX_PROFILES, ProfileError, ProfileStore};
 use mythos_llm::credentials::{CredentialStore, CredentialVault, KeyStatus};
-use mythos_llm::platform::{NativePrompt, platform_prompt};
+use mythos_llm::platform::NativePrompt;
 use mythos_store::error::StoreError;
 use secrecy::SecretString;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// llm 数据目录（app-data/llm/）：profile 与凭据降级文件的根。
 static LLM_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-/// profile 列表硬上限（契约：写明硬上限不超过 50 的列表可不分页）。
-const MAX_PROFILES: usize = 50;
 
 /// 逻辑读改写的进程内串行锁（storage.md「并发与锁」）：原子写只保证单次
 /// 覆写的物理完整，读-改-写周期由这两把锁串行；命令层持有，业务 crate 不感知。
 /// 原生输入等待用户时不持锁，避免长时间阻塞另一把锁的使用方。
 static PROFILE_LOCK: Mutex<()> = Mutex::new(());
 static KEY_LOCK: Mutex<()> = Mutex::new(());
+static PROMPT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+struct PromptPermit<'a>(&'a AtomicBool);
+impl<'a> PromptPermit<'a> {
+    fn acquire(active: &'a AtomicBool) -> Result<Self, CmdError> {
+        active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(prompt_busy)?;
+        Ok(Self(active))
+    }
+}
+impl Drop for PromptPermit<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+fn prompt_busy(_: bool) -> CmdError {
+    CmdError::new("app.busy", "原生密钥输入已打开", None)
+}
 
 fn profile_lock() -> MutexGuard<'static, ()> {
     // 锁中毒说明上次持锁期间 panic；文件操作是原子的，状态仍有效，忽略中毒。
@@ -130,12 +147,13 @@ fn delete_profile_in(store: &ProfileStore, profile_id: &str) -> Result<Deleted, 
     Ok(Deleted { deleted: true })
 }
 
-/// 查询凭据状态（不读取密钥明文，只返回 set + hint）。
+/// Rust 侧读取凭据并派生状态；IPC 只返回 set + hint。
 ///
 /// # Errors
 /// 凭据后端不可读时返回 store.*。
 #[tauri::command]
 pub fn llm_get_key_status(provider_id: String) -> Result<KeyStatus, CmdError> {
+    let _guard = key_lock();
     key_status_with(&provider_id, &credential_vault()?)
 }
 
@@ -143,21 +161,50 @@ fn key_status_with(provider_id: &str, store: &dyn CredentialStore) -> Result<Key
     store.status(provider_id).map_err(CmdError::from)
 }
 
-/// 设置 / 清除密钥。action="set" 时发起 Rust 原生输入（平台分发见
-/// [`NativePrompt`]，未验证平台显式拒绝）；"clear" 直接删除。取消输入
-/// 保留旧值，返回当前状态。
+/// UI 主线程调度器；Sync 使命令 Future 可由 Tauri 安全调度。
+pub type NativeDispatch = dyn Fn(Box<dyn FnOnce() + Send>) -> tauri::Result<()> + Sync;
+
+/// 同型密钥操作，原生等待期间不持业务锁。
 ///
 /// # Errors
-/// 未知 action 或平台未验证原生输入为 app.bad-request；凭据后端失败为
-/// store.*。
-#[tauri::command]
-pub fn llm_set_key(provider_id: String, action: String) -> Result<KeyStatus, CmdError> {
-    llm_set_key_with(
+/// 无效操作、重复原生输入、调度或凭据服务失败按统一命令错误返回。
+pub async fn set_key_with_dispatch(
+    provider_id: String,
+    action: String,
+    prompt: NativePrompt,
+    dispatch: &NativeDispatch,
+) -> Result<KeyStatus, CmdError> {
+    set_key_in(
         &provider_id,
         &action,
         &credential_vault()?,
-        platform_prompt(),
+        prompt,
+        dispatch,
     )
+    .await
+}
+
+async fn set_key_in(
+    provider_id: &str,
+    action: &str,
+    store: &dyn CredentialStore,
+    prompt: NativePrompt,
+    dispatch: &NativeDispatch,
+) -> Result<KeyStatus, CmdError> {
+    if action != "set" {
+        return llm_set_key_with(provider_id, action, store, prompt);
+    }
+    let permit = PromptPermit::acquire(&PROMPT_ACTIVE)?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let label = format!("provider {provider_id}");
+    dispatch(Box::new(move || {
+        let result = prompt(&label);
+        drop(permit);
+        let _ = tx.send(result);
+    }))
+    .map_err(native_dispatch_error)?;
+    let result = rx.await.map_err(native_receive_error)?;
+    save_prompt_result(provider_id, store, result)
 }
 
 fn llm_set_key_with(
@@ -172,24 +219,12 @@ fn llm_set_key_with(
             store.clear_key(provider_id).map_err(CmdError::from)?;
             key_status_with(provider_id, store)
         }
-        "set" => match prompt {
-            NativePrompt::Ready(prompt_fn) => set_via_prompt(provider_id, store, prompt_fn),
-            // 平台未验证原生输入：显式拒绝，不降级为 Webview 明文提交。
-            NativePrompt::Unverified => Err(CmdError::new(
-                "app.bad-request",
-                "该平台的原生密钥输入尚未验证；不支持经 Webview 明文提交密钥",
-                None,
-            )),
-        },
-        other => Err(CmdError::new(
-            "app.bad-request",
-            format!("未知 action：{other}"),
-            None,
-        )),
+        "set" => set_via_prompt(provider_id, store, prompt),
+        _ => Err(CmdError::new("app.bad-request", "未知凭据操作", None)),
     }
 }
 
-/// Ready 平台的设置流程：原生输入等待用户（此时不持锁，避免长时间阻塞
+/// 同型原生设置流程：原生输入等待用户（此时不持锁，避免长时间阻塞
 /// 并发的凭据命令），拿到密钥后才持 key 锁串行化写入；用户取消保留旧值。
 fn set_via_prompt(
     provider_id: &str,
@@ -197,13 +232,21 @@ fn set_via_prompt(
     prompt_fn: fn(&str) -> Result<Option<String>, StoreError>,
 ) -> Result<KeyStatus, CmdError> {
     let label = format!("provider {provider_id}");
-    let secret = match prompt_fn(&label) {
+    save_prompt_result(provider_id, store, prompt_fn(&label))
+}
+
+fn save_prompt_result(
+    provider_id: &str,
+    store: &dyn CredentialStore,
+    result: Result<Option<String>, StoreError>,
+) -> Result<KeyStatus, CmdError> {
+    let _guard = key_lock();
+    let secret = match result {
         Ok(Some(secret)) => secret,
         // 用户取消：保留旧值，返回当前状态。
         Ok(None) => return key_status_with(provider_id, store),
         Err(e) => return Err(CmdError::from(e)),
     };
-    let _guard = key_lock();
     store
         .set_key(provider_id, SecretString::from(secret))
         .map_err(CmdError::from)?;
@@ -217,9 +260,17 @@ pub struct LlmProfileList {
     pub items: Vec<LlmProfile>,
 }
 
+fn native_dispatch_error(_: tauri::Error) -> CmdError {
+    CmdError::new("store.io", "原生输入无法调度", None)
+}
+fn native_receive_error(_: tokio::sync::oneshot::error::RecvError) -> CmdError {
+    CmdError::new("store.io", "原生输入未返回", None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mythos_llm::platform::platform_prompt;
     use mythos_store::error::Result;
     use secrecy::ExposeSecret;
     use std::collections::BTreeMap;
@@ -289,6 +340,67 @@ mod tests {
             },
             proxy: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn native_dispatch_confirms_cancels_and_reports_shutdown() {
+        let keys = MemoryKeys::default();
+        let direct = |job: Box<dyn FnOnce() + Send>| {
+            job();
+            Ok(())
+        };
+        let status = set_key_in("p", "set", &keys, fake_prompt, &direct)
+            .await
+            .unwrap();
+        assert!(status.set);
+        let cancelled = set_key_in("p", "set", &keys, |_| Ok(None), &direct)
+            .await
+            .unwrap();
+        assert_eq!(status, cancelled);
+        assert_eq!(
+            set_key_in("p", "set", &keys, fake_prompt, &|_| Err(tauri::Error::Io(
+                std::io::Error::other("shutdown")
+            )))
+            .await
+            .unwrap_err()
+            .code(),
+            "store.io"
+        );
+        assert_eq!(
+            set_key_in("p", "set", &keys, fake_prompt, &|_| Ok(()))
+                .await
+                .unwrap_err()
+                .code(),
+            "store.io"
+        );
+        assert!(
+            !set_key_in("p", "clear", &keys, fake_prompt, &direct)
+                .await
+                .unwrap()
+                .set
+        );
+        init_llm_dir(tdir("async-command"));
+        let provider = unique("async-probe");
+        // 未知操作必须在原生交互前拒绝，装配入口也覆盖。
+        assert_eq!(
+            set_key_with_dispatch(provider, "bogus".into(), fake_prompt, &direct)
+                .await
+                .unwrap_err()
+                .code(),
+            "app.bad-request"
+        );
+    }
+
+    #[test]
+    fn prompt_permit_rejects_duplicates_and_releases_on_drop() {
+        let active = AtomicBool::new(false);
+        let permit = PromptPermit::acquire(&active).unwrap();
+        assert_eq!(
+            PromptPermit::acquire(&active).err().unwrap().code(),
+            "app.busy"
+        );
+        drop(permit);
+        assert!(PromptPermit::acquire(&active).is_ok());
     }
 
     #[test]
@@ -382,20 +494,12 @@ mod tests {
 
     /// clear 路径绝不触发输入；传入的 Ready 注入器若被误用会替换出可见的
     /// 新值，由断言暴露（函数体同时被 set 用例复用覆盖）。
-    #[cfg(windows)]
     fn fake_prompt(label: &str) -> Result<Option<String>> {
         Ok(Some(format!("sk-prompted-{label}")))
     }
 
-    #[cfg(windows)]
     fn clear_action(store: &dyn CredentialStore) -> std::result::Result<KeyStatus, CmdError> {
-        llm_set_key_with("deepseek", "clear", store, NativePrompt::Ready(fake_prompt))
-    }
-
-    #[cfg(not(windows))]
-    fn clear_action(store: &dyn CredentialStore) -> std::result::Result<KeyStatus, CmdError> {
-        // clear 不经输入器；Unverified 占位即可。
-        llm_set_key_with("deepseek", "clear", store, NativePrompt::Unverified)
+        llm_set_key_with("deepseek", "clear", store, fake_prompt)
     }
 
     #[test]
@@ -413,31 +517,19 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
     fn set_via_native_prompt_replaces_and_cancel_keeps_old_value() {
         let keys = MemoryKeys::default();
         keys.set_key("deepseek", SecretString::from(String::from("sk-old-9999")))
             .unwrap();
         // 用户取消：保留旧值。
-        let status = llm_set_key_with(
-            "deepseek",
-            "set",
-            &keys,
-            NativePrompt::Ready(|_label| Ok(None)),
-        )
-        .unwrap();
+        let status = llm_set_key_with("deepseek", "set", &keys, |_label| Ok(None)).unwrap();
         assert_eq!(status.hint.as_deref(), Some("9999"));
         // 确认输入：提示语含 provider 标识，替换并返回新状态。
-        let status = llm_set_key_with(
-            "deepseek",
-            "set",
-            &keys,
-            NativePrompt::Ready(|label| {
-                assert!(label.contains("deepseek"));
-                Ok(Some("sk-new-1234".into()))
-            }),
-        )
+        let status = llm_set_key_with("deepseek", "set", &keys, |label| {
+            assert!(label.contains("deepseek"));
+            Ok(Some("sk-new-1234".into()))
+        })
         .unwrap();
         assert_eq!(status.hint.as_deref(), Some("1234"));
         assert_eq!(
@@ -445,8 +537,7 @@ mod tests {
             "sk-new-1234"
         );
         // 函数项注入器同样可用（clear 路径复用它占位）。
-        let status =
-            llm_set_key_with("deepseek", "set", &keys, NativePrompt::Ready(fake_prompt)).unwrap();
+        let status = llm_set_key_with("deepseek", "set", &keys, fake_prompt).unwrap();
         assert!(
             keys.get_key("deepseek")
                 .unwrap()
@@ -456,17 +547,12 @@ mod tests {
         );
         assert_eq!(status.hint.as_deref(), Some("seek"));
         // 原生输入失败：store.* 透传，诊断与载荷不含明文。
-        let err = llm_set_key_with(
-            "deepseek",
-            "set",
-            &keys,
-            NativePrompt::Ready(|_label| {
-                Err(mythos_store::error::StoreError::Io {
-                    code: "io",
-                    source: std::io::Error::other("credential ui failed"),
-                })
-            }),
-        )
+        let err = llm_set_key_with("deepseek", "set", &keys, |_label| {
+            Err(mythos_store::error::StoreError::Io {
+                code: "io",
+                source: std::io::Error::other("credential ui failed"),
+            })
+        })
         .unwrap_err();
         assert_eq!(err.code(), "store.io");
         let serialized = serde_json::to_string(&err).unwrap();
@@ -477,30 +563,10 @@ mod tests {
     }
 
     #[test]
-    fn unverified_platform_prompt_rejects_set_without_touching_store() {
-        // macOS / Linux 的原生输入未验证：set 显式拒绝（app.bad-request），
-        // 绝不降级为 Webview 明文提交，也不改动已存凭据。
-        let keys = MemoryKeys::default();
-        keys.set_key("deepseek", SecretString::from(String::from("sk-keep")))
-            .unwrap();
-        let err = llm_set_key_with("deepseek", "set", &keys, NativePrompt::Unverified).unwrap_err();
-        assert_eq!(err.code(), "app.bad-request");
-        assert_eq!(
-            keys.get_key("deepseek").unwrap().unwrap().expose_secret(),
-            "sk-keep"
-        );
-    }
-
-    #[test]
     fn unknown_action_maps_to_bad_request() {
         let keys = MemoryKeys::default();
         // 注入器只是占位：未知 action 必须在任何交互前拒绝。
-        #[cfg(windows)]
-        let err = llm_set_key_with("deepseek", "bogus", &keys, NativePrompt::Ready(fake_prompt))
-            .unwrap_err();
-        #[cfg(not(windows))]
-        let err =
-            llm_set_key_with("deepseek", "bogus", &keys, NativePrompt::Unverified).unwrap_err();
+        let err = llm_set_key_with("deepseek", "bogus", &keys, fake_prompt).unwrap_err();
         assert_eq!(err.code(), "app.bad-request");
     }
 
@@ -510,12 +576,14 @@ mod tests {
         // 不写入任何真实凭据。目录由先到的测试注入（OnceLock 全进程共享）。
         init_llm_dir(tdir("vault-probe"));
         let provider = unique("vault-probe");
-        let status = llm_get_key_status(provider.clone()).unwrap();
-        assert!(!status.set);
-        let status = llm_set_key(provider, "clear".into()).unwrap();
-        assert_eq!(
-            serde_json::to_value(status).unwrap(),
-            serde_json::json!({ "set": false, "hint": null })
+        // 命令级检查目录注入与删除墓碑；OS 无会话时删除报错，墓碑仍阻止旧值读取。
+        // 服务真实读写清由三平台 test:native 留证，错误语义另有注入直测。
+        let _ = llm_set_key_with(
+            &provider,
+            "clear",
+            &credential_vault().unwrap(),
+            platform_prompt(),
         );
+        assert!(!llm_get_key_status(provider).unwrap().set);
     }
 }

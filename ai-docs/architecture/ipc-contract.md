@@ -1,6 +1,6 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-07。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调；018 已落地 `mythos-llm` crate（供应商适配、流式护栏、单层请求调度；传输类 7 码由 crate 内 `ProviderError` 产出，调度层的 `stalled` / `empty-output` 由 `RunError` 变体承载，码值见错误码目录）；019 已落地 LLM 配置与凭据命令（`llm_list_profiles` / `llm_save_profile` / `llm_delete_profile` / `llm_get_key_status` / `llm_set_key`，凭据明文不进 Webview；原生输入平台验证进行中——未验证平台显式拒绝）。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐由 020–023 实现任务承接，`llm.` 前缀的回合命令与错误映射随 020。
+更新日期：2026-10-07。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调；018 已落地 `mythos-llm` crate（供应商适配、流式护栏、单层请求调度；传输类 7 码由 crate 内 `ProviderError` 产出，调度层的 `stalled` / `empty-output` 由 `RunError` 变体承载，码值见错误码目录）；019 已落地 LLM 配置与凭据命令（`llm_list_profiles` / `llm_save_profile` / `llm_delete_profile` / `llm_get_key_status` / `llm_set_key`，凭据明文不进 Webview；三平台原生输入已实现，真实会话验收结果归 019）。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐由 020–023 实现任务承接，`llm.` 前缀的回合命令与错误映射随 020。
 
 ## 总则
 
@@ -45,13 +45,13 @@ Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 
 
 已落地（019）：profile 管理与凭据命令；`LlmProfile` 的 TS 同型见 `src-web/api/llm.ts`。
 
-| 命令               | 参数                                       | 成功返回                  | 边界                                                                                                                                         |
-| ------------------ | ------------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| llm_list_profiles  | 无                                         | `{ items: LlmProfile[] }` | 硬上限 50 个、无分页；目录缺失为空列表                                                                                                       |
-| llm_save_profile   | `{ profile: LlmProfile }`                  | 已持久化的 LlmProfile     | 同 id 覆盖、不存在追加；结构非法（空 id / model、代理 URL 形态）或数量超 50 为 app.bad-request；能力匹配不在此校验（020 提交时）             |
-| llm_delete_profile | `{ profileId }`                            | `{ deleted: true }`       | 幂等，不存在也成功                                                                                                                           |
-| llm_get_key_status | `{ providerId }`                           | `{ set, hint }`           | 只报设置状态，不读明文；凭据后端不可读为 store.*                                                                                             |
-| llm_set_key        | `{ providerId, action: "set" 或 "clear" }` | `{ set, hint }`           | set 发起 Rust 原生凭据输入（Windows CredUI 已验证；未验证平台显式拒绝 app.bad-request，不降级为 Webview 明文）；用户取消保留旧值；clear 幂等 |
+| 命令               | 参数                                       | 成功返回                  | 边界                                                                                                                                                                                 |
+| ------------------ | ------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| llm_list_profiles  | 无                                         | `{ items: LlmProfile[] }` | 硬上限 50 个、无分页；目录缺失为空列表                                                                                                                                               |
+| llm_save_profile   | `{ profile: LlmProfile }`                  | 已持久化的 LlmProfile     | 同 id 覆盖、不存在追加；结构非法（空 id / model、代理 URL 形态）或数量超 50 为 app.bad-request；能力匹配不在此校验（020 提交时）                                                     |
+| llm_delete_profile | `{ profileId }`                            | `{ deleted: true }`       | 幂等，不存在也成功                                                                                                                                                                   |
+| llm_get_key_status | `{ providerId }`                           | `{ set, hint }`           | 只报设置状态，不读明文；凭据后端不可读为 store.*                                                                                                                                     |
+| llm_set_key        | `{ providerId, action: "set" 或 "clear" }` | `{ set, hint }`           | set 发起 Rust 原生凭据输入（Windows CredUI / macOS AppKit / Linux GTK，同型 UI 主线程入口；重复输入 app.busy，无会话 store.io，不降级为 Webview 明文）；用户取消保留旧值；clear 幂等 |
 
 ```ts
 type ProfileMode = "completion" | "chat";
@@ -369,7 +369,7 @@ else showGenericError(err);
 | rename 目标占用                                            | 5 次 / 25ms 指数退避 | 报 `store.locked`，清理本次 tmp                                          |
 
 3. **重试单层化**：传输层只对尚未交付任何字节的请求重试网络错误、429 和 5xx，不重试 `llm.tls`。次数是 1 次初始请求加 2 次重试，间隔 500ms 指数、±25% 抖动。第一个已交付字节（或第一条已持久化的 delta）之后，5xx、429 和断线都不再重试。业务循环不得对同一请求再包一层重试。005 的设计启用正常空输出温度重试，触发条件见 llm.md；它与传输重试互斥，每回合共享最多 3 次物理 HTTP 请求，不能各自计数后叠加。首个安全字符被共享输出写入方接纳（与窗口有无监听者无关）或增量持久化，两者任一发生即禁止重发；keep-alive / reasoning 不计交付。模式选择在提交前完成，不在预算之外试探降级。底层 reqwest 重试和 SSE 自动重连必须禁用。检查：评审计数同一请求的最大重试层数；测试断言请求次数上限，并断言首字节之后的 5xx 不再发起下一次请求。
-4. **密钥隔离**：优先 OS 凭据库。凭据库不可用时，写入仅当前用户可读的文件：Unix 模式 `0600`；Windows 用只含当前用户的 ACL，不把 `0600` 当成 Windows 权限。IPC 只暴露 `{ set, hint }`，`hint` 是密钥末尾 4 个字符；短于 4 个字符时 `hint` 为空，只报告已设置。明文不进前端状态、日志、错误 `detail`。读取顺序：OS 库优先，未命中或读取失败再查降级文件（OS 库瞬断不丢已降级保存的密钥）；OS 库写或读成功时单向清除降级文件里的旧副本，清理失败不回滚、下次成功即重试——OS 瞬断期间可能读到过期副本，只影响鉴权，不涉泄密，窗口由读路径重试压到最短。检查：序列化载荷与日志的测试不含明文；文件模式或 ACL 由写入降级文件的存储测试断言。
+4. **密钥隔离**：优先 OS 凭据库。凭据库不可用时，写入仅当前用户可读的文件：Unix 模式 `0600`；Windows 用只含当前用户的 ACL，不把 `0600` 当成 Windows 权限。IPC 只暴露 `{ set, hint }`，`hint` 是密钥末尾 4 个字符；短于 4 个字符时 `hint` 为空，只报告已设置。明文不进前端状态、日志、错误 `detail`。写入优先 OS 库；credentials.json v2 原子记录每个条目的权威后端：OS 指针（无明文）、降级文件值或删除墓碑。读取只按确认后端取值，OS 写失败后新文件值不会被 OS 的旧值覆盖或清除；OS 读取失败返回 store.*，不伪装未设置。删除先发布墓碑再清 OS，清理失败仍报错但旧值不会在重启后复活。旧版无版本字典按文件值读取、下一次写入升级；不猜测另一后端的先后。私有写入必须先对空临时文件设置 0600 / DACL，再写正文、fsync 与发布，权限失败不发布新值。OS 与文件发布之间不具备分布式原子性：错误可表示提交不确定，应主动查状态而不是重复写猜测。检查：序列化载荷与日志的测试不含明文；文件模式或 ACL 由写入降级文件的存储测试断言。
 5. **后台任务门槛**：默认关闭；显式开启后须同时满足「闲置时长 + 距上次尝试冷却 + 素材量」门槛；用户返回时在任务边界让位；进度走事件。检查：每个后台任务在文档中列出门槛参数表。
 
 ## 与设计任务的对接位
