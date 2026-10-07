@@ -647,6 +647,21 @@ mod tests {
         let (frozen, auth) = freeze_submission(&id).unwrap();
         assert_eq!(frozen.credential.unwrap().expose_secret(), "local-fixture");
         assert!(auth.is_some());
+        for proxy in [
+            mythos_llm::config::ProxyConfig::None,
+            mythos_llm::config::ProxyConfig::System,
+            mythos_llm::config::ProxyConfig::Manual {
+                url: "http://127.0.0.1:3128".into(),
+                auth_ref: None,
+            },
+        ] {
+            let id = unique("turn-without-proxy-auth");
+            let mut profile = deepseek_profile(&id);
+            profile.proxy = proxy;
+            llm_save_profile(profile).unwrap();
+            let (_, auth) = freeze_submission(&id).unwrap();
+            assert!(auth.is_none());
+        }
         assert_eq!(
             freeze_submission(&unique("missing")).err().unwrap().code(),
             "app.not-found"
