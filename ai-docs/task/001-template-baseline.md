@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：无
 - 优先级：P0
-- 创建 / 更新：2026-10-04 / 2026-10-06
+- 创建 / 更新：2026-10-04 / 2026-10-07
 
 ## 目标与背景
 
@@ -81,6 +81,7 @@ Rust 工具链升级可能引入新的 clippy 门禁。需要回退时同步修�
 - 2026-10-06：issue #42 明确覆盖忽略正则作用于所有 crate 的 lib.rs，入口只放模块声明 / 薄装配，commands / events / ipc 与业务逻辑均受门槛约束；不改变覆盖配置或阈值。
 - 2026-10-06：第三轮整体 review：`utils/greet.ts` 与 `App.vue` 占位实现无需改动。消融验证 2 项行为（变异源码 → `bun run test` → 还原）：formatGreeting 去掉空白 trim 守卫 → `falls back to world for blank input` 失败；App.vue 去掉 IPC 失败回退（纯前端问候）→ 「IPC 失败回退纯前端」失败——2/2 被捕捉。
 - 2026-10-06：第十轮补齐三条本会话从未执行过的构建链验证，均一次通过：`bun run bench`（tinybench 基准链路可用，formatGreeting 均值 ~43ns）；`bun run build`（vue-tsc + vite 生产构建，产物 64KB JS / 25KB gzip）；`cargo build --release --workspace`（LTO + panic=abort + opt-level "s" 的 release profile 首次完整编译，1m55s 含 tauri 壳）。与既有 verify 十项互补，覆盖生产档位。
+- 2026-10-07：issue #59 同步 testing.md 更新日期，与 Rust 测试位置、knip 和基准门禁的现有正文一致；最终全项验证见本次修复记录，不改门禁配置。
 
 ## 完成摘要
 
