@@ -23,12 +23,12 @@
 
 ## 当前进度
 
-- **已落地**：`src-rust/mythos-llm/` 的 `config`（profile 校验 / 持久化 / 冻结）、`credentials`（OS 凭据库优先 + 降级文件 + 单向迁移）、`proxy`（三模式与传输客户端统一构造）、`platform/`（按平台分发的原生能力）；`src-tauri/src/llm_commands.rs` 五条命令；`src-web/api/llm.ts` TS 同型；覆盖率门禁 `coverage-rust.config.mts` + `scripts/coverage-rust.mts`。Windows 原生输入全链路实测。
-- **剩余**：Windows 修复后 CI 复验；本机 verify 十三项、lint:rust:fix 与 macOS 原生集成已过，macOS / Linux CI 原生集成已过。
+- **已落地**：`src-rust/mythos-llm/` 的 `config`（profile 校验 / 持久化 / 冻结）、`credentials`（OS 凭据库优先 + 权威后端指针 / 墓碑 + 私有文件）、`proxy`（三模式与传输客户端统一构造）、`platform/`（按平台分发的原生能力）；`src-tauri/src/llm_commands.rs` 五条命令；`src-web/api/llm.ts` TS 同型；覆盖率门禁 `coverage-rust.config.mts` + `scripts/coverage-rust.mts`。Windows 原生输入全链路实测。
+- **剩余**：独立质量评审优化后的最终门禁与 CI 复验；前一提交 `d10276d` 的三平台 CI 37612885510 全部通过，含真实原生输入及 OS 凭据读写清。
 
 ## 前置条件与待决策
 
-先在 Windows / macOS / Linux 验证原生安全输入可行性；如不可行，记录具体阻塞并修订设计后才能更换入口。不得默认放宽明文边界。实现为 Windows CredUI / macOS NSSecureTextField / Linux GTK 密码 Entry；命令层使用同型接口并统一 UI 主线程调度。macOS 本机真实 UI / Keychain 测试通过；Windows / Linux 本轮 CI 复验待完成，不在结果到达前标全部通过。
+先在 Windows / macOS / Linux 验证原生安全输入可行性；如不可行，记录具体阻塞并修订设计后才能更换入口。不得默认放宽明文边界。实现为 Windows CredUI / macOS NSSecureTextField / Linux GTK 密码 Entry；命令层使用同型接口并统一 UI 主线程调度。macOS 本机真实 UI / Keychain 测试通过；CI 37612885510 已验证 Windows / macOS / Linux 的真实输入确认 / 取消及 OS 凭据读写清。
 
 实现中登记的待决策项（处置结论随条目给出）：
 
@@ -38,7 +38,7 @@
 
 ## 实施步骤
 
-1. 完成三平台原生输入与凭据库探测，记录选型及失败恢复方式。（macOS 本机通过；Windows / Linux 本轮 CI 待复验）
+1. 完成三平台原生输入与凭据库探测，记录选型及失败恢复方式。（本机 macOS 与三平台 CI 37612885510 通过）
 2. 在 mythos-llm 中实现配置 / Secret 抽象，复用 store 文件工具；Tauri 层只适配原生交互。（完成）
 3. 用代理与权限夹具验证冻结、切换、取消和脱敏；同步实际配置结构与 IPC 状态接口。（完成）
 
@@ -47,7 +47,7 @@
 - [x] 设置 / 换 key / clear 不改变已接纳回合的凭据版本；取消输入保留旧值。（freeze 单测：冻结后换 key / clear 不影响副本；CredUI 取消路径直测 + 命令层取消保留旧值单测）
 - [x] IPC、配置、错误与日志均不含明文 key / 代理密码；权限与 hint 符合契约，降级保存有明确失败行为。（hint / 状态 JSON 形状、序列化无密钥、错误形状无明文单测；DACL / 0600 权限断言；降级 / 迁移 / 双后端失败单测）
 - [x] 三种代理模式互不叠加；HTTPS、重定向和 TLS 分类有夹具验证。（本地代理夹具：manual / none / system 快照互斥、CONNECT 隧道、禁重定向、经代理不可信证书分类为 tls、Proxy-Basic 认证）
-- [ ] 三平台原生输入及 OS 凭据库均有实际确认 / 取消 / 读写清记录：macOS 本机及 macOS / Linux CI 已通过；Windows 修复后本轮结果待记录。未验证结果不标通过。
+- [x] 三平台原生输入及 OS 凭据库均有实际确认 / 取消 / 读写清记录：本机 macOS 与三平台 CI 37612885510 全部通过；后续优化仍复验。
 - [x] 待决策三项处置完毕并记录结论：并发锁（设计回写 storage.md + 命令层双锁实现）、权威后端与墓碑（语义回写契约工程纪律 4 + v2 原子发布已实现）、Sampling 归属（迁移至独立 `sampling.rs` 词汇模块，持久化不反向依赖传输层）。
 - [ ] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十三项通过（最终代码 / 文档状态复验后记录结果）。
 
@@ -64,6 +64,8 @@
 | 2026-10-07 | 本机 macOS；`bun run test:native`                      | 真实 AppKit / Keychain 确认、取消、读写清 | 通过；合成值自动输入 / 关闭，条目已删除            |
 | 2026-10-07 | CI 37591267085：macOS / Linux 原生集成                 | 确认 / 取消、OS 凭据读写清                | 两平台通过；Windows 前置路径测试失败，修复后待复验 |
 
+| 2026-10-07 | CI 37612885510，提交 `d10276d`：三平台全量及原生集成 | 十三项及真实确认 / 取消 / OS 凭据读写清 | 全部通过 |
+
 本轮消融：在隔离副本逐项变异、先确认原树测试通过，只把可编译且行为断言失败计为捕捉，结束后还原。第一轮 9/10（数量用例被重复 ID 校验遮蔽）；改为 51 个独立 ID，并使用合法超量 JSON 后，第二轮 11/11 捕捉：权威后端、删除墓碑、OS 错误透传、私有权限顺序、profile 版本 / 重复 / 数量 / 大小、凭据大小、原生输入互斥、重定向禁止。未变异工作的分支源码，不扩大覆盖预算。
 
 ## 风险与回退
@@ -79,6 +81,8 @@
 - 2026-10-07：按用户要求用统一 NativePrompt 接口封装平台差异，Rust / 测试规范同步；原生集成从 examples 迁到 tests/rust/native-platform workspace 测试 crate，覆盖三平台，通过显式 desktop-session 保持 UI 主线程。增加独立输入占用门禁，取消等待不释放仍打开的窗口门禁；CI Linux 用真实 GTK/Xvfb 与 Secret Service，不以模拟后端替代系统服务验收。
 - 2026-10-07：按用户要求先 push 触发 CI，再整体审查 / 消融。补合法大 JSON 与独立 profile ID 两类测试盲区，11/11 变异捕捉；CI macOS / Linux 原生测试通过。Windows 将父路径为文件也报 NotFound，读取现区分非法父路径与首次缺项，显式失败且补直接回归。lint:rust:fix、verify 十三项通过；Windows CI 修复后结果待记录。
 - 2026-10-07：CI 37593897448 的 Windows 行为测试已全过，覆盖率缺失仅为非 NotFound 打开错误分支；补 profiles.json 为目录的实际失败用例（Windows open 拒绝，Unix read 拒绝），不登记新增豁免或提高预算。
+
+- 2026-10-07：按用户要求由独立子代理只读评审。修复有界读取 UTF-8 / 超限误报、凭据缺失路径误判及 Windows 取消测试的进程隔离；共享读取与祖先检查归 store，标识符结构校验由 profile / 凭据命令共用。删除仅供测试的同步原生设置路径，测试统一验证生产异步路径；修正自动 lint 造成的注释代码跨度。独立二轮复核无阻塞问题；`lint:rust:fix`、`bun run verify` 十三项通过。隔离副本补做有界大小、非法 UTF-8 分类、祖先目录检查、凭据标识符校验四项消融，4/4 捕捉；优化后 CI 待复验。
 
 ## 完成摘要
 

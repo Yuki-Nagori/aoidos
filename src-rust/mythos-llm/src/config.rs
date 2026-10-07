@@ -6,7 +6,6 @@
 //! 设置只影响下一回合）。持久化经 mythos-store 的原子写；文件形状是
 //! `{"version":1,"profiles":[…]}`，后续字段演进走版本迁移，不改写既有存档。
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
@@ -14,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use mythos_store::atomic::write_text_atomic;
 use mythos_store::error::{Result, StoreError};
+use mythos_store::read::read_text_bounded;
 
 use crate::credentials::CredentialStore;
 use crate::sampling::Sampling;
@@ -100,6 +100,26 @@ impl std::fmt::Display for ProfileError {
 
 impl std::error::Error for ProfileError {}
 
+/// 配置及凭据标识符的结构校验；不限制为已知供应商，以兼容代理凭据引用。
+///
+/// # Errors
+/// 空白、超过 256 字节或含控制字符时返回字段错误。
+pub fn validate_identifier(field: &str, value: &str) -> std::result::Result<(), ProfileError> {
+    if value.trim().is_empty() {
+        return Err(ProfileError {
+            code: "invalid-profile",
+            message: format!("{field} 不能为空"),
+        });
+    }
+    if value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(ProfileError {
+            code: "invalid-profile",
+            message: format!("{field} 过长或含控制字符"),
+        });
+    }
+    Ok(())
+}
+
 impl LlmProfile {
     /// 结构校验：id / provider / model 非空且无控制字符，manual 代理 URL
     /// 形态合法且不含内嵌凭据。能力匹配（模型是否存在、温度范围）不在保存时
@@ -113,18 +133,7 @@ impl LlmProfile {
             ("providerId", &self.provider_id),
             ("model", &self.model),
         ] {
-            if value.trim().is_empty() {
-                return Err(ProfileError {
-                    code: "invalid-profile",
-                    message: format!("{field} 不能为空"),
-                });
-            }
-            if value.len() > 256 || value.chars().any(char::is_control) {
-                return Err(ProfileError {
-                    code: "invalid-profile",
-                    message: format!("{field} 过长或含控制字符"),
-                });
-            }
+            validate_identifier(field, value)?;
         }
         if !self.sampling.temperature.is_finite() || self.sampling.max_tokens == 0 {
             return Err(ProfileError {
@@ -247,36 +256,16 @@ impl ProfileStore {
     /// # Errors
     /// 目录不可读（非缺失）或文件损坏时返回对应 store.* 错误。
     pub fn load(&self) -> Result<Vec<LlmProfile>> {
-        match std::fs::File::open(&self.path) {
-            Ok(file) => {
-                let mut text = String::new();
-                file.take(524_289)
-                    .read_to_string(&mut text)
-                    .map_err(StoreError::from_io)?;
-                if text.len() > 524_288 {
-                    return Err(StoreError::Corrupt("profiles file too large".into()));
-                }
-                let file: ProfileFile = serde_json::from_str(&text).map_err(err_profiles_json)?;
-                if file.version != 1 {
-                    return Err(StoreError::Corrupt("unsupported profiles version".into()));
-                }
-                validate_profiles(&file.profiles)?;
-                Ok(file.profiles)
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => missing_profiles(&self.path),
-            Err(err) => Err(StoreError::from_io(err)),
+        let Some(text) = read_text_bounded(&self.path, 524_288)? else {
+            return Ok(Vec::new());
+        };
+        let file: ProfileFile = serde_json::from_str(&text).map_err(err_profiles_json)?;
+        if file.version != 1 {
+            return Err(StoreError::Corrupt("unsupported profiles version".into()));
         }
+        validate_profiles(&file.profiles)?;
+        Ok(file.profiles)
     }
-}
-
-// Windows 将文件父路径下的查找也映射为 NotFound；只有真正缺项才是首次安装。
-fn missing_profiles(path: &Path) -> Result<Vec<LlmProfile>> {
-    if path.parent().is_some_and(Path::is_file) {
-        return Err(StoreError::InvalidPath(
-            "profile parent is not a directory".into(),
-        ));
-    }
-    Ok(Vec::new())
 }
 
 fn validate_profiles(profiles: &[LlmProfile]) -> Result<()> {
@@ -629,12 +618,6 @@ mod tests {
         //（Windows 上读目录为 PermissionDenied，Linux 侧同断言走各平台码）。
         let dir = temp_test_dir("load-dir");
         std::fs::write(dir.join("blocker"), b"x").unwrap();
-        assert_eq!(
-            missing_profiles(&dir.join("blocker").join("profiles.json"))
-                .unwrap_err()
-                .code(),
-            "invalid-path"
-        );
         let error = ProfileStore::new(&dir.join("blocker")).load().unwrap_err();
         assert_ne!(error.code(), "not-found");
         assert_ne!(error.code(), "corrupt");

@@ -24,8 +24,8 @@ async fn llm_set_key(
 }
 
 /// 事件发送装配胶水：契约信封（events 模块）+ `emit_to("main")`。
-/// 本文件在覆盖率口径外（装配代码需要活的 `AppHandle，tauri::test` 的 mock
-/// 在 Windows 触发 `STATUS_ENTRYPOINT_NOT_FOUND）——事件名与载荷形状的`
+/// 本文件在覆盖率口径外（装配代码需要活的 `AppHandle`，`tauri::test` 的 mock
+/// 在 Windows 触发 `STATUS_ENTRYPOINT_NOT_FOUND`）——事件名与载荷形状的
 /// 纯逻辑在 events / ipc 模块内有直测，这里只适配平台投递。
 ///
 /// # Errors

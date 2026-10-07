@@ -255,7 +255,7 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 代理模式 system / none / manual：system 使用启动时形成的环境代理快照（不隐式读环境）；none 显式禁用；manual 使用显式 HTTP(S) 或 SOCKS5 代理并禁用自动系统代理叠加（由构造方式保证：客户端统一经 `proxy::build_client` 显式组装，全程不让 reqwest 隐式读环境），按需启用 socks feature。代理三模式、CONNECT 隧道、禁用重定向与经代理的 TLS 分类已由本地代理夹具验证（019）。生产 endpoint 必须 HTTPS，禁止 URL 内嵌凭据，禁止自动重定向携带请求（redirect none）；仅测试 / 用户明确配置的回环本地服务可 HTTP。代理用户名 / 密码由 Rust 凭据引用取出，不存进 URL、普通配置、日志或 CmdError.detail；关闭原始 HTTP trace。端点和代理错误仅返回脱敏类别，不输出 response body、请求头或完整 prompt。
 
-密钥保存与 hint 规则仍按通信契约，secrecy 只降低 Debug 泄漏风险，不代替 OS 凭据库。当前保持「明文不进 Webview」的边界：llm_set_key 只发起 Rust 原生凭据输入（`platform/` 按平台分发），命令 / 快照只返回设置状态；用户主动取消设置保留旧值。平台支持状态（019 实测口径，未验证不宣称支持）：Windows CredUI 已验证（含真实对话框取消路径直测）；macOS AppKit 与 Linux GTK 已实现密码控件，统一经 UI 主线程调度，无桌面会话明确报错，不转 Webview；macOS 本机真实集成通过，Linux 本轮 CI 待验证；凭据后端权威指针 / 墓碑与私有发布规则见通信契约，不再用 OS 旧值推断降级值是否过期。OS 凭据库本身由 keyring 默认特性承担（macOS Keychain / Linux Secret Service；本机 macOS 已完成读写清，Linux CI 用独立会话验证，不可用时按权威后端规则处理），降级文件权限 Windows 受保护 DACL、Unix 0600。若将来允许设置表单短暂处理密钥，必须先同步修订职责边界与通信契约。
+密钥保存与 hint 规则仍按通信契约，secrecy 只降低 Debug 泄漏风险，不代替 OS 凭据库。当前保持「明文不进 Webview」的边界：llm_set_key 只发起 Rust 原生凭据输入（`platform/` 按平台分发），命令 / 快照只返回设置状态；用户主动取消设置保留旧值。平台支持状态（019 实测口径，未验证不宣称支持）：Windows CredUI 已验证（含真实对话框取消路径直测）；macOS AppKit 与 Linux GTK 已实现密码控件，统一经 UI 主线程调度，无桌面会话明确报错，不转 Webview；本机 macOS 与三平台 CI 37612885510 的真实集成均通过；凭据后端权威指针 / 墓碑与私有发布规则见通信契约，不再用 OS 旧值推断降级值是否过期。OS 凭据库本身由 keyring 默认特性承担（macOS Keychain / Linux Secret Service；本机 macOS 已完成读写清，Linux CI 用独立会话验证，不可用时按权威后端规则处理），降级文件权限 Windows 受保护 DACL、Unix 0600。若将来允许设置表单短暂处理密钥，必须先同步修订职责边界与通信契约。
 
 ## 错误分类与标定
 
@@ -281,11 +281,11 @@ SSE adapter 需要接受 content / reasoning 分离、usage-only chunk 和合法
 | 凭据 / 代理 / TLS | 三平台权限与 hint、取消设置保留旧值、代理 fixture、TLS source 分类，无明文日志                                      |
 | 模型质量          | 两候选模型、两调用形态、固定黄金剧本；记录格式违规率、人设一致性、首字符延迟和账单用量                              |
 
-TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地（自签名证书、连接拒绝、中途断连、异常 EOF、字节级分片重放）；019 的凭据与代理已落地并夹具验证（Windows 原生输入取消路径直测 + keyring 直测；macOS 原生 / Keychain 本机已通过，Linux 原生 / Secret Service 本轮 CI 待验证，见「代理、密钥与网络配置」），模型质量（024）仍为待标定项，上表给出方法；失败必须修正 adapter / profile 或显式拒绝能力，不以未经证实的降级掩盖。006 的[记录引擎](record-engine.md)承接 GuardSpec / 输出写入方约束并定义正式记录语法，012 定义引擎阶段与产品输入规则。
+TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地（自签名证书、连接拒绝、中途断连、异常 EOF、字节级分片重放）；019 的凭据与代理已落地并夹具验证（Windows 原生输入取消路径直测 + keyring 直测；三平台原生输入与 OS 凭据读写清已在 CI 37612885510 通过，见「代理、密钥与网络配置」），模型质量（024）仍为待标定项，上表给出方法；失败必须修正 adapter / profile 或显式拒绝能力，不以未经证实的降级掩盖。006 的[记录引擎](record-engine.md)承接 GuardSpec / 输出写入方约束并定义正式记录语法，012 定义引擎阶段与产品输入规则。
 
 ## 实现承接
 
-实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `mythos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 进行中——配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）与命令层 profile 及凭据命令已落地，Windows 原生输入已实测，三平台原生输入实现齐全，macOS 本机通过，Windows / Linux 本轮 CI 待复验（平台支持状态见「代理、密钥与网络配置」）；本节其余任务未开始。
+实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `mythos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 进行中——配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）与命令层 profile 及凭据命令已落地，Windows 原生输入已实测，三平台原生输入实现齐全，本机 macOS 与三平台 CI 37612885510 已通过，独立评审优化后复验（平台支持状态见「代理、密钥与网络配置」）；本节其余任务未开始。
 
 | 任务                                                          | 承接边界                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------- |

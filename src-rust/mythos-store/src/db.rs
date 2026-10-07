@@ -2,6 +2,7 @@
 //! pending 迁移前经 SQLite backup API 做一致快照到同级 `backups/`（保留 3 份）。
 //! 热 WAL 连接上直接拷主文件会丢掉尚未 checkpoint 的提交。
 
+use crate::paths::validate_missing_parent;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -132,28 +133,6 @@ pub fn current_version(path: &Path) -> Result<u32> {
         Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err_open)?;
     conn.busy_timeout(BUSY_TIMEOUT).map_err(err_pragma)?;
     query_user_version(&conn)
-}
-
-// Windows 将“祖先是普通文件”也报告为 NotFound（task 017 / issue #7）；只允许真正缺失的目录链。
-// 从最近父路径向上找到首个存在的目录，不创建目录，也不吞掉权限等错误。
-fn validate_missing_parent(path: &Path) -> Result<()> {
-    for parent in path
-        .ancestors()
-        .skip(1)
-        .filter(|p| !p.as_os_str().is_empty())
-    {
-        let metadata = match fs::metadata(parent) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            result => result.map_err(StoreError::from_io)?,
-        };
-        if !metadata.is_dir() {
-            return Err(StoreError::from_io(io::Error::from(
-                io::ErrorKind::NotADirectory,
-            )));
-        }
-        break;
-    }
-    Ok(())
 }
 
 fn enable_wal(conn: &Connection) -> Result<()> {

@@ -124,7 +124,7 @@ impl Usage {
     }
 }
 
-/// 服务端 finish `的合法取值；content_filter` / 未知 finish / 工具调用按 bad-response 失败。
+/// 服务端 finish 的合法取值；`content_filter` / 未知 finish / 工具调用按 bad-response 失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderFinish {
     Stop,

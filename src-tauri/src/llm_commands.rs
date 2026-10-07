@@ -1,5 +1,7 @@
 use crate::ipc::CmdError;
-use mythos_llm::config::{LlmProfile, MAX_PROFILES, ProfileError, ProfileStore};
+use mythos_llm::config::{
+    LlmProfile, MAX_PROFILES, ProfileError, ProfileStore, validate_identifier,
+};
 use mythos_llm::credentials::{CredentialStore, CredentialVault, KeyStatus};
 use mythos_llm::platform::NativePrompt;
 use mythos_store::error::StoreError;
@@ -153,11 +155,13 @@ fn delete_profile_in(store: &ProfileStore, profile_id: &str) -> Result<Deleted, 
 /// 凭据后端不可读时返回 store.*。
 #[tauri::command]
 pub fn llm_get_key_status(provider_id: String) -> Result<KeyStatus, CmdError> {
+    validate_identifier("providerId", &provider_id).map_err(bad_profile)?;
     let _guard = key_lock();
     key_status_with(&provider_id, &credential_vault()?)
 }
 
 fn key_status_with(provider_id: &str, store: &dyn CredentialStore) -> Result<KeyStatus, CmdError> {
+    validate_identifier("providerId", provider_id).map_err(bad_profile)?;
     store.status(provider_id).map_err(CmdError::from)
 }
 
@@ -174,6 +178,7 @@ pub async fn set_key_with_dispatch(
     prompt: NativePrompt,
     dispatch: &NativeDispatch,
 ) -> Result<KeyStatus, CmdError> {
+    validate_identifier("providerId", &provider_id).map_err(bad_profile)?;
     set_key_in(
         &provider_id,
         &action,
@@ -191,8 +196,11 @@ async fn set_key_in(
     prompt: NativePrompt,
     dispatch: &NativeDispatch,
 ) -> Result<KeyStatus, CmdError> {
-    if action != "set" {
-        return llm_set_key_with(provider_id, action, store, prompt);
+    validate_identifier("providerId", provider_id).map_err(bad_profile)?;
+    match action {
+        "clear" => return clear_key_in(provider_id, store),
+        "set" => {}
+        _ => return Err(CmdError::new("app.bad-request", "未知凭据操作", None)),
     }
     let permit = PromptPermit::acquire(&PROMPT_ACTIVE)?;
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -207,32 +215,10 @@ async fn set_key_in(
     save_prompt_result(provider_id, store, result)
 }
 
-fn llm_set_key_with(
-    provider_id: &str,
-    action: &str,
-    store: &dyn CredentialStore,
-    prompt: NativePrompt,
-) -> Result<KeyStatus, CmdError> {
-    match action {
-        "clear" => {
-            let _guard = key_lock();
-            store.clear_key(provider_id).map_err(CmdError::from)?;
-            key_status_with(provider_id, store)
-        }
-        "set" => set_via_prompt(provider_id, store, prompt),
-        _ => Err(CmdError::new("app.bad-request", "未知凭据操作", None)),
-    }
-}
-
-/// 同型原生设置流程：原生输入等待用户（此时不持锁，避免长时间阻塞
-/// 并发的凭据命令），拿到密钥后才持 key 锁串行化写入；用户取消保留旧值。
-fn set_via_prompt(
-    provider_id: &str,
-    store: &dyn CredentialStore,
-    prompt_fn: fn(&str) -> Result<Option<String>, StoreError>,
-) -> Result<KeyStatus, CmdError> {
-    let label = format!("provider {provider_id}");
-    save_prompt_result(provider_id, store, prompt_fn(&label))
+fn clear_key_in(provider_id: &str, store: &dyn CredentialStore) -> Result<KeyStatus, CmdError> {
+    let _guard = key_lock();
+    store.clear_key(provider_id).map_err(CmdError::from)?;
+    key_status_with(provider_id, store)
 }
 
 fn save_prompt_result(
@@ -342,6 +328,10 @@ mod tests {
         }
     }
 
+    fn rejecting_dispatch(_: Box<dyn FnOnce() + Send>) -> tauri::Result<()> {
+        Err(tauri::Error::Io(std::io::Error::other("shutdown")))
+    }
+
     #[tokio::test]
     async fn native_dispatch_confirms_cancels_and_reports_shutdown() {
         let keys = MemoryKeys::default();
@@ -358,12 +348,10 @@ mod tests {
             .unwrap();
         assert_eq!(status, cancelled);
         assert_eq!(
-            set_key_in("p", "set", &keys, fake_prompt, &|_| Err(tauri::Error::Io(
-                std::io::Error::other("shutdown")
-            )))
-            .await
-            .unwrap_err()
-            .code(),
+            set_key_in("p", "set", &keys, fake_prompt, &rejecting_dispatch)
+                .await
+                .unwrap_err()
+                .code(),
             "store.io"
         );
         assert_eq!(
@@ -379,11 +367,77 @@ mod tests {
                 .unwrap()
                 .set
         );
+        let status = set_key_in(
+            "deepseek",
+            "set",
+            &keys,
+            |label| {
+                assert!(label.contains("deepseek"));
+                Ok(Some("sk-new-1234".into()))
+            },
+            &direct,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({"set": true, "hint": "1234"})
+        );
+        assert_eq!(
+            keys.get_key("deepseek").unwrap().unwrap().expose_secret(),
+            "sk-new-1234"
+        );
+        let err = set_key_in(
+            "deepseek",
+            "set",
+            &keys,
+            |_| {
+                Err(StoreError::from_io(std::io::Error::other(
+                    "credential ui failed",
+                )))
+            },
+            &direct,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "store.io");
+        assert!(!serde_json::to_string(&err).unwrap().contains("sk-new-1234"));
+        // 非设置操作及非法标识符在调度前退出，不能弹窗或修改凭据。
+        let no_dispatch = rejecting_dispatch;
+        for id in ["", " ", "bad\nname", &"x".repeat(257)] {
+            for action in ["set", "clear"] {
+                assert_eq!(
+                    set_key_in(id, action, &keys, fake_prompt, &no_dispatch)
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    "app.bad-request"
+                );
+            }
+            assert_eq!(
+                key_status_with(id, &keys).unwrap_err().code(),
+                "app.bad-request"
+            );
+        }
+        assert!(keys.0.lock().unwrap().keys().all(|id| id == "deepseek"));
+        assert_eq!(
+            set_key_in("p", "bogus", &keys, fake_prompt, &no_dispatch)
+                .await
+                .unwrap_err()
+                .code(),
+            "app.bad-request"
+        );
+        assert!(
+            !set_key_in("deepseek", "clear", &keys, fake_prompt, &no_dispatch)
+                .await
+                .unwrap()
+                .set
+        );
         init_llm_dir(tdir("async-command"));
         let provider = unique("async-probe");
         // 未知操作必须在原生交互前拒绝，装配入口也覆盖。
         assert_eq!(
-            set_key_with_dispatch(provider, "bogus".into(), fake_prompt, &direct)
+            set_key_with_dispatch(provider, "bogus".into(), platform_prompt(), &direct)
                 .await
                 .unwrap_err()
                 .code(),
@@ -499,7 +553,7 @@ mod tests {
     }
 
     fn clear_action(store: &dyn CredentialStore) -> std::result::Result<KeyStatus, CmdError> {
-        llm_set_key_with("deepseek", "clear", store, fake_prompt)
+        clear_key_in("deepseek", store)
     }
 
     #[test]
@@ -518,59 +572,6 @@ mod tests {
     }
 
     #[test]
-    fn set_via_native_prompt_replaces_and_cancel_keeps_old_value() {
-        let keys = MemoryKeys::default();
-        keys.set_key("deepseek", SecretString::from(String::from("sk-old-9999")))
-            .unwrap();
-        // 用户取消：保留旧值。
-        let status = llm_set_key_with("deepseek", "set", &keys, |_label| Ok(None)).unwrap();
-        assert_eq!(status.hint.as_deref(), Some("9999"));
-        // 确认输入：提示语含 provider 标识，替换并返回新状态。
-        let status = llm_set_key_with("deepseek", "set", &keys, |label| {
-            assert!(label.contains("deepseek"));
-            Ok(Some("sk-new-1234".into()))
-        })
-        .unwrap();
-        assert_eq!(status.hint.as_deref(), Some("1234"));
-        assert_eq!(
-            keys.get_key("deepseek").unwrap().unwrap().expose_secret(),
-            "sk-new-1234"
-        );
-        // 函数项注入器同样可用（clear 路径复用它占位）。
-        let status = llm_set_key_with("deepseek", "set", &keys, fake_prompt).unwrap();
-        assert!(
-            keys.get_key("deepseek")
-                .unwrap()
-                .unwrap()
-                .expose_secret()
-                .ends_with("deepseek")
-        );
-        assert_eq!(status.hint.as_deref(), Some("seek"));
-        // 原生输入失败：store.* 透传，诊断与载荷不含明文。
-        let err = llm_set_key_with("deepseek", "set", &keys, |_label| {
-            Err(mythos_store::error::StoreError::Io {
-                code: "io",
-                source: std::io::Error::other("credential ui failed"),
-            })
-        })
-        .unwrap_err();
-        assert_eq!(err.code(), "store.io");
-        let serialized = serde_json::to_string(&err).unwrap();
-        assert!(
-            !serialized.contains("sk-new-1234"),
-            "错误形状不得携带明文：{serialized}"
-        );
-    }
-
-    #[test]
-    fn unknown_action_maps_to_bad_request() {
-        let keys = MemoryKeys::default();
-        // 注入器只是占位：未知 action 必须在任何交互前拒绝。
-        let err = llm_set_key_with("deepseek", "bogus", &keys, fake_prompt).unwrap_err();
-        assert_eq!(err.code(), "app.bad-request");
-    }
-
-    #[test]
     fn status_command_reads_through_shared_vault() {
         // 命令级：对从未设置过的唯一 id 读状态 / 清除（NoEntry 幂等路径），
         // 不写入任何真实凭据。目录由先到的测试注入（OnceLock 全进程共享）。
@@ -578,12 +579,7 @@ mod tests {
         let provider = unique("vault-probe");
         // 命令级检查目录注入与删除墓碑；OS 无会话时删除报错，墓碑仍阻止旧值读取。
         // 服务真实读写清由三平台 test:native 留证，错误语义另有注入直测。
-        let _ = llm_set_key_with(
-            &provider,
-            "clear",
-            &credential_vault().unwrap(),
-            platform_prompt(),
-        );
+        let _ = clear_key_in(&provider, &credential_vault().unwrap());
         assert!(!llm_get_key_status(provider).unwrap().set);
     }
 }

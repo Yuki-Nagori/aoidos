@@ -4,6 +4,28 @@ use std::path::{Path, PathBuf};
 
 use super::error::{Result, StoreError};
 
+// Windows 将“祖先是普通文件”也报告为 NotFound（task 017 / issue #7）；只允许真正缺失的目录链。
+// 从最近父路径向上找到首个存在的目录，不创建目录，也不吞掉权限等错误。
+pub(crate) fn validate_missing_parent(path: &Path) -> Result<()> {
+    for parent in path
+        .ancestors()
+        .skip(1)
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        let metadata = match std::fs::metadata(parent) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            result => result.map_err(StoreError::from_io)?,
+        };
+        if !metadata.is_dir() {
+            return Err(StoreError::from_io(std::io::Error::from(
+                std::io::ErrorKind::NotADirectory,
+            )));
+        }
+        break;
+    }
+    Ok(())
+}
+
 // Windows 设备名，大小写不敏感，按第一个 `.` 之前的 stem 匹配（task 013）。不是一般的非法字符表。
 const WINDOWS_RESERVED: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",

@@ -14,7 +14,7 @@ pub enum StoreError {
     AlreadyRunning { lock_path: PathBuf },
     /// 目标被占用，重试耗尽后放弃（tmp 已清理）。
     LockedTimeout { path: PathBuf },
-    /// `迁移执行失败；事务已回滚，user_version` 未推进。
+    /// 迁移执行失败；事务已回滚，`user_version` 未推进。
     Migration {
         version: u32,
         source: rusqlite::Error,

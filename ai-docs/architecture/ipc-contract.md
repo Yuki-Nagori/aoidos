@@ -53,6 +53,8 @@ Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 
 | llm_get_key_status | `{ providerId }`                           | `{ set, hint }`           | 只报设置状态，不读明文；凭据后端不可读为 store.*                                                                                                                                     |
 | llm_set_key        | `{ providerId, action: "set" 或 "clear" }` | `{ set, hint }`           | set 发起 Rust 原生凭据输入（Windows CredUI / macOS AppKit / Linux GTK，同型 UI 主线程入口；重复输入 app.busy，无会话 store.io，不降级为 Webview 明文）；用户取消保留旧值；clear 幂等 |
 
+凭据命令的 `providerId` 与 profile 共用结构校验：非空白、最多 256 字节、无控制字符；非法输入在原生交互及后端操作前返回 `app.bad-request`。允许自定义标识符及代理认证引用，不限于内置供应商。
+
 ```ts
 type ProfileMode = "completion" | "chat";
 

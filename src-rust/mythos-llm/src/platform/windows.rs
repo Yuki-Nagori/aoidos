@@ -262,13 +262,30 @@ fn map_cred_ui_result(result: u32, password: &[u16]) -> Result<Option<String>> {
     }
 }
 
+// 合成消息只投递给本测试进程，避免同标题的真实应用窗口被取消。
+#[cfg(any(test, feature = "native-smoke"))]
+fn own_prompt_window(caption: &[u16]) -> windows_sys::Win32::Foundation::HWND {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
+    // SAFETY: 调用方提供 NUL 结尾标题；查询到的窗口仅用于核对进程 ID。
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), caption.as_ptr());
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &raw mut pid);
+        if pid == std::process::id() {
+            hwnd
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// Windows 真实确认 / 取消验证：只给当前测试进程的 CredUI 窗口发合成输入。
 #[cfg(feature = "native-smoke")]
 pub fn verify_native_input() -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, FindWindowW, GWL_STYLE, GetWindowLongW, GetWindowThreadProcessId,
-        PostMessageW, SendMessageW, WM_CLOSE, WM_COMMAND, WM_SETTEXT,
+        EnumChildWindows, GWL_STYLE, GetWindowLongW, PostMessageW, SendMessageW, WM_CLOSE,
+        WM_COMMAND, WM_SETTEXT,
     };
     static FILLED: AtomicBool = AtomicBool::new(false);
     unsafe extern "system" fn fill(hwnd: windows_sys::Win32::Foundation::HWND, _: isize) -> i32 {
@@ -293,21 +310,17 @@ pub fn verify_native_input() -> Result<()> {
             for _ in 0..600 {
                 // SAFETY: 字符串 NUL 结尾；只操作匹配当前进程 ID 的测试窗口。
                 unsafe {
-                    let hwnd = FindWindowW(std::ptr::null(), caption.as_ptr());
+                    let hwnd = own_prompt_window(&caption);
                     if !hwnd.is_null() {
-                        let mut pid = 0;
-                        GetWindowThreadProcessId(hwnd, &raw mut pid);
-                        if pid == std::process::id() {
-                            if accept {
-                                EnumChildWindows(hwnd, Some(fill), 0);
-                                if FILLED.load(Ordering::SeqCst) {
-                                    PostMessageW(hwnd, WM_COMMAND, 1, 0);
-                                    return true;
-                                }
-                            } else {
-                                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                        if accept {
+                            EnumChildWindows(hwnd, Some(fill), 0);
+                            if FILLED.load(Ordering::SeqCst) {
+                                PostMessageW(hwnd, WM_COMMAND, 1, 0);
                                 return true;
                             }
+                        } else {
+                            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                            return true;
                         }
                     }
                 }
@@ -333,7 +346,7 @@ mod tests {
     use super::*;
     use crate::temp_test_dir;
     use std::time::Duration;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
 
     #[test]
     fn sid_extraction_rejects_dead_handles() {
@@ -405,11 +418,9 @@ mod tests {
         let handle = std::thread::spawn(|| prompt_native_key("provider deepseek"));
         let mut closed = false;
         for _ in 0..600 {
-            // SAFETY: FindWindowW 的类名 / 窗口名均为 NUL 结尾宽字符串（类名
-            // 置 null 表示按标题匹配）；PostMessageW 的 hwnd 来自上一步查询，
-            // WM_CLOSE 为合法消息常量。
-            let hwnd = unsafe { FindWindowW(std::ptr::null(), caption.as_ptr()) };
+            let hwnd = own_prompt_window(&caption);
             if !hwnd.is_null() {
+                // SAFETY: 窗口已核对为当前进程；WM_CLOSE 是合法取消消息。
                 unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
                 closed = true;
                 break;

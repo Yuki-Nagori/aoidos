@@ -19,14 +19,14 @@ pub enum ProviderError {
     Network { source: TransportClass },
     /// TLS 证书 / 握手失败，不重试、不关闭校验。
     Tls,
-    /// 协议或能力拒绝：非成功状态、SSE / JSON / UTF-8 损坏、未知 `finish、content_filter` 等。
+    /// 协议或能力拒绝：非成功状态、SSE / JSON / UTF-8 损坏、未知 `finish`、`content_filter` 等。
     BadResponse {
         reason: &'static str,
         status: Option<u16>,
     },
     /// 流提前结束且未带合法 finish / 结束标记；按交付边界映射 network / aborted。
     Interrupted,
-    /// 服务端 aborted / `insufficient_system_resource；按交付边界映射` bad-response / aborted。
+    /// 服务端 aborted / `insufficient_system_resource`；按交付边界映射 bad-response / aborted。
     ServerAborted,
 }
 

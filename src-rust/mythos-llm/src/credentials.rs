@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -17,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use mythos_store::atomic::write_atomic_private;
 use mythos_store::error::{Result, StoreError};
+use mythos_store::read::read_text_bounded;
 
 /// 凭据库按 provider 存取密钥；句柄可克隆共享，019 内由命令层持有。
 pub trait CredentialStore: Send + Sync {
@@ -174,33 +174,23 @@ impl CredentialFile {
     }
 
     fn read_data(&self) -> Result<CredentialData> {
-        match std::fs::File::open(&self.path) {
-            Ok(file) => {
-                let mut text = String::new();
-                file.take(524_289)
-                    .read_to_string(&mut text)
-                    .map_err(StoreError::from_io)?;
-                if text.len() > 524_288 {
-                    return Err(StoreError::Corrupt("credentials file too large".into()));
-                }
-                let decoded: CredentialEncoding =
-                    serde_json::from_str(&text).map_err(err_credentials_json)?;
-                match decoded {
-                    CredentialEncoding::Current(data) if data.version == 2 => Ok(data),
-                    CredentialEncoding::Current(_) => Err(StoreError::Corrupt(
-                        "unsupported credentials version".into(),
-                    )),
-                    CredentialEncoding::Legacy(map) => Ok(CredentialData {
-                        version: 2,
-                        entries: map
-                            .into_iter()
-                            .map(|(id, value)| (id, CredentialEntry::File { value }))
-                            .collect(),
-                    }),
-                }
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(CredentialData::default()),
-            Err(err) => Err(StoreError::from_io(err)),
+        let Some(text) = read_text_bounded(&self.path, 524_288)? else {
+            return Ok(CredentialData::default());
+        };
+        let decoded: CredentialEncoding =
+            serde_json::from_str(&text).map_err(err_credentials_json)?;
+        match decoded {
+            CredentialEncoding::Current(data) if data.version == 2 => Ok(data),
+            CredentialEncoding::Current(_) => Err(StoreError::Corrupt(
+                "unsupported credentials version".into(),
+            )),
+            CredentialEncoding::Legacy(map) => Ok(CredentialData {
+                version: 2,
+                entries: map
+                    .into_iter()
+                    .map(|(id, value)| (id, CredentialEntry::File { value }))
+                    .collect(),
+            }),
         }
     }
 
