@@ -470,7 +470,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vault.get_key("p").unwrap_err().code(), "corrupt");
-        std::fs::write(dir.join("credentials.json"), " ".repeat(524_289)).unwrap();
+        std::fs::write(
+            dir.join("credentials.json"),
+            r#"{"version":2,"entries":{}}"#.to_owned() + &" ".repeat(524_289),
+        )
+        .unwrap();
         assert_eq!(vault.get_key("p").unwrap_err().code(), "corrupt");
         let data = CredentialData {
             version: 2,

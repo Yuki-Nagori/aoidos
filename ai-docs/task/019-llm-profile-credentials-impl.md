@@ -24,7 +24,7 @@
 ## 当前进度
 
 - **已落地**：`src-rust/mythos-llm/` 的 `config`（profile 校验 / 持久化 / 冻结）、`credentials`（OS 凭据库优先 + 降级文件 + 单向迁移）、`proxy`（三模式与传输客户端统一构造）、`platform/`（按平台分发的原生能力）；`src-tauri/src/llm_commands.rs` 五条命令；`src-web/api/llm.ts` TS 同型；覆盖率门禁 `coverage-rust.config.mts` + `scripts/coverage-rust.mts`。Windows 原生输入全链路实测。
-- **剩余**：Windows / Linux 本轮 CI 原生集成复验与最终全项验证；三平台实现均已存在，macOS 本机真实 AppKit / Keychain 已通过。
+- **剩余**：Windows 修复后 CI 复验；本机 verify 十三项、lint:rust:fix 与 macOS 原生集成已过，macOS / Linux CI 原生集成已过。
 
 ## 前置条件与待决策
 
@@ -47,7 +47,7 @@
 - [x] 设置 / 换 key / clear 不改变已接纳回合的凭据版本；取消输入保留旧值。（freeze 单测：冻结后换 key / clear 不影响副本；CredUI 取消路径直测 + 命令层取消保留旧值单测）
 - [x] IPC、配置、错误与日志均不含明文 key / 代理密码；权限与 hint 符合契约，降级保存有明确失败行为。（hint / 状态 JSON 形状、序列化无密钥、错误形状无明文单测；DACL / 0600 权限断言；降级 / 迁移 / 双后端失败单测）
 - [x] 三种代理模式互不叠加；HTTPS、重定向和 TLS 分类有夹具验证。（本地代理夹具：manual / none / system 快照互斥、CONNECT 隧道、禁重定向、经代理不可信证书分类为 tls、Proxy-Basic 认证）
-- [ ] 三平台原生输入及 OS 凭据库均有实际确认 / 取消 / 读写清记录：macOS 本机已通过；Windows / Linux 本轮 CI 集成结果待记录。未验证结果不标通过。
+- [ ] 三平台原生输入及 OS 凭据库均有实际确认 / 取消 / 读写清记录：macOS 本机及 macOS / Linux CI 已通过；Windows 修复后本轮结果待记录。未验证结果不标通过。
 - [x] 待决策三项处置完毕并记录结论：并发锁（设计回写 storage.md + 命令层双锁实现）、权威后端与墓碑（语义回写契约工程纪律 4 + v2 原子发布已实现）、Sampling 归属（迁移至独立 `sampling.rs` 词汇模块，持久化不反向依赖传输层）。
 - [ ] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十三项通过（最终代码 / 文档状态复验后记录结果）。
 
@@ -55,14 +55,16 @@
 
 本地代理 / TLS fixture、配置与权限测试；原生输入和凭据库做三平台手工检查并记录环境。
 
-| 日期       | 环境 / 命令                                            | 预期                                      | 实际结果                                |
-| ---------- | ------------------------------------------------------ | ----------------------------------------- | --------------------------------------- |
-| 2026-10-07 | Windows 11；`bun run verify`（十三项）                 | 全项 exit 0                               | 通过（coverage 门禁见下条）             |
-| 2026-10-07 | 代理夹具（`cargo test -p mythos-llm proxy`）           | 三模式互斥、CONNECT / TLS / 重定向        | 16 项通过                               |
-| 2026-10-07 | Windows CredUI 对话框取消直测 + keyring 直测           | 取消 → `Ok(None)`；凭据库读写清正常       | 通过                                    |
-| 2026-10-07 | coverage 门禁（`coverage-rust.config.mts` 逐文件预算） | 除登记伪影外全部文件 100%                 | 通过：22 文件、3 行登记伪影在预算内     |
-| 2026-10-07 | 本机 macOS；`bun run test:native`                      | 真实 AppKit / Keychain 确认、取消、读写清 | 通过；合成值自动输入 / 关闭，条目已删除 |
-| —          | Windows / Linux CI 原生集成                            | 真实 CredUI / GTK 与 OS 凭据服务          | 本轮待复验                              |
+| 日期       | 环境 / 命令                                            | 预期                                      | 实际结果                                           |
+| ---------- | ------------------------------------------------------ | ----------------------------------------- | -------------------------------------------------- |
+| 2026-10-07 | Windows 11；`bun run verify`（十三项）                 | 全项 exit 0                               | 通过（coverage 门禁见下条）                        |
+| 2026-10-07 | 代理夹具（`cargo test -p mythos-llm proxy`）           | 三模式互斥、CONNECT / TLS / 重定向        | 16 项通过                                          |
+| 2026-10-07 | Windows CredUI 对话框取消直测 + keyring 直测           | 取消 → `Ok(None)`；凭据库读写清正常       | 通过                                               |
+| 2026-10-07 | coverage 门禁（`coverage-rust.config.mts` 逐文件预算） | 除登记伪影外全部文件 100%                 | 通过：22 文件、3 行登记伪影在预算内                |
+| 2026-10-07 | 本机 macOS；`bun run test:native`                      | 真实 AppKit / Keychain 确认、取消、读写清 | 通过；合成值自动输入 / 关闭，条目已删除            |
+| 2026-10-07 | CI 37591267085：macOS / Linux 原生集成                 | 确认 / 取消、OS 凭据读写清                | 两平台通过；Windows 前置路径测试失败，修复后待复验 |
+
+本轮消融：在隔离副本逐项变异、先确认原树测试通过，只把可编译且行为断言失败计为捕捉，结束后还原。第一轮 9/10（数量用例被重复 ID 校验遮蔽）；改为 51 个独立 ID，并使用合法超量 JSON 后，第二轮 11/11 捕捉：权威后端、删除墓碑、OS 错误透传、私有权限顺序、profile 版本 / 重复 / 数量 / 大小、凭据大小、原生输入互斥、重定向禁止。未变异工作的分支源码，不扩大覆盖预算。
 
 ## 风险与回退
 
@@ -75,6 +77,7 @@
 - 2026-10-07：**按用户决定回退为 in-progress**——原生输入未覆盖三平台就不算完成；macOS / Linux 的实现与真实环境验证由用户在本分支继续。同批把三个实现中识别的设计取舍（读改写并发锁、降级文件过期副本、Sampling 归属）登记进「前置条件与待决策」，完成前处置并记录结论。
 - 2026-10-07：本分支整体评审修复私有凭据发布前权限、权威后端 / 删除墓碑、OS 错误吞掉、profile 读取版本 / 重复 ID / 数量 / 大小校验、SOCKS5 特性遗漏、代理 Debug 脱敏、并行测试修改全局环境、Windows SID 释放 / 对齐读取；启动持实例锁，凭据状态读取纳入 key 锁。补失败路径回归与架构 / 注释同步；三平台原生输入已实现；macOS 真实烟测已通过，Windows / Linux 本轮 CI 待复验，暂不标 done。
 - 2026-10-07：按用户要求用统一 NativePrompt 接口封装平台差异，Rust / 测试规范同步；原生集成从 examples 迁到 tests/rust/native-platform workspace 测试 crate，覆盖三平台，通过显式 desktop-session 保持 UI 主线程。增加独立输入占用门禁，取消等待不释放仍打开的窗口门禁；CI Linux 用真实 GTK/Xvfb 与 Secret Service，不以模拟后端替代系统服务验收。
+- 2026-10-07：按用户要求先 push 触发 CI，再整体审查 / 消融。补合法大 JSON 与独立 profile ID 两类测试盲区，11/11 变异捕捉；CI macOS / Linux 原生测试通过。Windows 将父路径为文件也报 NotFound，读取现区分非法父路径与首次缺项，显式失败且补直接回归。lint:rust:fix、verify 十三项通过；Windows CI 修复后结果待记录。
 
 ## 完成摘要
 

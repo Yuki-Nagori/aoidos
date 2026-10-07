@@ -263,10 +263,20 @@ impl ProfileStore {
                 validate_profiles(&file.profiles)?;
                 Ok(file.profiles)
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => missing_profiles(&self.path),
             Err(err) => Err(StoreError::from_io(err)),
         }
     }
+}
+
+// Windows 将文件父路径下的查找也映射为 NotFound；只有真正缺项才是首次安装。
+fn missing_profiles(path: &Path) -> Result<Vec<LlmProfile>> {
+    if path.parent().is_some_and(Path::is_file) {
+        return Err(StoreError::InvalidPath(
+            "profile parent is not a directory".into(),
+        ));
+    }
+    Ok(Vec::new())
 }
 
 fn validate_profiles(profiles: &[LlmProfile]) -> Result<()> {
@@ -328,10 +338,10 @@ mod tests {
         for text in [
             serde_json::json!({"version": 2, "profiles": []}).to_string(),
             serde_json::json!({"version": 1, "profiles": [profile, profile]}).to_string(),
-            serde_json::json!({"version": 1, "profiles": vec![deepseek_profile(); 51]}).to_string(),
+            serde_json::json!({"version": 1, "profiles": (0..51).map(|i| { let mut profile = deepseek_profile(); profile.profile_id = format!("p{i}"); profile }).collect::<Vec<_>>()}).to_string(),
             serde_json::json!({"version": 1, "profiles": [], "apiKey": "must-not-be-accepted"})
                 .to_string(),
-            " ".repeat(524_289),
+            serde_json::json!({"version":1,"profiles":[]}).to_string() + &" ".repeat(524_289),
         ] {
             std::fs::write(&path, text).unwrap();
             assert_eq!(store.load().unwrap_err().code(), "corrupt");
@@ -609,6 +619,12 @@ mod tests {
         //（Windows 上读目录为 PermissionDenied，Linux 侧同断言走各平台码）。
         let dir = temp_test_dir("load-dir");
         std::fs::write(dir.join("blocker"), b"x").unwrap();
+        assert_eq!(
+            missing_profiles(&dir.join("blocker").join("profiles.json"))
+                .unwrap_err()
+                .code(),
+            "invalid-path"
+        );
         let error = ProfileStore::new(&dir.join("blocker")).load().unwrap_err();
         assert_ne!(error.code(), "not-found");
         assert_ne!(error.code(), "corrupt");
