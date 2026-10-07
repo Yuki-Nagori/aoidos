@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-06。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。业务记录、记忆与导入导出仍按各自任务规划；工程纪律前提见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-07。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。业务记录、记忆与导入导出仍按各自任务规划；工程纪律前提见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -60,6 +60,9 @@ CREATE TABLE point_allocations (
 <app-data>/                       # tauri PathResolver::app_data_dir，注入业务 crate
 ├── storage.sqlite                # 业务状态（含 WAL/SHM）
 ├── storage.lock                  # InstanceLock：OS 独占锁，释放不删除
+├── llm/                          # 019 配置与凭据
+│   ├── profiles.json             # profile 集合；业务 schema 由 mythos-llm 管理
+│   └── credentials.json          # 权威后端指针 / 墓碑及私有降级值
 ├── migrations/…                  # SQL 迁移（编译期内嵌，目录仅调试导出）
 ├── workspaces/<script-id>/       # 每剧本一个工作区
 │   ├── transcript/<session-id>.jsonl
@@ -101,7 +104,7 @@ CREATE TABLE point_allocations (
 ## 错误与对接
 
 - 裸码由 `StoreError::code()` 返回。IPC 的 `store.` 前缀、中文 `message` 与 `detail` 见[通信契约](ipc-contract.md)。磁盘满、权限、锁定超时、损坏、路径非法各占独立码。
-- 对接：006 用原子写 + JSONL 截断恢复；007 使用 SQLite manifest + 文件正文；不可变版本 / cycle 目录及依赖式清理见[记忆设计](memory.md)，SQLite 迁移备份与文件覆写备份遵守本文约定；密钥的降级文件目录由本规范预留。
+- 对接：006 用原子写 + JSONL 截断恢复；007 使用 SQLite manifest + 文件正文；不可变版本 / cycle 目录及依赖式清理见[记忆设计](memory.md)，SQLite 迁移备份与文件覆写备份遵守本文约定；019 的配置及私有凭据文件使用 `llm/`，schema 与权威后端规则见[通信契约](ipc-contract.md#工程纪律可检查版)。
 
 ## 实现状态与后续范围
 

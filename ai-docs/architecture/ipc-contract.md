@@ -1,6 +1,8 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-07。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。谁拥有什么见[职责边界](ts-rust-boundary.md)。错误形状、事件信封和看门狗预算以本文为准。状态：**部分落地**——015 已提供命令错误映射，016 已提供序号与信封，017 已提供只读 store 命令和迁移回调；018 已落地 `mythos-llm` crate（供应商适配、流式护栏、单层请求调度；传输类 7 码由 crate 内 `ProviderError` 产出，调度层的 `stalled` / `empty-output` 由 `RunError` 变体承载，码值见错误码目录）；019 已落地 LLM 配置与凭据命令（`llm_list_profiles` / `llm_save_profile` / `llm_delete_profile` / `llm_get_key_status` / `llm_set_key`，凭据明文不进 Webview；三平台原生输入已实现，真实会话验收结果归 019）。前端界面仍是 greet 占位；真实事件发送方、在飞状态和快照对齐由 020–023 实现任务承接，`llm.` 前缀的回合命令与错误映射随 020。
+更新日期：2026-10-07。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
+
+实现状态：015–017 已提供命令错误、事件信封及只读 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令，三平台原生验证证据见 [019](../task/019-llm-profile-credentials-impl.md)。回合发送、在飞状态与快照对齐由 020–023 承接，前端仍为 greet 示例。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -39,7 +41,9 @@ Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 
 
 快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。真实迁移流的状态、阶段与每事件序号快照已由 006 定稿，见下文“记录命令与运行期迁移快照”；实际状态与发送由 [022](../task/022-record-engine-impl.md) 实现，监听者按该节规则对齐。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
 
-## LLM 命令与快照（005 已评审设计；019 已落地配置与凭据命令，回合命令随 020）
+## LLM 命令与快照
+
+005 的设计已评审；019 已实现配置与凭据命令，回合命令 / 事件 / 快照由 020 承接。
 
 产品使用 engine_submit_input，llm_submit 只在开发构建注册，并与产品回合共用单在飞门禁。provider / model / 代理 / stop 由 Rust 已保存 profile 与记录语法决定，不作为随意覆盖的 invoke 参数。
 

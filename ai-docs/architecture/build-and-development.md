@@ -32,7 +32,7 @@
 
 `typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `format:check` · `format:rust:check` · `test:coverage` · `test:rust` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十三项，任一失败即失败。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。husky 在每次 commit 前只跑双端格式检查（秒级反馈，拦住排版噪音）；lint、测试与覆盖率交给推送前自查与 CI——CI 把十三项拆成具名步骤逐步执行，不聚合调用，失败直接定位。失败处理：格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`（修完必须重跑 verify），测试挂了用 `test:watch` 本地复现。
 
-CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两次全量 Rust 编译）：`cargo check` 不单跑（clippy 已含类型检查）；`cargo test` 不单跑（llvm-cov 先执行同一套测试，单次插桩编译同时验证测试与覆盖率门槛）。纯文档改动（`ai-docs/**`、`**/*.md`）不触发 CI。见 ci.yml 顶部注释。
+CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两次全量 Rust 编译）：`cargo check` 不单跑（clippy 已含类型检查）；`cargo test` 不单跑（llvm-cov 先执行同一套测试，单次插桩编译同时验证测试与覆盖率门槛）。触发范围见下文。
 
 CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原生依赖并执行 rustdoc / clippy / Rust 覆盖率，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
 
@@ -41,6 +41,12 @@ CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原
 覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件与视图旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `coverage:rust` 由根目录 `coverage-rust.config.mts` 声明、`scripts/coverage-rust.mts` 执行——逐文件未覆盖行预算，缺省 0（必须 100%），`lib.rs` 与 `platform/windows.rs` 等确属装配或无法注入的文件在配置登记豁免与理由，详见[测试规范](../standards/testing.md)；src-tauri 的 commands / events / ipc 等非忽略文件与业务逻辑均须足额。改口径属于门禁变更，先登记 task。
 
 首次 `cargo check` 或改动 `[profile.*]` 后的全量重编译是一次性成本，属正常现象。
+
+## 原生能力集成验证
+
+`bun run test:native` 是独立于本地 verify 十三项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
+
+CI 每个平台额外执行该测试，单步超时 3 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)，实际结果归 [019](../task/019-llm-profile-credentials-impl.md)。原生能力实测不代替目标平台安装包验证。
 
 ## 打包与版本
 
@@ -55,5 +61,3 @@ $ bun run tauri:build
 1. 换图标：替换 `src-tauri/icons/icon.png`（1024×1024 方形）后执行 `bun run tauri icon src-tauri/icons/icon.png`，全套生成到 `src-tauri/icons/`（含 android / ios 子目录，纯桌面项目可删）；浏览器 favicon 用 `public/icon.png`，随手同步一份。
 2. 替换 greet 示例为第一个真实命令：`commands.rs` 定义 → `generate_handler![]` 注册 → 需要插件能力时在 `capabilities/default.json` 加权限 → TS 声明同型并 `invoke` → 照 `tests/web/App.test.ts` mock 测试。示例 `greet` 被替换后删除。
 3. 工作方式登记：非平凡改动从[任务索引](../task-index.md)建 task 开始。
-
-019 原生能力有额外的 `test:native` 三平台集成门禁：Windows CredUI、macOS AppKit / Keychain、Linux Xvfb + 独立 D-Bus / Secret Service，均验证确认 / 取消与凭据读写清。它需要桌面会话且显式开启 `desktop-session`，不计入无 UI 的本地 verify 十三项；CI 每平台另跑，超时 3 分钟。平台模块不以例外隐藏业务逻辑，具体覆盖边界见测试规范。
