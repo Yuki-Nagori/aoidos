@@ -8,9 +8,9 @@
 
 ### Rust 集成测试的位置
 
-- 默认使用**内联单测**（源文件内 `#[cfg(test)] mod tests`，夹具用 `#[cfg(test)] pub(crate) mod` 放 src/ 内，如 mythos-llm 的 testserver）：覆盖率门禁只统计 lib 目标与内联测试的执行，这一耦合是有意为之——夹具自身的行为路径也受门禁约束。
+- 默认使用**内联单测**（源文件内 `#[cfg(test)] mod tests`，夹具用 `#[cfg(test)] pub(crate) mod` 放 src/ 内，如 mythos-llm 的 testserver）：测试体较大时可拆成模块目录下的 `tests.rs`，由原模块的 `#[cfg(test)] mod tests` 加载，仍是单元测试，不因文件名成为 Cargo 集成 target。覆盖率门禁只统计 lib 目标与内联测试的执行，这一耦合是有意为之——夹具自身的行为路径也受门禁约束。
 - 出现真实跨 crate / 跨层场景（引擎协调、命令注册 + 事件投递端到端）时，用 Cargo 惯例位置，两选一：单 crate 的对外行为放**该 crate 自己的 `tests/` 目录**；跨 crate 集成放**专门的测试 crate**（workspace member，`dev-dependencies` 引全部被测方）。`cargo test --workspace` 自动纳入两者，CI 无需改步骤。
-- 根 `tests/rust` 不放松散源码；三平台原生能力验证放 `tests/rust/native-platform` 独立测试 crate（workspace member），Cargo 显式登记集成 target。其 `harness = false` 让真实 AppKit / GTK 在进程主线程执行；`desktop-session` 特性及 `bun run test:native` 显式开启，普通无桌面套件不弹出原生窗口。所有平台都检查确认 / 取消与 OS 凭据读写清，使用固定合成值，不输出明文。
+- 根 `tests/rust` 不放松散源码；三平台原生能力验证放 `tests/rust/native-platform` 独立测试 crate（workspace member），Cargo 显式登记集成 target。其 `harness = false` 让真实 AppKit / GTK 在进程主线程执行；`desktop-session` 特性及 `bun run test:native` 显式开启，普通无桌面套件不弹出原生窗口。聚合入口执行该 crate 全部桌面会话 target：原生确认 / 取消与 OS 凭据读写清，以及真实主 Webview 的命令 / 事件往返；均使用本地合成夹具，不输出密钥、不发送收费请求。单目标排查通过 `bun run test:native --test <target>`，不新增逐目标根脚本。手写 `webview/`、`tauri.conf.json` 入库，生成的 `gen/` 忽略。
 - 集成测试不进覆盖率口径（`--lib` 不统计独立测试目标）：行为断言归集成测试，行覆盖归内联单测，互不替代；给集成测试补覆盖率属门禁变更，按下方门槛变更流程先立项。
 
 ## 覆盖率门槛（verify 两项）

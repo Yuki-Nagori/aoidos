@@ -1,4 +1,4 @@
-//! 事件信封与每流序号。事件名先登记到通信契约，实际投递由 lib.rs 适配。
+//! 事件信封与每流序号。事件名先登记到通信契约；准备与投递分开，由平台 adapter 投递。
 //! 序号按事件名和流标识分别计数，不跨进程续号；调用方须串行发送同一流。
 
 use crate::ipc::CmdError;
@@ -16,7 +16,7 @@ fn stream_seqs() -> &'static Mutex<StreamSeqs> {
 }
 
 /// 为事件名和流标识分配下一个序号，从 1 开始。空标识仅在同一事件名下共享计数。
-/// 条目随进程存活，空间随不同流的数量增长；当前不清退，也不保证实际投递成功。
+/// 回合生产者退出且 ring 驱逐后经 `retire_stream` 清退；不保证实际投递成功。
 ///
 /// # Errors
 ///
@@ -57,9 +57,38 @@ pub fn envelope<T: Serialize + ?Sized>(
     stream_id: &str,
     data: &T,
 ) -> Result<serde_json::Value, CmdError> {
+    Ok(prepare(event, stream_id, data)?.payload)
+}
+
+/// 可分步确认的信封；正文提交期间序号仅被预留，不自动确认到快照。
+pub struct PreparedEnvelope {
+    pub seq: u64,
+    pub payload: serde_json::Value,
+}
+
+/// 先序列化再预留，不投递、不提交业务状态。
+///
+/// # Errors
+/// 同 [`envelope`]；序列化失败不占号，已预留的序号不复用。
+pub fn prepare<T: Serialize + ?Sized>(
+    event: &str,
+    stream_id: &str,
+    data: &T,
+) -> Result<PreparedEnvelope, CmdError> {
     let data = serde_json::to_value(data).map_err(payload_error)?;
     let seq = next_seq(event, stream_id)?;
-    Ok(serde_json::json!({ "seq": seq, "data": data }))
+    Ok(PreparedEnvelope {
+        seq,
+        payload: serde_json::json!({ "seq": seq, "data": data }),
+    })
+}
+
+/// 生产者退出后清退该流的所有事件名；不会影响其他 UUID 的计数。
+pub fn retire_stream(stream_id: &str) {
+    stream_seqs()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|(_, id), _| id != stream_id);
 }
 
 fn payload_error(_: serde_json::Error) -> CmdError {

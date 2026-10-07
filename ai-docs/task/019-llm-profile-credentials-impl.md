@@ -67,8 +67,7 @@
 | 2026-10-07 | [CI 37593897448](https://github.com/Yuki-Nagori/mythos/actions/runs/37593897448)            | Windows 行为通过，覆盖率暴露未执行的文件打开失败路径；补目录目标用例 |
 | 2026-10-07 | [CI 37612885510](https://github.com/Yuki-Nagori/mythos/actions/runs/37612885510)，`d10276d` | 三平台全量门禁及真实原生 / OS 凭据集成全部通过                       |
 | 2026-10-07 | 独立评审优化，`6d4f8b6`；本机 macOS                                                         | `lint:rust:fix` 与 `bun run verify` 十三项通过；二轮只读复核无阻塞   |
-
-| 2026-10-07 | [CI 37615530871](https://github.com/Yuki-Nagori/mythos/actions/runs/37615530871)，`6097cfc` | 优化及文档整理后三平台门禁与真实原生 / OS 凭据集成全部通过 |
+| 2026-10-07 | [CI 37615530871](https://github.com/Yuki-Nagori/mythos/actions/runs/37615530871)，`6097cfc` | 优化及文档整理后三平台门禁与真实原生 / OS 凭据集成全部通过           |
 
 ### 消融验证
 

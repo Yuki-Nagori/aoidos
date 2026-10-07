@@ -47,8 +47,8 @@ fn key_lock() -> MutexGuard<'static, ()> {
     KEY_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// setup 注入 llm 数据目录；重复注入忽略。
-pub(crate) fn init_llm_dir(dir: PathBuf) {
+/// 由桌面装配或独立集成进程注入 llm 数据目录；重复注入忽略。
+pub fn init_llm_dir(dir: PathBuf) {
     let _ = LLM_DIR.set(dir);
 }
 
@@ -127,6 +127,46 @@ fn save_profile_in(store: &ProfileStore, profile: LlmProfile) -> Result<LlmProfi
 /// profile 结构校验失败 → app.bad-request（message 面向用户，code 供分支）。
 fn bad_profile(error: ProfileError) -> CmdError {
     CmdError::new("app.bad-request", error.to_string(), None)
+}
+
+/// 提交前一次读取配置及凭据；返回不可变副本，后续重试不重新查 key。
+///
+/// # Errors
+/// 未知 profile 为 app.not-found；存储 / 凭据不可读按 store.* 透传。
+#[cfg(debug_assertions)]
+pub(crate) fn freeze_submission(
+    profile_id: &str,
+) -> Result<
+    (
+        mythos_llm::config::FrozenProfile,
+        Option<mythos_llm::proxy::ProxyAuth>,
+    ),
+    CmdError,
+> {
+    validate_identifier("profileId", profile_id).map_err(bad_profile)?;
+    let profile = {
+        let _guard = profile_lock();
+        profile_store()?
+            .load()
+            .map_err(CmdError::from)?
+            .into_iter()
+            .find(|profile| profile.profile_id == profile_id)
+            .ok_or_else(profile_missing)?
+    };
+    let _guard = key_lock();
+    let credentials = credential_vault()?;
+    let frozen = mythos_llm::config::freeze(&profile, &credentials).map_err(CmdError::from)?;
+    let auth_ref = match &profile.proxy {
+        mythos_llm::config::ProxyConfig::Manual { auth_ref, .. } => auth_ref.as_deref(),
+        _ => None,
+    };
+    let auth =
+        mythos_llm::proxy::resolve_proxy_auth(&credentials, auth_ref).map_err(CmdError::from)?;
+    Ok((frozen, auth))
+}
+#[cfg(debug_assertions)]
+fn profile_missing() -> CmdError {
+    CmdError::new("app.not-found", "配置不存在", None)
 }
 
 /// 删除 profile；不存在时也返回成功（幂等）。
@@ -581,5 +621,63 @@ mod tests {
         // 服务真实读写清由三平台 test:native 留证，错误语义另有注入直测。
         let _ = clear_key_in(&provider, &credential_vault().unwrap());
         assert!(!llm_get_key_status(provider).unwrap().set);
+    }
+    #[tokio::test]
+    async fn freeze_and_debug_submission_use_saved_configuration_once() {
+        init_llm_dir(tdir("turn-profile"));
+        let id = unique("turn-profile");
+        let mut profile = deepseek_profile(&id);
+        profile.model = "deepseek-v4-pro".into();
+        profile.proxy = mythos_llm::config::ProxyConfig::Manual {
+            url: "http://127.0.0.1:3128".into(),
+            auth_ref: Some("turn-proxy-auth".into()),
+        };
+        llm_save_profile(profile).unwrap();
+        {
+            let _guard = key_lock();
+            let file = mythos_llm::credentials::CredentialFile::new(llm_dir().unwrap());
+            file.set_key("deepseek", SecretString::from("local-fixture".to_owned()))
+                .unwrap();
+            file.set_key(
+                "turn-proxy-auth",
+                SecretString::from("user:proxy-fixture".to_owned()),
+            )
+            .unwrap();
+        }
+        let (frozen, auth) = freeze_submission(&id).unwrap();
+        assert_eq!(frozen.credential.unwrap().expose_secret(), "local-fixture");
+        assert!(auth.is_some());
+        assert_eq!(
+            freeze_submission(&unique("missing")).err().unwrap().code(),
+            "app.not-found"
+        );
+        assert_eq!(
+            freeze_submission("").err().unwrap().code(),
+            "app.bad-request"
+        );
+        let service = crate::turn_commands::TurnService::new(
+            std::sync::Arc::new(crate::turn_commands::WindowEvents::new(|_, _| Ok(()))),
+            mythos_llm::proxy::SystemProxySnapshot::default(),
+        )
+        .unwrap();
+        let input = mythos_llm::provider::ProviderInput::Completion(
+            mythos_llm::provider::CompletionInput {
+                prompt: "local".into(),
+            },
+        );
+        assert_eq!(
+            crate::turn_commands::submit(&service, id.clone(), input.clone(), "unknown".into())
+                .unwrap_err()
+                .code(),
+            "app.not-found"
+        );
+        let accepted = crate::turn_commands::submit(
+            &service,
+            id,
+            input,
+            mythos_engine::fixture::GUARD_SPEC_ID.into(),
+        )
+        .unwrap();
+        service.coordinator.cancel(&accepted.turn_id).await.unwrap();
     }
 }

@@ -1,0 +1,22 @@
+{
+  "productName": "Mythos IPC fixture",
+  "identifier": "com.yuki.mythos.ipcfixture",
+  "build": {
+    "frontendDist": "webview"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "ipc-fixture",
+          "windows": ["main"],
+          "permissions": ["core:default"]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "icon": ["../../../src-tauri/icons/icon.png", "../../../src-tauri/icons/icon.ico"]
+  }
+}

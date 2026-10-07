@@ -2433,6 +2433,7 @@ dependencies = [
 name = "mythos"
 version = "0.1.0"
 dependencies = [
+ "mythos-engine",
  "mythos-llm",
  "mythos-store",
  "rusqlite",
@@ -2442,6 +2443,19 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+]
+
+[[package]]
+name = "mythos-engine"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mythos-llm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -2468,6 +2482,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "url",
+ "uuid",
  "windows-sys 0.60.2",
 ]
 
@@ -2475,8 +2490,14 @@ dependencies = [
 name = "mythos-native-tests"
 version = "0.1.0"
 dependencies = [
+ "mythos",
+ "mythos-engine",
  "mythos-llm",
+ "mythos-store",
  "secrecy",
+ "serde_json",
+ "tauri",
+ "tauri-build",
 ]
 
 [[package]]

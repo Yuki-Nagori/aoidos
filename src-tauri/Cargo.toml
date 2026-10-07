@@ -18,6 +18,7 @@ serde_json.workspace = true
 tauri.workspace = true
 mythos-store.workspace = true
 mythos-llm.workspace = true
+mythos-engine.workspace = true
 secrecy.workspace = true
 
 [dev-dependencies]

@@ -42,19 +42,22 @@ pub struct ProviderCapabilities {
 }
 
 /// Completion 形态输入：prompt 非空，open tag 由记录投影生成，结果不含 prompt / echo。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompletionInput {
     pub prompt: String,
 }
 
 /// 单条 chat 消息；role 仅 system / user / assistant。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ChatRole {
     System,
     User,
@@ -62,17 +65,31 @@ pub enum ChatRole {
 }
 
 /// Chat 形态输入；`assistant_prefix` 由 adapter 注入（普通 chat 不能忽略该字段）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatInput {
     pub messages: Vec<ChatMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_prefix: Option<String>,
 }
 
 /// 已选定调用形态的输入。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ProviderInput {
     Completion(CompletionInput),
     Chat(ChatInput),
+}
+
+impl ProviderInput {
+    /// 输入联合类型的调用形态；配置、请求与 IPC 接线共用这一映射。
+    #[must_use]
+    pub fn mode(&self) -> RequestMode {
+        match self {
+            Self::Completion(_) => RequestMode::Completion,
+            Self::Chat(_) => RequestMode::Chat,
+        }
+    }
 }
 
 /// 一次物理请求的全部输入：模式已选定，只带适用的服务端 stop 子集；
@@ -89,10 +106,7 @@ impl ProviderRequest {
     /// 请求的调用形态，由已选定的 [`ProviderInput`] 决定。
     #[must_use]
     pub fn mode(&self) -> RequestMode {
-        match self.input {
-            ProviderInput::Completion(_) => RequestMode::Completion,
-            ProviderInput::Chat(_) => RequestMode::Chat,
-        }
+        self.input.mode()
     }
 
     /// 传输重试 / 温度阶梯复用同一冻结输入，仅改 temperature。

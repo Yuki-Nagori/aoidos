@@ -36,6 +36,12 @@ impl CmdError {
     }
 }
 
+impl From<mythos_engine::fault::Fault> for CmdError {
+    fn from(error: mythos_engine::fault::Fault) -> Self {
+        Self::new(error.code, error.message, None)
+    }
+}
+
 impl From<StoreError> for CmdError {
     fn from(err: StoreError) -> Self {
         let code = err.code();
@@ -58,15 +64,6 @@ impl From<StoreError> for CmdError {
         };
         Self::new(format!("store.{code}"), store_message(code), detail)
     }
-}
-
-/// 平台投递失败的诊断上下文；载荷序列化和序号错误由 events 模块处理。
-pub(crate) fn event_delivery_error(event: &str, source: String) -> CmdError {
-    CmdError::new(
-        "app.event-failed",
-        format!("事件 {event} 发送失败"),
-        Some(serde_json::json!({ "event": event, "source": source })),
-    )
 }
 
 /// `StoreError::code()` 的九个返回值 → 可展示中文。新增码先在
@@ -205,16 +202,12 @@ mod tests {
     }
 
     #[test]
-    fn event_delivery_error_serializes_context() {
-        let error = event_delivery_error("store:migration:progress", "platform failure".into());
-        let value = serde_json::to_value(error).unwrap();
-        assert_eq!(value["code"], "app.event-failed");
-        assert_eq!(value["detail"]["event"], "store:migration:progress");
-        assert_eq!(value["detail"]["source"], "platform failure");
-        let invalid: CmdError = StoreError::InvalidPath("original<>path".into()).into();
+    fn engine_fault_retains_only_public_fields() {
+        let error: CmdError =
+            mythos_engine::fault::Fault::new("llm.empty-output", "生成未返回正文").into();
         assert_eq!(
-            serde_json::to_value(invalid).unwrap()["detail"]["path"],
-            "original<>path"
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({"code":"llm.empty-output","message":"生成未返回正文"})
         );
     }
 }

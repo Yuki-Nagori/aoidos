@@ -2,8 +2,9 @@ mod commands;
 pub mod events;
 pub mod ipc;
 pub mod llm_commands;
+pub mod turn_commands;
 
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager};
 
 use ipc::CmdError;
 
@@ -23,51 +24,114 @@ async fn llm_set_key(
     .await
 }
 
-/// 事件发送装配胶水：契约信封（events 模块）+ `emit_to("main")`。
-/// 本文件在覆盖率口径外（装配代码需要活的 `AppHandle`，`tauri::test` 的 mock
-/// 在 Windows 触发 `STATUS_ENTRYPOINT_NOT_FOUND`）——事件名与载荷形状的
-/// 纯逻辑在 events / ipc 模块内有直测，这里只适配平台投递。
-///
-/// # Errors
-///
-/// 序列化、序号分配或平台投递失败时返回 `app.event-failed`。
-/// 同一流由调用方串行发送；失败不代表前端已收到，序号也可能已被保留。
-// TODO(task 020): 020 / 022 首个真实发送方接入后移除 dead_code 允许，并验证 main 窗口投递。
-#[allow(dead_code)]
-pub(crate) fn emit_event<R: Runtime, T: serde::Serialize + ?Sized>(
-    app: &AppHandle<R>,
-    event: &str,
-    stream_id: &str,
-    data: &T,
-) -> Result<(), CmdError> {
-    let payload = events::envelope(event, stream_id, data)?;
-    match app.emit_to("main", event, payload) {
-        Ok(()) => Ok(()),
-        Err(source) => Err(ipc::event_delivery_error(event, source.to_string())),
+/// 回合 IPC 薄适配；公开模块供真实窗口集成注册同一组命令。
+pub mod turn_ipc {
+    use super::{CmdError, turn_commands};
+    /// 开发构建只提交已登记的本地夹具；生产不编译 / 注册此命令。
+    #[cfg(debug_assertions)]
+    #[tauri::command]
+    pub async fn llm_submit(
+        state: tauri::State<'_, turn_commands::TurnService>,
+        profile_id: String,
+        input: serde_json::Value,
+        guard_spec_id: String,
+    ) -> Result<turn_commands::AcceptedTurn, CmdError> {
+        turn_commands::submit(
+            &state,
+            profile_id,
+            turn_commands::decode_input(input)?,
+            guard_spec_id,
+        )
     }
+
+    /// # Errors
+    /// 未知或已清退 turnId 为 app.not-found。
+    #[tauri::command]
+    pub fn llm_get_turn(
+        state: tauri::State<'_, turn_commands::TurnService>,
+        turn_id: String,
+    ) -> Result<mythos_engine::turn::TurnSnapshot, CmdError> {
+        state.coordinator.snapshot(&turn_id).map_err(CmdError::from)
+    }
+
+    /// # Errors
+    /// 未知 turnId 为 app.not-found；响应等待提交一致边界。
+    #[tauri::command]
+    pub async fn llm_cancel(
+        state: tauri::State<'_, turn_commands::TurnService>,
+        turn_id: String,
+    ) -> Result<mythos_engine::turn::CancelledTurn, CmdError> {
+        state
+            .coordinator
+            .cancel(&turn_id)
+            .await
+            .map_err(CmdError::from)
+    }
+}
+
+macro_rules! command_handler {
+    ($($extra:path),* $(,)?) => { tauri::generate_handler![
+        commands::greet, commands::store_list_backups, commands::store_get_migration,
+        llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
+        llm_commands::llm_get_key_status, llm_set_key, turn_ipc::llm_get_turn, turn_ipc::llm_cancel, $($extra),*
+    ] };
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| {
-            let dir = app.path().app_data_dir()?;
-            // 配置 / 凭据也是数据根写者；持锁到应用退出，后续 store 服务复用。
-            app.manage(mythos_store::lock::acquire(&dir)?);
-            commands::init_db_path(dir.join("storage.sqlite"));
-            llm_commands::init_llm_dir(dir.join("llm"));
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            commands::greet,
-            commands::store_list_backups,
-            commands::store_get_migration,
-            llm_commands::llm_list_profiles,
-            llm_commands::llm_save_profile,
-            llm_commands::llm_delete_profile,
-            llm_commands::llm_get_key_status,
-            llm_set_key,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let builder = tauri::Builder::default().setup(|app| {
+        let dir = app.path().app_data_dir()?;
+        // 配置 / 凭据也是数据根写者；持锁到应用退出，后续 store 服务复用。
+        app.manage(mythos_store::lock::acquire(&dir)?);
+        commands::init_db_path(dir.join("storage.sqlite"));
+        llm_commands::init_llm_dir(dir.join("llm"));
+        let handle = app.handle().clone();
+        let events =
+            std::sync::Arc::new(turn_commands::WindowEvents::new(move |event, payload| {
+                handle
+                    .emit_to("main", event, payload)
+                    .map_err(window_delivery_error)
+            }));
+        app.manage(events.clone());
+        app.manage(turn_commands::TurnService::new(
+            events,
+            mythos_llm::proxy::SystemProxySnapshot::capture(),
+        )?);
+        Ok(())
+    });
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(command_handler!(turn_ipc::llm_submit));
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(command_handler!());
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    let exiting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.run(move |handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event
+            && !finished.load(std::sync::atomic::Ordering::Acquire)
+        {
+            api.prevent_exit();
+            if !exiting.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                let coordinator = handle
+                    .state::<turn_commands::TurnService>()
+                    .coordinator
+                    .clone();
+                let handle = handle.clone();
+                let finished = finished.clone();
+                tauri::async_runtime::spawn(async move {
+                    coordinator.shutdown().await;
+                    handle
+                        .state::<std::sync::Arc<turn_commands::WindowEvents>>()
+                        .close();
+                    finished.store(true, std::sync::atomic::Ordering::Release);
+                    handle.exit(0);
+                });
+            }
+        }
+    });
+}
+fn window_delivery_error(_: tauri::Error) -> mythos_engine::fault::Fault {
+    mythos_engine::fault::Fault::new("app.event-failed", "主窗口事件无法投递")
 }
