@@ -614,6 +614,16 @@ mod tests {
     }
 
     #[test]
+    fn load_reports_directory_target_as_io_error() {
+        let dir = temp_test_dir("profile-directory");
+        std::fs::create_dir(dir.join("profiles.json")).unwrap();
+        // Windows 在 open 时拒绝目录；Unix 可打开，但读取正文时拒绝。
+        let error = ProfileStore::new(&dir).load().unwrap_err();
+        assert!(matches!(error.code(), "io" | "permission"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn load_maps_non_not_found_io_errors() {
         // 中间路径是普通文件：open 失败不是 NotFound，走 io_error 映射
         //（Windows 上读目录为 PermissionDenied，Linux 侧同断言走各平台码）。

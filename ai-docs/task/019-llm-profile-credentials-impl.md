@@ -78,6 +78,7 @@
 - 2026-10-07：本分支整体评审修复私有凭据发布前权限、权威后端 / 删除墓碑、OS 错误吞掉、profile 读取版本 / 重复 ID / 数量 / 大小校验、SOCKS5 特性遗漏、代理 Debug 脱敏、并行测试修改全局环境、Windows SID 释放 / 对齐读取；启动持实例锁，凭据状态读取纳入 key 锁。补失败路径回归与架构 / 注释同步；三平台原生输入已实现；macOS 真实烟测已通过，Windows / Linux 本轮 CI 待复验，暂不标 done。
 - 2026-10-07：按用户要求用统一 NativePrompt 接口封装平台差异，Rust / 测试规范同步；原生集成从 examples 迁到 tests/rust/native-platform workspace 测试 crate，覆盖三平台，通过显式 desktop-session 保持 UI 主线程。增加独立输入占用门禁，取消等待不释放仍打开的窗口门禁；CI Linux 用真实 GTK/Xvfb 与 Secret Service，不以模拟后端替代系统服务验收。
 - 2026-10-07：按用户要求先 push 触发 CI，再整体审查 / 消融。补合法大 JSON 与独立 profile ID 两类测试盲区，11/11 变异捕捉；CI macOS / Linux 原生测试通过。Windows 将父路径为文件也报 NotFound，读取现区分非法父路径与首次缺项，显式失败且补直接回归。lint:rust:fix、verify 十三项通过；Windows CI 修复后结果待记录。
+- 2026-10-07：CI 37593897448 的 Windows 行为测试已全过，覆盖率缺失仅为非 NotFound 打开错误分支；补 profiles.json 为目录的实际失败用例（Windows open 拒绝，Unix read 拒绝），不登记新增豁免或提高预算。
 
 ## 完成摘要
 
