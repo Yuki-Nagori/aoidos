@@ -22,10 +22,11 @@
 │   ├── tauri.conf.json        # 窗口 / 打包 / 开发服务器
 │   ├── capabilities/          # IPC 权限声明
 │   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）
+│   ├── src/store_commands/   # 存储参数适配及有界平台事件队列
 │   └── build.rs               # tauri-build
 ├── src-rust/                  # 不依赖 tauri 的业务 crate
-│   ├── mythos-engine/         # 协调 / lease / 输出端口，src/turn/{mod.rs,tests.rs}
-│   ├── mythos-store/          # 路径、原子发布、有界读取、实例锁与 SQLite 基建
+│   ├── mythos-engine/         # 协调 / lease、record/、迁移 / 偏好 / Storage
+│   ├── mythos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── mythos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
@@ -54,3 +55,9 @@ Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../
 ## 命名
 
 仓库 / 包名 `mythos`（`bun.lock` 的根 workspace 名同型），Rust package 同名、lib 名为下划线形态的 `mythos_lib`；产品显示名 `Mythos`（`tauri.conf.json` 的 productName 与窗口标题）。
+
+## 记录模块与夹具
+
+`mythos-engine/src/record/` 下按格式、注册事实、会话、世界协议、历史、工作集、投影、摘要候选、压缩和视图拆分；带外置单测的模块统一使用 `{mod.rs,tests.rs}`，包括 `facts/`。通用测试 Provider 位于 engine 的 `test_support.rs`，记录夹具位于 `record/test_support.rs`，均仅在测试构建编译。
+
+`tests/fixtures/record/token-estimation-v1.json` 保存匿名合成输入与离线 tokenizer 标定数据；不含玩家数据或密钥。原生窗口夹具继续放 `tests/rust/native-platform/`，不把需要私有实现访问的单测迁入此处。

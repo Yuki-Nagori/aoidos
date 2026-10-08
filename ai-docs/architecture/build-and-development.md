@@ -65,3 +65,7 @@ $ bun run tauri:build
 1. 换图标：替换 `src-tauri/icons/icon.png`（1024×1024 方形）后执行 `bun run tauri icon src-tauri/icons/icon.png`，全套生成到 `src-tauri/icons/`（含 android / ios 子目录，纯桌面项目可删）；浏览器 favicon 用 `public/icon.png`，随手同步一份。
 2. 替换 greet 示例为第一个真实命令：`commands.rs` 定义 → `generate_handler![]` 注册 → 需要插件能力时在 `capabilities/default.json` 加权限 → TS 声明同型并 `invoke` → 照 `tests/web/App.test.ts` mock 测试。示例 `greet` 被替换后删除。
 3. 工作方式登记：非平凡改动从[任务索引](../task-index.md)建 task 开始。
+
+原生夹具同一入口验证回合、记录 page / view / body、迁移及 UI 偏好的真实 Webview 往返，接入 Rust 公开服务和前端恢复消费者；本地夹具不发送收费请求。各平台实际结果与最新提交复验状态分别记录在对应实现 task，单平台成功不代替三平台 CI。
+
+Windows / MSVC 的 Tauri 构建按 Cargo 目标平台判断，共用 `scripts/rust/tauri-build.rs`，将 Common Controls v6 manifest 嵌入应用、lib 单测和原生测试入口。Tauri 默认资源链接仅覆盖 bins，新增 mock IPC 单测会使无 manifest 的测试程序在启动时返回 `STATUS_ENTRYPOINT_NOT_FOUND`；共享适配替换默认 manifest 注入，避免重复资源，同时保留应用默认 v6 能力。依据 [Tauri 上游 issue #13419](https://github.com/tauri-apps/tauri/issues/13419)，上游覆盖全部测试目标后可撤除此适配；实际 Windows 验证以 CI 为准。

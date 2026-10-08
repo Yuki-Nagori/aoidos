@@ -27,6 +27,11 @@ export default {
    * 额度为该文件允许的未覆盖行绝对数。
    */
   allowances: [
+    // 022 在 --workspace --lib 下复核：迁移无任何零计数 segment，格式只有同一
+    // 已执行行上的泛型 / ? 标点 segment；JSON summary 各多记 1 行。
+    // SQL / schema 失败、全部格式拒绝与序列化错误有直测；仅登记合并差额。
+    { file: "src-rust/mythos-engine/src/migration/mod.rs", maxUncoveredLines: 1 },
+    { file: "src-rust/mythos-engine/src/record/format/mod.rs", maxUncoveredLines: 1 },
     // 测试收尾语句（关停夹具 / 清理临时目录）的跨二进制归并伪影（019 实测）。
     { file: "src-rust/mythos-llm/src/proxy.rs", maxUncoveredLines: 1 },
     { file: "src-tauri/src/llm_commands.rs", maxUncoveredLines: 1 },

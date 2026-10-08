@@ -65,7 +65,7 @@ impl RunPolicy {
 }
 
 /// 对外收尾原因（契约 `llm:turn:*` 的 finishReason）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FinishReason {
     Stop,
@@ -1993,6 +1993,7 @@ mod tests {
         ) -> crate::provider::ProviderCapabilities {
             crate::provider::ProviderCapabilities {
                 model: model.to_owned(),
+                context_limit: Some(1_000_000),
                 completion: true,
                 chat: true,
                 prefix: false,

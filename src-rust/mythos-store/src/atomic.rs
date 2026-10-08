@@ -2,7 +2,7 @@
 //! 普通文件覆写经本模块；SQLite 事务与备份、多开锁文件由各自模块维护。
 
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread::sleep;
@@ -94,14 +94,37 @@ pub fn clean_temp_files(dir: &Path) -> Result<usize> {
 ///
 /// 文件无法读取或截断无法落盘时返回。
 pub fn truncate_incomplete_jsonl(path: &Path) -> Result<bool> {
-    let bytes = fs::read(path).map_err(StoreError::from_io)?;
-    if bytes.is_empty() || bytes.last() == Some(&b'\n') {
+    let mut source = File::open(path).map_err(StoreError::from_io)?;
+    let mut end = source.metadata().map_err(StoreError::from_io)?.len();
+    if end == 0 {
         return Ok(false);
     }
-    let new_len = match bytes.iter().rposition(|&b| b == b'\n') {
-        Some(cut) => cut as u64 + 1,
-        None => 0, // 没有完整行可留，清空，避免留下半行
-    };
+    source
+        .seek(SeekFrom::End(-1))
+        .map_err(StoreError::from_io)?;
+    let mut last = [0];
+    source.read_exact(&mut last).map_err(StoreError::from_io)?;
+    if last[0] == b'\n' {
+        return Ok(false);
+    }
+    let mut new_len = 0;
+    let mut buffer = [0_u8; 8192];
+    while end > 0 {
+        let start = end.saturating_sub(buffer.len() as u64);
+        let len = (end - start) as usize;
+        source
+            .seek(SeekFrom::Start(start))
+            .map_err(StoreError::from_io)?;
+        source
+            .read_exact(&mut buffer[..len])
+            .map_err(StoreError::from_io)?;
+        if let Some(cut) = buffer[..len].iter().rposition(|byte| *byte == b'\n') {
+            new_len = start + cut as u64 + 1;
+            break;
+        }
+        end = start;
+    }
+    drop(source);
     let file = fs::OpenOptions::new()
         .write(true)
         .open(path)

@@ -14,9 +14,46 @@ pub struct PreparedGeneration {
     pub(crate) request: GenerationRequest,
     pub(crate) policy: RunPolicy,
     pub(crate) budget: Arc<dyn BudgetPort>,
+    calibration_base: Option<Arc<dyn BudgetPort>>,
 }
 
 impl PreparedGeneration {
+    /// 绑定冻结输入的估计；每次物理请求保留原预算预留 / 结算行为。
+    /// 自动请求在连续低估后暂停，手动请求仍由原预算裁决。
+    pub fn with_calibration(
+        mut self,
+        provider: &str,
+        revision: &crate::record::estimator::EstimatorRevision,
+        diagnostics: Arc<std::sync::Mutex<crate::record::calibration::Calibration>>,
+        automatic: bool,
+    ) -> Self {
+        use crate::record::{
+            calibration::{Bucket, CalibrationBudget},
+            estimator::estimate_input,
+        };
+        let input = &self.request.provider_request.input;
+        let shape = match input {
+            ProviderInput::Completion(_) => "completion",
+            ProviderInput::Chat(input) if input.assistant_prefix.is_some() => "chatPrefix",
+            ProviderInput::Chat(_) => "chat",
+        };
+        self.budget = Arc::new(CalibrationBudget {
+            inner: self
+                .calibration_base
+                .get_or_insert_with(|| self.budget.clone())
+                .clone(),
+            diagnostics,
+            bucket: Bucket {
+                provider: provider.into(),
+                model: self.request.provider_request.model.clone(),
+                shape: shape.into(),
+                estimator_version: revision.version(),
+            },
+            estimate: revision.scale(estimate_input(input)),
+            automatic,
+        });
+        self
+    }
     /// 从冻结 profile / 凭据 / 代理组装请求；预算实现由调用方注入。
     ///
     /// # Errors
@@ -66,12 +103,31 @@ impl PreparedGeneration {
         auth: Option<&mythos_llm::proxy::ProxyAuth>,
         input: ProviderInput,
     ) -> Result<Self, Fault> {
-        let mut request = Self::from_frozen(
+        Self::local_fixture_with_guard(
             frozen,
             snapshot,
             auth,
             input,
             mythos_llm::guard::GuardSpec::default(),
+        )
+    }
+    /// 同源护栏的本地夹具入口，始终替换供应商传输，不发收费请求。
+    /// # Errors
+    /// 与冻结请求相同的能力 / 参数校验。
+    #[cfg(debug_assertions)]
+    pub fn local_fixture_with_guard(
+        frozen: mythos_llm::config::FrozenProfile,
+        snapshot: &mythos_llm::proxy::SystemProxySnapshot,
+        auth: Option<&mythos_llm::proxy::ProxyAuth>,
+        input: ProviderInput,
+        guard: mythos_llm::guard::GuardSpec,
+    ) -> Result<Self, Fault> {
+        let mut request = Self::from_frozen(
+            frozen,
+            snapshot,
+            auth,
+            input,
+            guard,
             Arc::new(mythos_llm::schedule::AllowAll),
         )?;
         request.provider = Arc::new(crate::fixture::FixtureProvider(request.provider));
@@ -153,6 +209,7 @@ impl PreparedGeneration {
             request,
             policy,
             budget,
+            calibration_base: None,
         })
     }
 }

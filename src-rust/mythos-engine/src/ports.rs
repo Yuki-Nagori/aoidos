@@ -3,10 +3,10 @@
 use crate::fault::Fault;
 use futures::future::BoxFuture;
 use mythos_llm::schedule::FinishReason;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 类型化终态只允许契约中的合法组合；取消不能携带错误或收尾原因。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "outcome",
     rename_all = "kebab-case",
@@ -25,7 +25,7 @@ pub enum Terminal {
 }
 
 /// IPC 的终态词汇，不扩展进行中状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Outcome {
     Completed,
@@ -140,9 +140,20 @@ pub trait EventPort: Send + Sync {
 
 /// 022 接入的输出提交边界；Future 开始后必须由所有者等待到一致边界。
 pub trait OutputWriter: Send + Sync {
+    /// 创建唯一活跃输出身份；完成后才允许 provider 开始。
+    /// # Errors
+    /// 会话不可写 / 元信息落盘失败不能启动收费请求。
+    fn begin<'a>(&'a self, _turn_id: &'a str) -> BoxFuture<'a, Result<(), Fault>> {
+        Box::pin(async { Ok(()) })
+    }
     /// # Errors
     /// 写入失败返回脱敏 store.*，该增量不进入快照或 chunk。
-    fn append<'a>(&'a self, turn_id: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), Fault>>;
+    fn append<'a>(
+        &'a self,
+        turn_id: &'a str,
+        chunk_seq: u64,
+        text: &'a str,
+    ) -> BoxFuture<'a, Result<(), Fault>>;
     /// # Errors
     /// 封口失败保留已提交前文，协调器展示 failed，不伪造 completed。
     fn finish<'a>(
@@ -156,7 +167,7 @@ pub trait OutputWriter: Send + Sync {
 #[derive(Default)]
 pub struct MemoryWriter;
 impl OutputWriter for MemoryWriter {
-    fn append<'a>(&'a self, _: &'a str, _: &'a str) -> BoxFuture<'a, Result<(), Fault>> {
+    fn append<'a>(&'a self, _: &'a str, _: u64, _: &'a str) -> BoxFuture<'a, Result<(), Fault>> {
         Box::pin(async { Ok(()) })
     }
     fn finish<'a>(&'a self, _: &'a str, _: &'a Terminal) -> BoxFuture<'a, Result<(), Fault>> {

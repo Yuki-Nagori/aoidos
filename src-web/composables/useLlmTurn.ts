@@ -9,6 +9,8 @@ import {
   type MaybeRefOrGetter,
 } from "vue";
 import { getTurn, listenTurnEvent } from "../api/llm";
+import { createListenerGroup } from "../utils/listener-group";
+import type { TurnNotification } from "../utils/turn-consumer";
 import {
   createTurnRecovery,
   turnRecoveryError,
@@ -48,11 +50,11 @@ export function useLlmTurn(
   });
   let disposed = false;
   let epoch = 0;
-  let listeners: (() => void)[] = [];
+  let listeners: ReturnType<typeof createListenerGroup> | undefined;
   let registration: Promise<void> | undefined;
   function release(): void {
-    for (const unlisten of listeners) unlisten();
-    listeners = [];
+    listeners?.close();
+    listeners = undefined;
   }
   function reconnect(): Promise<void> {
     if (disposed) return Promise.resolve();
@@ -61,37 +63,35 @@ export function useLlmTurn(
     const operation = Promise.resolve()
       .then(async () => {
         if (disposed || current !== epoch) return;
-        const forward = (event: import("../utils/turn-consumer").TurnNotification): void => {
+        const group = createListenerGroup();
+        listeners = group;
+        const forward = (event: TurnNotification): void => {
           if (!disposed && current === epoch) recovery.receive(event);
         };
         const results = await Promise.allSettled([
-          Promise.resolve().then(() =>
+          group.register(async () =>
             transport.listen("llm:turn:chunk", (envelope) => forward({ kind: "chunk", envelope })),
           ),
-          Promise.resolve().then(() =>
+          group.register(async () =>
             transport.listen("llm:turn:done", (envelope) => forward({ kind: "done", envelope })),
           ),
-          Promise.resolve().then(() =>
+          group.register(async () =>
             transport.listen("llm:turn:failed", (envelope) =>
               forward({ kind: "failed", envelope }),
             ),
           ),
         ]);
-        const successful = results
-          .filter((result) => result.status === "fulfilled")
-          .map((result) => result.value);
         if (disposed || current !== epoch) {
-          for (const unlisten of successful) unlisten();
+          group.close();
           return;
         }
         connecting.value = false;
         const failure = results.find((result) => result.status === "rejected");
         if (failure) {
-          for (const unlisten of successful) unlisten();
+          group.close();
           connectionError.value = turnRecoveryError(failure.reason);
           return;
         }
-        listeners = successful;
         await recovery.connect();
       })
       .finally(() => {

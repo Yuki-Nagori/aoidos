@@ -72,6 +72,8 @@ impl Provider for DeepSeek {
         };
         ProviderCapabilities {
             model: model.to_owned(),
+            // 官方 2026-10-08 标注 1M；保守登记十进制一百万。
+            context_limit: known.then_some(1_000_000),
             completion: known && mode == RequestMode::Completion,
             chat: known && mode == RequestMode::Chat,
             prefix: known && mode == RequestMode::Chat,
@@ -471,6 +473,7 @@ mod tests {
         assert!(completion.temperature_effective);
         assert_eq!(completion.stop_limit, 16);
         assert_eq!(completion.max_output_tokens, 4096);
+        assert_eq!(completion.context_limit, Some(1_000_000));
         let chat = deepseek.capabilities("deepseek-flash", RequestMode::Chat);
         assert!(chat.chat);
         assert!(chat.prefix);
@@ -491,6 +494,7 @@ mod tests {
         assert!(!caps.prefix);
         assert_eq!(caps.stop_limit, 0);
         assert_eq!(caps.max_output_tokens, 0);
+        assert_eq!(caps.context_limit, None);
         assert!(!caps.temperature_effective);
     }
 

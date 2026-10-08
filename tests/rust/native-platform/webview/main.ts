@@ -12,12 +12,20 @@ import {
 import { useLlmTurn, type TurnTransport } from "../../../../src-web/composables/useLlmTurn";
 import { type TurnNotification } from "../../../../src-web/utils/turn-consumer";
 
+import { useRecordView } from "../../../../src-web/composables/useRecordView";
+import { useMigration } from "../../../../src-web/composables/useMigration";
+import { getUiPreferences, setUiPreferences } from "../../../../src-web/api/store";
+import { getRecordPage } from "../../../../src-web/api/records";
+
 function check(value: boolean, code: string): void {
   if (!value) throw { code };
 }
 
 async function smoke(): Promise<void> {
   const turnId = ref<string>();
+  const sessionId = ref<string>();
+  let records!: ReturnType<typeof useRecordView>;
+  let migration!: ReturnType<typeof useMigration>;
   let consumer!: ReturnType<typeof useLlmTurn>;
   let requests = 0;
   let callbacks = 0;
@@ -41,6 +49,8 @@ async function smoke(): Promise<void> {
   const app = createApp({
     setup() {
       consumer = useLlmTurn(turnId, transport);
+      records = useRecordView(sessionId);
+      migration = useMigration();
       return () => h("div", "Mythos consumer fixture");
     },
   });
@@ -147,6 +157,35 @@ async function smoke(): Promise<void> {
         consumer.view.value.snapshot?.outcome === "completed" &&
         consumer.view.value.snapshot.text === "本地夹具正文。",
       "lost-events-recovery-mismatch",
+    );
+    await migration.reconnect();
+    check(
+      migration.state.value.snapshot?.phase === "completed" &&
+        migration.state.value.snapshot.current === 1,
+      "migration-terminal-mismatch",
+    );
+    await setUiPreferences(true, "auto");
+    const preferences = await getUiPreferences();
+    check(preferences.panelPinned && preferences.diceMode === "auto", "preferences-mismatch");
+    const persisted = await invoke<{ sessionId: string; turnId: string }>("record_smoke");
+    sessionId.value = persisted.sessionId;
+    await records.reconnect();
+    await invoke("wait_smoke", { turnId: persisted.turnId });
+    await records.recover();
+    const page = await getRecordPage(persisted.sessionId);
+    const item = page.items[0];
+    const recordedTurn = await getTurn(persisted.turnId);
+    check(
+      item?.turnId === persisted.turnId &&
+        item.outcome === "completed" &&
+        item.body !== undefined &&
+        "text" in item.body &&
+        item.body.text === recordedTurn.text,
+      "record-snapshot-bytes-mismatch",
+    );
+    check(
+      records.state.value.view?.items[0]?.recordSeq === item?.recordSeq,
+      "record-consumer-mismatch",
     );
     const beforeUnmount = callbacks;
     app.unmount();
