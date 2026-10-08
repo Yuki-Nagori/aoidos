@@ -383,6 +383,29 @@ mod tests {
             .await
             .unwrap();
         assert!(status.set);
+        // 原生对话框未返回时，重复命令不得调度第二个对话框或改写旧凭据。
+        let pending_job = std::sync::Arc::new(Mutex::new(None));
+        let dispatch_job = pending_job.clone();
+        let deferred = move |job: Box<dyn FnOnce() + Send>| {
+            *dispatch_job.lock().unwrap() = Some(job);
+            Ok(())
+        };
+        let mut first = std::pin::pin!(set_key_in("p", "set", &keys, fake_prompt, &deferred));
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(first.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(
+            set_key_in("p", "set", &keys, fake_prompt, &rejecting_dispatch)
+                .await
+                .unwrap_err()
+                .code(),
+            "app.busy"
+        );
+        assert_eq!(key_status_with("p", &keys).unwrap(), status);
+        pending_job.lock().unwrap().take().unwrap()();
+        assert_eq!(first.await.unwrap(), status);
         let cancelled = set_key_in("p", "set", &keys, |_| Ok(None), &direct)
             .await
             .unwrap();
