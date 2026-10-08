@@ -1,6 +1,6 @@
 # 回合与阶段状态机
 
-更新日期：2026-10-09。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/mythos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，当前实施中。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
+更新日期：2026-10-09。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/mythos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
 
 实现位于 `mythos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](README.md#阶段机基础链路)，验证证据见 [023](../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
 

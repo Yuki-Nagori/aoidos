@@ -32,14 +32,14 @@
 
 ## 风险与回退
 
-已有大批 023 未提交变更，只修改本审计涉及的测试、预算与记录；保留现有改动。覆盖率本机结果不替代三平台 CI。
+审计基于 023 实施工作树，只调整测试与预算记录；不改生产行为或覆盖率统计口径。跨平台结果以最终 CI 为准。
 
 ## 决策与工作记录
 
 - 2026-10-09：核实六处预算：`sample`、`open_verified`、`line` 的成功 / 失败分散在不同泛型实例；runtime 缺缓存第 17 项淘汰及 checked-only 身份命中；proxy / llm_commands 已足额覆盖。
 - 2026-10-09：LLVM `LineCoverageInfo::merge` 取 `max(covered)` / `max(total)`，不求行并集（[LLVM 实现](https://github.com/llvm/llvm-project/blob/main/llvm/tools/llvm-cov/CoverageSummaryInfo.h)，当日查阅）。补同一实例及缓存边界测试、明确等待 lease 释放，删除六处预算；生产代码和统计口径不变。
-- 2026-10-09：独立评审核对 diff、调用链和 LLVM 统计，无阻塞；主代理完成最终 verify。三平台验收随 023 PR 跟进。
+- 2026-10-09：独立评审核对 diff、调用链和 LLVM 统计，无阻塞；主代理完成最终 verify。三平台验收随 [023 PR](https://github.com/Yuki-Nagori/aoidos/pull/77) 完成，后续 CI 缺口及测试竞态修复记录归 023。
 
 ## 完成摘要
 
-六处逐文件预算全部删除，补齐真实缓存边界和同一泛型实例的成功 / 失败测试；生产行为及统计口径保持一致。完整 verify 十三项通过，workspace lib 72 文件未覆盖 0 行，独立评审无阻塞问题。本次结果为 macOS 本机验证，不替代其他平台 CI。
+六处逐文件预算全部删除，补齐真实缓存边界和同一泛型实例的成功 / 失败测试；生产行为及统计口径保持一致。完整 verify 十三项通过，workspace lib 72 文件未覆盖 0 行，独立评审无阻塞问题。三平台最终复验见 023 的运行记录。

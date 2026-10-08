@@ -117,7 +117,7 @@ text 仅包含护栏后的已接纳正文。产品模式已持久化后再更新
 
 021 的 `useLlmTurn` 消费上述载荷；读取错误保存在独立 recoveryError，不改写回合 error。subscribe / snapshot 竞态、终态补正文和最后全事件丢失的实际边界见 [LLM 恢复规则](llm.md)。
 
-## 引擎命令与阶段快照（012 设计，023 实施中）
+## 引擎命令与阶段快照（012 设计，023 已实现）
 
 规则以[阶段机](turn-state-machine.md)为准，023 实现；phase、场景和操作终态事件均用 sessionId 分流。roundId 是游戏回合，turnId 是单次 LLM 调用；内部提议不发 llm:turn:*，不出现在公开 llm_get_turn，旁白 / 角色仍沿用上节。
 
@@ -320,7 +320,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
   - `store:migration:progress`，data `{ migrationId, from, to, current, target }`；from / to 是本步骤版本，current == to，target 是流目标版本。
   - `store:migration:done`，data `{ migrationId, from, to, current }`；from / to 是整个流初始 / 目标版本，current == to；无步骤时 from == to。
   - `store:migration:failed`，data `{ migrationId, from?, to, current?, failedStep?, code, message }`；to 是目标版本，current 是最后成功提交版本；code 为 store.*，不发送原始 SQLite / IO 错误。失败不发 done，已提交步骤保留。open_with_progress 回调在每步提交后发生，022 已接入运行期状态与真实窗口发送适配；完成证据见任务记录。
-  - `engine:scene:advanced` / `engine:phase:changed` / `engine:operation:done` / `engine:operation:failed`：data 见上方引擎阶段快照，流标识 sessionId，012 已定稿、023 待实现。
+  - `engine:scene:advanced` / `engine:phase:changed` / `engine:operation:done` / `engine:operation:failed`：data 见上方引擎阶段快照，流标识 sessionId，012 定稿、023 已实现。
 - 流式期间发生错误：以 `*:failed` 事件收尾；命令本身的 `Err` 只表示「提交被拒绝」，两者不重复携带同一错误。
 
 ## 错误码目录
@@ -349,7 +349,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 
 HTTP 200 中的合法 usage-only / 空 choices 不属于 bad-response。未带合法 finish / 结束标记的提前 EOF 按网络中断及首交付边界分类；已解析完成的正文后还需检查终止协议。TLS 类型和供应商错误细分按 llm.md 的 fixture 标定，不解析中文 message。诊断 detail 最多携带 providerId / status / 脱敏类别，不包含 key、代理凭据、完整 endpoint、prompt 或供应商原始错误正文。
 
-- engine 预留（012 已冻结，023 待实现）：`engine.no-scene` 为未载入 / 已结束而无活动场景；`engine.invalid-phase` 为命令不适用于当前阶段、无合法恢复检查点或 pending 世界 / 控制意图未修复；与其他在飞 lease 冲突仍为 app.busy。详见阶段机的错误优先级。006 定义 `engine.interrupted`，仅为重开时已提交生成正文的中断记录错误，不代替实时 llm.aborted，不恢复旧 turnId。
+- engine（012 已冻结，023 已实现）：`engine.no-scene` 为未载入 / 已结束而无活动场景；`engine.invalid-phase` 为命令不适用于当前阶段、无合法恢复检查点或 pending 世界 / 控制意图未修复；与其他在飞 lease 冲突仍为 app.busy。详见阶段机的错误优先级。006 定义 `engine.interrupted`，仅为重开时已提交生成正文的中断记录错误，不代替实时 llm.aborted，不恢复旧 turnId。
 - 前端分支**正例**：
 
 ```ts
