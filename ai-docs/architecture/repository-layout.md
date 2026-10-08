@@ -31,7 +31,7 @@
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
 ├── tests/web/                 # Vitest 单测（目录镜像 src-web）
-├── scripts/                   # 仓库脚本（环境 / 覆盖率 / 原生前端夹具构建；独立 tsconfig）
+├── scripts/                   # 仓库脚本（环境 / 覆盖率 / 原生夹具与 Rust 构建适配；TS 独立 tsconfig）
 ├── coverage-rust.config.mts   # Rust 覆盖率门禁的忽略清单与逐文件预算（scripts/coverage-rust.mts 消费）
 ├── .github/workflows/ci.yml   # 三平台 CI
 ├── .husky/pre-commit          # 提交前查双端格式（全量门禁在 CI）

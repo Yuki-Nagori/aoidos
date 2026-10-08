@@ -1,6 +1,6 @@
 # 对局记录与上下文引擎
 
-更新 / 官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/mythos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现协议与适配，正在完成最终验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。实现由 [022](../task/022-record-engine-impl.md) 承接，阶段决策归 [012](../task/012-turn-state-machine-design.md)。
+更新 / 官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/mythos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现协议与适配并完成最终验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。实现由 [022](../task/022-record-engine-impl.md) 承接，阶段决策归 [012](../task/012-turn-state-machine-design.md)。
 
 ## 方案与边界
 
