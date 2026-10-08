@@ -48,9 +48,11 @@ CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原
 
 `bun run test:native` 是独立于本地 verify 十三项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
 
-入口一次执行 `mythos-native-tests` 的全部桌面会话目标，新增目标只登记 Cargo，不追加根脚本。定向排查可用 `bun run test:native --test ipc-platform`。入口先用 Bun 构建手写 `webview/main.ts` 到 `gen/webview/`；测试配置加载这一生成目录，因此必须经根脚本运行。`ipc-platform` 使用真实主 Webview 注册产品相同命令并装载实际 `useLlmTurn`，验证订阅、提交、正文 / 终态、快照、重复取消、非法输入、重连、全事件丢失后的主动恢复与卸载清理；只运行本地夹具，不调用收费 API。测试的 `webview/` 与 `tauri.conf.json` 是手写夹具，须入库；整个 `gen/` 包含 Tauri schema 与打包后的 Webview 资产，Git / ESLint 均排除，不能把第三方打包代码当自有源码检查。
+入口聚合 `mythos-native-tests` 全部桌面会话目标，新增目标只登记 Cargo；定向排查用 `bun run test:native --test ipc-platform`。根脚本先构建手写 `webview/main.ts` 到 `gen/webview/`，测试配置加载生成目录；`webview/` 与 `tauri.conf.json` 入库，整个 `gen/` 从 Git / ESLint 排除。
 
-CI 每个平台额外执行该聚合测试，单步超时 5 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)，原生凭据结果归 [019](../task/019-llm-profile-credentials-impl.md)，发送端结果归 [020](../task/020-llm-turn-ipc-impl.md)，实际消费者验证归 [021](../task/021-llm-web-recovery-impl.md)。原生能力实测不代替目标平台安装包验证。
+`ipc-platform` 使用真实主 Webview、产品命令及实际前端消费者，覆盖回合、记录、迁移、阶段 / 骰判、回退 / 重启和恢复 / 监听释放；`game-fixture.rs` 提供可信场景，不调用收费 API。具体断言与验证结果见 019–023 对应 task。
+
+CI 各平台运行聚合测试，单步超时 5 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。单平台结果不代替三平台 CI，原生实测不代替安装包验证；覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)。
 
 ## 打包与版本
 
@@ -65,7 +67,5 @@ $ bun run tauri:build
 1. 换图标：替换 `src-tauri/icons/icon.png`（1024×1024 方形）后执行 `bun run tauri icon src-tauri/icons/icon.png`，全套生成到 `src-tauri/icons/`（含 android / ios 子目录，纯桌面项目可删）；浏览器 favicon 用 `public/icon.png`，随手同步一份。
 2. 替换 greet 示例为第一个真实命令：`commands.rs` 定义 → `generate_handler![]` 注册 → 需要插件能力时在 `capabilities/default.json` 加权限 → TS 声明同型并 `invoke` → 照 `tests/web/App.test.ts` mock 测试。示例 `greet` 被替换后删除。
 3. 工作方式登记：非平凡改动从[任务索引](../task-index.md)建 task 开始。
-
-原生夹具同一入口验证回合、记录 page / view / body、迁移及 UI 偏好的真实 Webview 往返，接入 Rust 公开服务和前端恢复消费者；本地夹具不发送收费请求。各平台实际结果与最新提交复验状态分别记录在对应实现 task，单平台成功不代替三平台 CI。
 
 Windows / MSVC 的 Tauri 构建按 Cargo 目标平台判断，共用 `scripts/rust/tauri-build.rs`，将 Common Controls v6 manifest 嵌入应用、lib 单测和原生测试入口。Tauri 默认资源链接仅覆盖 bins，新增 mock IPC 单测会使无 manifest 的测试程序在启动时返回 `STATUS_ENTRYPOINT_NOT_FOUND`；共享适配替换默认 manifest 注入，避免重复资源，同时保留应用默认 v6 能力。依据 [Tauri 上游 issue #13419](https://github.com/tauri-apps/tauri/issues/13419)，上游覆盖全部测试目标后可撤除此适配；实际 Windows 验证以 CI 为准。

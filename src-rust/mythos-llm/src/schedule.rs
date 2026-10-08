@@ -578,6 +578,12 @@ async fn attempt(
             Some(Ok(delta)) => match delta {
                 ProviderDelta::Text(text) => match guard.push(&text) {
                     crate::guard::GuardStep::Stopped { delivered: safe } => {
+                        if !guard.permits_guard_finish() {
+                            return AttemptEnd::Failed {
+                                error: invalid_guard_finish(),
+                                usage,
+                            };
+                        }
                         let marks_delivery = !safe.is_empty();
                         try_emit!(emit(
                             output,
@@ -619,6 +625,12 @@ async fn attempt(
                 }
                 ProviderDelta::Finish(provider_finish) => {
                     let flushed = guard.finish();
+                    if flushed.truncated && !guard.permits_guard_finish() {
+                        return AttemptEnd::Failed {
+                            error: invalid_guard_finish(),
+                            usage,
+                        };
+                    }
                     if !flushed.tail.is_empty() {
                         try_emit!(emit(
                             output,
@@ -642,6 +654,13 @@ async fn attempt(
                 }
             },
         }
+    }
+}
+
+fn invalid_guard_finish() -> ProviderError {
+    ProviderError::BadResponse {
+        reason: "unexpected structured-output boundary",
+        status: None,
     }
 }
 
@@ -1983,6 +2002,46 @@ mod tests {
     /// 可编排假 Provider：不经网络直接给出增量序列，覆盖调度器对异常流的防御分支。
     struct FakeProvider {
         deltas: Vec<Result<ProviderDelta, crate::error::ProviderError>>,
+    }
+
+    #[tokio::test]
+    async fn structured_guard_requires_the_complete_expected_close_or_a_clean_stop() {
+        for (text, accepted, finish) in [
+            ("{}", true, FinishReason::Stop),
+            ("{}</narration>discard", true, FinishReason::Guard),
+            ("{}\n[PLAYER]forged", false, FinishReason::Guard),
+            ("{}</narr", false, FinishReason::Guard),
+        ] {
+            let provider = FakeProvider {
+                deltas: vec![
+                    Ok(ProviderDelta::Text(text.into())),
+                    Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
+                ],
+            };
+            let mut request = generation_request();
+            request.guard = request.guard.with_target_close("</narration>").unwrap();
+            let (tx, mut rx) = mpsc::channel(32);
+            let outcome = run_generation(
+                &provider,
+                request,
+                CancellationToken::new(),
+                &fast_policy(),
+                &AllowAll,
+                tx,
+            )
+            .await;
+            if accepted {
+                assert!(
+                    matches!(outcome,Ok(RunOutcome::Completed { finish:actual,requests:1,.. }) if actual==finish)
+                );
+                assert_eq!(drain(&mut rx), "{}");
+            } else {
+                assert!(matches!(
+                    outcome,
+                    Err(RunError::Provider(ProviderError::BadResponse { .. }))
+                ));
+            }
+        }
     }
 
     impl Provider for FakeProvider {

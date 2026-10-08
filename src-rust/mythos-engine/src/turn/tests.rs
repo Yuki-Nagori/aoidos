@@ -70,6 +70,36 @@ async fn accepted_snapshot_completed_event_and_bounded_retirement() {
     assert!(lock(&events.seqs).keys().all(|(_, turn)| turn != &id));
 }
 
+#[tokio::test]
+async fn already_cancelled_private_child_never_starts_transport_and_keeps_parent_lease() {
+    let (coordinator, _) = coordinator(16);
+    let lease = coordinator.acquire().unwrap();
+    let (request, calls) = generation(
+        vec![
+            Ok(ProviderDelta::Text("正文".into())),
+            Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
+        ],
+        false,
+    );
+    let child = CancellationToken::new();
+    child.cancel();
+    let result = coordinator
+        .run_private_cancellable(&lease, request, child)
+        .await
+        .unwrap();
+    assert_eq!(result.outcome, Outcome::Cancelled);
+    assert!(result.text.is_empty());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(coordinator.check_available().is_err());
+    drop(lease);
+    coordinator.check_available().unwrap();
+    coordinator.shutdown().await;
+    assert_eq!(
+        coordinator.check_available().unwrap_err().code,
+        "app.not-ready"
+    );
+}
+
 struct Writer {
     text: Mutex<String>,
     fail_append: bool,
@@ -849,4 +879,81 @@ async fn persistent_writer_keeps_file_snapshot_and_event_bytes_identical() {
         .collect::<String>();
     assert_eq!(chunks, snapshot.text);
     coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn prepared_public_identity_is_readable_before_network_and_drop_closes_it() {
+    let (coordinator, _) = coordinator(16);
+    let lease = coordinator.acquire().unwrap();
+    let (request, calls) = generation(
+        vec![
+            Ok(ProviderDelta::Text("叙事".into())),
+            Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
+        ],
+        false,
+    );
+    let pending = coordinator
+        .prepare_borrowed(&lease, request, Arc::new(MemoryWriter))
+        .unwrap();
+    let id = pending.id().to_owned();
+    assert_eq!(coordinator.snapshot(&id).unwrap().text, "");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    pending.start();
+    assert_eq!(coordinator.wait(&id).await.unwrap().text, "叙事");
+    let pending = coordinator
+        .prepare_borrowed(&lease, completed("未开始"), Arc::new(MemoryWriter))
+        .unwrap();
+    let id = pending.id().to_owned();
+    drop(pending);
+    assert_eq!(
+        coordinator.wait(&id).await.unwrap().outcome,
+        Some(Outcome::Failed)
+    );
+    assert!(coordinator.acquire().is_err());
+    drop(lease);
+    assert!(coordinator.acquire().is_ok());
+}
+
+#[tokio::test]
+async fn private_child_cancel_preserves_parent_lease_and_proposal_limit_is_enforced() {
+    let (coordinator, _) = coordinator(16);
+    let lease = coordinator.acquire().unwrap();
+    let (request, calls) = generation(vec![Ok(ProviderDelta::Text("提议".into()))], true);
+    let cancel = CancellationToken::new();
+    let run = coordinator.run_private_cancellable(&lease, request, cancel.clone());
+    let stop = async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        cancel.cancel();
+    };
+    let (result, ()) = tokio::join!(run, stop);
+    assert_eq!(result.unwrap().outcome, Outcome::Cancelled);
+    assert!(!lease.cancellation().is_cancelled());
+    assert_eq!(
+        coordinator
+            .run_private(&lease, completed("下一子调用"))
+            .await
+            .unwrap()
+            .text,
+        "下一子调用"
+    );
+    assert!(completed("x").with_private_limit(0).is_err());
+    assert!(
+        completed("x")
+            .with_private_limit(MAX_TEXT_BYTES + 1)
+            .is_err()
+    );
+    let request = completed(&"中".repeat(3000))
+        .with_private_limit(8 * 1024)
+        .unwrap();
+    assert_eq!(
+        coordinator
+            .run_private(&lease, request)
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "llm.bad-response"
+    );
 }

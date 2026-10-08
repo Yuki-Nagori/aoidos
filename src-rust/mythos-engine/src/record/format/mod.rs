@@ -42,7 +42,7 @@ pub enum InputMode {
     OutOfCharacter,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
     pub kind: String,
@@ -53,7 +53,7 @@ pub struct Roll {
     pub sides: u32,
     pub value: u32,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Modifier {
     pub value: i32,
     pub source: Source,

@@ -1,6 +1,52 @@
 use super::*;
 use crate::record::format::{self, Record};
 
+#[test]
+fn private_proposals_use_the_same_bounded_projection_with_json_target_in_all_shapes() {
+    let header = header();
+    let records = vec![player(1, "当前行动")];
+    let view = RecordView {
+        header: &header,
+        records: &records,
+        needs_recovery: false,
+        omitted_ranges: &[],
+        verified_recaps: &BTreeMap::new(),
+    };
+    let world = WorldView {
+        context: "可信规则与候选",
+        needs_recovery: false,
+    };
+    let budget = Budget {
+        context_limit: Some(65536),
+        ..Budget::default()
+    };
+    for target in [
+        grammar::PromptTarget::CheckProposal,
+        grammar::PromptTarget::SceneProposal,
+    ] {
+        for shape in [Shape::Completion, Shape::ChatPrefix, Shape::Chat] {
+            let projected = project_request(&view, &world, &budget, &target, shape).unwrap();
+            assert_eq!(projected.guard_spec_id, grammar::guard_request_id(&target));
+            assert_eq!(projected.included_sequences(), &[1]);
+            assert_eq!(
+                projected.guard.server_stops(16),
+                vec![target.close().to_owned()]
+            );
+            match projected.input {
+                ProviderInput::Completion(input) => {
+                    assert!(input.prompt.ends_with(&grammar::open_request(&target)))
+                }
+                ProviderInput::Chat(input) if shape == Shape::ChatPrefix => {
+                    assert_eq!(input.assistant_prefix, Some(grammar::open_request(&target)))
+                }
+                ProviderInput::Chat(input) => {
+                    assert!(input.messages[1].content.contains("仅返回 JSON"))
+                }
+            }
+        }
+    }
+}
+
 fn narrative(seq: u64, text: &str, character: bool) -> Parsed {
     let turn_id = uuid::Uuid::new_v4().to_string();
     let terminal = crate::ports::Terminal::Completed {

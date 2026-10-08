@@ -153,3 +153,27 @@ fn header_common_fields_system_and_recap_limits_are_strict() {
     assert!(recap.validate().is_err());
     assert!(line(&"x".repeat(MAX_LINE)).is_err());
 }
+
+#[test]
+fn line_serialization_failure_and_utf8_capacity_share_the_same_value_contract() {
+    struct Text(Option<String>);
+    impl Serialize for Text {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            match &self.0 {
+                Some(text) => serializer.serialize_str(text),
+                None => Err(serde::ser::Error::custom("injected serialization failure")),
+            }
+        }
+    }
+    assert_eq!(line(&Text(Some("字".into()))).unwrap(), "\"字\"\n");
+    assert!(line(&Text(None)).is_err());
+    // UTF-8 字节数包含引号和 LF；边界值通过，超过一字节拒绝。
+    assert_eq!(
+        line(&Text(Some("x".repeat(MAX_LINE - 3)))).unwrap().len(),
+        MAX_LINE
+    );
+    assert!(line(&Text(Some("x".repeat(MAX_LINE - 2)))).is_err());
+}

@@ -38,8 +38,10 @@ Mythos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScri
 ## 约定速查
 
 - 一切命令经根 `package.json` 的 bun scripts；`bun run verify` 十三项全过才算完成，husky 只查格式，CI 跑全量。
+- 覆盖率缺口由 subagent 分工修复，主代理整合并复验完整门禁，见[测试规范](ai-docs/standards/testing.md)。
 - `bun.lock` 与根 `Cargo.lock` 提交并保持同步（工作区唯一一份 `Cargo.lock`）。
 - 命令参数 / 返回类型在 Rust 定型后，TS 侧立即声明同型；`invoke` 无校验透传。
 - 前端纯逻辑进 `utils/` 配单测；Rust 命令层薄，业务长大后拆 crate 进 workspace members。
 - 非平凡改动先建 task（`ai-docs/task/_template.md`）再实现；提交消息带 `Task: NNN`，CI 修复等平凡改动不立项（例外见[任务索引](ai-docs/task-index.md)与[提交规范](ai-docs/standards/commits.md)）。
+- task 交付前须 subagent 独立评审、处理发现并复验，流程与证据见[测试规范](ai-docs/standards/testing.md)。
 - 改技术行为的 commit 同步受影响文档；目录树用文本代码块，mermaid 入库前渲染校验。

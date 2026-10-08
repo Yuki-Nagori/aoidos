@@ -1,5 +1,5 @@
 // 真实主 Webview 装载产品消费者，不复制恢复算法；夹具始终运行本地 Rust Provider。
-import { createApp, h, ref, watch } from "vue";
+import { createApp, h, ref, watch, type DeepReadonly } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
   getTurn,
@@ -16,6 +16,19 @@ import { useRecordView } from "../../../../src-web/composables/useRecordView";
 import { useMigration } from "../../../../src-web/composables/useMigration";
 import { getUiPreferences, setUiPreferences } from "../../../../src-web/api/store";
 import { getRecordPage } from "../../../../src-web/api/records";
+import { useEnginePhase } from "../../../../src-web/composables/useEnginePhase";
+import {
+  submitInput,
+  interruptRound,
+  cancelRound,
+  resume,
+  regenerate,
+  rewind,
+  submitCheck,
+  getPhase,
+  listenPhaseEvent,
+  type PhaseState,
+} from "../../../../src-web/api/engine";
 
 function check(value: boolean, code: string): void {
   if (!value) throw { code };
@@ -24,6 +37,14 @@ function check(value: boolean, code: string): void {
 async function smoke(): Promise<void> {
   const turnId = ref<string>();
   const sessionId = ref<string>();
+  const gameId = ref<string>();
+  let phaseCallbacks = 0,
+    phaseReleased = 0,
+    phaseListeners = 0,
+    phaseReads = 0;
+  let dropPhase = false;
+  const phaseNames = new Set<string>();
+  let phase!: ReturnType<typeof useEnginePhase>;
   let records!: ReturnType<typeof useRecordView>;
   let migration!: ReturnType<typeof useMigration>;
   let consumer!: ReturnType<typeof useLlmTurn>;
@@ -51,10 +72,47 @@ async function smoke(): Promise<void> {
       consumer = useLlmTurn(turnId, transport);
       records = useRecordView(sessionId);
       migration = useMigration();
+      phase = useEnginePhase(gameId, {
+        read(id) {
+          phaseReads++;
+          return getPhase(id);
+        },
+        listen(name, handler) {
+          return listenPhaseEvent(name, (envelope) => {
+            phaseCallbacks++;
+            phaseNames.add(name);
+            if (!dropPhase) handler(envelope);
+          }).then((unlisten) => {
+            phaseListeners++;
+            return () => {
+              phaseReleased++;
+              unlisten();
+            };
+          });
+        },
+      });
       return () => h("div", "Mythos consumer fixture");
     },
   });
   app.mount("#app");
+  function phaseState(
+    predicate: (state: DeepReadonly<PhaseState>) => boolean,
+  ): Promise<DeepReadonly<PhaseState>> {
+    const state = phase.state.value.snapshot;
+    if (state && predicate(state)) return Promise.resolve(state);
+    return new Promise((resolve) => {
+      const stop = watch(
+        () => phase.state.value.snapshot,
+        (next) => {
+          if (next && predicate(next)) {
+            stop();
+            resolve(next);
+          }
+        },
+        { flush: "sync" },
+      );
+    });
+  }
   const received: TurnNotification[] = [];
   const observers: (() => void)[] = [];
   let barrier: (() => void) | undefined;
@@ -187,15 +245,133 @@ async function smoke(): Promise<void> {
       records.state.value.view?.items[0]?.recordSeq === item?.recordSeq,
       "record-consumer-mismatch",
     );
+    // 登记本地可信场景后调用产品命令，等待真实事件；测试不增加持续快照轮询。
+    await setUiPreferences(true, "manual");
+    gameId.value = await invoke<string>("game_smoke");
+    await phase.reconnect();
+    const initialPhase = await getPhase(gameId.value);
+    const game = await submitInput(gameId.value, "搜索房间");
+    const waiting = await phaseState((state) => state.check?.status === "waiting");
+    check(waiting.inFlight?.roundId === game.roundId, "game-round-discovery");
+    let debugBusy = false;
+    try {
+      await submitTurn(
+        "ipc-fixture",
+        { kind: "completion", prompt: "共享门禁" },
+        "debug-fixture-v1",
+      );
+    } catch (error) {
+      debugBusy =
+        typeof error === "object" && error !== null && "code" in error && error.code === "app.busy";
+    }
+    check(debugBusy, "game-debug-gate-not-shared");
+    let invalidSteer = false;
+    try {
+      await interruptRound(gameId.value, game.roundId, "等待时插话");
+    } catch (error) {
+      invalidSteer =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "engine.invalid-phase";
+    }
+    check(invalidSteer, "waiting-interrupt-not-rejected");
+    const plan = waiting.check!.planId;
+    await submitCheck(gameId.value, game.roundId, plan);
+    await submitCheck(gameId.value, game.roundId, plan);
+    await phaseState(
+      (state) =>
+        state.lastOperation?.operationId === game.operationId &&
+        state.lastOperation.outcome === "completed",
+    );
+    check(
+      (await cancelRound(gameId.value, game.roundId)).outcome === "completed",
+      "game-cached-terminal",
+    );
+    const regenerated = await regenerate(gameId.value, game.roundId);
+    await phaseState(
+      (state) =>
+        state.lastOperation?.operationId === regenerated.operationId &&
+        state.lastOperation.outcome === "completed",
+    );
+    const gamePage = await getRecordPage(gameId.value, undefined, 50);
+    check(
+      gamePage.items.filter((item) => item.kind === "dice").length === 1,
+      "regenerate-rerolled-dice",
+    );
+    const checkSeq = gamePage.items.find((item) => item.kind === "check")!.recordSeq;
+    await rewind(gameId.value, checkSeq);
+    await invoke("game_restart_smoke", { sessionId: gameId.value });
+    await phase.reconnect();
+    const reopened = await getPhase(gameId.value);
+    check(
+      reopened.stateEpoch !== initialPhase.stateEpoch && reopened.resumeRequired,
+      "game-restart-checkpoint",
+    );
+    const resumed = await resume(gameId.value);
+    await phaseState(
+      (state) =>
+        state.lastOperation?.operationId === resumed.operationId &&
+        state.lastOperation.outcome === "completed",
+    );
+    check(
+      (await getRecordPage(gameId.value, undefined, 50)).items.filter(
+        (item) => item.kind === "dice",
+      ).length === 1,
+      "resume-rerolled-dice",
+    );
+    await setUiPreferences(true, "auto");
+    gameId.value = await invoke<string>("game_smoke", { scenario: "failure" });
+    await phase.recover();
+    const failedGame = await submitInput(gameId.value, "搜索失败夹具");
+    await phaseState(
+      (state) =>
+        state.lastOperation?.operationId === failedGame.operationId &&
+        state.lastOperation.outcome === "failed",
+    );
+    gameId.value = await invoke<string>("game_smoke", { scenario: "exit" });
+    await phase.recover();
+    const exitGame = await submitInput(gameId.value, "搜索出口夹具");
+    await phaseState(
+      (state) =>
+        state.lastOperation?.operationId === exitGame.operationId &&
+        state.lastOperation.outcome === "completed",
+    );
+    check(phase.state.value.snapshot?.scene === undefined, "exit-scene-not-cleared");
+    check(phaseNames.size === 4, "phase-event-stream-missing");
+    gameId.value = await invoke<string>("game_smoke", { scenario: "exit" });
+    await phase.recover();
+    const baselineReads = phaseReads;
+    dropPhase = true;
+    const lostGame = await submitInput(gameId.value, "丢弃所有阶段事件");
+    // 夹具只读等待 Rust 已确认终态；产品消费者本身不轮询。
+    await invoke("game_wait_smoke", { sessionId: gameId.value, operationId: lostGame.operationId });
+    check(phaseReads === baselineReads, "phase-added-polling");
+    dropPhase = false;
+    await phase.recover();
+    check(
+      phase.state.value.snapshot?.lastOperation?.operationId === lostGame.operationId &&
+        phase.state.value.snapshot.lastOperation.outcome === "completed",
+      "phase-active-recovery-failed",
+    );
+    let stageBarrier!: () => void;
+    const stageSeen = new Promise<void>((resolve) => {
+      stageBarrier = resolve;
+    });
+    observers.push(await listenPhaseEvent("engine:phase:changed", () => stageBarrier()));
+    const beforePhaseUnmount = phaseCallbacks;
     const beforeUnmount = callbacks;
     app.unmount();
     unmounted = true;
+    check(phaseReleased === phaseListeners, "phase-listener-release-mismatch");
     check(released === 6, "listener-release-mismatch");
     const seen = new Promise<void>((resolve) => {
       barrier = resolve;
     });
-    await invoke("emit_smoke", { turnId: second.turnId });
+    await invoke("emit_smoke", { turnId: second.turnId, sessionId: gameId.value });
     await seen;
+    await stageSeen;
+    check(phaseCallbacks === beforePhaseUnmount, "unmounted-phase-listener-called");
     check(callbacks === beforeUnmount, "unmounted-listener-called");
     passed = true;
   } catch (error) {

@@ -222,19 +222,28 @@ fn materialize(
     header: &Header,
     history: &str,
     world: &str,
-    target: &Target,
+    target: &grammar::PromptTarget,
     shape: Shape,
 ) -> ProviderInput {
     let context = format!("{history}{world}");
     match shape {
         Shape::Completion => ProviderInput::Completion(CompletionInput {
-            prompt: format!("{}{context}{}", header.static_prefix, grammar::open(target)),
+            prompt: format!(
+                "{}{context}{}",
+                header.static_prefix,
+                grammar::open_request(target)
+            ),
         }),
         Shape::Chat | Shape::ChatPrefix => {
             let content = if shape == Shape::Chat {
                 format!(
-                    "{context}生成 {} 选定块，仅返回正文，不返回结构标记。",
-                    grammar::open(target).trim_end()
+                    "{context}生成 {} 选定块，{}，不返回结构标记。",
+                    grammar::open_request(target).trim_end(),
+                    if target.proposal() {
+                        "仅返回 JSON"
+                    } else {
+                        "仅返回正文"
+                    }
                 )
             } else {
                 context
@@ -250,7 +259,8 @@ fn materialize(
                         content,
                     },
                 ],
-                assistant_prefix: (shape == Shape::ChatPrefix).then(|| grammar::open(target)),
+                assistant_prefix: (shape == Shape::ChatPrefix)
+                    .then(|| grammar::open_request(target)),
             })
         }
     }
@@ -275,6 +285,25 @@ pub fn project(
     world_view: &WorldView<'_>,
     budget: &Budget,
     target: &Target,
+    shape: Shape,
+) -> Result<PromptPlan, ProjectionError> {
+    project_request(
+        record_view,
+        world_view,
+        budget,
+        &grammar::PromptTarget::from(target),
+        shape,
+    )
+}
+
+/// 内部提议与正文共用纯投影、预算和来源核验，仍不发请求。
+/// # Errors
+/// 与 project 的配置、只读、恢复及预算错误相同。
+pub fn project_request(
+    record_view: &RecordView<'_>,
+    world_view: &WorldView<'_>,
+    budget: &Budget,
+    target: &grammar::PromptTarget,
     shape: Shape,
 ) -> Result<PromptPlan, ProjectionError> {
     if record_view.needs_recovery || world_view.needs_recovery {
@@ -555,8 +584,8 @@ pub fn project(
     Ok(PromptPlan {
         working_set_hash: super::working_set::fingerprint(header, records),
         input,
-        guard: grammar::guard(target),
-        guard_spec_id: grammar::guard_id(target),
+        guard: grammar::guard_request(target),
+        guard_spec_id: grammar::guard_request_id(target),
         estimate: count,
         estimator_version: budget.estimator.version(),
         folded,

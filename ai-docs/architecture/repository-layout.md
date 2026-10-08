@@ -15,6 +15,7 @@
 ├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
 │   ├── src/commands.rs        # #[tauri::command] 命令层、类型化载荷与命令单测
+│   ├── src/game_commands/     # 产品阶段 DTO / 命令适配，业务由 engine actor 执行
 │   ├── src/turn_commands/     # 回合服务 / 事件适配，mod.rs 与 tests.rs 并列
 │   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；平台原生输入经 mythos-llm 分发
 │   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
@@ -26,7 +27,7 @@
 │   └── build.rs               # tauri-build
 ├── src-rust/                  # 不依赖 tauri 的业务 crate
 │   ├── mythos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
-│   ├── mythos-engine/         # 协调 / lease、record/、迁移 / 偏好 / Storage
+│   ├── mythos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
 │   ├── mythos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── mythos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
@@ -60,5 +61,7 @@ Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../
 ## 记录模块与夹具
 
 `mythos-engine/src/record/` 下按格式、注册事实、会话、世界协议、历史、工作集、投影、摘要候选、压缩和视图拆分；带外置单测的模块统一使用 `{mod.rs,tests.rs}`，包括 `facts/`。通用测试 Provider 位于 engine 的 `test_support.rs`，记录夹具位于 `record/test_support.rs`，均仅在测试构建编译。
+
+`mythos-engine/src/game/` 分为串行驱动 / 执行、场景目录、骰判、转换、恢复、控制和阶段发布；`domain.rs` 定义可信域端口，`input.rs`、`proposal.rs`、`state.rs` 分别保存输入、提议与 IPC 数据。前端阶段链路见[架构总览](README.md#阶段机基础链路)，验收证据见 [023](../task/023-turn-state-machine-impl.md)。
 
 `tests/fixtures/record/token-estimation-v1.json` 保存匿名合成输入与离线 tokenizer 标定数据；不含玩家数据或密钥。原生窗口夹具继续放 `tests/rust/native-platform/`，不把需要私有实现访问的单测迁入此处。

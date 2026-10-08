@@ -1,11 +1,10 @@
 // coverage:rust 覆盖率门禁配置，由 scripts/coverage-rust.mts 消费。
 //
-// llvm-cov 对「同一 crate 同时作为其他测试二进制的依赖被重复插桩」做跨二进制
-// 合并时，会对内联副本与 serde derive 派生产生少量幽灵未覆盖行——`llvm-cov show`
-// 显示全覆盖而 `llvm-cov report` 计 miss，无法经测试触达（实际额度以本文件台账为准）。
-// 因此行覆盖门槛不设全局百分比，而是逐文件声明未覆盖行预算：
-// 缺省 0（所有文件默认必须 100%），确属工具伪影的文件在此登记理由与额度；
-// 真实回归会推高某文件的未覆盖数，照样拦截。
+// 缺省每文件未覆盖行 = 0。平台 / 装配排除见 ignore；逐文件预算目前为空。
+// LLVM 对函数实例组取已覆盖行数的最大值，并非各实例覆盖行的并集：
+// 不同闭包 / 泛型实例分别覆盖成功与失败时，文件 segments 看似全绿而 summary
+// 仍可能缺行。先核实 functions 并补同一实例的边界测试，不直接登记工具伪影。
+// 037 已清除原有六处预算，依据与验证见 ai-docs/task/037-rust-coverage-audit.md。
 
 export default {
   /** 不进门禁的文件名正则（对 llvm-cov 路径做子串匹配）。 */
@@ -26,14 +25,5 @@ export default {
    * 逐文件预算：键为 llvm-cov 路径的后缀（正斜杠归一后匹配），
    * 额度为该文件允许的未覆盖行绝对数。
    */
-  allowances: [
-    // 022 在 --workspace --lib 下复核：迁移无任何零计数 segment，格式只有同一
-    // 已执行行上的泛型 / ? 标点 segment；JSON summary 各多记 1 行。
-    // SQL / schema 失败、全部格式拒绝与序列化错误有直测；仅登记合并差额。
-    { file: "src-rust/mythos-engine/src/migration/mod.rs", maxUncoveredLines: 1 },
-    { file: "src-rust/mythos-engine/src/record/format/mod.rs", maxUncoveredLines: 1 },
-    // 测试收尾语句（关停夹具 / 清理临时目录）的跨二进制归并伪影（019 实测）。
-    { file: "src-rust/mythos-llm/src/proxy.rs", maxUncoveredLines: 1 },
-    { file: "src-tauri/src/llm_commands.rs", maxUncoveredLines: 1 },
-  ],
+  allowances: [] as { file: string; maxUncoveredLines: number }[],
 };

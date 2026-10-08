@@ -38,6 +38,7 @@ pub enum GuardSpecError {
     PatternTooLong { id: String, bytes: usize },
     TooManyRules { count: usize },
     DuplicateId { id: String },
+    UnknownTargetClose { pattern: String },
 }
 
 impl std::fmt::Display for GuardSpecError {
@@ -55,6 +56,7 @@ impl std::fmt::Display for GuardSpecError {
                 write!(f, "guard spec has {count} rules, limit {MAX_RULES}")
             }
             Self::DuplicateId { id } => write!(f, "duplicate guard rule id {id:?}"),
+            Self::UnknownTargetClose { pattern } => write!(f, "unknown target close {pattern:?}"),
         }
     }
 }
@@ -74,6 +76,7 @@ pub struct CompiledRule {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GuardSpec {
     rules: Vec<CompiledRule>,
+    target_close: Option<String>,
 }
 
 impl GuardSpec {
@@ -131,7 +134,31 @@ impl GuardSpec {
         }
         // 稳定排序：优先级升序，同优先级保持声明顺序。
         compiled.sort_by_key(|r| r.priority);
-        Ok(Self { rules: compiled })
+        Ok(Self {
+            rules: compiled,
+            target_close: None,
+        })
+    }
+
+    /// 结构化提议只有完整目标闭合可以按正常 guard 收尾；其他 stop 只作拦截。
+    /// 服务端只保留目标闭合，避免丢失外来标记后被误认为普通 stop。
+    /// # Errors
+    /// 目标闭合必须是已编译的 Anywhere 规则，否则拒绝。
+    pub fn with_target_close(mut self, pattern: &str) -> Result<Self, GuardSpecError> {
+        if !self
+            .rules
+            .iter()
+            .any(|rule| rule.anchor == Anchor::Anywhere && rule.pattern == pattern)
+        {
+            return Err(GuardSpecError::UnknownTargetClose {
+                pattern: pattern.into(),
+            });
+        }
+        for rule in &mut self.rules {
+            rule.server_eligible &= rule.pattern == pattern;
+        }
+        self.target_close = Some(pattern.into());
+        Ok(self)
     }
 
     #[must_use]
@@ -200,6 +227,7 @@ pub struct Guard {
     pending: String,
     /// `pending` 起始位置是否处于行首（输出起点或 LF 之后）。
     at_line_start: bool,
+    matched_stop: Option<String>,
 }
 
 impl Guard {
@@ -209,12 +237,21 @@ impl Guard {
             spec,
             pending: String::new(),
             at_line_start: true,
+            matched_stop: None,
         }
     }
 
     #[must_use]
     pub fn spec(&self) -> &GuardSpec {
         &self.spec
+    }
+
+    /// 普通正文兼容所有 guard；结构化提议拒绝外来标记和 EOF 疑似前缀。
+    pub fn permits_guard_finish(&self) -> bool {
+        self.spec
+            .target_close
+            .as_ref()
+            .is_none_or(|pattern| self.matched_stop.as_ref() == Some(pattern))
     }
 
     /// 测试观测：未交付尾部的字节数。护栏只扣留可能匹配的尾部，不缓存整行。
@@ -229,6 +266,7 @@ impl Guard {
         source.push_str(text);
         let (combined, trailing_cr) = normalize_lf(&source);
         if let Some(hit) = self.find_complete_hit(&combined) {
+            self.matched_stop = Some(self.spec.rules[hit.order].pattern.clone());
             self.pending.clear();
             let delivered = combined[..hit.start].to_owned();
             return GuardStep::Stopped { delivered };
@@ -251,6 +289,7 @@ impl Guard {
         }
         let (combined, _) = normalize_lf(&source);
         if let Some(hit) = self.find_complete_hit(&combined) {
+            self.matched_stop = Some(self.spec.rules[hit.order].pattern.clone());
             return GuardFinish {
                 tail: combined[..hit.start].to_owned(),
                 truncated: true,
@@ -913,5 +952,44 @@ mod tests {
         for e in &errors {
             assert!(!e.to_string().is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod structured_tests {
+    use super::*;
+    #[test]
+    fn structured_guards_only_accept_registered_target_close() {
+        let rules = vec![
+            GuardRule {
+                id: "close".into(),
+                pattern: "[/TARGET]".into(),
+                anchor: Anchor::Anywhere,
+                priority: 0,
+                server_eligible: true,
+            },
+            GuardRule {
+                id: "foreign".into(),
+                pattern: "[/OTHER]".into(),
+                anchor: Anchor::Anywhere,
+                priority: 1,
+                server_eligible: true,
+            },
+        ];
+        let base = GuardSpec::compile(rules).unwrap();
+        let error = base.clone().with_target_close("missing").unwrap_err();
+        assert!(error.to_string().contains("target close"));
+        let strict = base.with_target_close("[/TARGET]").unwrap();
+        assert_eq!(strict.server_stops(2), vec!["[/TARGET]"]);
+        let mut correct = Guard::new(strict.clone());
+        correct.push("{}[/TARGET]");
+        assert!(correct.permits_guard_finish());
+        let mut wrong = Guard::new(strict.clone());
+        wrong.push("{}[/OTHER]");
+        assert!(!wrong.permits_guard_finish());
+        let mut partial = Guard::new(strict);
+        partial.push("{}[/TAR");
+        assert!(partial.finish().truncated);
+        assert!(!partial.permits_guard_finish());
     }
 }
