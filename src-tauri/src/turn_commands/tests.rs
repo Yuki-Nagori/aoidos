@@ -194,7 +194,7 @@ async fn fixture_runs_to_completion_without_calling_real_transport() {
 fn malformed_input_uses_uniform_command_error_and_valid_wire_shape_is_preserved() {
     let valid = serde_json::json!({"kind":"completion","prompt":"P"});
     assert_eq!(
-        serde_json::to_value(decode_input(valid.clone()).unwrap()).unwrap(),
+        mythos_json::to_value(decode_input(valid.clone()).unwrap()).unwrap(),
         valid
     );
     for invalid in [

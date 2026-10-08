@@ -4,6 +4,22 @@
 use mythos_store::error::StoreError;
 use serde::Serialize;
 
+/// 解码完整 JSON 参数，未知字段的拒绝由各命令的 deny_unknown_fields DTO 决定。
+/// # Errors
+/// 非 JSON 或字段类型不合法返回统一 CmdError，不透传框架诊断。
+pub(crate) fn decode_request<T: serde::de::DeserializeOwned>(
+    request: &tauri::ipc::Request<'_>,
+    message: &'static str,
+) -> Result<T, CmdError> {
+    let tauri::ipc::InvokeBody::Json(value) = request.body() else {
+        return Err(CmdError::new("app.bad-request", message, None));
+    };
+    match mythos_json::decode_value(value) {
+        Ok(decoded) => Ok(decoded),
+        Err(_) => Err(CmdError::new("app.bad-request", message, None)),
+    }
+}
+
 /// 所有命令的统一错误形状。`code` 是前端分支的唯一依据；
 /// `message` 是可展示中文；`detail` 为 `None` 时不出现在序列化结果里。
 #[derive(Debug, Serialize)]
@@ -160,7 +176,7 @@ mod tests {
     #[test]
     fn cmd_error_serializes_contract_shape() {
         let with_detail: CmdError = StoreError::LockedTimeout { path: "t".into() }.into();
-        let value = serde_json::to_value(&with_detail).unwrap();
+        let value = mythos_json::to_value(&with_detail).unwrap();
         assert_eq!(value["code"], "store.locked");
         assert_eq!(value["detail"]["path"], "t");
 
@@ -171,7 +187,7 @@ mod tests {
         }
         .into();
         assert_eq!(plain.code(), "store.io");
-        let value = serde_json::to_value(&plain).unwrap();
+        let value = mythos_json::to_value(&plain).unwrap();
         assert_eq!(value["code"], "store.io");
         assert!(
             value.get("detail").is_none(),
@@ -206,7 +222,7 @@ mod tests {
         let error: CmdError =
             mythos_engine::fault::Fault::new("llm.empty-output", "生成未返回正文").into();
         assert_eq!(
-            serde_json::to_value(error).unwrap(),
+            mythos_json::to_value(error).unwrap(),
             serde_json::json!({"code":"llm.empty-output","message":"生成未返回正文"})
         );
     }

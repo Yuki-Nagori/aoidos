@@ -93,7 +93,7 @@ fn missing() -> Fault {
     Fault::new("app.not-found", "记录不存在")
 }
 fn encode<T: Serialize>(value: &T, key: &str) -> String {
-    let bytes = serde_json::to_vec(value).expect("reference contains only finite scalar values");
+    let bytes = mythos_json::to_vec(value).expect("reference contains only finite scalar values");
     let mut mac =
         <Hmac<Sha256> as Mac>::new_from_slice(key.as_bytes()).expect("HMAC accepts any key length");
     mac.update(&bytes);
@@ -124,7 +124,7 @@ fn decode<T: serde::de::DeserializeOwned>(value: &str, key: &str) -> Result<T, F
         <Hmac<Sha256> as Mac>::new_from_slice(key.as_bytes()).expect("HMAC accepts any key length");
     mac.update(&bytes);
     mac.verify_slice(&signature).map_err(invalid_mac)?;
-    serde_json::from_slice(&bytes).map_err(ref_json)
+    mythos_json::decode_bytes(&bytes, 2048).map_err(ref_json)
 }
 fn invalid_mac(_: hmac::digest::MacError) -> Fault {
     invalid()
@@ -135,7 +135,7 @@ fn ref_utf8(_: std::str::Utf8Error) -> Fault {
 fn ref_hex(_: std::num::ParseIntError) -> Fault {
     invalid()
 }
-fn ref_json(_: serde_json::Error) -> Fault {
+fn ref_json(_: mythos_json::Error) -> Fault {
     invalid()
 }
 
@@ -241,7 +241,7 @@ impl Session {
                 },
                 &self.reference_key,
             );
-            let large = serde_json::to_vec(&body).map_err(ref_json)?.len() > PAGE_BYTES / 2;
+            let large = mythos_json::to_vec(&body).map_err(ref_json)?.len() > PAGE_BYTES / 2;
             let item = RecordItem {
                 record_seq: seq,
                 kind: index.kind.clone(),
@@ -253,7 +253,7 @@ impl Session {
                 outcome,
             };
             page.items.push(item);
-            if serde_json::to_vec(&page).map_err(ref_json)?.len() > PAGE_BYTES - 4096 {
+            if mythos_json::to_vec(&page).map_err(ref_json)?.len() > PAGE_BYTES - 4096 {
                 page.items.pop();
                 if page.items.is_empty() {
                     return Err(Fault::new("store.corrupt", "单条记录摘要超过分页上限"));

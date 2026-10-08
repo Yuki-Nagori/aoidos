@@ -420,7 +420,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            serde_json::to_value(status).unwrap(),
+            mythos_json::to_value(status).unwrap(),
             serde_json::json!({"set": true, "hint": "1234"})
         );
         assert_eq!(
@@ -441,7 +441,11 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), "store.io");
-        assert!(!serde_json::to_string(&err).unwrap().contains("sk-new-1234"));
+        assert!(
+            !mythos_json::to_string(&err)
+                .unwrap()
+                .contains("sk-new-1234")
+        );
         // 非设置操作及非法标识符在调度前退出，不能弹窗或修改凭据。
         let no_dispatch = rejecting_dispatch;
         for id in ["", " ", "bad\nname", &"x".repeat(257)] {
@@ -580,7 +584,7 @@ mod tests {
             .unwrap();
         let status = key_status_with("deepseek", &keys).unwrap();
         assert_eq!(
-            serde_json::to_value(&status).unwrap(),
+            mythos_json::to_value(&status).unwrap(),
             serde_json::json!({ "set": true, "hint": "ef99" })
         );
         assert!(!key_status_with("missing", &keys).unwrap().set);
@@ -606,7 +610,7 @@ mod tests {
         // 未设置时再清：仍成功。
         let status = clear_action(&keys).unwrap();
         assert_eq!(
-            serde_json::to_value(status).unwrap(),
+            mythos_json::to_value(status).unwrap(),
             serde_json::json!({ "set": false, "hint": null })
         );
     }

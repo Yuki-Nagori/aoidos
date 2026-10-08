@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm", "src-rust/mythos-engine", "tests/rust/native-platform"]
+members = ["src-rust/mythos-json", "src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm", "src-rust/mythos-engine", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,6 +16,7 @@ tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
+mythos-json = { path = "src-rust/mythos-json" }
 mythos-store = { path = "src-rust/mythos-store" }
 mythos-llm = { path = "src-rust/mythos-llm" }
 mythos-engine = { path = "src-rust/mythos-engine" }

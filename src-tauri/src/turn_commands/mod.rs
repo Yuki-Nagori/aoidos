@@ -102,9 +102,9 @@ fn event_prepare_error(_: CmdError) -> Fault {
 pub fn decode_input(
     input: serde_json::Value,
 ) -> Result<mythos_llm::provider::ProviderInput, CmdError> {
-    serde_json::from_value(input).map_err(invalid_input)
+    mythos_json::from_value(input).map_err(invalid_input)
 }
-fn invalid_input(_: serde_json::Error) -> CmdError {
+fn invalid_input(_: mythos_json::Error) -> CmdError {
     CmdError::new("app.bad-request", "回合输入形状不合法", None)
 }
 

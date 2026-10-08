@@ -51,7 +51,7 @@ impl Preferences {
         else {
             return Ok(UiPreferences::default());
         };
-        let preferences: UiPreferences = serde_json::from_str(&text).map_err(corrupt)?;
+        let preferences: UiPreferences = mythos_json::decode(&text, 4096).map_err(corrupt)?;
         if preferences.version != 1 {
             return Err(Fault::new("store.corrupt", "偏好版本不受支持"));
         }
@@ -71,12 +71,12 @@ impl Preferences {
             panel_pinned,
             dice_mode,
         };
-        let bytes = serde_json::to_vec(&preferences).map_err(corrupt)?;
+        let bytes = mythos_json::to_vec(&preferences).map_err(corrupt)?;
         mythos_store::atomic::write_atomic(&self.path, &bytes).map_err(store_fault)?;
         Ok(preferences)
     }
 }
-fn corrupt(_: serde_json::Error) -> Fault {
+fn corrupt(_: mythos_json::Error) -> Fault {
     Fault::new("store.corrupt", "偏好文件不合法")
 }
 #[cfg(test)]

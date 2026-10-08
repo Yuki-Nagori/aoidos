@@ -206,7 +206,7 @@ impl Fact {
     /// # Errors
     /// 登记数据缺失或非法身份拒绝，不把未知版本解释为当前语义。
     pub fn decode(code: &str, data: &Value) -> mythos_store::error::Result<Self> {
-        let fact: Self = serde_json::from_value(serde_json::json!({"code":code,"data":data}))
+        let fact: Self = mythos_json::from_value(serde_json::json!({"code":code,"data":data}))
             .map_err(decode_error)?;
         if data["version"] != 1 {
             return Err(format::corrupt());
@@ -280,7 +280,7 @@ impl Fact {
         Ok(fact)
     }
 }
-fn decode_error(_: serde_json::Error) -> mythos_store::error::StoreError {
+fn decode_error(_: mythos_json::Error) -> mythos_store::error::StoreError {
     format::corrupt()
 }
 

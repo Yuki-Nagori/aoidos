@@ -69,7 +69,7 @@ ai-docs/
 | 020  | [实现：LLM 回合协调与 IPC 发送端](task/020-llm-turn-ipc-impl.md)              | **底层·LLM 链路** | 018、019、016                     | done      |
 | 021  | [实现：前端 LLM 调用与快照恢复](task/021-llm-web-recovery-impl.md)            | **底层·LLM 链路** | 020                               | done      |
 | 022  | [实现：对局记录、投影与迁移运行期协议](task/022-record-engine-impl.md)        | **底层·LLM 链路** | 006、013、020                     | done      |
-| 023  | [实现：回合阶段机与产品提交入口](task/023-turn-state-machine-impl.md)         | **底层·LLM 链路** | 012、020、022                     | **ready** |
+| 023  | [实现：回合阶段机与产品提交入口](task/023-turn-state-machine-impl.md)         | **底层·LLM 链路** | 012、020、022、036                | **ready** |
 | 024  | [实现：LLM 产品链路与故障联调](task/024-llm-engine-integration.md)            | **底层·LLM 链路** | 021、023                          | planned   |
 | 025  | [实现：舞台与对话面板](task/025-ui-shell-impl.md)                             | 界面·交互         | 004、008、024、026、034           | planned   |
 | 026  | [实现：主题偏好与剧本皮肤](task/026-theming-impl.md)                          | 界面·主题         | 004、009、013                     | planned   |
@@ -80,6 +80,7 @@ ai-docs/
 | 033  | [实现：记忆算法标定与产品验收](task/033-memory-calibration-integration.md)    | **底层·记忆**     | 007、030、031、032、027、035      | planned   |
 | 034  | [实现：界面国际化与本地化](task/034-i18n-impl.md)                             | 界面·语言         | 028、013、026                     | planned   |
 | 035  | [实现：LLM 计价与费用控制](task/035-llm-cost-control-impl.md)                 | 底层·LLM          | 027、013、018、019、020、025、034 | planned   |
+| 036  | [实现：共用 JSON 编解码与规范化](task/036-json-tools-impl.md)                 | 底层·共用工具     | 013、018、022                     | done      |
 
 实现任务可在用户明确要求时提前规划；设计未定稿、依赖未完成的任务保持 planned，不因此提前开工。018–024 承接 LLM 核心、配置、协调、前端恢复、记录持久化、阶段机与产品联调；006 / 012 已分别为 022 / 023 提供定稿输入。018–022 已完成，023 / 029 前置已满足并标 ready，其余任务按依赖推进。
 

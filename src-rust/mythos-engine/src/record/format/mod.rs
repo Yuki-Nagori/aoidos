@@ -5,7 +5,6 @@ use mythos_store::error::{Result, StoreError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const MAX_SEQ: u64 = (1 << 53) - 1;
@@ -427,70 +426,11 @@ pub fn json(line: &str) -> Result<Value> {
     if line.len() > MAX_LINE || !line.ends_with('\n') {
         return Err(corrupt());
     }
-    let mut decoder = serde_json::Deserializer::from_str(line);
-    let value = Unique::deserialize(&mut decoder).map_err(decode_error)?.0;
-    decoder.end().map_err(decode_error)?;
-    Ok(value)
+    mythos_json::parse(line, MAX_LINE).map_err(decode_error)
 }
-fn decode_error(_: serde_json::Error) -> StoreError {
+fn decode_error(_: mythos_json::Error) -> StoreError {
     corrupt()
 }
-struct Unique(Value);
-impl<'de> Deserialize<'de> for Unique {
-    fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> std::result::Result<Self, D::Error> {
-        struct Visitor;
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = Unique;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("JSON without duplicate keys")
-            }
-            fn visit_map<A: serde::de::MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> std::result::Result<Unique, A::Error> {
-                let mut fields = BTreeMap::new();
-                while let Some((key, value)) = map.next_entry::<String, Unique>()? {
-                    if fields.insert(key, value.0).is_some() {
-                        return Err(serde::de::Error::custom("duplicate key"));
-                    }
-                }
-                Ok(Unique(Value::Object(fields.into_iter().collect())))
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> std::result::Result<Unique, A::Error> {
-                let mut values = Vec::new();
-                while let Some(value) = seq.next_element::<Unique>()? {
-                    values.push(value.0);
-                }
-                Ok(Unique(Value::Array(values)))
-            }
-            fn visit_bool<E: serde::de::Error>(self, v: bool) -> std::result::Result<Unique, E> {
-                Ok(Unique(Value::Bool(v)))
-            }
-            fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<Unique, E> {
-                Ok(Unique(v.into()))
-            }
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<Unique, E> {
-                Ok(Unique(v.into()))
-            }
-            fn visit_f64<E: serde::de::Error>(self, v: f64) -> std::result::Result<Unique, E> {
-                serde_json::Number::from_f64(v)
-                    .map(|n| Unique(Value::Number(n)))
-                    .ok_or_else(|| E::custom("nonfinite"))
-            }
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<Unique, E> {
-                Ok(Unique(v.into()))
-            }
-            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Unique, E> {
-                Ok(Unique(Value::Null))
-            }
-        }
-        decoder.deserialize_any(Visitor)
-    }
-}
-
 /// # Errors
 /// 已知块的非法字段不得降级为未知；未知 kind 只读保存原行。
 pub fn parse(line: &str) -> Result<Parsed> {
@@ -545,7 +485,7 @@ pub fn parse(line: &str) -> Result<Parsed> {
         }
     }
     let body = if known {
-        let record: Record = serde_json::from_value(value).map_err(decode_error)?;
+        let record: Record = mythos_json::from_value(value).map_err(decode_error)?;
         record.validate()?;
         Some(record)
     } else {
@@ -582,7 +522,7 @@ pub fn registered_system(code: &str) -> bool {
 /// # Errors
 /// 序列化或容量不合法返回 corrupt。
 pub fn line<T: Serialize>(value: &T) -> Result<String> {
-    let mut line = serde_json::to_string(value).map_err(decode_error)?;
+    let mut line = mythos_json::to_string(value).map_err(decode_error)?;
     line.push('\n');
     if line.len() > MAX_LINE {
         return Err(corrupt());

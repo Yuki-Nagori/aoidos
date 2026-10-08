@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+mythos-json.workspace = true
 mythos-store.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true

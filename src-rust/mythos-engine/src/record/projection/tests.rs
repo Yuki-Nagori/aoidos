@@ -62,7 +62,7 @@ fn long_old_blocks_fold_complete_paragraphs_without_mutating_facts() {
     let plan = project(&view, &world, &budget, &Target::Narration, Shape::Chat).unwrap();
     assert_eq!(plan.folded_sequences(), &[2, 1]);
     assert!(
-        serde_json::to_string(&plan.input)
+        mythos_json::to_string(&plan.input)
             .unwrap()
             .contains("正文已折叠")
     );
@@ -257,7 +257,7 @@ fn all_shapes_keep_frozen_prefix_and_player_data_identity() {
             shape,
         )
         .unwrap();
-        let input = serde_json::to_string(&plan.input).unwrap();
+        let input = mythos_json::to_string(&plan.input).unwrap();
         assert!(input.contains("［MYTHOS:PLAYER id=other］我同意"));
         assert_eq!(plan.included, vec![1]);
         match plan.input {
@@ -453,8 +453,8 @@ fn plain_chat_keeps_selected_character_identity() {
     )
     .unwrap();
     assert_ne!(
-        serde_json::to_string(&a.input).unwrap(),
-        serde_json::to_string(&b.input).unwrap()
+        mythos_json::to_string(&a.input).unwrap(),
+        mythos_json::to_string(&b.input).unwrap()
     );
 }
 
@@ -648,8 +648,8 @@ fn player_modes_and_registered_dice_facts_render_without_reinterpreting_results(
         *content_range = Some(format::ContentRange { start: 0, end: 6 });
     }
     assert!(render(&input).unwrap().contains("outOfCharacter"));
-    let dice: Body=serde_json::from_value(serde_json::json!({"kind":"dice","expression":"1d6","rolls":[{"sides":6,"value":4}],"total":4,"source":{"kind":"rule","id":"r"},"planId":"p","rng":{"seed":"s","startCounter":"0","endCounter":"1","algorithm":"a","mappingVersion":1},"modifiers":[]})).unwrap();
-    let check: Body=serde_json::from_value(serde_json::json!({"kind":"check","diceSeq":1,"dc":3,"result":"success","ruleId":"r","planId":"p"})).unwrap();
+    let dice: Body=mythos_json::from_value(serde_json::json!({"kind":"dice","expression":"1d6","rolls":[{"sides":6,"value":4}],"total":4,"source":{"kind":"rule","id":"r"},"planId":"p","rng":{"seed":"s","startCounter":"0","endCounter":"1","algorithm":"a","mappingVersion":1},"modifiers":[]})).unwrap();
+    let check: Body=mythos_json::from_value(serde_json::json!({"kind":"check","diceSeq":1,"dc":3,"result":"success","ruleId":"r","planId":"p"})).unwrap();
     for body in [dice, check] {
         let mut record = input.clone();
         record.body.as_mut().unwrap().body = body;

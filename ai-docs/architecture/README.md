@@ -76,15 +76,26 @@ src-rust/（独立业务 crate：mythos-engine → mythos-llm → mythos-store�
 src-tauri
   ├─→ mythos-engine
   │     ├─→ mythos-llm
-  │     │     └─→ mythos-store
-  │     └─→ mythos-store
+  │     │     ├─→ mythos-store
+  │     │     └─→ mythos-json
+  │     ├─→ mythos-store
+  │     └─→ mythos-json
   ├─→ mythos-llm
-  └─→ mythos-store
+  ├─→ mythos-store
+  └─→ mythos-json
 ```
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。后续记录、阶段机、记忆与计费接入时，补齐实际链路并核对无环；端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
 
 前端 API 放在 `src-web/api/`，可测纯逻辑放在 `utils/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
+
+### JSON 共用能力
+
+`mythos-json` 基于 serde / serde_json，供 engine、llm 和 Tauri 单向消费，只依赖第三方序列化库。公共 API 使用 `serde_json::Value`；消费方显式依赖 serde_json，不由工具 crate 转导出其类型或宏。
+
+共用能力包括按 UTF-8 字节限制输入、递归拒绝重复键、完整值解码、类型转换、紧凑编码及显式规范化。错误只保留静态类别，区分容量、UTF-8、JSON、schema 与编码失败，不携带原文。`InvalidShape` 统一覆盖缺字段与类型错误，不匹配第三方错误字符串。
+
+领域 DTO、未知字段策略、JSONL 行规则、原始记录 hash 与 I/O 由消费模块负责。普通编码保持字段顺序，规范化只用于明确采用排序规则的摘要；已存记录按原字节保留。实现及验证见 [036](../task/036-json-tools-impl.md)。
 
 ### 前端回合消费链路
 

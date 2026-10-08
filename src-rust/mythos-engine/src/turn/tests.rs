@@ -35,7 +35,7 @@ async fn accepted_snapshot_completed_event_and_bounded_retirement() {
     let id = c.submit(completed("中文"), Arc::new(MemoryWriter)).unwrap();
     assert!(Uuid::parse_str(&id).is_ok());
     assert_eq!(
-        serde_json::to_value(c.snapshot(&id).unwrap()).unwrap(),
+        mythos_json::to_value(c.snapshot(&id).unwrap()).unwrap(),
         serde_json::json!({"turnId":id,"text":"","seq":{"chunk":0,"done":0,"failed":0}})
     );
     assert_eq!(
@@ -58,7 +58,7 @@ async fn accepted_snapshot_completed_event_and_bounded_retirement() {
     );
     assert_eq!(c.cancel(&id).await.unwrap().outcome, Outcome::Completed);
     assert_eq!(lock(&events.sent).len(), 2);
-    let done = serde_json::to_value(&lock(&events.sent)[1].1).unwrap();
+    let done = mythos_json::to_value(&lock(&events.sent)[1].1).unwrap();
     assert_eq!(done["chunkSeq"], 1);
     assert_eq!(done["finishReason"], "stop");
     let next = c.submit(completed("next"), Arc::new(MemoryWriter)).unwrap();
@@ -173,7 +173,7 @@ async fn cancellation_waits_for_started_commit_and_does_not_expose_reservation()
     assert!(snapshot.finish_reason.is_none());
     assert!(snapshot.error.is_none());
     assert_eq!(
-        serde_json::to_value(&lock(&events.sent)[1].1).unwrap(),
+        mythos_json::to_value(&lock(&events.sent)[1].1).unwrap(),
         serde_json::json!({"turnId":id,"outcome":"cancelled","chunkSeq":1})
     );
     assert!(c.acquire().is_ok());
@@ -195,7 +195,7 @@ async fn output_and_terminal_failures_confirm_discarded_sequences_without_false_
             sent.iter()
                 .all(|(_, e)| !matches!(e, TurnEvent::Done { .. }))
         );
-        let failed = serde_json::to_value(&sent.last().unwrap().1).unwrap();
+        let failed = mythos_json::to_value(&sent.last().unwrap().1).unwrap();
         assert_eq!(failed["chunkSeq"], 1);
         assert_eq!(failed["code"], s.error.unwrap().code);
         assert!(c.acquire().is_ok());
@@ -306,8 +306,11 @@ async fn empty_finish_reasons_match_failed_events_and_cancel_has_none() {
         let s = exited(&c, &id).await;
         assert_eq!(s.finish_reason, Some(finish));
         assert_eq!(s.error.unwrap().code, "llm.empty-output");
-        let event = serde_json::to_value(&lock(&events.sent)[0].1).unwrap();
-        assert_eq!(event["finishReason"], serde_json::to_value(finish).unwrap());
+        let event = mythos_json::to_value(&lock(&events.sent)[0].1).unwrap();
+        assert_eq!(
+            event["finishReason"],
+            mythos_json::to_value(finish).unwrap()
+        );
     }
 }
 
@@ -436,7 +439,11 @@ async fn error_mapping_and_budget_identity_do_not_echo_raw_inputs() {
         let id = c.submit(request, Arc::new(MemoryWriter)).unwrap();
         let s = exited(&c, &id).await;
         assert_eq!(s.outcome, Some(Outcome::Failed));
-        assert!(!serde_json::to_string(&s).unwrap().contains("secret prompt"));
+        assert!(
+            !mythos_json::to_string(&s)
+                .unwrap()
+                .contains("secret prompt")
+        );
     }
     for error in [
         RunError::Stalled,
@@ -600,17 +607,17 @@ fn input_and_policy_validation_precede_gate_and_preserve_wire_shape() {
         serde_json::json!({"kind":"completion","prompt":"P"}),
         serde_json::json!({"kind":"chat","messages":[{"role":"system","content":"S"},{"role":"user","content":"U"},{"role":"assistant","content":"A"}],"assistantPrefix":"pre"}),
     ] {
-        let decoded: ProviderInput = serde_json::from_value(input.clone()).unwrap();
-        assert_eq!(serde_json::to_value(decoded).unwrap(), input);
+        let decoded: ProviderInput = mythos_json::from_value(input.clone()).unwrap();
+        assert_eq!(mythos_json::to_value(decoded).unwrap(), input);
     }
     assert!(
-        serde_json::from_value::<ProviderInput>(
+        mythos_json::from_value::<ProviderInput>(
             serde_json::json!({"kind":"chat","messages":[{"role":"tool","content":"T"}]})
         )
         .is_err()
     );
     assert!(
-        serde_json::from_value::<ProviderInput>(
+        mythos_json::from_value::<ProviderInput>(
             serde_json::json!({"kind":"completion","prompt":"P","endpoint":"forbidden"})
         )
         .is_err()

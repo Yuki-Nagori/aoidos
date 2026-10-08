@@ -247,7 +247,7 @@ impl ProfileStore {
             version: 1,
             profiles: profiles.to_vec(),
         };
-        let text = serde_json::to_string(&file).map_err(err_profile_serialize)?;
+        let text = mythos_json::to_string(&file).map_err(err_profile_serialize)?;
         write_text_atomic(&self.path, &text)
     }
 
@@ -259,7 +259,7 @@ impl ProfileStore {
         let Some(text) = read_text_bounded(&self.path, 524_288)? else {
             return Ok(Vec::new());
         };
-        let file: ProfileFile = serde_json::from_str(&text).map_err(err_profiles_json)?;
+        let file: ProfileFile = mythos_json::decode(&text, 524_288).map_err(err_profiles_json)?;
         if file.version != 1 {
             return Err(StoreError::Corrupt("unsupported profiles version".into()));
         }
@@ -283,12 +283,12 @@ fn validate_profiles(profiles: &[LlmProfile]) -> Result<()> {
 }
 
 /// profile 集合序列化失败：字段类型受控，正常不可达（防御性映射）。
-fn err_profile_serialize(_: serde_json::Error) -> StoreError {
+fn err_profile_serialize(_: mythos_json::Error) -> StoreError {
     StoreError::Corrupt("profile serialization failed".into())
 }
 
 /// profiles.json 不是合法 JSON（外部篡改或损坏）。
-fn err_profiles_json(_: serde_json::Error) -> StoreError {
+fn err_profiles_json(_: mythos_json::Error) -> StoreError {
     StoreError::Corrupt("profiles file is not valid json".into())
 }
 
@@ -393,9 +393,14 @@ mod tests {
     #[test]
     fn defensive_json_mappers_map_to_corrupt() {
         // 防御性映射正常不可达（受控类型不会序列化失败），按映射器直测约定覆盖。
-        let json_error = || serde_json::from_str::<()>("garbage").unwrap_err();
-        assert_eq!(err_profiles_json(json_error()).code(), "corrupt");
-        assert_eq!(err_profile_serialize(json_error()).code(), "corrupt");
+        assert_eq!(
+            err_profiles_json(mythos_json::Error::InvalidJson).code(),
+            "corrupt"
+        );
+        assert_eq!(
+            err_profile_serialize(mythos_json::Error::InvalidEncoding).code(),
+            "corrupt"
+        );
     }
 
     #[test]
@@ -516,7 +521,7 @@ mod tests {
     #[test]
     fn serialized_profile_contains_no_secrets() {
         let profile = deepseek_profile();
-        let json = serde_json::to_string(&profile).unwrap();
+        let json = mythos_json::to_string(&profile).unwrap();
         // 配置文件形状里只有代理引用名，没有任何密钥字段。
         assert!(!json.contains("apiKey") && !json.contains("secret"));
     }
@@ -538,22 +543,22 @@ mod tests {
     fn proxy_config_serialization_is_tagged_enum() {
         let system = ProxyConfig::System;
         assert_eq!(
-            serde_json::to_string(&system).unwrap(),
+            mythos_json::to_string(&system).unwrap(),
             r#"{"mode":"system"}"#
         );
         let none = ProxyConfig::None;
-        assert_eq!(serde_json::to_string(&none).unwrap(), r#"{"mode":"none"}"#);
+        assert_eq!(mythos_json::to_string(&none).unwrap(), r#"{"mode":"none"}"#);
         let manual = ProxyConfig::Manual {
             url: "http://p:1".into(),
             auth_ref: None,
         };
         assert_eq!(
-            serde_json::to_string(&manual).unwrap(),
+            mythos_json::to_string(&manual).unwrap(),
             r#"{"mode":"manual","url":"http://p:1"}"#
         );
         // 回读保持同形态。
         let back: ProxyConfig =
-            serde_json::from_str(&serde_json::to_string(&manual).unwrap()).unwrap();
+            serde_json::from_str(&mythos_json::to_string(&manual).unwrap()).unwrap();
         assert_eq!(back, manual);
     }
 

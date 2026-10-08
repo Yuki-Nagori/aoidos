@@ -168,7 +168,7 @@ impl Session {
         mythos_store::journal::scan(&path, MAX_LINE, &mut |offset, line| {
             if offset == 0 {
                 let parsed: Header =
-                    serde_json::from_value(format::json(line)?).map_err(decode_error)?;
+                    mythos_json::from_value(format::json(line)?).map_err(decode_error)?;
                 parsed.validate()?;
                 header = Some(parsed);
                 return Ok(());
@@ -664,12 +664,12 @@ impl Session {
         mythos_store::journal::scan(path, 64 * 1024, &mut |offset, line| {
             if offset == 0 {
                 meta = Some(
-                    serde_json::from_value::<PartialMeta>(format::json(line)?)
+                    mythos_json::from_value::<PartialMeta>(format::json(line)?)
                         .map_err(decode_error)?,
                 );
                 return Ok(());
             }
-            let part: Part = serde_json::from_value(format::json(line)?).map_err(decode_error)?;
+            let part: Part = mythos_json::from_value(format::json(line)?).map_err(decode_error)?;
             if part.part_seq != part_seq + 1
                 || part.chunk_seq <= chunk_seq
                 || part.chunk_seq > MAX_SEQ
@@ -852,7 +852,7 @@ fn entry(offset: u64, parsed: &Parsed) -> Entry {
         branch_seq: parsed.body.as_ref().and_then(|r| r.branch_seq),
     }
 }
-fn decode_error(_: serde_json::Error) -> mythos_store::error::StoreError {
+fn decode_error(_: mythos_json::Error) -> mythos_store::error::StoreError {
     format::corrupt()
 }
 fn recovery_store_error(error: Fault) -> mythos_store::error::StoreError {

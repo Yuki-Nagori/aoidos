@@ -1,0 +1,9 @@
+[package]
+name = "mythos-json"
+description = "基于 serde_json 的有界 JSON 编解码与规范化"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

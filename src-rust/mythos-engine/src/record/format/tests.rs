@@ -119,22 +119,6 @@ fn registered_dice_check_and_terminal_schema_reject_corrupt_known_fields() {
 
 #[test]
 fn header_common_fields_system_and_recap_limits_are_strict() {
-    assert!(
-        Unique::deserialize(serde::de::value::F64Deserializer::<serde::de::value::Error>::new(1.5))
-            .is_ok()
-    );
-    assert!(
-        Unique::deserialize(
-            serde::de::value::F64Deserializer::<serde::de::value::Error>::new(f64::NAN)
-        )
-        .is_err()
-    );
-    assert!(
-        Unique::deserialize(serde::de::value::F64Deserializer::<serde_json::Error>::new(
-            1.5
-        ))
-        .is_ok()
-    );
     let mut header = crate::record::test_support::header();
     header.static_prefix_hash = hash(b"wrong");
     assert!(header.validate().is_err());
@@ -168,18 +152,4 @@ fn header_common_fields_system_and_recap_limits_are_strict() {
     };
     assert!(recap.validate().is_err());
     assert!(line(&"x".repeat(MAX_LINE)).is_err());
-    let decoder = serde::de::value::BytesDeserializer::<serde::de::value::Error>::new(b"binary");
-    assert!(
-        Unique::deserialize(decoder)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("JSON without duplicate keys")
-    );
-    assert!(
-        Unique::deserialize(serde::de::value::F64Deserializer::<serde_json::Error>::new(
-            f64::NAN
-        ))
-        .is_err()
-    );
 }

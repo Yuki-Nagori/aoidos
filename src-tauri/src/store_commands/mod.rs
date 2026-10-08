@@ -56,10 +56,7 @@ struct SetPreferences {
 fn decode<T: serde::de::DeserializeOwned>(
     request: &tauri::ipc::Request<'_>,
 ) -> Result<T, CmdError> {
-    let tauri::ipc::InvokeBody::Json(value) = request.body() else {
-        return Err(invalid_args());
-    };
-    serde::Deserialize::deserialize(value).map_err(decode_args)
+    crate::ipc::decode_request(request, "存储参数不合法")
 }
 /// 解码完整请求体，拒绝额外可写字段；保存成功才确认偏好。
 /// # Errors
@@ -72,12 +69,6 @@ pub async fn store_set_ui_preferences(
     state.ready()?;
     let preferences = state.storage.preferences.clone();
     storage_job(move || preferences.set(params.panel_pinned, params.dice_mode)).await
-}
-fn invalid_args() -> CmdError {
-    CmdError::new("app.bad-request", "存储参数不合法", None)
-}
-fn decode_args(_: serde_json::Error) -> CmdError {
-    invalid_args()
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -149,12 +149,12 @@ fn keyring_error(error: keyring::Error) -> StoreError {
 }
 
 /// credentials.json 不是合法 JSON（外部篡改或损坏）。
-fn err_credentials_json(_: serde_json::Error) -> StoreError {
+fn err_credentials_json(_: mythos_json::Error) -> StoreError {
     StoreError::Corrupt("credentials file is not valid json".into())
 }
 
 /// 凭据条目序列化失败：BTreeMap<String, String> 受控，正常不可达（防御性映射）。
-fn err_credentials_serialize(_: serde_json::Error) -> StoreError {
+fn err_credentials_serialize(_: mythos_json::Error) -> StoreError {
     StoreError::Corrupt("credentials serialization failed".into())
 }
 
@@ -178,7 +178,7 @@ impl CredentialFile {
             return Ok(CredentialData::default());
         };
         let decoded: CredentialEncoding =
-            serde_json::from_str(&text).map_err(err_credentials_json)?;
+            mythos_json::decode(&text, 524_288).map_err(err_credentials_json)?;
         match decoded {
             CredentialEncoding::Current(data) if data.version == 2 => Ok(data),
             CredentialEncoding::Current(_) => Err(StoreError::Corrupt(
@@ -195,7 +195,7 @@ impl CredentialFile {
     }
 
     fn write_data(&self, data: &CredentialData) -> Result<()> {
-        let text = serde_json::to_string(data).map_err(err_credentials_serialize)?;
+        let text = mythos_json::to_string(data).map_err(err_credentials_serialize)?;
         if text.len() > 524_288 {
             return Err(StoreError::Corrupt("credentials file too large".into()));
         }
@@ -590,10 +590,10 @@ mod tests {
                 hint: Some("5678".into())
             }
         );
-        let json = serde_json::to_value(&status).unwrap();
+        let json = mythos_json::to_value(&status).unwrap();
         assert_eq!(json, serde_json::json!({ "set": true, "hint": "5678" }));
         let missing = store.status("none").unwrap();
-        let json = serde_json::to_value(&missing).unwrap();
+        let json = mythos_json::to_value(&missing).unwrap();
         assert_eq!(json, serde_json::json!({ "set": false, "hint": null }));
     }
 
@@ -850,7 +850,7 @@ mod tests {
             set: true,
             hint: Some("7890".into()),
         };
-        let serialized = serde_json::to_string(&status).unwrap();
+        let serialized = mythos_json::to_string(&status).unwrap();
         assert!(!serialized.contains("sk-plaintext-marker"));
     }
 
@@ -866,8 +866,13 @@ mod tests {
     #[test]
     fn defensive_json_mappers_map_to_corrupt() {
         // 防御性映射正常不可达（受控类型不会序列化失败），按映射器直测约定覆盖。
-        let json_error = || serde_json::from_str::<()>("garbage").unwrap_err();
-        assert_eq!(err_credentials_json(json_error()).code(), "corrupt");
-        assert_eq!(err_credentials_serialize(json_error()).code(), "corrupt");
+        assert_eq!(
+            err_credentials_json(mythos_json::Error::InvalidJson).code(),
+            "corrupt"
+        );
+        assert_eq!(
+            err_credentials_serialize(mythos_json::Error::InvalidEncoding).code(),
+            "corrupt"
+        );
     }
 }

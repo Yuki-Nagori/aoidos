@@ -95,11 +95,13 @@ impl Provider for DeepSeek {
             let prefix_mode = matches!(&request.input, crate::provider::ProviderInput::Chat(chat) if chat.assistant_prefix.is_some());
             let url = self.endpoint(prefix_mode, request.mode());
             let body = build_body(&request);
+            let body = mythos_json::to_vec(&body).map_err(err_chunk_json)?;
             let response = self
                 .client
                 .post(url)
                 .bearer_auth(self.key.expose_secret())
-                .json(&body)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body)
                 .send()
                 .await
                 .map_err(err_send)?;
@@ -123,8 +125,8 @@ fn err_send(error: reqwest::Error) -> ProviderError {
     ProviderError::from_reqwest(&error, crate::error::RequestPhase::Send)
 }
 
-/// data 载荷不是合法 JSON：协议损坏按 bad-response，不重试。
-fn err_chunk_json(_: serde_json::Error) -> ProviderError {
+/// 请求编码或 data 解码不合法：按 bad-response 拒绝，不重试。
+fn err_chunk_json(_: mythos_json::Error) -> ProviderError {
     ProviderError::BadResponse {
         reason: "json",
         status: None,
@@ -249,7 +251,8 @@ where
             self.done_marker = true;
             return Ok(());
         }
-        let chunk: StreamChunk = serde_json::from_str(data).map_err(err_chunk_json)?;
+        let chunk: StreamChunk =
+            mythos_json::decode(data, crate::sse::MAX_EVENT_BYTES).map_err(err_chunk_json)?;
         if let Some(StreamUsage {
             prompt_tokens: Some(prompt_tokens),
             completion_tokens: Some(completion_tokens),

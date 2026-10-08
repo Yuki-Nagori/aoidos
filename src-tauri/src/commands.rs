@@ -112,7 +112,7 @@ mod tests {
         let db_path = dir.join("storage.sqlite");
         init_db_path(db_path.clone());
 
-        let empty = serde_json::to_value(store_list_backups().unwrap()).unwrap();
+        let empty = mythos_json::to_value(store_list_backups().unwrap()).unwrap();
         assert_eq!(empty["items"].as_array().unwrap().len(), 0);
         let migrations = ["CREATE TABLE heroes(id INTEGER PRIMARY KEY);"];
         let conn = db::open(&db_path, &migrations).unwrap();
@@ -122,7 +122,7 @@ mod tests {
         std::fs::write(backups.join("storage-v1-100.sqlite"), b"a").unwrap();
         std::fs::write(backups.join("storage-v1-200.sqlite"), b"bb").unwrap();
 
-        let listed = serde_json::to_value(store_list_backups().unwrap()).unwrap();
+        let listed = mythos_json::to_value(store_list_backups().unwrap()).unwrap();
         let items = listed["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["size"], 2);
@@ -131,7 +131,7 @@ mod tests {
         // 重复注入忽略：备份查询仍使用最初的业务库路径。
         init_db_path(dir.join("other.sqlite"));
         assert_eq!(
-            serde_json::to_value(store_list_backups().unwrap()).unwrap()["items"]
+            mythos_json::to_value(store_list_backups().unwrap()).unwrap()["items"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -154,7 +154,7 @@ mod tests {
             .unwrap();
         }
         let value =
-            serde_json::to_value(list_backups_payload(&dir.join("storage.sqlite")).unwrap())
+            mythos_json::to_value(list_backups_payload(&dir.join("storage.sqlite")).unwrap())
                 .unwrap();
         let items = value["items"].as_array().unwrap();
         assert_eq!(items.len(), 50);

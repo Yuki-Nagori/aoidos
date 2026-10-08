@@ -2444,6 +2444,7 @@ name = "mythos"
 version = "0.1.0"
 dependencies = [
  "mythos-engine",
+ "mythos-json",
  "mythos-llm",
  "mythos-store",
  "rusqlite",
@@ -2461,6 +2462,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "hmac 0.12.1",
+ "mythos-json",
  "mythos-llm",
  "mythos-store",
  "rusqlite",
@@ -2474,6 +2476,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mythos-json"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mythos-llm"
 version = "0.1.0"
 dependencies = [
@@ -2483,6 +2493,7 @@ dependencies = [
  "gtk",
  "keyring",
  "keyring-core",
+ "mythos-json",
  "mythos-store",
  "objc2",
  "objc2-app-kit",
