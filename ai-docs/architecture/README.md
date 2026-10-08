@@ -15,7 +15,7 @@ Mythos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 记录与上下文 | [记录引擎](record-engine.md)           | 块语法、流式持久化、投影预算、恢复与迁移；022 已实现并验收       |
 | 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；产品规则确认，工程协议 v1 已评审 |
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定   |
-| 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；已评审，待实现   |
+| 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 实施中       |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；已评审，待实现             |
 | 国际化       | [界面国际化](i18n.md)                  | 语言、单源资源、首窗与原生文案、精确格式化；已评审，待实现       |
 | 主题与皮肤   | [主题架构](theming.md)                 | token 目录、偏好防闪、CSS 子集与失败回退；已评审，待实现         |
@@ -24,11 +24,9 @@ Mythos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 ## 工程现状
 
-已实现的 Rust 基础包括存储基建 `mythos-store`、LLM 适配 / 护栏 / 调度 `mythos-llm`、回合协调 `mythos-engine`，以及薄命令、统一错误与事件适配。前端已同步 store / LLM / records API 类型和薄调用，界面仍使用 greet 示例验证 IPC 往返；回合发送端和前端消费者的真实窗口验证使用独立本地夹具，产品界面尚未接入。
+存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。当前窗口仍使用 greet 示例，真实调用链通过独立原生夹具验证；验收证据见[任务索引](../task-index.md)。
 
-LLM、记录引擎和阶段机设计均已定稿；018 已交付 `mythos-llm` crate（本地夹具验证），019 已落地配置 / 凭据 / 三平台原生输入与代理，真实平台验收已通过，验证证据与最终复验状态见 [019](../task/019-llm-profile-credentials-impl.md)；020 已接入共享回合协调、内存快照与薄 IPC，本地夹具不发送收费请求；验收状态见 [020](../task/020-llm-turn-ipc-impl.md)，021 已接入订阅、有界缓存及快照恢复，验收状态见 [021](../task/021-llm-web-recovery-impl.md)；022 已接入持久化、投影与迁移，已通过最终验收；产品接线由 023 / 024 承接。007 记忆系统已整理确定规则，世界事实 / 角色记忆权限、认知冲突、同 session 段收束、模糊轮回刻痕、回合计时与条件推进已确认；工程协议 v1 已评审，算法参数待实测标定；[记忆算法与标定](memory-algorithms.md)独立维护候选与实验计划，尚未进行标定实验。
-
-008 界面设计已定稿，025 在样式底座与产品链路完成后实施舞台容器、对话面板和输入交互。009 主题设计已定稿，004 接默认样式与映射，026 接持久主题、皮肤校验与首窗初始化。真实事件发送与内存回合快照已由 020 接入；021 已接入前端恢复；022 已实现持久记录、投影、分页与迁移运行期，已通过最终验收，业务界面按后续任务接入。主题文档区分现有能力、设计方案与待验证项，具体进度以任务索引为准。
+记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。记忆工程协议已评审，[算法与标定](memory-algorithms.md)仍待实测；设计定稿不等于产品能力已上线。
 
 ## 设计与实施对应
 
@@ -124,6 +122,23 @@ useRecordView / useMigration / useLlmTurn → listener-group（逐项持有资�
 ```
 
 记录事实、估算与压缩属于 engine；存储原语属于 store，供应商 / 传输仍属于 llm。生产依赖保持单向，测试夹具不进入生产链路；023 接领域决策，024 接最小产品联调，025 接完整界面。
+
+### 阶段机基础链路
+
+```text
+game::runtime（有界 actor / 控制队列）→ game::execution（共享 lease / 副作用提交）
+  → game::input / proposal / reducer（纯转换与 effect 身份）
+game::catalog → ConfirmedWorldView（确认世界及有效记录依据）
+game::dice → CheckPlan / Dice / Check（冻结规则与确定性采样）
+record::Session → game::recovery / control（事实投影、恢复锚点与合法回退边界）
+game::publication → PhaseSnapshot / PhaseEvents（原子确认与投递分离）
+
+useEnginePhase → api/engine + listener-group
+  → phase-recovery（有界缓存、单在飞快照与恢复代次）
+    → phase-consumer（独立事件基线与跨流修订）
+```
+
+`game::domain` 定义可信世界解释器、冻结请求构造器和只读 completed 通知的内部端口，不引用 Tauri，也不虚构世界属性。实现与验证状态见 [023](../task/023-turn-state-machine-impl.md)，生产 crate 依赖保持单向。
 
 ## 文档职责
 

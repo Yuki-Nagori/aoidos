@@ -4,7 +4,7 @@ use super::format::{self, InputMode, Modifier};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DiceMode {
     Manual,
@@ -27,14 +27,14 @@ pub enum GenerationTarget {
     Narration,
     CharacterSpeech { speaker_id: String },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultPolicy {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dc: Option<f64>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckPlan {
     pub plan_id: String,
@@ -63,13 +63,13 @@ pub struct MutationData {
     pub kind: String,
     pub payload: Value,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScenePosition {
     pub scene_id: String,
     pub path: Vec<SceneNode>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneNode {
     pub kind: String,
     pub id: String,
@@ -91,7 +91,7 @@ pub enum SkipReason {
     NoCheck,
     OutOfCharacter,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ForkMode {
     Rewind,
@@ -203,6 +203,19 @@ pub enum Fact {
     },
 }
 impl Fact {
+    /// 统一生成已登记 system 块；消息只用于展示 / 上下文，因果执行始终读取 data。
+    /// # Errors
+    /// 序列化失败返回 corrupt；版本与字段引用继续由 Session 追加边界核验。
+    pub fn body(&self, message: &str) -> mythos_store::error::Result<format::Body> {
+        let value = mythos_json::to_value(self).map_err(decode_error)?;
+        Ok(format::Body::System {
+            code: value["code"].as_str().ok_or_else(format::corrupt)?.into(),
+            message: message.into(),
+            related_seq: None,
+            turn_id: None,
+            data: value["data"].clone(),
+        })
+    }
     /// # Errors
     /// 登记数据缺失或非法身份拒绝，不把未知版本解释为当前语义。
     pub fn decode(code: &str, data: &Value) -> mythos_store::error::Result<Self> {

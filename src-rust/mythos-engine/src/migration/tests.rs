@@ -179,3 +179,59 @@ fn ports_without_async_diagnostics_keep_the_default_snapshot_contract() {
     assert!(flow.snapshot().delivery_error.is_none());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn verified_open_keeps_all_failure_stages_and_retry_in_one_validator_contract() {
+    let root = std::env::temp_dir().join(format!("mythos-verified-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let events = Arc::new(Events {
+        seq: AtomicU64::new(0),
+        fail: false,
+        invalid_seq: false,
+        regress: std::sync::atomic::AtomicBool::new(false),
+        retired: Mutex::new(Vec::new()),
+    });
+    let flow = Migration::new(events.clone());
+    let bad = root.join("bad.sqlite");
+    std::fs::write(&bad, b"not sqlite").unwrap();
+    let good = root.join("good.sqlite");
+    for (path, sql, reject, expected) in [
+        (
+            &bad,
+            "CREATE TABLE test(id INTEGER);",
+            false,
+            Some("store.corrupt"),
+        ),
+        (&good, "INVALID SQL;", false, Some("store.migration")),
+        (
+            &good,
+            "CREATE TABLE test(id INTEGER);",
+            true,
+            Some("store.corrupt"),
+        ),
+        (&good, "CREATE TABLE test(id INTEGER);", false, None),
+    ] {
+        let result = flow.open_verified(path, &[sql], |connection| {
+            let count: i64 = connection
+                .query_row("SELECT count(*) FROM test", [], |row| row.get(0))
+                .map_err(db::sqlite_error)?;
+            assert_eq!(count, 0);
+            if reject {
+                Err(StoreError::Corrupt("schema rejected".into()))
+            } else {
+                Ok(())
+            }
+        });
+        if let Some(code) = expected {
+            assert_eq!(result.unwrap_err().code, code);
+            assert_eq!(flow.snapshot().phase, Phase::Failed);
+            assert_eq!(flow.snapshot().seq.done, 0);
+        } else {
+            drop(result.unwrap());
+            assert_eq!(flow.snapshot().phase, Phase::Completed);
+            assert!(flow.snapshot().seq.done > 0);
+        }
+    }
+    assert_eq!(events.retired.lock().unwrap().len(), 3);
+    std::fs::remove_dir_all(root).unwrap();
+}

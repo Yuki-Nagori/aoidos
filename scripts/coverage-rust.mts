@@ -1,5 +1,5 @@
 // coverage:rust 门禁执行器：跑 llvm-cov（JSON 导出），按根目录
-// coverage-rust.config.mts 的逐文件预算裁决。门槛设计与工具伪影背景见该配置。
+// coverage-rust.config.mts 的逐文件预算裁决。门槛设计与函数实例统计注意事项见该配置。
 import { exit } from "node:process";
 import config from "../coverage-rust.config.mts";
 

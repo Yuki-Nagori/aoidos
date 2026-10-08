@@ -15,9 +15,20 @@ pub struct PreparedGeneration {
     pub(crate) policy: RunPolicy,
     pub(crate) budget: Arc<dyn BudgetPort>,
     calibration_base: Option<Arc<dyn BudgetPort>>,
+    pub(crate) private_limit: usize,
 }
 
 impl PreparedGeneration {
+    /// 按内部目标收紧收集器容量；提议使用 8 KiB，正文 / recap 保持既有上限。
+    /// # Errors
+    /// 空上限或超出全局正文硬上限拒绝。
+    pub fn with_private_limit(mut self, bytes: usize) -> Result<Self, Fault> {
+        if bytes == 0 || bytes > crate::turn::MAX_TEXT_BYTES {
+            return Err(Fault::bad_request());
+        }
+        self.private_limit = bytes;
+        Ok(self)
+    }
     /// 绑定冻结输入的估计；每次物理请求保留原预算预留 / 结算行为。
     /// 自动请求在连续低估后暂停，手动请求仍由原预算裁决。
     pub fn with_calibration(
@@ -210,6 +221,7 @@ impl PreparedGeneration {
             policy,
             budget,
             calibration_base: None,
+            private_limit: crate::turn::MAX_TEXT_BYTES,
         })
     }
 }

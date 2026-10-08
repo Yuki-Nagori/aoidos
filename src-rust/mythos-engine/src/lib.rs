@@ -2,6 +2,7 @@
 
 pub mod blocking;
 pub mod fault;
+pub mod game;
 pub mod ports;
 pub mod record;
 pub mod request;

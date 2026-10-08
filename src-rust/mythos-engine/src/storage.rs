@@ -57,17 +57,24 @@ impl Storage {
     /// # Errors
     /// 初始化 / 迁移失败的业务服务返回 not-ready；诊断查询不经过此门禁。
     pub fn ready(&self) -> Result<(), Fault> {
-        if self
+        self.with_database(|_| Ok(()))
+    }
+    /// 登记解释器借用唯一连接；领域条件、投影与 applied 标记在回调内同事务提交。
+    /// 回调不递归获取本存储锁；阻塞调用由引擎 blocking 边界调度，不在持锁期间 await。
+    /// # Errors
+    /// 未开放 / 已关闭为 not-ready；原领域错误原样返回，不另建连接或迁移生命周期。
+    pub fn with_database<T>(
+        &self,
+        job: impl FnOnce(&mut rusqlite::Connection) -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let mut database = self
             .database
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_none()
-        {
-            return Err(Fault::new(
-                "app.not-ready",
-                "业务存储未开放，请查看迁移诊断",
-            ));
-        }
-        Ok(())
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let connection = database.as_mut().ok_or_else(not_ready)?;
+        job(connection)
     }
+}
+fn not_ready() -> Fault {
+    Fault::new("app.not-ready", "业务存储未开放，请查看迁移诊断")
 }

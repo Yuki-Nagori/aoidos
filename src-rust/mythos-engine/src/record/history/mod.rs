@@ -15,6 +15,17 @@ pub trait HistoryPort {
     /// # Errors
     /// 缺解释器 / 非法目标 / pending 世界意图拒绝。
     fn verify_target(&self, session: &Session, target: u64) -> Result<(), Fault>;
+    /// 已耐久控制恢复时按其父路径核验；不能把当前 needsRecovery 当成新控制授权。
+    /// # Errors
+    /// 未登记的恢复解释器或非法父路径 / 边界拒绝；旧实现保持原核验策略。
+    fn verify_replay_target(
+        &self,
+        session: &Session,
+        _parent: u64,
+        target: u64,
+    ) -> Result<(), Fault> {
+        self.verify_target(session, target)
+    }
     fn applied(&self, operation: &str, hash: &str) -> Result<bool, Fault>;
     /// 重建当前状态与 applied 控制标记必须同 SQLite 事务。
     /// # Errors
@@ -181,7 +192,7 @@ impl Session {
                 .collect::<Vec<_>>();
             let content_hash = self.index[&seq].hash.clone();
             if !port.applied(&operation_id, &content_hash)? {
-                port.verify_target(self, target_seq)?;
+                port.verify_replay_target(self, parent_control_seq, target_seq)?;
                 port.rebuild(self, &path, &operation_id, &content_hash)?;
             }
             active = seq;

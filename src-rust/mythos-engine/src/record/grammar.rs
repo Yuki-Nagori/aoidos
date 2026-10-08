@@ -3,6 +3,50 @@
 use super::session::Target;
 use mythos_llm::guard::{Anchor, GuardRule, GuardSpec};
 
+/// 请求目标包含内部提议；提议不成为正式记录 kind。
+#[derive(Debug, Clone)]
+pub enum PromptTarget {
+    Narration,
+    Character(String),
+    CheckProposal,
+    SceneProposal,
+}
+impl From<&Target> for PromptTarget {
+    fn from(target: &Target) -> Self {
+        match target {
+            Target::Narration => Self::Narration,
+            Target::Character(id) => Self::Character(id.clone()),
+        }
+    }
+}
+impl PromptTarget {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Narration => "narration",
+            Self::Character(_) => "characterSpeech",
+            Self::CheckProposal => "check-proposal",
+            Self::SceneProposal => "scene-proposal",
+        }
+    }
+    pub fn speaker(&self) -> Option<&str> {
+        match self {
+            Self::Character(id) => Some(id),
+            _ => None,
+        }
+    }
+    pub fn proposal(&self) -> bool {
+        matches!(self, Self::CheckProposal | Self::SceneProposal)
+    }
+    pub fn close(&self) -> &'static str {
+        match self {
+            Self::Narration => "[/MYTHOS:NARRATION]",
+            Self::Character(_) => "[/MYTHOS:CHARACTER]",
+            Self::CheckProposal => "[/MYTHOS:CHECK-PROPOSAL]",
+            Self::SceneProposal => "[/MYTHOS:SCENE-PROPOSAL]",
+        }
+    }
+}
+
 /// 仅替换投影副本中的括号，并统一 LF；磁盘正文和导出保持原样。
 pub fn data(text: &str) -> String {
     text.replace("\r\n", "\n")
@@ -12,25 +56,49 @@ pub fn data(text: &str) -> String {
 }
 /// 目标身份只能来自可信登记，字符角色闭合标记不带自由名称。
 pub fn open(target: &Target) -> String {
+    open_request(&PromptTarget::from(target))
+}
+/// 内部目标与正文共用结构字符串来源，不接受任意标记名。
+pub fn open_request(target: &PromptTarget) -> String {
     match target {
-        Target::Narration => "[MYTHOS:NARRATION]\n".into(),
-        Target::Character(id) => format!("[MYTHOS:CHARACTER id={id}]\n"),
+        PromptTarget::Narration => "[MYTHOS:NARRATION]\n".into(),
+        PromptTarget::Character(id) => format!("[MYTHOS:CHARACTER id={id}]\n"),
+        PromptTarget::CheckProposal => "[MYTHOS:CHECK-PROPOSAL]\n".into(),
+        PromptTarget::SceneProposal => "[MYTHOS:SCENE-PROPOSAL]\n".into(),
     }
 }
-/// v1 的目标 kind 绑定版本化 GuardSpec 身份。
+/// v1 的目标绑定版本化 GuardSpec 身份。
 pub fn guard_id(target: &Target) -> String {
+    guard_request_id(&PromptTarget::from(target))
+}
+pub fn guard_request_id(target: &PromptTarget) -> String {
     format!("grammar-v1-{}", target.kind())
 }
-/// 从同一标记集生成护栏，声明的规则均为静态且在 005 上限内。
+/// 正文与提议从同一标记集生成护栏；提议只接受完整目标 close。
 pub fn guard(target: &Target) -> GuardSpec {
-    let (close, other) = match target {
-        Target::Narration => ("[/MYTHOS:NARRATION]", "[/MYTHOS:CHARACTER]"),
-        Target::Character(_) => ("[/MYTHOS:CHARACTER]", "[/MYTHOS:NARRATION]"),
-    };
-    let mut rules = vec![
-        rule("close", close, Anchor::Anywhere, 0, true),
-        rule("foreign-close", other, Anchor::Anywhere, 1, true),
-    ];
+    guard_request(&PromptTarget::from(target))
+}
+pub fn guard_request(target: &PromptTarget) -> GuardSpec {
+    let mut rules = vec![rule("close", target.close(), Anchor::Anywhere, 0, true)];
+    for (index, close) in [
+        "[/MYTHOS:NARRATION]",
+        "[/MYTHOS:CHARACTER]",
+        "[/MYTHOS:CHECK-PROPOSAL]",
+        "[/MYTHOS:SCENE-PROPOSAL]",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if close != target.close() && (target.proposal() || !close.contains("PROPOSAL")) {
+            rules.push(rule(
+                &format!("foreign-{index}"),
+                close,
+                Anchor::Anywhere,
+                1,
+                !target.proposal(),
+            ));
+        }
+    }
     for (name, pattern, priority) in [
         ("player", "[MYTHOS:PLAYER", 2),
         ("outer", "[MYTHOS:", 3),
@@ -52,8 +120,16 @@ pub fn guard(target: &Target) -> GuardSpec {
             ));
         }
     }
-    GuardSpec::compile(rules).expect("v1 grammar has unique bounded fixed rules")
+    let guard = GuardSpec::compile(rules).expect("v1 grammar has bounded unique fixed rules");
+    if target.proposal() {
+        guard
+            .with_target_close(target.close())
+            .expect("target close is registered")
+    } else {
+        guard
+    }
 }
+
 fn rule(
     id: &str,
     pattern: &str,
@@ -94,5 +170,31 @@ mod tests {
             );
         }
         assert_eq!(data("[x]\r\n甲\r乙"), "［x］\n甲\n乙");
+    }
+    #[test]
+    fn proposal_markers_are_internal_targets_and_only_their_own_close_is_successful() {
+        for target in [PromptTarget::CheckProposal, PromptTarget::SceneProposal] {
+            assert!(target.proposal());
+            assert!(target.speaker().is_none());
+            assert!(guard_request_id(&target).ends_with(target.kind()));
+            assert!(open_request(&target).contains("PROPOSAL"));
+            assert_eq!(
+                guard_request(&target).server_stops(16),
+                vec![target.close().to_owned()]
+            );
+            let mut valid = Guard::new(guard_request(&target));
+            assert!(matches!(
+                valid.push(&format!("{{}}{}", target.close())),
+                GuardStep::Stopped { .. }
+            ));
+            assert!(valid.permits_guard_finish());
+            let mut foreign = Guard::new(guard_request(&target));
+            assert!(matches!(
+                foreign.push("{}[/MYTHOS:NARRATION]"),
+                GuardStep::Stopped { .. }
+            ));
+            assert!(!foreign.permits_guard_finish());
+        }
+        assert_eq!(guard(&Target::Narration).rules().len(), 17);
     }
 }

@@ -227,6 +227,10 @@ impl Session {
     pub fn history_revision(&self) -> u64 {
         self.history_revision
     }
+    /// 单写者内预备关联状态时使用；调用方必须持有会话锁直到追加完成。
+    pub(crate) fn next_sequence(&self) -> u64 {
+        self.next_seq
+    }
     pub fn needs_recovery(&self) -> bool {
         self.needs_recovery || self.pending_world || self.pending_history || self.read_only
     }
@@ -634,7 +638,7 @@ impl Session {
         active.chunk_seq = chunk_seq;
         Ok(())
     }
-    fn seal(
+    pub(crate) fn seal(
         &mut self,
         turn: &str,
         target: &Target,

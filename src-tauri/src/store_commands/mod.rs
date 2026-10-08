@@ -15,14 +15,14 @@ use mythos_engine::{
 use std::{path::Path, sync::Arc};
 
 pub struct StorageService {
-    pub storage: Storage,
+    pub storage: Arc<Storage>,
     pub events: Arc<StorageEvents>,
 }
 impl StorageService {
     /// 实例锁由 setup 唯一持有；初始化失败仍保留可查询的迁移诊断。
     pub fn new(root: &Path, events: Arc<StorageEvents>) -> Self {
         Self {
-            storage: Storage::new(root, events.clone(), events.clone()),
+            storage: Arc::new(Storage::new(root, events.clone(), events.clone())),
             events,
         }
     }

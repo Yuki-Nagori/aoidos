@@ -23,5 +23,6 @@ mythos-engine.workspace = true
 secrecy.workspace = true
 
 [dev-dependencies]
+uuid.workspace = true
 tauri = { workspace = true, features = ["test"] }
 rusqlite.workspace = true

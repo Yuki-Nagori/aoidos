@@ -1,5 +1,6 @@
 mod commands;
 pub mod events;
+pub mod game_commands;
 pub mod ipc;
 pub mod llm_commands;
 pub mod store_commands;
@@ -117,8 +118,71 @@ pub mod store_ipc {
     }
 }
 
+/// 产品阶段命令宏装配；原生夹具注册同一组入口。
+pub mod game_ipc {
+    use super::{CmdError, game_commands};
+    use mythos_engine::game::{runtime::Service, state::*};
+    #[tauri::command]
+    pub async fn engine_submit_input(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<AcceptedRound, CmdError> {
+        game_commands::submit_input(&state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_interrupt(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<AcceptedOperation, CmdError> {
+        game_commands::interrupt(&state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_cancel_round(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<CancelledRound, CmdError> {
+        game_commands::cancel_round(&state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_resume(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<AcceptedRound, CmdError> {
+        game_commands::resume(&state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_regenerate(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<AcceptedRound, CmdError> {
+        game_commands::regenerate(&state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_rewind(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<AcceptedOperation, CmdError> {
+        game_commands::rewind(&state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_submit_check(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<AcceptedCheck, CmdError> {
+        game_commands::submit_check(&state, request).await
+    }
+    #[tauri::command]
+    pub fn engine_get_phase(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<PhaseSnapshot, CmdError> {
+        game_commands::get_phase(&state, request)
+    }
+}
+
 macro_rules! command_handler {
     ($($extra:path),* $(,)?) => { tauri::generate_handler![
+        game_ipc::engine_submit_input, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase,
         commands::greet, commands::store_list_backups, store_ipc::store_get_migration,
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
@@ -145,10 +209,17 @@ pub fn run() {
         let storage_events = store_commands::StorageEvents::new(events.clone());
         let storage = store_commands::StorageService::new(&dir, storage_events);
         app.manage(storage);
-        app.manage(turn_commands::TurnService::new(
+        let turns = turn_commands::TurnService::new(
             events,
             mythos_llm::proxy::SystemProxySnapshot::capture(),
-        )?);
+        )?;
+        let factory = std::sync::Arc::new(game_commands::Factory::default());
+        app.manage(mythos_engine::game::runtime::Service::new(
+            turns.coordinator.clone(),
+            factory.clone(),
+        ));
+        app.manage(factory);
+        app.manage(turns);
         Ok(())
     });
     #[cfg(debug_assertions)]
@@ -173,6 +244,10 @@ pub fn run() {
                 let handle = handle.clone();
                 let finished = finished.clone();
                 tauri::async_runtime::spawn(async move {
+                    handle
+                        .state::<mythos_engine::game::runtime::Service>()
+                        .shutdown()
+                        .await;
                     coordinator.shutdown().await;
                     let _ = handle
                         .state::<store_commands::StorageService>()

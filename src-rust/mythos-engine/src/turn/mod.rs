@@ -168,6 +168,24 @@ impl Coordinator {
         })))
     }
 
+    /// 接纳前的只读优先级检查；最终仍须 acquire 原子竞争同一门禁。
+    /// # Errors
+    /// 已占用返回 busy，关闭返回 not-ready；此检查不预留 lease。
+    pub fn check_available(&self) -> Result<(), Fault> {
+        let registry = lock(&self.0.registry);
+        if registry.closing {
+            return Err(Fault::new("app.not-ready", "应用正在关闭"));
+        }
+        if registry.active {
+            return Err(Fault::busy());
+        }
+        Ok(())
+    }
+    /// 平台登记游戏服务时核验共享门禁，拒绝把另一协调器伪装为同一应用。
+    pub fn shares_gate(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// 已校验请求的独立 public 提交，空快照创建后才返回 UUID。
     ///
     /// # Errors
@@ -191,6 +209,22 @@ impl Coordinator {
         request: PreparedGeneration,
         writer: Arc<dyn OutputWriter>,
     ) -> Result<String, Fault> {
+        let call = self.prepare_borrowed(lease, request, writer)?;
+        let id = call.id().to_owned();
+        call.start();
+        Ok(id)
+    }
+
+    /// 先登记可读的空公开快照，驱动方发布阶段身份后再调用 start。
+    /// 放弃准备对象会关闭空快照并释放子调用资源，父游戏 lease 仍由调用方所有。
+    /// # Errors
+    /// 与 submit_borrowed 相同；不得等待尚未 start 的子调用退出。
+    pub fn prepare_borrowed(
+        &self,
+        lease: &Lease,
+        request: PreparedGeneration,
+        writer: Arc<dyn OutputWriter>,
+    ) -> Result<PublicCall, Fault> {
         let runtime = tokio::runtime::Handle::try_current().map_err(runtime_missing)?;
         let permit = self.begin(lease)?;
         let id = Uuid::new_v4().to_string();
@@ -226,12 +260,15 @@ impl Coordinator {
         for old_id in retired {
             self.0.events.retire(&old_id);
         }
-        let owner = self.0.clone();
-        runtime.spawn(async move {
-            let _producer = producer;
-            run_public(owner, turn, request, writer).await;
-        });
-        Ok(id)
+        Ok(PublicCall {
+            id,
+            runtime,
+            producer,
+            owner: self.0.clone(),
+            turn,
+            request,
+            writer,
+        })
     }
 
     /// private 收集器复用调度与 lease，不创建公开 ring / 事件 / 正文写入。
@@ -243,28 +280,58 @@ impl Coordinator {
         lease: &Lease,
         request: PreparedGeneration,
     ) -> Result<PrivateResult, Fault> {
+        self.run_private_cancellable(lease, request, CancellationToken::new())
+            .await
+    }
+
+    /// 独立子取消令牌只结束本次 private 调用，父 lease 可继续交给新回合。
+    /// # Errors
+    /// 同 run_private；取消仍等待提交 / 用量结算完成。
+    pub async fn run_private_cancellable(
+        &self,
+        lease: &Lease,
+        request: PreparedGeneration,
+        child_cancel: CancellationToken,
+    ) -> Result<PrivateResult, Fault> {
         let permit = self.begin(lease)?;
         let _producer = Producer {
             permit: Some(permit),
             turn: None,
         };
         let id = Uuid::new_v4().to_string();
+        let limit = request.private_limit;
+        if child_cancel.is_cancelled() {
+            return Ok(PrivateResult {
+                turn_id: id,
+                text: String::new(),
+                outcome: Outcome::Cancelled,
+                finish_reason: None,
+            });
+        }
         let cancel = lease.0.cancel.child_token();
         let mut text = String::new();
         let (tx, mut rx) = mpsc::channel::<PendingText>(32);
-        let producer = schedule(request, cancel.clone(), tx, id.clone());
-        let consumer = async {
-            while let Some(pending) = next_pending(&mut rx, &cancel).await {
-                if text.len() + pending.text.len() > MAX_TEXT_BYTES {
-                    cancel.cancel();
-                    return Some(Fault::limit());
+        let (result, fault) = {
+            let producer = schedule(request, cancel.clone(), tx, id.clone());
+            let consumer = async {
+                while let Some(pending) = next_pending(&mut rx, &cancel).await {
+                    if text.len() + pending.text.len() > limit {
+                        cancel.cancel();
+                        return Some(Fault::limit());
+                    }
+                    text.push_str(&pending.text);
+                    let _ = pending.accepted.send(());
                 }
-                text.push_str(&pending.text);
-                let _ = pending.accepted.send(());
+                None
+            };
+            let run = async { tokio::join!(producer, consumer) };
+            tokio::pin!(run);
+            tokio::select! {
+                biased;
+                result = &mut run => result,
+                () = child_cancel.cancelled() => { cancel.cancel(); run.await }
             }
-            None
         };
-        let (result, fault) = tokio::join!(producer, consumer);
         let terminal = terminal(result, fault, !text.is_empty());
         if let Some(error) = terminal.error() {
             return Err(error.clone());
@@ -349,6 +416,29 @@ impl Coordinator {
         })
     }
 }
+/// 已准备的公开子调用；快照身份确认后才能开始网络 / 正文写入。
+pub struct PublicCall {
+    id: String,
+    runtime: tokio::runtime::Handle,
+    producer: Producer,
+    owner: Arc<Inner>,
+    turn: Arc<Turn>,
+    request: PreparedGeneration,
+    writer: Arc<dyn OutputWriter>,
+}
+impl PublicCall {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    /// 串行驱动确认并发布 inFlight.turnId 后调用；消费 self，不能重复启动。
+    pub fn start(self) {
+        self.runtime.spawn(async move {
+            let _producer = self.producer;
+            run_public(self.owner, self.turn, self.request, self.writer).await;
+        });
+    }
+}
+
 fn lease_busy(_: bool) -> Fault {
     Fault::busy()
 }

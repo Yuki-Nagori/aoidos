@@ -14,6 +14,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use tauri::{AppHandle, Emitter, Manager};
+#[path = "game-fixture.rs"]
+mod game_fixture;
 
 struct Report {
     passed: Arc<AtomicBool>,
@@ -32,6 +34,9 @@ async fn report_smoke(
     if !passed {
         eprintln!("IPC fixture failed: {diagnostic}");
     }
+    app.state::<mythos_engine::game::runtime::Service>()
+        .shutdown()
+        .await;
     service.coordinator.shutdown().await;
     let closed = app.state::<StorageService>().storage.close().is_ok();
     app.state::<StorageService>().events.shutdown().await;
@@ -39,7 +44,7 @@ async fn report_smoke(
     let cleaned = std::fs::remove_dir_all(&report.dir).is_ok();
     if passed && cleaned && closed {
         println!(
-            "main Webview turn / record / migration / preferences / reconnect / recovery / listener release: PASS"
+            "main Webview turn / record / phase / check / fork / restart / migration / preferences / recovery / listener release: PASS"
         );
     }
     app.exit(if passed && cleaned && closed { 0 } else { 1 });
@@ -129,7 +134,16 @@ fn emit_smoke(
     app: AppHandle,
     service: tauri::State<'_, TurnService>,
     turn_id: String,
+    session_id: String,
+    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
 ) -> Result<(), String> {
+    let phase = game.get_phase(&session_id).map_err(smoke_snapshot_error)?;
+    app.emit_to(
+        "main",
+        "engine:phase:changed",
+        serde_json::json!({"seq": phase.seq.phase_changed + 1, "data": phase.state}),
+    )
+    .map_err(smoke_emit_error)?;
     let snapshot = service
         .coordinator
         .snapshot(&turn_id)
@@ -153,6 +167,93 @@ fn smoke_emit_error(_: tauri::Error) -> String {
 
 fn delivery_failed(_: tauri::Error) -> Fault {
     Fault::new("app.event-failed", "主窗口事件无法投递")
+}
+
+// 可信场景只在本集成目标登记，产品参数无法指定模型、规则或文件路径。
+#[tauri::command]
+async fn game_smoke(
+    scenario: Option<String>,
+    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
+    storage: tauri::State<'_, StorageService>,
+    turns: tauri::State<'_, TurnService>,
+    events: tauri::State<'_, Arc<WindowEvents>>,
+) -> Result<String, String> {
+    let header = game_fixture::header();
+    let id = header.session_id.clone();
+    let session = storage
+        .storage
+        .records
+        .create(header)
+        .map_err(smoke_snapshot_error)?;
+    let context = game_fixture::context(
+        storage.storage.clone(),
+        session,
+        turns.coordinator.clone(),
+        events.inner().clone(),
+        scenario,
+    )
+    .await
+    .map_err(smoke_snapshot_error)?;
+    game.register(context).map_err(smoke_snapshot_error)?;
+    Ok(id)
+}
+#[tauri::command]
+async fn game_restart_smoke(
+    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
+    storage: tauri::State<'_, StorageService>,
+    turns: tauri::State<'_, TurnService>,
+    events: tauri::State<'_, Arc<WindowEvents>>,
+    session_id: String,
+) -> Result<(), String> {
+    game.close_session(&session_id)
+        .await
+        .map_err(smoke_snapshot_error)?;
+    storage
+        .storage
+        .records
+        .close(&session_id)
+        .map_err(smoke_snapshot_error)?;
+    let session = storage
+        .storage
+        .records
+        .open("demo", &session_id)
+        .map_err(smoke_snapshot_error)?;
+    let context = game_fixture::context(
+        storage.storage.clone(),
+        session,
+        turns.coordinator.clone(),
+        events.inner().clone(),
+        None,
+    )
+    .await
+    .map_err(smoke_snapshot_error)?;
+    game.register(context).map_err(smoke_snapshot_error)
+}
+
+// 仅原生测试等待确认快照；产品消费者没有定时轮询。
+#[tauri::command]
+async fn game_wait_smoke(
+    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
+    session_id: String,
+    operation_id: String,
+) -> Result<(), String> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let snapshot = game.get_phase(&session_id).map_err(smoke_snapshot_error)?;
+            if snapshot.state.last_operation.is_some_and(|operation| {
+                operation.operation_id == operation_id
+                    && operation.outcome == mythos_engine::game::state::OperationOutcome::Completed
+            }) {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(smoke_timeout_error)?
+}
+fn smoke_timeout_error(_: tokio::time::error::Elapsed) -> String {
+    "fixture-game-timeout".into()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -191,11 +292,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(delivery_failed)
             }));
             app.manage(events.clone());
-            app.manage(StorageService::new(
-                &fixture_dir,
-                StorageEvents::new(events.clone()),
+            let storage = StorageService::new(&fixture_dir, StorageEvents::new(events.clone()));
+            let turns = TurnService::new(events, SystemProxySnapshot::default())?;
+            app.manage(mythos_engine::game::runtime::Service::new(
+                turns.coordinator.clone(),
+                Arc::new(game_fixture::Factory {
+                    dir: fixture_dir.clone(),
+                    storage: storage.storage.clone(),
+                }),
             ));
-            app.manage(TurnService::new(events, SystemProxySnapshot::default())?);
+            app.manage(storage);
+            app.manage(turns);
             tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -222,6 +329,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mythos_lib::store_ipc::engine_get_record_page,
             mythos_lib::store_ipc::engine_get_record_view,
             mythos_lib::store_ipc::engine_get_record_body,
+            mythos_lib::game_ipc::engine_submit_input,
+            mythos_lib::game_ipc::engine_interrupt,
+            mythos_lib::game_ipc::engine_cancel_round,
+            mythos_lib::game_ipc::engine_resume,
+            mythos_lib::game_ipc::engine_regenerate,
+            mythos_lib::game_ipc::engine_rewind,
+            mythos_lib::game_ipc::engine_submit_check,
+            mythos_lib::game_ipc::engine_get_phase,
+            game_smoke,
+            game_restart_smoke,
+            game_wait_smoke,
             record_smoke,
             report_smoke,
             wait_smoke,
@@ -237,7 +355,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "real main Webview IPC did not pass"
     );
     println!(
-        "main Webview turn / record / migration / preferences / reconnect / recovery / listener release: PASS"
+        "main Webview turn / record / phase / check / fork / restart / migration / preferences / recovery / listener release: PASS"
     );
     Ok(())
 }

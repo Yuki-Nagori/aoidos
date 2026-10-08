@@ -1,10 +1,12 @@
 # 回合与阶段状态机
 
-更新日期：2026-10-06。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/mythos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，尚未开始。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
+更新日期：2026-10-09。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/mythos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，当前实施中。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
+
+实现位于 `mythos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](README.md#阶段机基础链路)，验证证据见 [023](../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
 
 ## 边界与身份
 
-使用手写 Rust enum + match。状态转换函数（reducer）为 `step(state, event) -> Result<(state, Vec<Effect>), TransitionError>`，只计算转移和待执行副作用。异步驱动层（driver）执行网络、随机采样、记录和投递操作，再向唯一串行所有者交回类型化回执。网络读取方不得直接改变阶段。
+使用手写 Rust enum + match。状态转换函数（reducer）为 `State::step(&self, Event) -> Result<Decision, Fault>`，返回新状态、至多一个待执行副作用及过期回执是否被忽略；副作用携带 ownerEpoch / roundId / effectId 身份，只有对应提交回执才能推进。异步驱动层（driver）执行网络、随机采样、记录和投递操作，再向唯一串行所有者交回类型化回执。网络读取方不得直接改变阶段。
 
 | 身份        | 含义 / 生命周期                                                          |
 | ----------- | ------------------------------------------------------------------------ |
@@ -100,13 +102,15 @@ v1 默认注册规则为 `pbta-2d6-v1`：2d6 + 修正之和，修正之和限定
 
 骰式的 K 是 modifiers 的来源分解之和：total = sum(rolls.value) + K，不能再把 modifiers 加第二次。骰式 v1 只支持 `NdS±K`：N 1–20，S 2–1000，K 整数 −100 到 100；PbtA 默认仍固定 2d6，修正规则更严格。拒绝爆炸骰、无限重掷、任意函数和非有限数。骰式解析先用小子集，caith / tyche 留作候选，不在未验证可注入 RNG 及限制前接入；[caith 官方说明](https://github.com/Geobert/caith)包含更丰富骰式，不能直接视为本项目合法输入。
 
-RNG 建议使用 rand_chacha 的确定性生成器；实现时锁版本并用黄金向量冻结 `chacha20-v1` 的 seed 长度、字节序与无偏映射（[官方文档](https://docs.rs/rand_chacha/latest/rand_chacha/)）。
+023 已采用 rand_chacha 的 ChaCha20 确定性生成器，具体版本由根 Cargo.lock 锁定；黄金向量冻结 `chacha20-v1` 的 seed 长度、字节序与无偏映射（[官方文档](https://docs.rs/rand_chacha/latest/rand_chacha/)）。
 
 每个新 plan 由系统熵生成 32 字节 seed，保存小写 64 位十六进制 seed 与 startCounter / endCounter 十进制字符串、algorithm、mappingVersion=1；
 
 初始 stream=0、word position=0，startCounter=0；原始流按连续 little-endian u32 字消费。对 S 面骰取 L=floor(2^32/S)*S，丢弃 x>=L 的字，接受时 value=(x mod S)+1；counter 计实际消耗字数，不以骰子个数代替拒绝采样次数。复现用已冻结算法核验，恢复的业务结果直接读取已记录 rolls / total，不靠升级后的库重新采样。
 
-dice 新增 `planId`、`rng`、`modifiers`；check 新增 `planId`，result 包含 costlySuccess，dc 变为可选：PbtA 省略，DC 注册规则必有有限 dc。dice.source 指向规则 / plan，check.diceSeq 必须引用当前有效因果路径上的既有 dice。修正之和、各骰值和 total 校验一致；没有 check 但已有 dice 时重算分档，不能再掷。023 负责规则执行，022 负责类型化读写；这些都是未实现格式设计修订，不迁移当前不存在的产品存档。
+单次采样最多消耗 4096 个原始字，耗尽返回 invalid-phase，整组骰子不提交；系统熵获取失败不使用备用 seed。零 seed 的前两个原始字为 `0xade0b876 / 0x903df1a0`，2d6 拒绝采样结果为 `[1, 1]`，endCounter 为 `2`。计划摘要覆盖除 planHash 自身之外的完整 CheckPlan，按键排序的 JSON 对象序列化并包含末尾 LF；执行前重核规则版本、表达式、修正来源、身份形状和冻结 worldRevision。
+
+dice 包含 `planId`、`rng`、`modifiers`；check 包含 `planId`，result 包含 costlySuccess，dc 为可选：PbtA 省略，DC 注册规则必有有限 dc。dice.source 指向规则 / plan，check.diceSeq 必须引用当前有效因果路径上的既有 dice。修正之和、各骰值和 total 校验一致；没有 check 但已有 dice 时重算分档，不能再掷。022 已实现类型化读写，023 的默认 PbtA 已加入计划和采样基础；当前执行器只支持 `pbta-2d6-v1`，DC / 暴击仅保留格式扩展位，后续须增加并登记相应执行器，不能从历史或模型字段自动启用。
 
 | 走查       | 输入 / 骰值                                         | 结论                                                |
 | ---------- | --------------------------------------------------- | --------------------------------------------------- |
@@ -205,7 +209,7 @@ SQL 失败或提交结果不确定按 006 pending 协议核验，needsRecovery �
 
 ### 场景规则视图与只读求值端口
 
-SceneCatalog 是可信剧本注册域；023 负责交付 SceneRuleView 及登记规则求值器，032 在其上维护派生进度 / 停滞计数和提示选择。以下是待实施的内部 Rust 端口，不新增 Tauri 命令、公开阶段或世界属性。
+SceneCatalog 是可信剧本注册域；023 负责交付 SceneRuleView 及登记规则求值器，032 在其上维护派生进度 / 停滞计数和提示选择。以下是已接入并经本机测试的内部 Rust 端口，不新增 Tauri 命令、公开阶段或世界属性。
 
 | SceneRuleView 字段        | 注册内容与约束                                                                             |
 | ------------------------- | ------------------------------------------------------------------------------------------ |
@@ -215,11 +219,11 @@ SceneCatalog 是可信剧本注册域；023 负责交付 SceneRuleView 及登记
 | hintRules                 | hintId、whenRuleId、固定文本、priority 与目标范围；文本 / 权重由剧本注册，模型不可自由填写 |
 | exitRuleIds               | 已登记合法出口 / 结束条件；命中不代替正常晋级校验与提交                                    |
 
-端口为 `get_scene_rule_view(sceneId, catalogRevision)` 与 `evaluate_scene_rule(sceneId, ruleId, ConfirmedWorldView) -> SceneRuleMatch`。输入世界视图必须是当前已确认的不可变快照；结果含 ruleId、matched、catalogRevision、worldRevision、historyRevision 和 evidenceRefs。evidenceRefs 区分已注册剧本事实（剧本 / 规则版本、键、值 hash）与已提交记录事实（sessionId / recordSeq / 内容 hash），由注册解释器输出，不接受模型伪造引用。
+端口为 `get_scene_rule_view(sceneId, catalogRevision)` 与 `evaluate_scene_rule(sceneId, ruleId, ConfirmedWorldView, currentWorldRevision, currentHistoryRevision) -> Result<SceneRuleMatch, Fault>`。输入世界视图必须是当前已确认的不可变快照；结果含 ruleId、matched、catalogRevision、worldRevision、historyRevision 和 evidenceRefs。evidenceRefs 区分已注册剧本事实（剧本 / 规则版本、键、值 hash）与已提交记录事实（sessionId / recordSeq / 内容 hash），由注册解释器输出，不接受模型伪造引用。
 
 规则 ID 必须属于对应场景的已登记规则集合，条件由 023 实现的统一类型化条件求值层处理，场景晋级与 032 共用这一层；未知规则 / 解释器、过期 revision、缺失依据返回类型化拒绝，不能以 matched=false 掩盖无法求值。函数只读、不提交状态、不采随机、不调用 LLM。角色 / 原文相关引用仍需 022 核验有效路径；匹配结果不得直接当作世界补丁。
 
-内部端口同样有界：每类规则 ID 最多 64、hintRules 最多 32、单提示最多 512 字节，SceneRuleView 完整序列化最多 64 KiB；单次 SceneRuleMatch 的 evidenceRefs 最多 32。超过上限拒绝目录 / 求值结果，不截掉依据后宣称成功；这些是拟实施工程限制，不表示已有运行时。
+内部端口同样有界：每类规则 ID 最多 64、hintRules 最多 32、单提示最多 512 字节，SceneRuleView 完整序列化最多 64 KiB；单次 SceneRuleMatch 的 evidenceRefs 最多 32。超过上限拒绝目录 / 求值结果，不截掉依据后宣称成功；这些限制已由登记与求值层验证，032 的消费接线仍待实施。
 
 023 验证规则目录与只读求值结果，032 使用其确认身份幂等消费 completed 钩子；032 不复制条件解释器、不扩展权威状态。无 progress / hint / exit 配置的场景返回空登记集合，不自动制造进展或出口。原有公开五阶段、每回合三个 LLM 调用、场景提议与提交顺序保持不变。
 
@@ -254,6 +258,4 @@ phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件
 - 事件：阶段 / 场景跨流乱序、旧快照 / cursor 淘汰。
 - 回退：fork 各提交故障点、recap 失效、缺解释器时不改世界。
 
-性质测试可选 proptest，黄金快照可选 insta，依赖在实现时锁定。
-
-本次完成的是设计评审与一致性检查，没有运行状态机、RNG、世界重放或模型质量的实现测试。世界属性 schema、具体剧本后果与三平台真实联调分别在承接实现中验证；没有注册解释器的操作必须明确拒绝，不能以 TODO 绕过验收。
+023 已执行状态机、确定性 RNG、世界重放和故障恢复测试，验证证据见对应 task；模型质量与真实剧本后果由 024 标定，世界属性 schema 由可信注册域提供。三平台结果按实际 CI 记录；没有注册解释器的操作必须明确拒绝，不能以 TODO 绕过验收。
