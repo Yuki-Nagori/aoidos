@@ -41,6 +41,20 @@ async fn wait(service: &Service, id: &str, predicate: impl Fn(&PhaseState) -> bo
     .expect("actor deadline")
 }
 
+// 终态快照先于阻塞提交回执发布；后续接纳须另等实际 lease 释放。
+async fn wait_available(fixture: &Fixture) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::task::yield_now().await;
+            if fixture.context.coordinator.check_available().is_ok() {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("application gate deadline");
+}
+
 #[tokio::test]
 async fn actor_manual_check_duplicate_and_shutdown_use_one_application_gate() {
     let fixture = Fixture::new(true, "{}");
@@ -96,6 +110,7 @@ async fn actor_manual_check_duplicate_and_shutdown_use_one_application_gate() {
             .outcome,
         Outcome::Completed
     );
+    wait_available(&fixture).await;
     let second = service.submit_input(&id, "再搜索".into()).await.unwrap();
     wait(&service, &id, |state| state.check.is_some()).await;
     assert_ne!(accepted.round_id, second.round_id);
@@ -136,6 +151,7 @@ async fn cancel_waiting_resume_and_regenerate_latest_resumed_round_preserve_orig
             .is_some_and(|operation| operation.outcome == OperationOutcome::Completed)
     })
     .await;
+    wait_available(&fixture).await;
     let regeneration = service.regenerate(&id, &resumed.round_id).await.unwrap();
     let state = wait(&service, &id, |state| {
         state.last_operation.as_ref().is_some_and(|operation| {
@@ -547,7 +563,7 @@ async fn rolling_delivery_failure_seals_without_rng_and_releases_the_application
     assert!(terminal.resume_required);
     assert!(!terminal.needs_recovery);
     assert_eq!(fixture.generation.calls.load(Ordering::SeqCst), 0);
-    // 阶段发布后 runner 的 lease 在 actor 返回时释放；用真实接纳验证其可再次使用。
+    wait_available(&fixture).await;
     fixture.events.fail_rolling.store(false, Ordering::SeqCst);
     service.resume(&id).await.unwrap();
     service.shutdown().await;
@@ -1457,14 +1473,7 @@ async fn regenerating_an_older_terminal_is_rejected_without_more_requests() {
             .is_some_and(|op| op.outcome == OperationOutcome::Completed)
     })
     .await;
-    // completed 已发布时 blocking 回执仍可能在途，下一回合须等 lease 释放。
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while fixture.context.coordinator.check_available().is_err() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_available(&fixture).await;
     let second = service.submit_input(&id, "查看二".into()).await.unwrap();
     wait(&service, &id, |state| {
         state.last_operation.as_ref().is_some_and(|op| {
@@ -1472,6 +1481,7 @@ async fn regenerating_an_older_terminal_is_rejected_without_more_requests() {
         })
     })
     .await;
+    wait_available(&fixture).await;
     let calls = fixture.generation.calls.load(Ordering::SeqCst);
     assert_eq!(
         service
@@ -1746,6 +1756,7 @@ async fn regeneration_prepare_failure_preserves_the_confirmed_history_and_starts
             .is_some_and(|op| op.outcome == OperationOutcome::Completed)
     })
     .await;
+    wait_available(&fixture).await;
     let before = lock(&fixture.context.session).next_sequence();
     let calls = fixture.generation.calls.load(Ordering::SeqCst);
     fixture.events.fail_prepare.store(true, Ordering::SeqCst);
