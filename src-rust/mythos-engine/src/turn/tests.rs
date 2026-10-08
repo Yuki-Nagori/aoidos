@@ -1,124 +1,16 @@
 use super::*;
 use crate::ports::MemoryWriter;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream};
+use futures::{FutureExt, future::BoxFuture};
+use mythos_llm::error::ProviderError;
 use mythos_llm::guard::{Anchor, GuardRule, GuardSpec};
 use mythos_llm::provider::*;
 use mythos_llm::schedule::{
-    AllowAll, AttemptIdentity, AttemptOutcome, BudgetDenial, BudgetPort, GenerationRequest,
-    RunPolicy,
+    AttemptIdentity, AttemptOutcome, BudgetDenial, BudgetPort, GenerationRequest, RunPolicy,
 };
-use mythos_llm::{error::ProviderError, sampling::Sampling};
-use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-#[derive(Default)]
-struct Events {
-    seqs: Mutex<HashMap<(String, String), u64>>,
-    sent: Mutex<Vec<(u64, TurnEvent)>>,
-    retired: Mutex<Vec<String>>,
-    prepare_calls: AtomicUsize,
-    fail_prepare: AtomicUsize,
-    invalid_seq: AtomicBool,
-    lose_delivery: AtomicBool,
-}
-impl EventPort for Events {
-    fn prepare(&self, event: TurnEvent) -> Result<PreparedEvent, Fault> {
-        let call = self.prepare_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.fail_prepare.load(Ordering::SeqCst) == call {
-            return Err(Fault::event());
-        }
-        let mut seqs = lock(&self.seqs);
-        let seq = seqs
-            .entry((event.name().into(), event.turn_id().into()))
-            .or_default();
-        *seq += 1;
-        let seq = if self.invalid_seq.load(Ordering::SeqCst) {
-            0
-        } else {
-            *seq
-        };
-        let envelope = serde_json::json!({"seq": seq, "data": &event});
-        Ok(PreparedEvent {
-            seq,
-            event,
-            envelope,
-        })
-    }
-    fn deliver(&self, event: PreparedEvent) -> Result<(), Fault> {
-        if self.lose_delivery.load(Ordering::SeqCst) {
-            return Err(Fault::event());
-        }
-        lock(&self.sent).push((event.seq, event.event));
-        Ok(())
-    }
-    fn retire(&self, id: &str) {
-        lock(&self.seqs).retain(|(_, turn), _| turn != id);
-        lock(&self.retired).push(id.into());
-    }
-}
+use crate::test_support::{Events, generation};
 
-struct Fake {
-    deltas: Vec<Result<ProviderDelta, ProviderError>>,
-    hold: bool,
-    calls: Arc<AtomicUsize>,
-}
-impl Provider for Fake {
-    fn capabilities(&self, model: &str, _: RequestMode) -> ProviderCapabilities {
-        ProviderCapabilities {
-            model: model.into(),
-            completion: model == "m",
-            chat: model == "m",
-            prefix: model == "m",
-            thinking: false,
-            stop_limit: 2,
-            max_output_tokens: 4096,
-            temperature_effective: true,
-            temperature_min: 0.0,
-            temperature_max: 2.0,
-        }
-    }
-    fn start(&self, _: ProviderRequest, _: CancellationToken) -> StartFuture<'_> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let stream = stream::iter(self.deltas.clone());
-        let stream = if self.hold {
-            stream.chain(stream::pending()).boxed()
-        } else {
-            stream.boxed()
-        };
-        async move { Ok(stream) }.boxed()
-    }
-}
-fn generation(
-    deltas: Vec<Result<ProviderDelta, ProviderError>>,
-    hold: bool,
-) -> (PreparedGeneration, Arc<AtomicUsize>) {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let provider = Arc::new(Fake {
-        deltas,
-        hold,
-        calls: calls.clone(),
-    });
-    let request = GenerationRequest {
-        provider_request: ProviderRequest {
-            model: "m".into(),
-            input: ProviderInput::Completion(CompletionInput { prompt: "P".into() }),
-            sampling: Sampling {
-                temperature: 1.0,
-                max_tokens: 64,
-            },
-            stops: vec![],
-        },
-        guard: GuardSpec::default(),
-    };
-    let mut policy = RunPolicy::default();
-    policy.ladder.clear();
-    policy.transport_retries = 0;
-    (
-        PreparedGeneration::new(provider, request, policy, Arc::new(AllowAll)).unwrap(),
-        calls,
-    )
-}
 fn completed(text: &str) -> PreparedGeneration {
     generation(
         vec![
@@ -182,6 +74,7 @@ struct Writer {
     text: Mutex<String>,
     fail_append: bool,
     fail_finish: bool,
+    fail_begin: bool,
     slow: bool,
     started: Notify,
     released: Notify,
@@ -192,6 +85,7 @@ impl Writer {
             text: Mutex::new(String::new()),
             fail_append,
             fail_finish,
+            fail_begin: false,
             slow,
             started: Notify::new(),
             released: Notify::new(),
@@ -199,7 +93,17 @@ impl Writer {
     }
 }
 impl OutputWriter for Writer {
-    fn append<'a>(&'a self, _: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), Fault>> {
+    fn begin<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<(), Fault>> {
+        async move {
+            if self.fail_begin {
+                Err(Fault::new("store.permission", "没有操作权限"))
+            } else {
+                Ok(())
+            }
+        }
+        .boxed()
+    }
+    fn append<'a>(&'a self, _: &'a str, _: u64, text: &'a str) -> BoxFuture<'a, Result<(), Fault>> {
         async move {
             self.started.notify_one();
             if self.slow {
@@ -223,6 +127,21 @@ impl OutputWriter for Writer {
         }
         .boxed()
     }
+}
+
+#[tokio::test]
+async fn failed_metadata_preparation_never_starts_provider_or_retries_finish() {
+    let (coordinator, _) = coordinator(16);
+    let mut writer = Writer::new(false, true, false);
+    writer.fail_begin = true;
+    let writer = Arc::new(writer);
+    let (request, calls) = generation(vec![Ok(ProviderDelta::Text("不得发出".into()))], false);
+    let id = coordinator.submit(request, writer).unwrap();
+    let snapshot = coordinator.wait(&id).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(snapshot.error.unwrap().code, "store.permission");
+    assert!(snapshot.text.is_empty());
+    assert!(coordinator.acquire().is_ok());
 }
 
 #[tokio::test]
@@ -721,7 +640,12 @@ async fn queued_tail_cancel_and_abnormal_owner_exit_preserve_invariants() {
     assert!(receipt.await.is_err());
     struct PanicWriter;
     impl OutputWriter for PanicWriter {
-        fn append<'a>(&'a self, _: &'a str, _: &'a str) -> BoxFuture<'a, Result<(), Fault>> {
+        fn append<'a>(
+            &'a self,
+            _: &'a str,
+            _: u64,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<(), Fault>> {
             async { panic!("injected output owner panic") }.boxed()
         }
         fn finish<'a>(&'a self, _: &'a str, _: &'a Terminal) -> BoxFuture<'a, Result<(), Fault>> {
@@ -862,4 +786,60 @@ async fn concurrent_cancel_and_finish_keep_one_terminal_and_release_borrowed_chi
         assert_eq!(Some(c.cancel(&id).await.unwrap().outcome), snapshot.outcome);
     }
     assert_eq!(lock(&events.retired).len(), 63);
+}
+
+#[tokio::test]
+async fn persistent_writer_keeps_file_snapshot_and_event_bytes_identical() {
+    use crate::record::{
+        format::Body,
+        session::{PersistentWriter, Target, body_text},
+        test_support::Fixture,
+    };
+    let fixture = Fixture::new();
+    let path = fixture.path.clone();
+    let session = Arc::new(Mutex::new(
+        crate::record::session::Session::open(path.clone(), fixture.events.clone()).unwrap(),
+    ));
+    let events = Arc::new(Events::default());
+    let coordinator = Coordinator::new(events.clone(), 16).unwrap();
+    let (request, _) = generation(
+        vec![
+            Ok(ProviderDelta::Text("灯亮着。😀".into())),
+            Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
+        ],
+        false,
+    );
+    let turn = coordinator
+        .submit(
+            request,
+            Arc::new(PersistentWriter {
+                session: session.clone(),
+                target: Target::Narration,
+                high: true,
+            }),
+        )
+        .unwrap();
+    coordinator.wait(&turn).await.unwrap();
+    let snapshot = coordinator.snapshot(&turn).unwrap();
+    let record = {
+        let state = lock(&session);
+        state.read(1).unwrap().body.unwrap()
+    };
+    assert_eq!(body_text(&record.body), Some(snapshot.text.as_str()));
+    assert!(matches!(
+        record.body,
+        Body::Narration {
+            terminal: Terminal::Completed { .. },
+            ..
+        }
+    ));
+    let chunks = lock(&events.sent)
+        .iter()
+        .filter_map(|(_, event)| match event {
+            TurnEvent::Chunk { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(chunks, snapshot.text);
+    coordinator.shutdown().await;
 }

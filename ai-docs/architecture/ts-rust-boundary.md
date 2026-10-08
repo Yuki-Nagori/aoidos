@@ -29,6 +29,7 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 mythos-llm / mythos-en
 ```text
 src-tauri（装配、命令、窗口事件适配）
   ├─→ mythos-engine（lease、回合所有者、快照、输出 / 事件端口）
+  │     ├─→ mythos-store（记录追加与 applied 原语）
   │     └─→ mythos-llm（Provider、护栏、唯一请求调度器与预算端口）
   │           └─→ mythos-store（配置 / 凭据复用的文件基建）
   ├─→ mythos-llm（配置 / 凭据的薄命令适配）
@@ -36,7 +37,7 @@ src-tauri（装配、命令、窗口事件适配）
 ```
 
 - **事件端口**：`EventPort` 和回合载荷由 engine 定义；Tauri adapter 负责序列化、序号预留、主窗口投递与清退。engine 不引用 `AppHandle`、`CmdError` 或前端类型。
-- **输出端口**：`OutputWriter` 由 engine 定义；内存实现仅供调试。022 的记录模块实现增量提交 / 封口，并消费 store 原语；文件基建不反向依赖 engine 的终态或业务 schema。当前 engine 不为尚未消费的能力直接依赖 store。
+- **输出端口**：`OutputWriter` 由 engine 定义；内存实现仅供调试。022 的记录模块实现增量提交 / 封口，并消费 store 原语；文件基建不反向依赖 engine 的终态或业务 schema。022 实施中，engine 已直接依赖 store 的记录日志与 applied 原语；数据库连接、业务格式与恢复状态归 engine，壳只持有服务。
 - **调度确认端口**：`OutputPort` 属 llm，engine 通过确认通道接入；LLM 仅在接纳后确认首交付，不能引用 engine 的快照。准备 / 写入错误由 engine 映射为事件和快照，LLM 不承担记录持久化。
 - **预算端口**：`BudgetPort` 属 llm，020 提供每个 turn 和物理 request 的唯一身份；035 在调用方注入账本实现，补齐价格 / 周期上下文。LLM 不反向依赖计费模块，engine 不把账本写成第二套调度器。
 

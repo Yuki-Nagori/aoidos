@@ -173,3 +173,18 @@ it("disposal before registration starts avoids creating platform listeners", asy
   expect(h.listen).not.toHaveBeenCalled();
   expect(h.get).not.toHaveBeenCalled();
 });
+
+it("releases resolved listeners immediately while other registrations remain pending", async () => {
+  const h = harness();
+  await vi.waitFor(() => expect(h.pending).toHaveLength(3));
+  h.pending[0]!.resolve(h.handlers[0]!.unlisten);
+  await vi.waitFor(() => expect(h.consumer.connecting.value).toBe(true));
+  await Promise.resolve();
+  h.scope.stop();
+  expect(h.handlers[0]!.unlisten).toHaveBeenCalledOnce();
+  expect(h.get).not.toHaveBeenCalled();
+  h.pending.slice(1).forEach((wait, i) => wait.resolve(h.handlers[i + 1]!.unlisten));
+  await vi.waitFor(() =>
+    h.handlers.forEach((handler) => expect(handler.unlisten).toHaveBeenCalledOnce()),
+  );
+});

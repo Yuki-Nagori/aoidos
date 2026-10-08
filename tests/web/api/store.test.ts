@@ -29,7 +29,13 @@ describe("store IPC", () => {
   });
 
   it("接收新安装的 idle 快照", async () => {
-    const response: MigrationSnapshot = { from: 0, to: 0, phase: "idle" };
+    const response: MigrationSnapshot = {
+      from: 0,
+      to: 0,
+      current: 0,
+      phase: "idle",
+      seq: { progress: 0, done: 0, failed: 0 },
+    };
     vi.mocked(invoke).mockResolvedValue(response);
     expect(await getMigration()).toBe(response);
     expect(invoke).toHaveBeenCalledWith("store_get_migration");

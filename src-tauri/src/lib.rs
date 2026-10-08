@@ -2,6 +2,7 @@ mod commands;
 pub mod events;
 pub mod ipc;
 pub mod llm_commands;
+pub mod store_commands;
 pub mod turn_commands;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -69,9 +70,57 @@ pub mod turn_ipc {
     }
 }
 
+/// 存储 IPC 宏装配与业务模块分离，原生夹具注册同一组入口。
+pub mod store_ipc {
+    use super::{CmdError, store_commands};
+    use tauri::{State, ipc::Request};
+    type Service<'a> = State<'a, store_commands::StorageService>;
+    #[tauri::command]
+    pub fn store_get_migration(
+        state: Service<'_>,
+    ) -> Result<mythos_engine::migration::Snapshot, CmdError> {
+        store_commands::store_get_migration(state)
+    }
+    #[tauri::command]
+    pub async fn store_get_ui_preferences(
+        state: Service<'_>,
+    ) -> Result<mythos_engine::preferences::UiPreferences, CmdError> {
+        store_commands::store_get_ui_preferences(state).await
+    }
+    #[tauri::command]
+    pub async fn store_set_ui_preferences(
+        state: Service<'_>,
+        request: Request<'_>,
+    ) -> Result<mythos_engine::preferences::UiPreferences, CmdError> {
+        store_commands::store_set_ui_preferences(state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_get_record_page(
+        state: Service<'_>,
+        request: Request<'_>,
+    ) -> Result<mythos_engine::record::view::Page, CmdError> {
+        store_commands::engine_get_record_page(state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_get_record_view(
+        state: Service<'_>,
+        request: Request<'_>,
+    ) -> Result<mythos_engine::record::view::View, CmdError> {
+        store_commands::engine_get_record_view(state, request).await
+    }
+    #[tauri::command]
+    pub async fn engine_get_record_body(
+        state: Service<'_>,
+        request: Request<'_>,
+    ) -> Result<mythos_engine::record::view::BodyPage, CmdError> {
+        store_commands::engine_get_record_body(state, request).await
+    }
+}
+
 macro_rules! command_handler {
     ($($extra:path),* $(,)?) => { tauri::generate_handler![
-        commands::greet, commands::store_list_backups, commands::store_get_migration,
+        commands::greet, commands::store_list_backups, store_ipc::store_get_migration,
+        store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
         llm_commands::llm_get_key_status, llm_set_key, turn_ipc::llm_get_turn, turn_ipc::llm_cancel, $($extra),*
     ] };
@@ -93,6 +142,9 @@ pub fn run() {
                     .map_err(window_delivery_error)
             }));
         app.manage(events.clone());
+        let storage_events = store_commands::StorageEvents::new(events.clone());
+        let storage = store_commands::StorageService::new(&dir, storage_events);
+        app.manage(storage);
         app.manage(turn_commands::TurnService::new(
             events,
             mythos_llm::proxy::SystemProxySnapshot::capture(),
@@ -122,6 +174,15 @@ pub fn run() {
                 let finished = finished.clone();
                 tauri::async_runtime::spawn(async move {
                     coordinator.shutdown().await;
+                    let _ = handle
+                        .state::<store_commands::StorageService>()
+                        .storage
+                        .close();
+                    handle
+                        .state::<store_commands::StorageService>()
+                        .events
+                        .shutdown()
+                        .await;
                     handle
                         .state::<std::sync::Arc<turn_commands::WindowEvents>>()
                         .close();

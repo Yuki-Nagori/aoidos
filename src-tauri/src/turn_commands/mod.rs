@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 /// 统一运行服务；产品后续接入同一个协调器，不新建调试 / private 门禁。
 pub struct TurnService {
     pub coordinator: Coordinator,
+    pub diagnostics: Arc<Mutex<mythos_engine::record::calibration::Calibration>>,
     #[cfg(debug_assertions)]
     pub proxy_snapshot: SystemProxySnapshot,
 }
@@ -25,6 +26,9 @@ impl TurnService {
         let _ = proxy_snapshot;
         Ok(Self {
             coordinator: Coordinator::new(events, 16)?,
+            diagnostics: Arc::new(Mutex::new(
+                mythos_engine::record::calibration::Calibration::default(),
+            )),
             #[cfg(debug_assertions)]
             proxy_snapshot,
         })
@@ -39,6 +43,16 @@ pub struct WindowEvents {
     deliver: Mutex<Option<Arc<WindowDelivery>>>,
 }
 impl WindowEvents {
+    /// 所有事件域共用窗口句柄生命周期；关闭后统一拒绝投递。
+    pub(crate) fn dispatch(&self, name: &str, payload: serde_json::Value) -> Result<(), Fault> {
+        let deliver = self
+            .deliver
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(window_closed)?;
+        deliver(name, payload)
+    }
     /// 注入平台投递；内核不接触窗口类型。
     pub fn new(
         deliver: impl Fn(&str, serde_json::Value) -> Result<(), Fault> + Send + Sync + 'static,
@@ -68,13 +82,7 @@ impl EventPort for WindowEvents {
         })
     }
     fn deliver(&self, event: PreparedEvent) -> Result<(), Fault> {
-        let deliver = self
-            .deliver
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .ok_or_else(window_closed)?;
-        deliver(event.event.name(), event.envelope)
+        self.dispatch(event.event.name(), event.envelope)
     }
     fn retire(&self, turn_id: &str) {
         events::retire_stream(turn_id);
@@ -139,7 +147,13 @@ pub(crate) fn submit_frozen(
         &service.proxy_snapshot,
         auth,
         input,
-    )?;
+    )?
+    .with_calibration(
+        "local-fixture",
+        &mythos_engine::record::estimator::EstimatorRevision::ConservativeV2,
+        service.diagnostics.clone(),
+        false,
+    );
     let turn_id = service
         .coordinator
         .submit(request, Arc::new(MemoryWriter))?;

@@ -5,7 +5,7 @@ use mythos_llm::schedule::FinishReason;
 use serde::Serialize;
 
 /// 事件和快照共用的脱敏错误形状。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Fault {
     pub code: String,
     pub message: String,
@@ -53,6 +53,9 @@ impl Fault {
             RunError::Stalled if delivered => ("llm.aborted".into(), None),
             RunError::Stalled => ("llm.stalled".into(), None),
             RunError::EmptyOutput { finish } => ("llm.empty-output".into(), Some(*finish)),
+            RunError::Budget { reason } if reason == "token-estimation-needs-calibration" => {
+                ("engine.invalid-phase".into(), None)
+            }
             RunError::Budget { .. } => ("budget.exceeded".into(), None),
             RunError::InvalidPolicy(_) => ("app.bad-request".into(), None),
         };
@@ -66,6 +69,7 @@ impl Fault {
             "llm.empty-output" => "生成未返回正文",
             "llm.aborted" => "生成中断，已提交正文保留",
             "budget.exceeded" => "费用额度不足",
+            "engine.invalid-phase" => "自动请求已暂停，请重新标定 Token 估算",
             "app.bad-request" => "回合参数不合法",
             _ => "供应商响应不合法",
         };
@@ -79,3 +83,23 @@ impl std::fmt::Display for Fault {
     }
 }
 impl std::error::Error for Fault {}
+
+impl From<mythos_store::error::StoreError> for Fault {
+    fn from(error: mythos_store::error::StoreError) -> Self {
+        Self::new(format!("store.{}", error.code()), "记录存储操作失败")
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn store_faults_and_display_are_stable_and_do_not_include_raw_data() {
+        let error = Fault::from(mythos_store::error::StoreError::Corrupt(
+            "private raw data".into(),
+        ));
+        assert_eq!(error.code, "store.corrupt");
+        assert!(error.to_string().starts_with("store.corrupt:"));
+        assert!(!error.to_string().contains("private raw data"));
+        let _: &dyn std::error::Error = &error;
+    }
+}

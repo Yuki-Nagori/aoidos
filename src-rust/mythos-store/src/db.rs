@@ -354,6 +354,11 @@ fn err_backup(source: rusqlite::Error) -> StoreError {
     db_err("backup", source)
 }
 
+/// 业务事务复用同一 SQLite 到存储码映射，不在各域复制错误分类。
+pub fn sqlite_error(source: rusqlite::Error) -> StoreError {
+    db_err("operation", source)
+}
+
 fn db_err(stage: &str, source: rusqlite::Error) -> StoreError {
     StoreError::Io {
         code: sqlite_store_code(&source),

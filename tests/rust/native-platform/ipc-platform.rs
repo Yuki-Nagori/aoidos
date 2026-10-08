@@ -1,6 +1,7 @@
 //! 真实主 Webview 的命令 / 事件往返；本地夹具不发送收费 HTTP，独立进程主线程运行。
 
 use mythos_engine::fault::Fault;
+use mythos_lib::store_commands::{StorageEvents, StorageService};
 use mythos_lib::turn_commands::{TurnService, WindowEvents};
 use mythos_llm::{
     config::{LlmProfile, ProfileMode, ProfileStore, ProxyConfig},
@@ -32,15 +33,83 @@ async fn report_smoke(
         eprintln!("IPC fixture failed: {diagnostic}");
     }
     service.coordinator.shutdown().await;
+    let closed = app.state::<StorageService>().storage.close().is_ok();
+    app.state::<StorageService>().events.shutdown().await;
     app.state::<Arc<WindowEvents>>().close();
     let cleaned = std::fs::remove_dir_all(&report.dir).is_ok();
-    if passed && cleaned {
+    if passed && cleaned && closed {
         println!(
-            "main Webview submit / events / consumer / reconnect / recovery / listener release: PASS"
+            "main Webview turn / record / migration / preferences / reconnect / recovery / listener release: PASS"
         );
     }
-    app.exit(if passed && cleaned { 0 } else { 1 });
+    app.exit(if passed && cleaned && closed { 0 } else { 1 });
     Ok(())
+}
+
+// 记录链路的合成请求只在此集成 target 注册，不是产品提交入口。
+#[tauri::command]
+async fn record_smoke(
+    report: tauri::State<'_, Report>,
+    service: tauri::State<'_, TurnService>,
+    storage: tauri::State<'_, StorageService>,
+) -> Result<serde_json::Value, String> {
+    use mythos_engine::{
+        record::{
+            format::{Header, hash, now},
+            grammar,
+            session::{PersistentWriter, Target},
+        },
+        request::PreparedGeneration,
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let prefix = "[MYTHOS:STATIC]\n只推进已知场景。\n[/MYTHOS:STATIC]\n".to_owned();
+    let header = Header {
+        kind: "header".into(),
+        format_version: 1,
+        grammar_version: 1,
+        projection_version: 1,
+        script_id: "demo".into(),
+        session_id: id.clone(),
+        created_at: now(),
+        static_prefix_hash: hash(prefix.as_bytes()),
+        static_prefix: prefix.clone(),
+        script_revision: hash(b"fixture"),
+    };
+    let session = storage
+        .storage
+        .records
+        .create(header)
+        .map_err(smoke_snapshot_error)?;
+    let profiles = ProfileStore::new(&report.dir)
+        .load()
+        .map_err(smoke_store_error)?;
+    let frozen = mythos_llm::config::freeze(&profiles[0], &CredentialFile::new(&report.dir))
+        .map_err(smoke_store_error)?;
+    let request = PreparedGeneration::local_fixture_with_guard(
+        frozen,
+        &service.proxy_snapshot,
+        None,
+        mythos_llm::provider::ProviderInput::Completion(mythos_llm::provider::CompletionInput {
+            prompt: format!("{prefix}{}", grammar::open(&Target::Narration)),
+        }),
+        grammar::guard(&Target::Narration),
+    )
+    .map_err(smoke_snapshot_error)?;
+    let turn = service
+        .coordinator
+        .submit(
+            request,
+            Arc::new(PersistentWriter {
+                session,
+                target: Target::Narration,
+                high: true,
+            }),
+        )
+        .map_err(smoke_snapshot_error)?;
+    Ok(serde_json::json!({"sessionId":id,"turnId":turn}))
+}
+fn smoke_store_error(error: mythos_store::error::StoreError) -> String {
+    format!("store.{}", error.code())
 }
 
 // 测试专用同步屏障不取消回合、不轮询；用于验证最后事件全丢后的主动恢复。
@@ -122,6 +191,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(delivery_failed)
             }));
             app.manage(events.clone());
+            app.manage(StorageService::new(
+                &fixture_dir,
+                StorageEvents::new(events.clone()),
+            ));
             app.manage(TurnService::new(events, SystemProxySnapshot::default())?);
             tauri::WebviewWindowBuilder::new(
                 app,
@@ -143,6 +216,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mythos_lib::turn_ipc::llm_submit,
             mythos_lib::turn_ipc::llm_get_turn,
             mythos_lib::turn_ipc::llm_cancel,
+            mythos_lib::store_ipc::store_get_migration,
+            mythos_lib::store_ipc::store_get_ui_preferences,
+            mythos_lib::store_ipc::store_set_ui_preferences,
+            mythos_lib::store_ipc::engine_get_record_page,
+            mythos_lib::store_ipc::engine_get_record_view,
+            mythos_lib::store_ipc::engine_get_record_body,
+            record_smoke,
             report_smoke,
             wait_smoke,
             emit_smoke
@@ -157,7 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "real main Webview IPC did not pass"
     );
     println!(
-        "main Webview submit / events / consumer / reconnect / recovery / listener release: PASS"
+        "main Webview turn / record / migration / preferences / reconnect / recovery / listener release: PASS"
     );
     Ok(())
 }

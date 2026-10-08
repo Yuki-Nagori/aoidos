@@ -94,6 +94,13 @@ pub fn retire_stream(stream_id: &str) {
 fn payload_error(_: serde_json::Error) -> CmdError {
     event_error("事件载荷无法序列化")
 }
+#[cfg(test)]
+pub(crate) fn force_sequence(event: &str, id: &str, seq: u64) {
+    stream_seqs()
+        .lock()
+        .unwrap()
+        .insert((event.into(), id.into()), seq);
+}
 
 #[cfg(test)]
 mod tests {

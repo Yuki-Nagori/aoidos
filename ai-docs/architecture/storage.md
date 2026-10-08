@@ -58,7 +58,7 @@ CREATE TABLE point_allocations (
 
 数据根由装配层调用 Tauri `app_data_dir()` 取得，当前应用标识为 `com.yuki.mythos`，没有自定义目录覆盖。默认 macOS 为 `~/Library/Application Support/com.yuki.mythos/`，Windows 为 `%APPDATA%\com.yuki.mythos\`，Linux 为 `$XDG_DATA_HOME/com.yuki.mythos/`（未设置时使用 `~/.local/share/com.yuki.mythos/`），不使用 `~/.mythos`。实际系统重定向由 Tauri 解析，不在业务层拼接用户主目录。
 
-`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `mythos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。下面的对话 / 记忆目录为设计布局，持久对话仍由 022 实现；020 的调试正文仅存内存。
+`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `mythos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。对话记录及两字段 UI 偏好已由 022 实现；记忆目录仍为后续设计布局。020 的调试正文仅存内存，产品持久化使用独立 OutputWriter。
 
 ```text
 <app-data>/                       # tauri PathResolver::app_data_dir，注入业务 crate
@@ -70,7 +70,7 @@ CREATE TABLE point_allocations (
 ├── migrations/…                  # SQL 迁移（编译期内嵌，目录仅调试导出）
 ├── workspaces/<script-id>/       # 每剧本一个工作区
 │   ├── transcript/<session-id>.jsonl
-│   ├── transcript/<session-id>.<turn-id>.partial.jsonl  # 唯一活跃安全增量日志（022 待实现）
+│   ├── transcript/<session-id>.<turn-id>.partial.jsonl  # 唯一活跃安全增量日志
 │   ├── memory/                   # 007 文件正文；manifest 在 storage.sqlite（029 待实现）
 │   │   ├── runs/<run-id>/        # 会话记忆版本正文与批次结果（029 / 030 待实现）
 │   │   │   ├── entries/<entry-id>/<version-id>.json
@@ -86,7 +86,7 @@ CREATE TABLE point_allocations (
 
 ## 原子写工具（全仓唯一实现）
 
-- API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8）。普通文件覆写经此二函数；凭据使用 `write_atomic_private`，在空 tmp 阶段经平台权限函数确认后才写正文，共用原子发布 / 清理 / fsync 管线。SQLite 事务与在线备份、实例锁文件、JSONL 受控追加 / 尾行截断由各自模块原地写，不经这里。JSONL 追加原语由 022 在 store 中实现，全仓复用，不在 engine 再写一套 IO。
+- API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8）。普通文件覆写经此二函数；凭据使用 `write_atomic_private`，在空 tmp 阶段经平台权限函数确认后才写正文，共用原子发布 / 清理 / fsync 管线。SQLite 事务与在线备份、实例锁文件、JSONL 受控追加 / 尾行截断由各自模块原地写，不经这里。JSONL 追加原语已由 022 在 store 中实现，全仓复用，不在 engine 再写一套 IO。
 - 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。重试次数与退避见[通信契约](ipc-contract.md)看门狗表。三端的 `WouldBlock`、`ResourceBusy`、`ExecutableFileBusy` 进入退避。Windows 上原始码 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）同样算占用；Unix 上同号是 EIO / EPIPE，保持 `io`，不重试。目录目标三端立即 `io`，不进入退避：Windows 把「文件 rename 到目录」也报成 ACCESS_DENIED，若先按占用重试，目录会在 Windows 上等满退避。耗尽报 `locked` 并清理本次 tmp。父目录同步只吞掉 `PermissionDenied`、`InvalidInput`、`Unsupported`；其它同步错误在 rename 已经发布后仍返回，调用方不能把该错误当成「目标未更新」。
 - 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行；完整行仍须校验 JSON / 身份，中间损坏不得删。partial 不是 .tmp，不由通用临时清理删除；保留已提交前文并封中断块的恢复及 buffered / high 耐久边界见[记录引擎](record-engine.md)。
 - 并发与锁：单写者约定；打开数据库前持有数据根 `storage.lock` 上的 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
@@ -112,4 +112,12 @@ CREATE TABLE point_allocations (
 
 ## 实现状态与后续范围
 
-- 已标定（task 013）：WAL，备份保留最近 3 份，OS 独占实例锁。rename 的重试预算见[通信契约](ipc-contract.md)看门狗表，013 已按该表实现。业务 schema、记录 append 与导入导出随相应任务实现。
+- 已标定（task 013）：WAL，备份保留最近 3 份，OS 独占实例锁。rename 的重试预算见[通信契约](ipc-contract.md)看门狗表，013 已按该表实现。记录 append 已由 022 实现；业务 schema 与导入导出随相应任务实现。
+
+## 业务存储所有权
+
+`mythos-engine::Storage` 统一打开 `storage.sqlite` 并核验共享 applied 表，保存真实迁移状态；后续主题 / 计费 / 记忆模块复用此所有者及迁移编号，不创建第二套业务连接生命周期。`mythos-store::applied` 提供 operationId + contentHash 幂等提交原语，业务 schema 和解释器由消费模块所有。
+
+`ui-preferences.json` 在系统应用数据根保存版本 1 的 `panelPinned` / `diceMode`。文件缺失返回默认值，坏格式或未知版本明确拒绝，不静默覆盖；单文件上限 4 KiB，保存经原子写成功才确认。主题和语言偏好仍遵循各自架构，不扩充这两个字段。
+
+`journal` 的已知 write / flush 失败回退至此前确认边界；sync 或回退结果不确定时冻结写者。尾行修复先保留原文件副本再截断；正式行与 partial 扫描均有界，未知记录保留原字节并只读。会话关闭不删除原记录，应用退出时关闭全部登记会话。

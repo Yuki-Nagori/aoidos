@@ -1,6 +1,6 @@
 # 对局记录与上下文引擎
 
-更新 / 官方资料核验日期：2026-10-06。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/mythos/issues/9) 细化格式、持久化、投影和运行期协议；尚未实现。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。实现由 [022](../task/022-record-engine-impl.md) 承接，阶段决策归 [012](../task/012-turn-state-machine-design.md)。
+更新 / 官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/mythos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现协议与适配，正在完成最终验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。实现由 [022](../task/022-record-engine-impl.md) 承接，阶段决策归 [012](../task/012-turn-state-machine-design.md)。
 
 ## 方案与边界
 
@@ -19,7 +19,7 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
   → 已确认快照和窗口事件
 ```
 
-`RecordWriter` 归 mythos-engine；SQL / 文件 IO 原语归 mythos-store，域层通过普通接口使用。Tauri 层准备事件和适配平台，不拥有记录语法、预算或状态转换。现有 store 只提供文件基建，尚无追加协议、投影或迁移运行期状态，不把本设计写成已有能力。
+`RecordWriter` 归 mythos-engine；SQL / 文件 IO 原语归 mythos-store，域层通过普通接口使用。Tauri 层准备事件和适配平台，不拥有记录语法、预算或状态转换。store 已提供 journal 追加 / 同步 / 尾行修复和 applied 幂等事务原语；engine 负责记录语法、持久化写入方、投影、迁移与偏好服务。产品阶段机与控制命令由 023 接入。
 
 ## 文件与块结构
 
@@ -42,7 +42,7 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 }
 ```
 
-保存包含 STATIC 结构标记及末尾 LF 的完整已渲染前缀及其 SHA-256，不能只有 hash 却依赖后来修改的剧本重建。会话创建时先生成并校验 header，再经原子写创建文件；已有会话不覆盖。时间使用 RFC 3339 UTC 字符串，只用于显示 / 审计，排序与引用以 seq 为准。header 的格式、语法、投影版本分别表达磁盘解析、标记字符串和 prompt 生成规则，不能互相替代。
+保存包含 STATIC 结构标记及末尾 LF 的完整已渲染前缀及其 SHA-256，不能只有 hash 却依赖后来修改的剧本重建。会话创建时先生成并校验 header，再排他创建文件、写完整首行并同步文件与父目录；已有会话不覆盖。时间使用 RFC 3339 UTC 字符串，只用于显示 / 审计，排序与引用以 seq 为准。header 的格式、语法、投影版本分别表达磁盘解析、标记字符串和 prompt 生成规则，不能互相替代。
 
 块用 Rust `#[serde(tag = "kind")]`、camelCase；公共字段为 `seq`、`createdAt`。seq 是会话逻辑块编号，正整数；已持久化或对外确认的编号不复用，当前进程失败预留允许留下空洞，JS 安全整数上限沿用契约。LLM 块另有 turnId、outcome 和可选 finishReason / error；正文仅为护栏后的规范文本。所有可选字段省略，不写 null。记录 seq、partial 的 partSeq、窗口信封 seq 是三种不同编号，禁止混用。重开从正式文件与 sidecar 已记录的最大编号继续；没有写盘或发布过的纯内存预留不构成跨进程事实身份。
 
@@ -53,7 +53,7 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 | narration       | text、turnId、outcome、finishReason?、error?                                           | 旁白标记                                                                                           |
 | dice            | expression、rolls、total、source、planId、rng、modifiers                               | 机器上下文；由确定性骰判执行器创建                                                                 |
 | check           | diceSeq、dc?、result、ruleId、planId                                                   | 引用此前有效 dice，result 为 success / costlySuccess / failure / criticalSuccess / criticalFailure |
-| system          | code、message、relatedSeq?、turnId?、data?                                             | 只投影注册且有上下文意义的事件，不塞任意日志                                                       |
+| system          | code、message、relatedSeq?、turnId?、data                                              | 只投影注册且有上下文意义的事件，不塞任意日志                                                       |
 | recap           | fromSeq、throughSeq、text、sourceHash、estimatorVersion、origin（manual / background） | 经过验证的覆盖区间摘要，非世界状态指令                                                             |
 | tombstone       | targetSeq、reason                                                                      | 格式预留；v1 不创建、不执行                                                                        |
 | supersede       | supersedes、replacement、reason                                                        | 格式预留；v1 不创建、不执行                                                                        |
@@ -194,7 +194,7 @@ WorldMutation 是类型化变更载荷，不是独立 system.code。结算变更
 
 ## 投影、预算与 recap
 
-`project(&RecordView, &WorldView, &Budget) -> Result<PromptPlan, ProjectionError>` 是纯函数；输入是不可变已确认视图，输出包含选定调用形态的 prompt / messages、GuardSpec、估算用量和所用 seq 区间。兼容概念上的 `project(&Record, &Budget)`，显式传入只读世界上下文；函数不写 JSONL、不发请求、不更新 estimator、不调整阶段。没有可信世界视图时使用空视图，不能读取一个任意外部数据库。
+`project(&RecordView, &WorldView, &Budget) -> Result<PromptPlan, ProjectionError>` 是纯函数；输入是不可变、按物理 seq 严格递增的已确认视图；乱序或重复 seq 本地拒绝。输出包含选定调用形态的 prompt / messages、GuardSpec、估算用量和所用 seq 区间。兼容概念上的 `project(&Record, &Budget)`，显式传入只读世界上下文；函数不写 JSONL、不发请求、不更新 estimator、不调整阶段。没有可信世界视图时使用空视图，不能读取一个任意外部数据库。
 
 顺序固定为冻结静态前缀 → 已接受 recap 区间 → 逐字近期窗口 → 有界当前场景 / 状态 → 目标 open tag。动态时钟、随机值、网络 profile 和变化的状态不进入静态前缀。换剧本规则、grammar / projectionVersion 或静态设置时新建会话或显式迁移，不能悄悄换 header 前缀。静态前缀字节稳定是可测试承诺，供应商实际 cache 命中由 usage 观察，不承诺每轮全命中。
 
@@ -230,6 +230,8 @@ recap 追加的 fromSeq..throughSeq 为此前未覆盖的连续逻辑区间（�
 ## Token 估算与标定
 
 初始字符估算为 `ceil(1.15 × (0.6 × 汉字数 + 0.3 × ASCII 数 + 1.0 × 其他 Unicode 标量数 + 封装估计量))`；先计入 prompt 标记、Chat 角色封装与静态字段，再乘 1.15 保守余量，不能只估正文。汉字范围由版本化分类器定义，emoji 不按字节长度假装英文。系数是粗估，实际计费 / 用量以供应商 usage 为准；[DeepSeek 官方说明](https://api-docs.deepseek.com/quick_start/token_usage/) 给出中英文经验值和离线 tokenizer，不能拿 tiktoken-rs 当其准绳。
+
+022 的离线夹具位于 `tests/fixtures/record/token-estimation-v1.json`：36 个合成样本，覆盖中文、英文、混合、JSON、emoji 与长剧本，每类包含六档长度。使用官方 DeepSeek V4 tokenizer 的 JSON 数据及 `tokenizers 0.23.2`，不执行下载包中的 Python 代码，不发送收费请求；夹具记录来源、包 / 数据 hash 及逐样本 hash。v1 的 actual / estimate P95 为 1.224432，最大为 1.224694，显示 emoji 样本低估约 22.5%。因此显式登记 v2：`ceil(v1Estimate × 1.25)`，作为下一次投影的默认估算版本；同一语料 v2 的 P95 为 0.979545，最大为 0.979720。该证据只代表离线 tokenizer 样本，不等同供应商实际 usage，也不证明所有模型和文本都不会低估。recap 的 estimatorVersion 接受已登记的 1 / 2，历史记录不改写。
 
 按 provider + model + 调用形态 + estimatorVersion 分桶收集每次物理请求的估计 / usage；不存正文或密钥。只有 usage 完整、对应冻结 prompt 的样本用于校正，缓存命中和未命中 input token 均计入实际 prompt 总量。离线用中文、英文、混合、JSON、emoji 和长剧本各类样本回归；候选 tokenizer 仅用于 dev / 离线标定，不进运行时。
 
@@ -288,4 +290,28 @@ store_get_migration 运行期快照包含 migrationId、phase、from?、to、cur
 | 迁移        | 多步 / 无步骤 / 第一步前失败 / 中途失败 / 投递失败，current 与真实 user_version 一致，终态与 seq 清退 |
 | 标定        | 混合语料 / usage 缺失 / 高偏差，模型 / 形态分桶与估算版本更新                                         |
 
-本稿不引入依赖；serde / serde_json / store 为既有基础，insta / proptest / 类型生成库是实现候选，按明确测试需要引入，不为记录设计引入 ORM 或事件溯源框架。022 实现时每次提交同步跨端类型、注释与架构现状，并在最终状态通过 bun run verify。
+022 复用 serde / serde_json / store，并引入 SHA-256、HMAC 和 RFC3339 时间库，依赖版本口径见[技术栈](tech-stack.md)。不引入 ORM 或事件溯源框架。022 实现时每次提交同步跨端类型、注释与架构现状，并在最终状态通过 bun run verify。
+
+## 实现边界与运行链路
+
+022 的实现位于 `mythos-engine::record`。格式与注册事实由 `format/`、`facts/` 所有；`session/` 串行分配身份、持久化、确认事件及恢复；`world/`、`history/` 通过注入解释器协调 JSONL 意图与 SQLite applied。未登记解释器拒绝执行，不为协议测试创造产品世界 schema。复杂模块入口与外置单测采用同目录 `mod.rs` / `tests.rs`。
+
+```text
+Tauri store_ipc 宏入口 → store_commands 参数解码与错误适配
+  → engine::blocking → Storage / Records / Session
+  → store::journal / applied / db
+Session 提交确认 → StorageEvents 有界队列 → 主窗口事件
+Vue composable → API → recovery 纯逻辑 → 快照 / 分页 / 正文
+```
+
+`Storage` 唯一拥有业务数据库打开状态、迁移诊断、偏好与会话登记表；实例锁仍由桌面 setup 持有。普通存储命令须经过 ready 门禁，迁移失败后 `store_get_migration` 仍可诊断。文件任务通过统一 blocking 边界运行，不占用异步运行时线程。`Records` 最多登记 16 个会话；生产者退出后可关闭单个会话，冻结、同步及事件清退完成后才释放同身份登记，防止重开与旧清退冲突。应用关闭先停止生产者，再关闭存储并排空事件适配。
+
+投影工作集最多 256 块 / 8 MiB 原行，优先保留最新块和当前玩家输入，再加载最新 recap（最多 16 块 / 1 MiB）和逐字历史。旧摘要来源逐行核验，不整段载入；工作集持有不可伪造的来源证据，纯投影使用该证据校验 recap。省略元数据最多为选中块数加一的逻辑区间；序号保留间隙和无效分支不增加无限的单条省略项。
+
+摘要候选最多 64 个来源块 / 256 KiB 原行，绑定会话、viewEpoch、物理读取边界、有效分支、冻结前缀和格式版本。请求前及提交前都核验；过期候选不发请求，提交不复用旧身份。后台压缩默认关闭，需要显式启用及调用授权，并共享主流程 lease。主动取消不追加 recap、不累计失败；真实失败才累计暂停条件。取消发生在文件提交临界区之后时保留已提交事实。
+
+估算诊断按 provider / model / shape / estimatorVersion 分桶，每桶最多 256 个比例样本，最多 128 桶；缺失 usage 不补零。每次物理请求使用冻结输入估算，安装诊断装饰器不会重复记样本。连续显著低估只暂停自动请求并返回 `engine.invalid-phase`，由用户主动重新标定恢复；不暗改系数，也不冒充费用不足。费用账本与产品调度仍分别由 035 / 023 接入。
+
+记录和迁移消费者复用逐项监听资源管理；部分注册已成功、其他注册仍等待时，卸载也立即释放已有监听，迟到句柄自行释放。恢复请求与缓存有界，不持续轮询；最后所有事件都丢失时，只有主动恢复或重连才能获知终态。当前真实窗口验证使用本地夹具，产品界面仍由 024 / 025 接入。
+
+记录追加通知包含确认后的 `viewEpoch`。同 UUID 重开、因果切换后的旧代际通知不能抬高当前事件基线；未知代际只触发有界快照核验，最多补一次读取，确认属于其他代际后丢弃提示。事件仍只带身份，不携带正文。

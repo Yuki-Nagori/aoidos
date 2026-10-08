@@ -1,6 +1,6 @@
 # LLM 接入与护栏
 
-更新日期：2026-10-08；供应商资料核验日期：2026-10-05。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/mythos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；记录持久化、阶段机与产品联调由 022–024 承接，当前验收状态见任务记录。实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
+更新日期：2026-10-08；供应商资料核验日期：2026-10-05。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/mythos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，正在最终验收；阶段机与产品联调由 023 / 024 承接，当前验收状态见任务记录。实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
 
 ## 架构与职责
 
@@ -27,16 +27,16 @@ Provider 用可作为 trait object 的异步接口，返回 Send 的 boxed futur
 
 业务结构至少包括以下字段；所有 byte 上限计算 UTF-8 长度，token 上限由 adapter 能力约束，不能互相替代：
 
-| 结构                 | 必需字段 / 不变量                                                                                                     |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| ProviderCapabilities | model、支持的调用形态、thinking 支持、按形态的 stopLimit / maxOutputTokens、temperatureEffective；未知不当作 true     |
-| GenerationRequest    | 冻结 profile、input、GuardSpec、outputLimits；凭据是 Rust 内部引用，不可序列化到 IPC                                  |
-| CompletionInput      | prompt 非空；其 open tag 由 006 投影生成；生成结果不包含 prompt 或 echo                                               |
-| ChatInput            | 非空 messages；role 仅 system / user / assistant；assistantPrefix 单独表达并由 adapter 注入，普通 chat 不能忽略该字段 |
-| Sampling             | temperature、maxTokens、emptyTemperatureSteps；thinking 与 temperature 能力冲突时禁用阶梯并省略无效参数               |
-| GuardRule            | id、非空 pattern、Anywhere / LineStart、priority、serverEligible；没有任意用户正则                                    |
-| AttemptState         | 物理请求数、传输重试是否已用、温度阶梯位置、首交付是否发生；状态跨 adapter 保留                                       |
-| TurnState            | turnId、冻结 profileId、text、三事件基线、可选 outcome / finishReason / error；终态不可逆                             |
+| 结构                 | 必需字段 / 不变量                                                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| ProviderCapabilities | model、支持的调用形态、thinking 支持、按形态的 stopLimit / maxOutputTokens、contextLimit?、temperatureEffective；未知不当作 true |
+| GenerationRequest    | 冻结 profile、input、GuardSpec、outputLimits；凭据是 Rust 内部引用，不可序列化到 IPC                                             |
+| CompletionInput      | prompt 非空；其 open tag 由 006 投影生成；生成结果不包含 prompt 或 echo                                                          |
+| ChatInput            | 非空 messages；role 仅 system / user / assistant；assistantPrefix 单独表达并由 adapter 注入，普通 chat 不能忽略该字段            |
+| Sampling             | temperature、maxTokens、emptyTemperatureSteps；thinking 与 temperature 能力冲突时禁用阶梯并省略无效参数                          |
+| GuardRule            | id、非空 pattern、Anywhere / LineStart、priority、serverEligible；没有任意用户正则                                               |
+| AttemptState         | 物理请求数、传输重试是否已用、温度阶梯位置、首交付是否发生；状态跨 adapter 保留                                                  |
+| TurnState            | turnId、冻结 profileId、text、三事件基线、可选 outcome / finishReason / error；终态不可逆                                        |
 
 Provider 的一次 start 可先失败，也可返回尚无 Text 的流；调用方不得把两者都包装进额外循环。adapter 将 completion 的 choices[0].text 与 chat 的 choices[0].delta.content 转成同一种 Text；reasoning 和 usage 单独传递，不用字符串启发式猜测。单个 Text 可以为空，但不能改变首交付状态。
 
@@ -289,7 +289,7 @@ TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地
 
 ## 实现承接
 
-实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `mythos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `mythos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022–024 仍待接入。
+实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `mythos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `mythos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 / 024 仍待产品接线。
 
 | 任务                                                          | 承接边界                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -302,4 +302,10 @@ TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地
 | [024 产品联调](../task/024-llm-engine-integration.md)         | 真实窗口、持久记录与失败恢复的三平台验证                      |
 | [035 计价与费用控制](../task/035-llm-cost-control-impl.md)    | 计价、统一预算端口与费用设置 / 明细（018 已预留可注入端口）   |
 
-018 的 GuardSpec 使用测试夹具验证匹配机制；产品语法使用 006 的[正式 GrammarSpec](record-engine.md#正式-prompt-语法与-guardspec)，由 022 实现后才能用于产品，不能把样例标记当默认协议。020 的内存调试仅验证协调机制，产品路径必须接入 022 的持久化写入方。007 记忆与 008 完整游戏 UI 各自另有设计任务，不混入本轮 LLM 接线验收。
+018 的 GuardSpec 使用测试夹具验证匹配机制；产品语法使用 006 的[正式 GrammarSpec](record-engine.md#正式-prompt-语法与-guardspec)，由 022 的 grammar 同源实现供 023 / 024 接入产品，不能把样例标记当默认协议。020 的内存调试仅验证协调机制，产品路径必须接入 022 的持久化写入方。007 记忆与 008 完整游戏 UI 各自另有设计任务，不混入本轮 LLM 接线验收。
+
+### 模型窗口与估算诊断
+
+`ProviderCapabilities.context_limit` 是已核验的模型窗口，未知模型返回 None，投影在本地拒绝。当前 DeepSeek 已登记模型按官方 1M context 文档设置保守的 1,000,000 Token；输出上限仍按各形态能力校验。[DeepSeek 官方能力与价格](https://api-docs.deepseek.com/quick_start/pricing/)。切换模型须重新冻结预算，不用前一个模型窗口。
+
+PreparedGeneration 的估算诊断包装真实 BudgetPort，每次物理请求记录冻结估算与真实 usage，重装包装不会重复统计。缺失 usage 不补零，自动暂停与恢复规则见[记录引擎](record-engine.md)。当前调试 IPC 使用 local-fixture provider 标识；实际供应商诊断及费用账本由产品接线 / 035 注入，不把夹具用量当真实费用。

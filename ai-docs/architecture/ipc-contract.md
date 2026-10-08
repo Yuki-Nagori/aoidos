@@ -34,12 +34,12 @@
 
 Rust 的 Serialize 载荷与 `src-web/api/store.ts` 类型同步维护；invoke 只透传，不做运行时校验。命令不要求前端传入磁盘路径，setup 注入业务库路径；重复注入保留首次值。
 
-| 命令                  | 参数 | 返回                                          | 边界                                                                                 |
-| --------------------- | ---- | --------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `store_list_backups`  | 无   | `{ items: [{ path, version, nanos, size }] }` | 最新 50 项，新到旧；目录不存在为空；nanos 为 Unix epoch 纳秒字符串，size 为字节数    |
-| `store_get_migration` | 无   | `{ from, to, phase: "idle" }`                 | from == to == 持久化 user_version；库或父目录不存在为 0，不创建目录 / 库，不运行迁移 |
+| 命令                  | 参数 | 返回                                          | 边界                                                                              |
+| --------------------- | ---- | --------------------------------------------- | --------------------------------------------------------------------------------- |
+| `store_list_backups`  | 无   | `{ items: [{ path, version, nanos, size }] }` | 最新 50 项，新到旧；目录不存在为空；nanos 为 Unix epoch 纳秒字符串，size 为字节数 |
+| `store_get_migration` | 无   | `MigrationSnapshot`（见下方运行期协议）       | 读取当前打开流程诊断及序号基线；查询不创建库、不运行迁移                          |
 
-快照目前只提供静态版本，不表示迁移正在运行、成功结束或失败，也未提供事件 seq 基线。真实迁移流的状态、阶段与每事件序号快照已由 006 定稿，见下文“记录命令与运行期迁移快照”；实际状态与发送由 [022](../task/022-record-engine-impl.md) 实现，监听者按该节规则对齐。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
+迁移运行期快照已由 022 接入，反映当前流程或最近终态；监听者按下方运行期协议对齐。备份只列普通文件，跳过目录和符号链接；迁移写入保留 3 份，人工放入更多备份时命令最多列最新 50 份。
 
 ## LLM 命令与快照
 
@@ -195,7 +195,7 @@ stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每
 
 接纳的长流程 done / failed 二选一恰一次；未接纳只返回 Err。cancel 不另造 operationId，用被取消流程的终态事件；interrupt 接纳后新 operation 负责换回合结果，旧 operation 正常取消收尾。PhaseState 的完整载荷只能在对应事实 / applied 确认后发布，最后事件全部丢失仍需重连或主动 get_phase，不暗加轮询。前端一 session 一个快照请求、最多 32 条缓存；按 seq 对齐，再按 phaseRevision 防止跨事件名乱序倒退。
 
-## 界面偏好（008 设计，尚未实现）
+## 界面偏好（008 设计，022 已实现）
 
 | 命令                     | 参数                        | 成功返回                                       |
 | ------------------------ | --------------------------- | ---------------------------------------------- |
@@ -255,16 +255,16 @@ ThemeBootstrap 由 026 在窗口创建前注入，非 invoke 返回，也不带�
 
 SkinToken.name 只取主题目录，value 只含 Rust 规范化常量，按目录顺序输出，每模式每名称最多一次。warning.token 仅目录名或受限 ASCII 候选（最多 64 字节），非安全名称省略，不泄露原值 / 路径；line 为 1 起安全整数。载荷 / warning / 缓存限额只在主题架构维护。theme 域无后台任务或事件流，响应即是已确认结果，不借主题切换取得游戏回合 lease。
 
-## 记录命令与运行期迁移快照（006 设计，尚未实现）
+## 记录命令与运行期迁移快照（006 设计，022 已实现）
 
-规则与磁盘结构见[记录引擎](record-engine.md)，实现由 022 承接；下列载荷不修改当前 Rust / TS API。本节定稿后，022 在同次实现提交中同步两端类型与调用者，不能只改文档就宣称运行期接口已生效。
+规则与磁盘结构见[记录引擎](record-engine.md)，实现由 022 承接；以下载荷已由 022 同步实现 Rust / TS API；产品记录创建与阶段决策仍由 023 接入。
 
 | 命令                   | 参数                              | 成功返回                                                                                                       |
 | ---------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | engine_get_record_page | `{ sessionId, cursor?, limit? }`  | `{ sessionId, items: RecordItem[], nextCursor?, lastSeq, lastRecordSeq, viewEpoch }`                           |
 | engine_get_record_view | `{ sessionId, limit? }`           | `{ sessionId, items: RecordItem[], nextCursor?, lastSeq, lastRecordSeq, viewEpoch, needsRecovery, inFlight? }` |
 | engine_get_record_body | `{ sessionId, bodyRef, cursor? }` | `{ text, nextCursor? }`；每段最多 32 KiB，按 UTF-8 边界                                                        |
-| store_get_migration    | 无（沿用现有命令）                | 下方 MigrationSnapshot；022 接入时替换当前静态形状                                                             |
+| store_get_migration    | 无（沿用现有命令）                | 下方 MigrationSnapshot；022 已替换静态形状                                                                     |
 
 记录 page / view 默认新到旧；limit 沿用总则，另有每页 512 KiB 上限。items 不含 header / partial journal，每项 `{ recordSeq, kind, createdAt, body?, bodyRef?, turnId?, outcome? }`；已知且单项能放入页时 body 为该 kind 的类型化块内容（不重复公共字段），超大或未知项仅提供元信息与 bodyRef，未知 kind 用兼容提示显示。生成块的 body 含 speakerId?、text、finishReason? / error?，outcome completed / cancelled / failed 同记录规则；其他 kind 的字段按记录引擎块表定型。nextCursor 缺省表示没有更多历史，不能用空字符串；bodyRef 为 Rust 发出的不透明内容引用，不含路径。
 
@@ -314,10 +314,10 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
   - `llm:turn:chunk`，data `{ turnId, delta }`（005 可加字段，不能删这两项）
   - `llm:turn:done`，data `{ turnId, outcome: "completed" | "cancelled", chunkSeq, finishReason? }`；completed 时必有 stop / guard / length，cancelled 时省略
   - `llm:turn:failed`，data `{ turnId, code, message, chunkSeq, finishReason? }`；llm.empty-output 时 finishReason 必有 stop / guard / length，其余失败仅在原因已确定时出现，与失败快照同值（错误码见下）
-  - `engine:record:appended`，data `{ sessionId, recordSeq, kind, turnId? }`；流标识 sessionId，正式块完成提交后发布，不携带整段正文；监听者用 view / page 取有界内容。
+  - `engine:record:appended`，data `{ sessionId, viewEpoch, recordSeq, kind, turnId? }`；流标识 sessionId，正式块完成提交后发布，不携带整段正文；监听者用 view / page 取有界内容。
   - `store:migration:progress`，data `{ migrationId, from, to, current, target }`；from / to 是本步骤版本，current == to，target 是流目标版本。
   - `store:migration:done`，data `{ migrationId, from, to, current }`；from / to 是整个流初始 / 目标版本，current == to；无步骤时 from == to。
-  - `store:migration:failed`，data `{ migrationId, from?, to, current?, failedStep?, code, message }`；to 是目标版本，current 是最后成功提交版本；code 为 store.*，不发送原始 SQLite / IO 错误。失败不发 done，已提交步骤保留。open_with_progress 回调在每步提交后发生，022 必须接入运行期状态和发送；当前仍无真实发送方。
+  - `store:migration:failed`，data `{ migrationId, from?, to, current?, failedStep?, code, message }`；to 是目标版本，current 是最后成功提交版本；code 为 store.*，不发送原始 SQLite / IO 错误。失败不发 done，已提交步骤保留。open_with_progress 回调在每步提交后发生，022 已接入运行期状态与真实窗口发送适配；完成证据见任务记录。
   - `engine:scene:advanced` / `engine:phase:changed` / `engine:operation:done` / `engine:operation:failed`：data 见上方引擎阶段快照，流标识 sessionId，012 已定稿、023 待实现。
 - 流式期间发生错误：以 `*:failed` 事件收尾；命令本身的 `Err` 只表示「提交被拒绝」，两者不重复携带同一错误。
 
@@ -325,7 +325,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
 - 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`theme.*`（026）、`engine.*` 的码名在本文预留（映射随 022、023 等实现任务落地）。`llm.*` 十码分工：传输类 7 码（auth / quota / rate-limited / network / tls / bad-response / aborted）已由 018 的 `mythos-llm::ProviderError` 落地，`code()` 返回裸码、交付边界定码见 `code_at_boundary`；`stalled` / `empty-output` 由调度层 `RunError::Stalled` / `RunError::EmptyOutput` 变体承载（无 `code()`，020 域错误映射补码）；`missing-key` 是提交前未保存密钥的命令层判定，不在 crate 内。020 域错误与薄命令适配已统一加 `llm.` 前缀。`app.*` 属于命令层。
-- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（所需业务存储未开放：初始化尚未完成，或运行期迁移失败后被冻结；后一种为 022 待实现行为。普通业务命令拒绝，但 store_get_migration 诊断仍可用；前端主动取该快照展示脱敏迁移失败，不持续轮询）。存储路径或文件缺失只用 `store.not-found`。
+- 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（所需业务存储未开放：初始化尚未完成，或运行期迁移失败后被冻结；后一种由 022 的共享 Storage 门禁实现。普通业务命令拒绝，但 store_get_migration 诊断仍可用；前端主动取该快照展示脱敏迁移失败，不持续轮询）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合；019 同型原生输入门禁也用此码拒绝第二个密码框，不占用业务 key 锁。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - theme 预留（009 设计，026 待实现）：`theme.invalid-skin` 表示存在的皮肤结构 / 硬预算不合法；缺文件为成功 missing、单条语义失败为 warnings、读取失败为 store.*，不自动重试。
@@ -387,3 +387,9 @@ else showGenericError(err);
 - **005**：[task 005 — LLM 接入与护栏](../task/005-llm-design.md)：规则与结构见 [LLM 已评审设计](llm.md)；本文集中维护每个 llm.* 的触发条件和 IPC 载荷，模式 / 护栏与重试例外见该文档。
 - **006**：[task 006 — 对局记录与上下文](../task/006-record-design.md)：定义记录追加事件、记录 page / body 与有界 view 恢复，以及 engine.interrupted 的持久记录触发。它们不是阶段快照。存储迁移流的 progress / done / failed、流标识、阶段、失败上下文和 store_get_migration 每事件 seq 基线已定稿；实际发送与运行期状态由 [022](../task/022-record-engine-impl.md) 实现。
 - **012**：[task 012 — 回合与阶段状态机](../task/012-turn-state-machine-design.md)：冻结 `engine.no-scene`、`engine.invalid-phase` 的触发条件，阶段事件的 data，以及 `engine_get_phase` 的快照载荷。单回合拒绝码用本文的 `app.busy`。
+
+### 记录命令的完整参数校验
+
+记录 page / view / body 与 UI 偏好写入通过完整 camelCase DTO 解码请求对象；字段类型错误、额外字段、非 JSON 请求返回 `app.bad-request`，不透传框架字符串错误。命令只适配解码、ready 门禁、业务调用及 CmdError；磁盘工作由共享 blocking 边界处理。迁移诊断在业务存储不可用时仍可读取，不触发新迁移。
+
+自动请求因 Token 估算需要重新标定而暂停时返回 `engine.invalid-phase`；其语义属于自动请求门禁，不使用费用 `budget.exceeded`。实时主动取消仍不使用 `engine.interrupted`，后者只用于重开恢复的中断正文记录。

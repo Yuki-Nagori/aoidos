@@ -360,6 +360,9 @@ fn runtime_missing(_: tokio::runtime::TryCurrentError) -> Fault {
 #[derive(Clone)]
 pub struct Lease(Arc<LeaseState>);
 impl Lease {
+    pub(crate) fn cancellation(&self) -> CancellationToken {
+        self.0.cancel.clone()
+    }
     /// 取消整轮及当前子调用；等待一致边界由协调器或阶段机持有者负责。
     pub fn cancel(&self) {
         self.0.cancel.cancel();
@@ -491,6 +494,11 @@ async fn run_public(
     writer: Arc<dyn OutputWriter>,
 ) {
     let id = lock(&turn.state).snapshot.turn_id.clone();
+    if let Err(error) = writer.begin(&id).await {
+        // begin 未确认时不尝试第二次创建 / 封口，不覆盖首次存储失败原因。
+        seal(&owner, &turn, None, &id, Terminal::failed(error)).await;
+        return;
+    }
     let (tx, mut rx) = mpsc::channel::<PendingText>(32);
     let producer = schedule(request, turn.cancel.clone(), tx, id.clone());
     let consumer = async {
@@ -507,7 +515,7 @@ async fn run_public(
     };
     let (result, fault) = tokio::join!(producer, consumer);
     let ending = terminal(result, fault, !lock(&turn.state).snapshot.text.is_empty());
-    seal(&owner, &turn, writer.as_ref(), &id, ending).await;
+    seal(&owner, &turn, Some(writer.as_ref()), &id, ending).await;
 }
 
 fn prepare(owner: &Inner, event: TurnEvent) -> Result<PreparedEvent, Fault> {
@@ -542,7 +550,7 @@ async fn commit_text(
             },
         )?;
         lock(&turn.state).reserved.confirm(&event);
-        writer.append(id, delta).await?;
+        writer.append(id, event.seq, delta).await?;
         {
             let mut state = lock(&turn.state);
             state.snapshot.text.push_str(delta);
@@ -580,7 +588,7 @@ fn terminal_event(id: &str, chunk_seq: u64, ending: &Terminal) -> TurnEvent {
 async fn seal(
     owner: &Inner,
     turn: &Turn,
-    writer: &dyn OutputWriter,
+    writer: Option<&dyn OutputWriter>,
     id: &str,
     mut ending: Terminal,
 ) {
@@ -598,7 +606,9 @@ async fn seal(
     if let Some(event) = &prepared {
         lock(&turn.state).reserved.confirm(event);
     }
-    if let Err(error) = writer.finish(id, &ending).await {
+    if let Some(writer) = writer
+        && let Err(error) = writer.finish(id, &ending).await
+    {
         ending = Terminal::failed(error);
         prepared = prepare(owner, terminal_event(id, chunk_seq, &ending)).ok();
     }

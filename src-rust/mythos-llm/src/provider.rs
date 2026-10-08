@@ -24,6 +24,8 @@ pub enum RequestMode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderCapabilities {
     pub model: String,
+    /// 已核验的上下文窗口；未知时拒绝记录投影，不推测无限容量。
+    pub context_limit: Option<u32>,
     pub completion: bool,
     pub chat: bool,
     /// 末条 assistant 消息带 `prefix` 标志的续写能力（Chat 形态）。

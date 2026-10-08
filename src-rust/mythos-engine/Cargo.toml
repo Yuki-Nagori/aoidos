@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+mythos-store.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+time.workspace = true
 mythos-llm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -14,4 +19,5 @@ futures.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+mythos-store = {workspace = true, features=["test-support"]}
 tokio = { workspace = true, features = ["test-util"] }
