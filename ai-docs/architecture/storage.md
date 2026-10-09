@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-09。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；记忆与导入导出按后续任务推进；工程纪律前提见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-10。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；029 正在实现记忆 manifest / 正文存储与恢复，产品接入仍由后续任务负责；导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -58,7 +58,7 @@ CREATE TABLE point_allocations (
 
 数据根由装配层调用 Tauri `app_data_dir()` 取得，当前应用标识为 `com.yuki.aoidos`，没有自定义目录覆盖。默认 macOS 为 `~/Library/Application Support/com.yuki.aoidos/`，Windows 为 `%APPDATA%\com.yuki.aoidos\`，Linux 为 `$XDG_DATA_HOME/com.yuki.aoidos/`（未设置时使用 `~/.local/share/com.yuki.aoidos/`），不使用 `~/.aoidos`。实际系统重定向由 Tauri 解析，不在业务层拼接用户主目录。
 
-`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `aoidos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。对话记录及两字段 UI 偏好已由 022 实现；记忆目录仍为后续设计布局。020 的调试正文仅存内存，产品持久化使用独立 OutputWriter。
+`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `aoidos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。对话记录及两字段 UI 偏好已由 022 实现；029 实现会话记忆版本目录，批次结果由 030 接入。020 的调试正文仅存内存，产品持久化使用独立 OutputWriter。
 
 ```text
 <app-data>/                       # tauri PathResolver::app_data_dir，注入业务 crate
@@ -72,8 +72,8 @@ CREATE TABLE point_allocations (
 ├── workspaces/<script-id>/       # 每剧本一个工作区
 │   ├── transcript/<session-id>.jsonl
 │   ├── transcript/<session-id>.<turn-id>.partial.jsonl  # 唯一活跃安全增量日志
-│   ├── memory/                   # 007 文件正文；manifest 在 storage.sqlite（029 待实现）
-│   │   ├── runs/<run-id>/        # 会话记忆版本正文与批次结果（029 / 030 待实现）
+│   ├── memory/                   # 029：文件正文；manifest 在 storage.sqlite
+│   │   ├── runs/<run-id>/        # 029：会话记忆版本正文；030 接入批次结果文件
 │   │   │   ├── entries/<entry-id>/<version-id>.json
 │   │   │   └── batches/<batch-id>/result.json
 │   │   └── cycle/                # 轮回刻痕，独立生命周期（032 待实现）
@@ -112,7 +112,7 @@ CREATE TABLE point_allocations (
 ## 错误与对接
 
 - 裸码由 `StoreError::code()` 返回。IPC 的 `store.` 前缀、中文 `message` 与 `detail` 见[通信契约](ipc-contract.md)。磁盘满、权限、锁定超时、损坏、路径非法各占独立码。
-- 对接：006 用原子写 + JSONL 截断恢复；007 使用 SQLite manifest + 文件正文；不可变版本 / cycle 目录及依赖式清理见[记忆设计](memory.md)，SQLite 迁移备份与文件覆写备份遵守本文约定；019 的配置及私有凭据文件使用 `llm/`，schema 与权威后端规则见[通信契约](ipc-contract.md#工程纪律可检查版)。
+- 对接：006 用原子写 + JSONL 截断恢复；029 正在实现 007 的 SQLite manifest、不可变文件正文与恢复，产品记忆流程尚未接入；cycle 与依赖式清理边界见[记忆设计](memory.md)。SQLite 迁移备份与文件覆写备份遵守本文约定；019 的配置及私有凭据文件使用 `llm/`，schema 与权威后端规则见[通信契约](ipc-contract.md#工程纪律可检查版)。
 
 ## 实现状态与后续范围
 
