@@ -84,7 +84,7 @@ ai-docs/
 | 036  | [实现：共用 JSON 编解码与规范化](task/036-json-tools-impl.md)                 | 底层·共用工具     | 013、018、022                     | done      |
 | 037  | [Rust 覆盖率预算审计与消除](task/037-rust-coverage-audit.md)                  | 底层·门禁         | 019、022、023                     | done      |
 | 038  | [统一项目命名为 Aoidos](task/038-rename-aoidos.md)                            | 底层·工程         | 023、037                          | done      |
-| 040  | [实现：独立剧本解析器](task/040-script-parser-impl.md)                        | 底层·剧本         | 039、023                          | ready     |
+| 040  | [实现：独立剧本解析器](task/040-script-parser-impl.md)                        | 底层·剧本         | 039、023                          | done      |
 | 041  | [默认原创奇幻剧本与玩法验证](task/041-default-scenario.md)                    | 剧本·内容         | 012、023、038                     | done      |
 
 实施按表中依赖推进，设计未定稿或前置未完成时保持 planned。018–024 承接 LLM 链路；029–033 承接记忆，030 / 033 直接依赖 035 计费，031 依赖 034 国际化。025 交付完整界面，不扩大 004 样式底座或 024 联调范围。

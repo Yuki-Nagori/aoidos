@@ -26,6 +26,7 @@
 │   ├── src/store_commands/   # 存储参数适配及有界平台事件队列
 │   └── build.rs               # tauri-build
 ├── src-rust/                  # 不依赖 tauri 的业务 crate
+│   ├── aoidos-script/         # 剧本原文解析 / 格式校验，不执行内容规则
 │   ├── aoidos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建

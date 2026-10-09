@@ -143,3 +143,7 @@ useEnginePhase → api/engine + listener-group
 ## 文档职责
 
 架构文档维护模块边界和协议设计，规范记录长期工程规则，task 保存范围、决策与验证证据。依赖版本集中在技术栈，跨端接口与公共预算集中在通信契约，专题文档通过链接引用，避免同一规则出现多份口径。未排期构想放在 [ideas/](../ideas/)，调查依据放在 [research/](../research/)。
+
+### 剧本原文解析
+
+040 已交付独立 `aoidos-script` 工作区 crate，只依赖标准库，解析 Markdown 原文并校验身份 / 标题 / 容量。生产接线由 024 承接，不反向依赖业务 crate。默认原文与许可保存在 `resources/scripts/`，格式契约见[剧本规范](../standards/scenarios.md)。

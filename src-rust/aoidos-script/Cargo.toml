@@ -1,0 +1,5 @@
+[package]
+name = "aoidos-script"
+description = "剧本原文解析、格式校验与结构化数据输出"
+version.workspace = true
+edition.workspace = true
