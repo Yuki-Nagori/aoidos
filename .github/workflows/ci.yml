@@ -8,13 +8,19 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "ai-docs/**"
-      - "**/*.md"
+    paths:
+      - "**"
+      - "!ai-docs/**"
+      - "!**/*.md"
+      # 内嵌剧本改变编译产物与 prompt，必须复验；文档 Markdown 仍不触发。
+      - "resources/scripts/**"
   pull_request:
-    paths-ignore:
-      - "ai-docs/**"
-      - "**/*.md"
+    paths:
+      - "**"
+      - "!ai-docs/**"
+      - "!**/*.md"
+      # 内嵌剧本改变编译产物与 prompt，必须复验；文档 Markdown 仍不触发。
+      - "resources/scripts/**"
 
 concurrency:
   group: ci-${{ github.ref }}
