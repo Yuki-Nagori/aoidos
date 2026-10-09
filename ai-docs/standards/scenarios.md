@@ -8,7 +8,7 @@
 
 默认资源由 engine 的资源模块显式登记，使用编译期 `include_bytes!` / `include_str!` 嵌入正文与许可。固定路径属于发布资源配置，运行时按 scriptId 选择，不依赖编译机器目录；业务模块不自行拼接文件路径。首版不引入目录扫描或任意剧本包注册。
 
-默认示例为 Mistbell v1 原文（资源由 041 内嵌）。正文和许可按原字节冻结，格式器不改写；更新为显式发布。正文原始 UTF-8 字节的 SHA256 使用 `sha256:<hex>` 作为 header.scriptRevision，引擎加正式 prompt 标记后的静态前缀另算 staticPrefixHash。原文更新不覆盖已有周目；重新打开必须匹配已登记版本，不仅校验 scriptId。
+默认示例为 [Mistbell v1 原文](../../resources/scripts/mistbell/Mistbell.md)。正文和许可按原字节冻结，格式器不改写；更新为显式发布。正文原始 UTF-8 字节的 SHA256 使用 `sha256:<hex>` 作为 header.scriptRevision，引擎加正式 prompt 标记后的静态前缀另算 staticPrefixHash。原文更新不覆盖已有周目；重新打开必须匹配已登记版本，不仅校验 scriptId。
 
 ## 最小原文 v1
 

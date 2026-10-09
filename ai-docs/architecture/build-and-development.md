@@ -74,3 +74,5 @@ $ bun run tauri:build
 3. 工作方式登记：非平凡改动从[任务索引](../task-index.md)建 task 开始。
 
 Windows / MSVC 的 Tauri 构建按 Cargo 目标平台判断，共用 `scripts/rust/tauri-build.rs`，将 Common Controls v6 manifest 嵌入应用、lib 单测和原生测试入口。Tauri 默认资源链接仅覆盖 bins，新增 mock IPC 单测会使无 manifest 的测试程序在启动时返回 `STATUS_ENTRYPOINT_NOT_FOUND`；共享适配替换默认 manifest 注入，避免重复资源，同时保留应用默认 v6 能力。依据 [Tauri 上游 issue #13419](https://github.com/tauri-apps/tauri/issues/13419)，上游覆盖全部测试目标后可撤除此适配；实际 Windows 验证以 CI 为准。
+
+剧本原文 `resources/scripts/**` 是编译资源，修改正文或许可触发三平台 CI；普通 Markdown 与 `ai-docs/**` 仍跳过纯文档流水线。

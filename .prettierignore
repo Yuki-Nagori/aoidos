@@ -5,3 +5,6 @@ target/
 src-tauri/gen/
 Cargo.lock
 bun.lock
+
+# 剧本发布原文及许可按原字节冻结，不由格式器重写。
+resources/scripts/mistbell/
