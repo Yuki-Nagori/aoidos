@@ -1,4 +1,4 @@
-# 013 — 实现：存储与文件基建 crate（mythos-store）
+# 013 — 实现：存储与文件基建 crate（aoidos-store）
 
 - 状态：done
 - 依赖：011
@@ -7,7 +7,7 @@
 
 ## 目标与背景
 
-[存储基建设计](../architecture/storage.md)已定稿（011 done）。本任务按设计落地首个业务 crate `src-rust/mythos-store`（不依赖 tauri），提供全仓复用的持久化基座：原子写、路径消毒、迁移 runner、多开锁与错误码。设计中标定的参数在此落定初值。
+[存储基建设计](../architecture/storage.md)已定稿（011 done）。本任务按设计落地首个业务 crate `src-rust/aoidos-store`（不依赖 tauri），提供全仓复用的持久化基座：原子写、路径消毒、迁移 runner、多开锁与错误码。设计中标定的参数在此落定初值。
 
 ## 必读
 
@@ -15,7 +15,7 @@
 
 ## 范围与非目标
 
-交付（`src-rust/mythos-store`）：
+交付（`src-rust/aoidos-store`）：
 
 1. `paths`：组件消毒（非法字符 / Windows 保留名 / 尾点尾空格）、`script_id_from_name`（`[a-z0-9-]{1,64}`，截断 + FNV-1a 短 hash，CJK 回退）、`join_under_root`（拒 `..` / 分隔符 / 盘符）。
 2. `atomic`：`write_atomic` / `write_text_atomic` / `write_atomic_private`（唯一 tmp + fsync + rename，Windows 锁定退避重试，失败上抛并清理 tmp）、`clean_temp_files`（`.tmp` 自愈）、`truncate_incomplete_jsonl`（尾行截断恢复）。
@@ -30,13 +30,13 @@
 
 ## 实施步骤
 
-1. 根 `Cargo.toml`：`members` 增 `src-rust/mythos-store`，workspace 依赖增 rusqlite（bundled、backup）、fs4。
+1. 根 `Cargo.toml`：`members` 增 `src-rust/aoidos-store`，workspace 依赖增 rusqlite（bundled、backup）、fs4。
 2. 按 `error → paths → atomic → lock → db` 顺序实现，每模块带单测（含错误路径）。
 3. `cargo fmt / clippy / test / coverage:rust`（新 crate 纳入 workspace 100% 行覆盖），初次交付时 `bun run verify` 为十项；后续补充使用当前十三项门禁。
 
 ## 预计改动
 
-新建 `src-rust/mythos-store/`（Cargo.toml、lib.rs、原交付模块）；修改根 `Cargo.toml`、`Cargo.lock`、`repository-layout.md`（目录树补 src-rust 实体）。
+新建 `src-rust/aoidos-store/`（Cargo.toml、lib.rs、原交付模块）；修改根 `Cargo.toml`、`Cargo.lock`、`repository-layout.md`（目录树补 src-rust 实体）。
 
 ## 验收标准
 
@@ -48,16 +48,16 @@
 
 ## 验证计划与结果
 
-以下记录区分初次实现、issue #1 修复与整体复核，历史数字不代表当前测试数量。测试数写为「mythos-store + src-tauri」；Rust 行覆盖门槛始终为 100%。
+以下记录区分初次实现、issue #1 修复与整体复核，历史数字不代表当前测试数量。测试数写为「aoidos-store + src-tauri」；Rust 行覆盖门槛始终为 100%。
 
 | 阶段          | 日期       | 环境              | 检查                                                                                      | 结果                                   |
 | ------------- | ---------- | ----------------- | ----------------------------------------------------------------------------------------- | -------------------------------------- |
 | 初次实现      | 2026-10-05 | Windows           | `bun run verify`                                                                          | 十项 exit 0；54 + 1 测试；1222/1222 行 |
 | issue #1 修复 | 2026-10-05 | macOS 本地        | `bun run verify`                                                                          | 十项 exit 0；55 + 1 测试；1237/1237 行 |
-| issue #1 修复 | 2026-10-05 | Ubuntu / macOS CI | [run 37236789035](https://github.com/Yuki-Nagori/mythos/actions/runs/37236789035)         | 全过；55 + 1 测试；1237/1237 行        |
+| issue #1 修复 | 2026-10-05 | Ubuntu / macOS CI | [run 37236789035](https://github.com/Yuki-Nagori/aoidos/actions/runs/37236789035)         | 全过；55 + 1 测试；1237/1237 行        |
 | issue #1 修复 | 2026-10-05 | Windows CI        | 同上                                                                                      | 全过；56 + 1 测试；1260/1260 行        |
 | 整体复核      | 2026-10-05 | macOS 本地        | `bun run verify`                                                                          | 十项 exit 0；60 + 1 测试；1312/1312 行 |
-| 整体复核      | 2026-10-05 | Ubuntu / macOS CI | [PR #4 / run 37237430870](https://github.com/Yuki-Nagori/mythos/actions/runs/37237430870) | 全过；60 + 1 测试；1312/1312 行        |
+| 整体复核      | 2026-10-05 | Ubuntu / macOS CI | [PR #4 / run 37237430870](https://github.com/Yuki-Nagori/aoidos/actions/runs/37237430870) | 全过；60 + 1 测试；1312/1312 行        |
 | 整体复核      | 2026-10-05 | Windows CI        | 同上                                                                                      | 全过；59 + 1 测试；1335/1335 行        |
 
 整体复核 CI 对应提交 `a443f12`。新增回归测试验证临时文件冲突不破坏既有文件、写失败清理、路径编码保真，以及部分 SQL / COMMIT 失败后的回滚、版本不推进与连接复用。Unix 有原始字节路径测试，Windows 有宽字符保真和文件占用测试，因此测试数量不同。
@@ -74,11 +74,11 @@
 
 - 2026-10-05：创建任务（ready），标定 WAL、备份保留 3 份、rename 重试 5 次 / 25ms 指数退避和 OS 独占锁。
 - 2026-10-05：初次实现完成，在 Windows 验证十项门禁。路径归一化集中在 `paths`；SQLite 备份使用 backup API，避免遗漏未 checkpoint 的 WAL 提交；备份按时间戳整数排序。多开使用 fs4，锁文件只解锁不删除。
-- 2026-10-05：[issue #1](https://github.com/Yuki-Nagori/mythos/issues/1) 复核发现 Ubuntu / macOS 仅覆盖 1197/1199 行。`finish_rename_err` 已有错误映射测试，但泛型重试函数的闭包实例各自缺少成功 / 失败路径，汇总行号不能完整显示实例缺口。
+- 2026-10-05：[issue #1](https://github.com/Yuki-Nagori/aoidos/issues/1) 复核发现 Ubuntu / macOS 仅覆盖 1197/1199 行。`finish_rename_err` 已有错误映射测试，但泛型重试函数的闭包实例各自缺少成功 / 失败路径，汇总行号不能完整显示实例缺口。
 - 2026-10-05：提交 `9c75d9e` 共享非泛型重试实现，补测 busy 耗尽与非 busy 立即失败，验证次数、错误路径、原文件保留和 tmp 清理。三平台 CI 通过，已用 gh 评论并关闭 issue #1；门槛和忽略口径未改。
 - 2026-10-05：按用户要求整体 review 五模块。临时文件改排他创建，仅清理本次成功创建的文件；临时名和归一化路径保留 OS 原始编码；迁移改为 RAII IMMEDIATE 事务；修正幂等测试检查错误备份目录的断言。
 - 2026-10-05：公开注释明确实例锁、可信 SQL、数据根所有权与 rename 后错误语义，清理重复及失效说明。`error` 无需修改，`lock` 保留 OS 锁和中断重试，并改用确定更长的 PID 测试数据。内容补入本任务，不新增 task。
-- 2026-10-06：第二轮整体 review（含注释逐条核对）：atomic / paths / db / lock 四模块无需代码或注释改动。消融验证 10 项安全机制（单点摘除 → `cargo test -p mythos-store` → 还原，零残留）：Windows 保留名消毒、路径穿越 / 分隔符拒绝、rename 占用退避重试（4 失败）、失败后 tmp 清理、JSONL 半行截断自愈、迁移 SQL 失败回滚上报（2 失败）、备份保留份数（2 失败）、WAL 模式强制、新库版本拒绝、实例锁独占检测——**10/10 全部被既有测试捕捉**，无一漏网。
+- 2026-10-06：第二轮整体 review（含注释逐条核对）：atomic / paths / db / lock 四模块无需代码或注释改动。消融验证 10 项安全机制（单点摘除 → `cargo test -p aoidos-store` → 还原，零残留）：Windows 保留名消毒、路径穿越 / 分隔符拒绝、rename 占用退避重试（4 失败）、失败后 tmp 清理、JSONL 半行截断自愈、迁移 SQL 失败回滚上报（2 失败）、备份保留份数（2 失败）、WAL 模式强制、新库版本拒绝、实例锁独占检测——**10/10 全部被既有测试捕捉**，无一漏网。
 - 2026-10-06：第五轮子不变量消融前排查发现 `PRAGMA foreign_keys` 无断言（打开路径必须带外键约束），补入 `migrations_apply_in_order_and_are_idempotent`。消融 6 项：foreign_keys 开启（1 失败）、首装不做迁移备份（3 失败，既有 backs-up-once 断言已钉）、备份按解析整数排序（1 失败）、保留名检查前先去尾点空格（3 失败）、script_id CJK 哈希回退（2 失败）——5/5 捕捉；锁 Drop 的显式 `unlock` 变异后套件仍绿，属**非承重防御**：guard drop 时 File 句柄关闭，内核即释放锁，「Drop 释放锁」行为本身由 `second_acquire_fails_release_allows_retry` 钉住，显式调用保留作表达明确性。
 - 2026-10-06：第八轮补角消融补记 paths 项：script_id 超 64 字符的截断+哈希后缀（`script_id_truncates_long_names_with_hash` 钉住，变异 keep 边界即失败）。
 
@@ -94,4 +94,4 @@
 
 ## 完成摘要
 
-`mythos-store` 已提供路径消毒、原子 / 私有文件发布、有界文本读取与文件自愈、独占实例锁、SQLite WAL 迁移和在线备份，以及统一存储错误码。原交付十项门禁与三平台 CI 均通过；019 补充能力的十三项验证与消融证据见 [019](019-llm-profile-credentials-impl.md)。存储逻辑仍要求逐文件行覆盖 100%。crate 不依赖 Tauri；业务 schema 与消费命令随 006 / 007 接入，使用边界见「风险与回退」。
+`aoidos-store` 已提供路径消毒、原子 / 私有文件发布、有界文本读取与文件自愈、独占实例锁、SQLite WAL 迁移和在线备份，以及统一存储错误码。原交付十项门禁与三平台 CI 均通过；019 补充能力的十三项验证与消融证据见 [019](019-llm-profile-credentials-impl.md)。存储逻辑仍要求逐文件行覆盖 100%。crate 不依赖 Tauri；业务 schema 与消费命令随 006 / 007 接入，使用边界见「风险与回退」。

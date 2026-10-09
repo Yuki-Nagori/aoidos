@@ -1,5 +1,5 @@
 [package]
-name = "mythos-native-tests"
+name = "aoidos-native-tests"
 version.workspace = true
 edition.workspace = true
 publish = false
@@ -16,12 +16,12 @@ tauri.workspace = true
 [dev-dependencies]
 tokio.workspace = true
 uuid.workspace = true
-mythos.workspace = true
-mythos-engine.workspace = true
-mythos-store.workspace = true
+aoidos.workspace = true
+aoidos-engine.workspace = true
+aoidos-store.workspace = true
 serde_json.workspace = true
 
-mythos-llm = { workspace = true, features = ["native-smoke"] }
+aoidos-llm = { workspace = true, features = ["native-smoke"] }
 secrecy.workspace = true
 
 [[test]]

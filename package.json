@@ -1,5 +1,5 @@
 {
-  "name": "mythos",
+  "name": "aoidos",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:native": "bun scripts/build-native-fixture.mts && cargo test -p mythos-native-tests --features desktop-session",
+    "test:native": "bun scripts/build-native-fixture.mts && cargo test -p aoidos-native-tests --features desktop-session",
     "test:rust": "cargo test --workspace",
     "coverage:rust": "bun scripts/coverage-rust.mts",
     "doc:rust": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps --workspace",
@@ -33,7 +33,8 @@
     "format:rust:check": "cargo fmt --all --check",
     "knip": "knip",
     "verify": "bun run typecheck && bun run typecheck:rust && bun run lint && bun run lint:rust && bun run format:check && bun run format:rust:check && bun run test:coverage && bun run test:rust && bun run coverage:rust && bun run knip && bun run bench && bun run build:web && bun run doc:rust",
-    "prepare": "husky"
+    "prepare": "husky",
+    "clean:rust": "cargo clean"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

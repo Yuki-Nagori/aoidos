@@ -26,7 +26,7 @@
 
 ## 关联
 
-- [002 产品化改名](../task/002-rebrand-mythos.md)：将本构想落档，不含实现。
+- [002 产品化改名](../task/002-rebrand-aoidos.md)：将本构想落档，不含实现。
 - [006 记录设计](../task/006-record-design.md)（done）与 [022 记录实施](../task/022-record-engine-impl.md)（planned）：投影、持久化与恢复。
 - [007 记忆设计](../task/007-memory-design.md)（done）：角色认知与记忆生命周期。
 - [Herta 调查](../research/001-herta.md)：记录、上下文与记忆机制的设计输入。

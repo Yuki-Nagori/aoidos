@@ -7,7 +7,7 @@
 
 ## 目标与背景
 
-LLM 设计已冻结，但仓库尚无供应商调用与安全输出流水线。交付不依赖 Tauri 的 mythos-llm 核心，以可重复的本地夹具验证生成行为。
+LLM 设计已冻结，但仓库尚无供应商调用与安全输出流水线。交付不依赖 Tauri 的 aoidos-llm 核心，以可重复的本地夹具验证生成行为。
 
 ## 必读
 
@@ -33,7 +33,7 @@ LLM 设计已冻结，但仓库尚无供应商调用与安全输出流水线。�
 
 ## 预计改动
 
-待创建 `src-rust/mythos-llm/` 及测试夹具；更新现存根 workspace、锁文件与 package scripts（新增命令时）。以上为规划，不表示目录或接口已经实现。
+待创建 `src-rust/aoidos-llm/` 及测试夹具；更新现存根 workspace、锁文件与 package scripts（新增命令时）。以上为规划，不表示目录或接口已经实现。
 
 ## 验收标准
 
@@ -51,9 +51,9 @@ LLM 设计已冻结，但仓库尚无供应商调用与安全输出流水线。�
 
 | 日期       | 环境 / 命令                                                             | 预期        | 实际结果                                                                        |
 | ---------- | ----------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------- |
-| 2026-10-06 | `cargo test -p mythos-llm`                                              | 全部通过    | 147 通过（decode/sse/guard 单测 + deepseek 25 + schedule 33 + testserver 3 等） |
-| 2026-10-06 | `cargo llvm-cov -p mythos-llm --lib --ignore-filename-regex "lib\.rs$"` | 行覆盖 100% | Lines 100.00%（4116/4116），函数 100%                                           |
-| 2026-10-06 | `cargo clippy -p mythos-llm --all-targets -- -D warnings`               | 无告警      | 通过                                                                            |
+| 2026-10-06 | `cargo test -p aoidos-llm`                                              | 全部通过    | 147 通过（decode/sse/guard 单测 + deepseek 25 + schedule 33 + testserver 3 等） |
+| 2026-10-06 | `cargo llvm-cov -p aoidos-llm --lib --ignore-filename-regex "lib\.rs$"` | 行覆盖 100% | Lines 100.00%（4116/4116），函数 100%                                           |
+| 2026-10-06 | `cargo clippy -p aoidos-llm --all-targets -- -D warnings`               | 无告警      | 通过                                                                            |
 | 2026-10-06 | `bun run verify`（提交前在最终状态重跑）                                | 十项通过    | 十项全部通过                                                                    |
 
 ## 风险与回退
@@ -71,16 +71,16 @@ LLM 设计已冻结，但仓库尚无供应商调用与安全输出流水线。�
 - 2026-10-06：用户要求供应商实现独立成适配层目录，`deepseek.rs` 移入 `src/providers/`，`providers/mod.rs` 提供 ProviderId 身份 / 默认端点 / 解析（新厂商 = 新模块 + 登记，不动核心流水线）。
 - 2026-10-06：夹具服务器按用户可见行为打磨——测试用缩短真实预算替代 paused 虚拟时钟（暂停时钟在真实 IO 等待期间空转推进会误触发计时器）；退避取消测试用预算端口记账（观察到 S1:Failed 再取消）消除竞态；Windows 下 RST 会清客户端未读缓冲，中断类夹具在 RST 前留读取窗口。
 - 2026-10-06：`bun run verify` 十项通过（typecheck 双端、eslint / clippy、prettier / rustfmt、vitest、cargo test、行覆盖 100%、knip），任务与索引标 done。
-- 2026-10-06：整体评审后做行为不变优化——删除 `run_generation`→`run` 的无谓中转、删除 `ProviderCapabilities.mode` 只写字段（形态由 `capabilities(model, mode)` 入参给出）、deepseek / schedule 两处重复的 `mode_of` 收编为 `ProviderRequest::mode()`；新增 `stream_is_terminal_after_finish` 契约测试（Finish 之后再 poll 只得 None）。src-tauri / mythos-store 注释扫描无需改动。
+- 2026-10-06：整体评审后做行为不变优化——删除 `run_generation`→`run` 的无谓中转、删除 `ProviderCapabilities.mode` 只写字段（形态由 `capabilities(model, mode)` 入参给出）、deepseek / schedule 两处重复的 `mode_of` 收编为 `ProviderRequest::mode()`；新增 `stream_is_terminal_after_finish` 契约测试（Finish 之后再 poll 只得 None）。src-tauri / aoidos-store 注释扫描无需改动。
 - 2026-10-06：消融验证（单点摘除安全机制 → 跑套件 → 还原，工作区零残留）：护栏命中+扣留摘除 → 24 测试失败；UTF-8 跨包扣留摘除 → 6 失败；SSE 事件上限摘除 → 2 失败；头 / 空闲看门狗摘除 → 挂起（限时中止）；传输重试 / 请求总数上限摘除 → 无限重试挂起；温度阶梯门禁摘除 → 3 失败 + 挂起；首字节后禁止重发摘除 → 失败 + 挂起；适配流终止一次性摘除 → 重复增量无限产出致进程 abort（上述契约测试将此类退化钉为断言级失败）。八项机制均被套件捕捉；`reqwest retry(never)` 摘除在离线夹具下无差异（无法触发协议 NACK 重试），该项由 024 真实端点联调覆盖。
 - 2026-10-06：第四轮细粒度消融（子不变量级单点变异，12/12 捕捉）：LineStart 锚定放宽为 Anywhere（3 失败）、命中选择改为最早起点而非最早结束位置（2 失败）、同结束位置改选最短规则（1 失败）、尾部 CR 扣留改立即转 LF（3 失败）、server_stops 资格过滤（1 失败）、传输重试后仍进阶梯（1 失败）、阶梯请求保留传输预算（1 失败）、阶梯配置校验（1 失败）、预算 reserve 门槛（1 失败）、跨尝试 usage 改覆盖不累计（1 失败）、退避指数改恒为基准（1 失败）、SSE 多行 data 不以 LF 连接（4 失败）。其中「跨尝试 usage 累计」原为盲区（无测试断言），本轮补 `usage_accumulates_across_ladder_attempts` 钉住后再消融验证。
 - 2026-10-06：第五轮消融发现并修复实现与契约的偏差：`ingest_data` 原取 choices 首元素，未校验 index 字段，与契约「只抽 index=0，不启用 n>1」不符——改为 `find(index == 0)`（index 缺失按 0），补 `only_index_zero_choices_are_consumed`（index=1 候选排前不进正文）。同轮子不变量消融 4/4 捕捉：index 过滤、显式关闭 thinking（2 失败）、prefix=true 标志、空 stop 省略参数。
 - 2026-10-06：第六轮残存微不变量消融 3/3 捕捉：decode 非法序列报错（吞掉则 3 失败）、SSE 流首 BOM 剥除、data 值单空格剥除（38 失败——所有携带正文帧的测试共同钉住）。注释评审至此全仓逐文件闭环，零改动。
-- 2026-10-06：第七轮测试健壮性审计（生产矩阵已满后转向测试自身）：静态分类全部时序假设——`fast_policy` 的 80ms 看门狗预算是主要抖动源（慢速 CI 上首包晚到会让 idle/head 在正文到达前触发走错分支），RST 前 50ms 读取窗口次之（Windows 会清未读缓冲）；其余 sleep 均为缺失断言或事件驱动，不依赖时序。加固：head/idle 预算 80→250ms、RST 窗口 50→150ms（超时类测试并行执行下总时长几乎不变）。压力验证：mythos-llm ×10、store / tauri ×3、vitest ×5 共 21 轮全部通过，单轮耗时分布 2.2–2.3s / 0.9–1.6s / 0.3–0.4s / 0.8s，零抖动。
+- 2026-10-06：第七轮测试健壮性审计（生产矩阵已满后转向测试自身）：静态分类全部时序假设——`fast_policy` 的 80ms 看门狗预算是主要抖动源（慢速 CI 上首包晚到会让 idle/head 在正文到达前触发走错分支），RST 前 50ms 读取窗口次之（Windows 会清未读缓冲）；其余 sleep 均为缺失断言或事件驱动，不依赖时序。加固：head/idle 预算 80→250ms、RST 窗口 50→150ms（超时类测试并行执行下总时长几乎不变）。压力验证：aoidos-llm ×10、store / tauri ×3、vitest ×5 共 21 轮全部通过，单轮耗时分布 2.2–2.3s / 0.9–1.6s / 0.3–0.4s / 0.8s，零抖动。
 - 2026-10-06：第八轮补角消融（叶子级规则与常量，9/9 捕捉，零代码改动）：guard 空 pattern 拒绝、含 CR 拒绝、512 字节上限、32 条上限、收尾截断标志（2 失败）、deepseek prefix 端点走 /beta、completion 端点走 /beta、SSE EOF 冲刷派发（4 失败）、script_id 64 截断+哈希。至此八轮消融台账闭合：全部机制 / 子不变量 / 叶子规则共 66 项变异，64 项被钉死，1 项离线不可触发（reqwest retry 归 024），1 项非承重防御（锁显式 unlock）。
 - 2026-10-06：第九轮补两项从未做过的检查：首次 `cargo doc --no-deps` 构建发现 error.rs 一处断链（code_at_boundary 未限定路径），已修为 Self:: 限定，现零警告；clippy pedantic 信息性扫描 135 条均属风格意见或有意模式（short_hash 低 32 位有专项测试钉住、migrations.len() as u32 为 user_version 目标空间），无可行动项，不据此改门禁。
 - 2026-10-07：issue #64 同步更新日期，复核 #55 的全项门禁与 fast_policy 看门狗说明已生效；本次未改变调度策略或重做历史消融。
 
 ## 完成摘要
 
-已交付 `src-rust/mythos-llm`：不依赖 tauri 的纯 Rust crate，含增量 UTF-8 解码、有界 SSE 解析、GuardSpec 编译与跨分片护栏、结构化错误分类（含 TLS 链下钻标定）、Provider 抽象与 DeepSeek 适配层（completion / chat / prefix，能力表按官方文档登记）、单层请求调度器（互斥重试、看门狗、可取消背压、预算端口）。全部行为由本地夹具验证：行覆盖 100%、clippy / fmt 干净、`bun run verify` 全项通过（测试数与门禁项数随后续消融 / 门禁扩张增长，以 CI 为准）；消融验证确认 8/9 安全机制可被套件捕捉（reqwest 隐式重试禁用归 024 联调）。凭据持久化、代理、命令层接线与产品联调按任务索引归 019–024。
+已交付 `src-rust/aoidos-llm`：不依赖 tauri 的纯 Rust crate，含增量 UTF-8 解码、有界 SSE 解析、GuardSpec 编译与跨分片护栏、结构化错误分类（含 TLS 链下钻标定）、Provider 抽象与 DeepSeek 适配层（completion / chat / prefix，能力表按官方文档登记）、单层请求调度器（互斥重试、看门狗、可取消背压、预算端口）。全部行为由本地夹具验证：行覆盖 100%、clippy / fmt 干净、`bun run verify` 全项通过（测试数与门禁项数随后续消融 / 门禁扩张增长，以 CI 为准）；消融验证确认 8/9 安全机制可被套件捕捉（reqwest 隐式重试禁用归 024 联调）。凭据持久化、代理、命令层接线与产品联调按任务索引归 019–024。

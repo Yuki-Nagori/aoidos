@@ -59,6 +59,107 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "aoidos"
+version = "0.1.0"
+dependencies = [
+ "aoidos-engine",
+ "aoidos-json",
+ "aoidos-llm",
+ "aoidos-store",
+ "rusqlite",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "aoidos-engine"
+version = "0.1.0"
+dependencies = [
+ "aoidos-json",
+ "aoidos-llm",
+ "aoidos-store",
+ "futures",
+ "getrandom 0.4.3",
+ "hmac 0.12.1",
+ "rand_chacha",
+ "rand_core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "aoidos-json"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aoidos-llm"
+version = "0.1.0"
+dependencies = [
+ "aoidos-json",
+ "aoidos-store",
+ "block2",
+ "bytes",
+ "futures",
+ "gtk",
+ "keyring",
+ "keyring-core",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "url",
+ "uuid",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "aoidos-native-tests"
+version = "0.1.0"
+dependencies = [
+ "aoidos",
+ "aoidos-engine",
+ "aoidos-llm",
+ "aoidos-store",
+ "secrecy",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "aoidos-store"
+version = "0.1.0"
+dependencies = [
+ "fs4",
+ "rusqlite",
+]
+
+[[package]]
 name = "apple-native-keyring-store"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2437,107 +2538,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mythos"
-version = "0.1.0"
-dependencies = [
- "mythos-engine",
- "mythos-json",
- "mythos-llm",
- "mythos-store",
- "rusqlite",
- "secrecy",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "mythos-engine"
-version = "0.1.0"
-dependencies = [
- "futures",
- "getrandom 0.4.3",
- "hmac 0.12.1",
- "mythos-json",
- "mythos-llm",
- "mythos-store",
- "rand_chacha",
- "rand_core",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
-name = "mythos-json"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mythos-llm"
-version = "0.1.0"
-dependencies = [
- "block2",
- "bytes",
- "futures",
- "gtk",
- "keyring",
- "keyring-core",
- "mythos-json",
- "mythos-store",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "rcgen",
- "reqwest",
- "rustls",
- "secrecy",
- "serde",
- "serde_json",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "url",
- "uuid",
- "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "mythos-native-tests"
-version = "0.1.0"
-dependencies = [
- "mythos",
- "mythos-engine",
- "mythos-llm",
- "mythos-store",
- "secrecy",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "mythos-store"
-version = "0.1.0"
-dependencies = [
- "fs4",
- "rusqlite",
 ]
 
 [[package]]

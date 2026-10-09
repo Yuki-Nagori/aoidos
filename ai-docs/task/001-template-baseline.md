@@ -58,7 +58,7 @@
 | 2026-10-05 | Windows / Rust 1.99.0               | `bun run verify`                                                                          | 十项 exit 0；commands.rs 行覆盖 100% |
 | 2026-10-05 | Windows / Rust 1.99.0、Tauri 2.12.1 | `bun run tauri:build`                                                                     | msi 1.56 MiB + nsis 1.08 MiB         |
 | 2026-10-05 | macOS / issue #3 与 CI 优化         | `bun run verify`                                                                          | 十项 exit 0                          |
-| 2026-10-05 | Ubuntu / macOS / Windows            | [PR #4 / run 37237430870](https://github.com/Yuki-Nagori/mythos/actions/runs/37237430870) | 提交 `a443f12` 三平台全部通过        |
+| 2026-10-05 | Ubuntu / macOS / Windows            | [PR #4 / run 37237430870](https://github.com/Yuki-Nagori/aoidos/actions/runs/37237430870) | 提交 `a443f12` 三平台全部通过        |
 
 issue #3 复核已核对三平台矩阵、Rust 工具链、CI 调用的 bun scripts 与本地门槛。testing.md 仅引用脚本入口，实际参数统一在 package.json 维护。CI 的编译形态合并与步骤顺序见[构建与开发](../architecture/build-and-development.md)。
 
@@ -72,10 +72,10 @@ Rust 工具链升级可能引入新的 clippy 门禁。需要回退时同步修�
 - 2026-10-05：升级 ESLint 10、Vite 8、Knip 6 等依赖，TypeScript 保留 5.9；Rust 工具链升级 1.99.0。`greet` 移入 commands.rs，装配 lib.rs 不计覆盖。husky 只查格式，完整门禁由推送前验证与 CI 执行。
 - 2026-10-05：环境配置聚合到 `bun install` 的 postinstall，负责工具链自检、自愈半截安装和补装 cargo-llvm-cov；`bun run setup` 为手动入口。
 - 2026-10-05：对齐 npm 与 Rust 侧 Tauri 版本，解决 bundler 的版本不匹配错误；完整验证与 Windows 打包通过，任务标为 done。
-- 2026-10-05：[issue #3](https://github.com/Yuki-Nagori/mythos/issues/3) 复核发现 testing.md 保留了过期的 `--summary-only` 命令副本。改为引用 `bun run coverage:rust`，保留统计范围与门槛说明，避免参数漂移。
+- 2026-10-05：[issue #3](https://github.com/Yuki-Nagori/aoidos/issues/3) 复核发现 testing.md 保留了过期的 `--summary-only` 命令副本。改为引用 `bun run coverage:rust`，保留统计范围与门槛说明，避免参数漂移。
 - 2026-10-05：CI 将格式 / 前端 / knip 快速门禁前置，Linux 系统依赖安装和 Rust 编译后置；失败也保存 Rust 依赖缓存，token 仅需 `contents: read`，每 job 30 分钟超时。三平台验证通过，证据补入本任务，不新增 task。
 - 2026-10-05：按用户要求收窄 CI 触发范围，main push / pull request 仅改 `ai-docs/**` 或 Markdown 时跳过全量检查；其余改动保留三平台门禁。代码 PR 的累计 diff 含代码时仍触发，文档格式由本地检查与 husky 保证。
-- 2026-10-06：issue #37 明确桌面版本唯一来源为 workspace.package，package / Tauri 配置未设 version；Bun 锁文件刷新未更新根名，校正旧 excel 元数据为 mythos 并检查 frozen-lockfile，依赖解析版本不变。
+- 2026-10-06：issue #37 明确桌面版本唯一来源为 workspace.package，package / Tauri 配置未设 version；Bun 锁文件刷新未更新根名，校正旧 excel 元数据为 aoidos 并检查 frozen-lockfile，依赖解析版本不变。
 - 2026-10-06：issue #38 对齐技术栈当前 Rust 工作区 / 工具链、测试依赖版本和 CI 等价合并门禁；不改变配置。
 - 2026-10-06：issue #41 补 workspace.package 与 api 层归属规范；serde_json / tauri-build 版本移入 workspace 并在成员继承，版本 / features 不变，不新增运行时行为。
 - 2026-10-06：issue #42 明确覆盖忽略正则作用于所有 crate 的 lib.rs，入口只放模块声明 / 薄装配，commands / events / ipc 与业务逻辑均受门槛约束；不改变覆盖配置或阈值。

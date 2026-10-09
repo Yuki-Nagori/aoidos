@@ -91,7 +91,7 @@ async function smoke(): Promise<void> {
           });
         },
       });
-      return () => h("div", "Mythos consumer fixture");
+      return () => h("div", "Aoidos consumer fixture");
     },
   });
   app.mount("#app");

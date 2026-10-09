@@ -8,23 +8,23 @@ use tauri::{
 
 #[tokio::test]
 async fn real_command_decoding_preferences_and_frozen_storage_diagnostics() {
-    let dir = std::env::temp_dir().join(format!("mythos-store-commands-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("aoidos-store-commands-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let events = StorageEvents::new(Arc::new(WindowEvents::new(|_, _| Ok(()))));
     let service = StorageService::new(&dir, events.clone());
-    let header = mythos_engine::record::format::Header {
+    let header = aoidos_engine::record::format::Header {
         kind: "header".into(),
         format_version: 1,
         grammar_version: 1,
         projection_version: 1,
         script_id: "demo".into(),
         session_id: "00000000-0000-4000-8000-000000000022".into(),
-        created_at: mythos_engine::record::format::now(),
-        static_prefix: "[MYTHOS:STATIC]\nx\n[/MYTHOS:STATIC]\n".into(),
-        static_prefix_hash: mythos_engine::record::format::hash(
-            b"[MYTHOS:STATIC]\nx\n[/MYTHOS:STATIC]\n",
+        created_at: aoidos_engine::record::format::now(),
+        static_prefix: "[AOIDOS:STATIC]\nx\n[/AOIDOS:STATIC]\n".into(),
+        static_prefix_hash: aoidos_engine::record::format::hash(
+            b"[AOIDOS:STATIC]\nx\n[/AOIDOS:STATIC]\n",
         ),
-        script_revision: mythos_engine::record::format::hash(b"script"),
+        script_revision: aoidos_engine::record::format::hash(b"script"),
     };
     service.storage.records.create(header.clone()).unwrap();
     let app = mock_builder()

@@ -1,8 +1,8 @@
 use super::*;
-use mythos_engine::ports::Outcome;
-use mythos_llm::config::{FrozenProfile, LlmProfile, ProfileMode, ProxyConfig};
-use mythos_llm::provider::{CompletionInput, ProviderInput};
-use mythos_llm::sampling::Sampling;
+use aoidos_engine::ports::Outcome;
+use aoidos_llm::config::{FrozenProfile, LlmProfile, ProfileMode, ProxyConfig};
+use aoidos_llm::provider::{CompletionInput, ProviderInput};
+use aoidos_llm::sampling::Sampling;
 use secrecy::SecretString;
 use std::sync::Mutex;
 
@@ -154,9 +154,9 @@ async fn submit_validates_profile_input_and_key_before_occupying_gate() {
         "llm.network"
     );
     for assistant_prefix in [None, Some("prefix".into())] {
-        let chat = ProviderInput::Chat(mythos_llm::provider::ChatInput {
-            messages: vec![mythos_llm::provider::ChatMessage {
-                role: mythos_llm::provider::ChatRole::User,
+        let chat = ProviderInput::Chat(aoidos_llm::provider::ChatInput {
+            messages: vec![aoidos_llm::provider::ChatMessage {
+                role: aoidos_llm::provider::ChatRole::User,
                 content: "chat".into(),
             }],
             assistant_prefix,
@@ -194,7 +194,7 @@ async fn fixture_runs_to_completion_without_calling_real_transport() {
 fn malformed_input_uses_uniform_command_error_and_valid_wire_shape_is_preserved() {
     let valid = serde_json::json!({"kind":"completion","prompt":"P"});
     assert_eq!(
-        mythos_json::to_value(decode_input(valid.clone()).unwrap()).unwrap(),
+        aoidos_json::to_value(decode_input(valid.clone()).unwrap()).unwrap(),
         valid
     );
     for invalid in [

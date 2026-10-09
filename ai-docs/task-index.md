@@ -57,31 +57,32 @@ ai-docs/
 
 ### 实现任务
 
-| 编号 | 任务                                                                          | 域                | 依赖                              | 状态      |
-| ---- | ----------------------------------------------------------------------------- | ----------------- | --------------------------------- | --------- |
-| 004  | [引入 Tailwind v4 并接线 token](task/004-tailwind-v4.md)                      | 界面·基建         | 002、009                          | done      |
-| 013  | [存储与文件基建 crate](task/013-storage-impl.md)                              | **底层·存储**     | 011                               | done      |
-| 015  | [CmdError 与命令错误形状](task/015-cmd-error-impl.md)                         | **底层·契约**     | 010、013                          | done      |
-| 016  | [IPC 事件基建](task/016-ipc-events-infra.md)                                  | **底层·契约**     | 010、015                          | done      |
-| 017  | [store 域命令与迁移事件](task/017-store-commands-migration-events.md)         | **底层·存储**     | 016、013                          | done      |
-| 018  | [实现：LLM Provider、流式护栏与请求策略](task/018-llm-provider-guard-impl.md) | **底层·LLM 链路** | 005                               | done      |
-| 019  | [实现：LLM 配置、原生凭据与代理](task/019-llm-profile-credentials-impl.md)    | **底层·LLM 链路** | 005、013、018                     | done      |
-| 020  | [实现：LLM 回合协调与 IPC 发送端](task/020-llm-turn-ipc-impl.md)              | **底层·LLM 链路** | 018、019、016                     | done      |
-| 021  | [实现：前端 LLM 调用与快照恢复](task/021-llm-web-recovery-impl.md)            | **底层·LLM 链路** | 020                               | done      |
-| 022  | [实现：对局记录、投影与迁移运行期协议](task/022-record-engine-impl.md)        | **底层·LLM 链路** | 006、013、020                     | done      |
-| 023  | [实现：回合阶段机与产品提交入口](task/023-turn-state-machine-impl.md)         | **底层·LLM 链路** | 012、020、022、036                | done      |
-| 024  | [实现：LLM 产品链路与故障联调](task/024-llm-engine-integration.md)            | **底层·LLM 链路** | 021、023                          | **ready** |
-| 025  | [实现：舞台与对话面板](task/025-ui-shell-impl.md)                             | 界面·交互         | 004、008、024、026、034           | planned   |
-| 026  | [实现：主题偏好与剧本皮肤](task/026-theming-impl.md)                          | 界面·主题         | 004、009、013                     | planned   |
-| 029  | [实现：记忆版本存储与恢复](task/029-memory-storage-recovery-impl.md)          | **底层·记忆**     | 007、013、022                     | **ready** |
-| 030  | [实现：记忆门控与授权批次](task/030-memory-gates-batches-impl.md)             | **底层·记忆**     | 007、029、018、020、023、027、035 | planned   |
-| 031  | [实现：记忆高级设置与查询](task/031-memory-settings-queries-impl.md)          | 界面·记忆         | 007、029、030、025、028、034      | planned   |
-| 032  | [实现：轮回刻痕与节点收束接入](task/032-memory-cycle-nodes-impl.md)           | **底层·记忆**     | 007、029、030、022、023           | planned   |
-| 033  | [实现：记忆算法标定与产品验收](task/033-memory-calibration-integration.md)    | **底层·记忆**     | 007、030、031、032、027、035      | planned   |
-| 034  | [实现：界面国际化与本地化](task/034-i18n-impl.md)                             | 界面·语言         | 028、013、026                     | planned   |
-| 035  | [实现：LLM 计价与费用控制](task/035-llm-cost-control-impl.md)                 | 底层·LLM          | 027、013、018、019、020、025、034 | planned   |
-| 036  | [实现：共用 JSON 编解码与规范化](task/036-json-tools-impl.md)                 | 底层·共用工具     | 013、018、022                     | done      |
-| 037  | [Rust 覆盖率预算审计与消除](task/037-rust-coverage-audit.md)                  | 底层·门禁         | 019、022、023                     | done      |
+| 编号 | 任务                                                                          | 域                | 依赖                              | 状态        |
+| ---- | ----------------------------------------------------------------------------- | ----------------- | --------------------------------- | ----------- |
+| 004  | [引入 Tailwind v4 并接线 token](task/004-tailwind-v4.md)                      | 界面·基建         | 002、009                          | done        |
+| 013  | [存储与文件基建 crate](task/013-storage-impl.md)                              | **底层·存储**     | 011                               | done        |
+| 015  | [CmdError 与命令错误形状](task/015-cmd-error-impl.md)                         | **底层·契约**     | 010、013                          | done        |
+| 016  | [IPC 事件基建](task/016-ipc-events-infra.md)                                  | **底层·契约**     | 010、015                          | done        |
+| 017  | [store 域命令与迁移事件](task/017-store-commands-migration-events.md)         | **底层·存储**     | 016、013                          | done        |
+| 018  | [实现：LLM Provider、流式护栏与请求策略](task/018-llm-provider-guard-impl.md) | **底层·LLM 链路** | 005                               | done        |
+| 019  | [实现：LLM 配置、原生凭据与代理](task/019-llm-profile-credentials-impl.md)    | **底层·LLM 链路** | 005、013、018                     | done        |
+| 020  | [实现：LLM 回合协调与 IPC 发送端](task/020-llm-turn-ipc-impl.md)              | **底层·LLM 链路** | 018、019、016                     | done        |
+| 021  | [实现：前端 LLM 调用与快照恢复](task/021-llm-web-recovery-impl.md)            | **底层·LLM 链路** | 020                               | done        |
+| 022  | [实现：对局记录、投影与迁移运行期协议](task/022-record-engine-impl.md)        | **底层·LLM 链路** | 006、013、020                     | done        |
+| 023  | [实现：回合阶段机与产品提交入口](task/023-turn-state-machine-impl.md)         | **底层·LLM 链路** | 012、020、022、036                | done        |
+| 024  | [实现：LLM 产品链路与故障联调](task/024-llm-engine-integration.md)            | **底层·LLM 链路** | 021、023                          | **ready**   |
+| 025  | [实现：舞台与对话面板](task/025-ui-shell-impl.md)                             | 界面·交互         | 004、008、024、026、034           | planned     |
+| 026  | [实现：主题偏好与剧本皮肤](task/026-theming-impl.md)                          | 界面·主题         | 004、009、013                     | planned     |
+| 029  | [实现：记忆版本存储与恢复](task/029-memory-storage-recovery-impl.md)          | **底层·记忆**     | 007、013、022                     | **ready**   |
+| 030  | [实现：记忆门控与授权批次](task/030-memory-gates-batches-impl.md)             | **底层·记忆**     | 007、029、018、020、023、027、035 | planned     |
+| 031  | [实现：记忆高级设置与查询](task/031-memory-settings-queries-impl.md)          | 界面·记忆         | 007、029、030、025、028、034      | planned     |
+| 032  | [实现：轮回刻痕与节点收束接入](task/032-memory-cycle-nodes-impl.md)           | **底层·记忆**     | 007、029、030、022、023           | planned     |
+| 033  | [实现：记忆算法标定与产品验收](task/033-memory-calibration-integration.md)    | **底层·记忆**     | 007、030、031、032、027、035      | planned     |
+| 034  | [实现：界面国际化与本地化](task/034-i18n-impl.md)                             | 界面·语言         | 028、013、026                     | planned     |
+| 035  | [实现：LLM 计价与费用控制](task/035-llm-cost-control-impl.md)                 | 底层·LLM          | 027、013、018、019、020、025、034 | planned     |
+| 036  | [实现：共用 JSON 编解码与规范化](task/036-json-tools-impl.md)                 | 底层·共用工具     | 013、018、022                     | done        |
+| 037  | [Rust 覆盖率预算审计与消除](task/037-rust-coverage-audit.md)                  | 底层·门禁         | 019、022、023                     | done        |
+| 038  | [统一项目命名为 Aoidos](task/038-rename-aoidos.md)                            | 底层·工程         | 023、037                          | in-progress |
 
 实施按表中依赖推进，设计未定稿或前置未完成时保持 planned。018–024 承接 LLM 链路；029–033 承接记忆，030 / 033 直接依赖 035 计费，031 依赖 034 国际化。025 交付完整界面，不扩大 004 样式底座或 024 联调范围。
 
@@ -90,6 +91,6 @@ ai-docs/
 | 编号 | 任务                                             | 依赖 | 状态 |
 | ---- | ------------------------------------------------ | ---- | ---- |
 | 001  | [模板基线](task/001-template-baseline.md)        | —    | done |
-| 002  | [Mythos 产品化改名](task/002-rebrand-mythos.md)  | 001  | done |
+| 002  | [Aoidos 产品化改名](task/002-rebrand-aoidos.md)  | 001  | done |
 | 003  | [UI 风格规范落档](task/003-ui-style-standard.md) | 002  | done |
 | 014  | [注释规范落档](task/014-comments-standard.md)    | 002  | done |

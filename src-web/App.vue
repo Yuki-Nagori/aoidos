@@ -26,7 +26,7 @@ async function greet(): Promise<void> {
   <main class="grid min-h-screen place-items-center p-6">
     <section class="glass-panel">
       <span class="led-dot" aria-hidden="true"></span>
-      <h1 class="text-2xl font-semibold tracking-wide text-ink">Mythos</h1>
+      <h1 class="text-2xl font-semibold tracking-wide text-ink">Aoidos</h1>
       <p class="text-sm text-muted">AI 驱动的剧情跑团</p>
       <form class="flex gap-2" @submit.prevent="greet">
         <input

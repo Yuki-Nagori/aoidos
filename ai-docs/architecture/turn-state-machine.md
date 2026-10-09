@@ -1,8 +1,8 @@
 # 回合与阶段状态机
 
-更新日期：2026-10-09。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/mythos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
+更新日期：2026-10-09。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/aoidos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
 
-实现位于 `mythos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](README.md#阶段机基础链路)，验证证据见 [023](../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
+实现位于 `aoidos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](README.md#阶段机基础链路)，验证证据见 [023](../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
 
 ## 边界与身份
 
@@ -77,7 +77,7 @@ resume 到骰前时，新 round 重新校验合法计划并使用当前偏好冻
 
 普通旁白 / 角色正文始终只生成选定正文块，不扫描它提取判定或状态指令。另设 Rust 内部 `ProposalRequest<CheckProposal | SceneProposal>`，复用 005 Provider、取消、护栏、冻结 profile 和唯一重试调度器；不暴露新的调试 invoke，不启用 tool_calls。
 
-提议使用独立目标 `[MYTHOS:CHECK-PROPOSAL]` 或 `[MYTHOS:SCENE-PROPOSAL]`，仅用于请求投影，不是正式 JSONL kind。目标闭合标记 Anywhere stop，并沿用 006 的行首 outer / forged-close 拦截；GrammarSpec 登记该目标及生成 GuardSpec，不能在 adapter 硬编码第二套规则。普通 Chat 明确要求仅返回 JSON，Completion / Prefix 输出 JSON 后结束在目标闭合处。玩家 / 历史的保留括号仍只在 prompt 副本转义。
+提议使用独立目标 `[AOIDOS:CHECK-PROPOSAL]` 或 `[AOIDOS:SCENE-PROPOSAL]`，仅用于请求投影，不是正式 JSONL kind。目标闭合标记 Anywhere stop，并沿用 006 的行首 outer / forged-close 拦截；GrammarSpec 登记该目标及生成 GuardSpec，不能在 adapter 硬编码第二套规则。普通 Chat 明确要求仅返回 JSON，Completion / Prefix 输出 JSON 后结束在目标闭合处。玩家 / 历史的保留括号仍只在 prompt 副本转义。
 
 内部收集器最多 8 KiB UTF-8；逐增量接纳也构成 005 首交付边界，之后不可自动重发。合法 finish 为 stop 或完整目标 close 所致 guard；length、其他标记导致 guard、半个 JSON、未知字段、重复键和 schema 不符均报 llm.bad-response，不发修复 prompt。空输出仍沿用 llm.empty-output 与真实 finishReason。解析成功只是候选，必须经过可信规则校验。
 

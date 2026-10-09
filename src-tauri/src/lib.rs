@@ -16,11 +16,11 @@ async fn llm_set_key(
     app: AppHandle,
     provider_id: String,
     action: String,
-) -> Result<mythos_llm::credentials::KeyStatus, CmdError> {
+) -> Result<aoidos_llm::credentials::KeyStatus, CmdError> {
     llm_commands::set_key_with_dispatch(
         provider_id,
         action,
-        mythos_llm::platform::platform_prompt(),
+        aoidos_llm::platform::platform_prompt(),
         &move |job| app.run_on_main_thread(job),
     )
     .await
@@ -52,7 +52,7 @@ pub mod turn_ipc {
     pub fn llm_get_turn(
         state: tauri::State<'_, turn_commands::TurnService>,
         turn_id: String,
-    ) -> Result<mythos_engine::turn::TurnSnapshot, CmdError> {
+    ) -> Result<aoidos_engine::turn::TurnSnapshot, CmdError> {
         state.coordinator.snapshot(&turn_id).map_err(CmdError::from)
     }
 
@@ -62,7 +62,7 @@ pub mod turn_ipc {
     pub async fn llm_cancel(
         state: tauri::State<'_, turn_commands::TurnService>,
         turn_id: String,
-    ) -> Result<mythos_engine::turn::CancelledTurn, CmdError> {
+    ) -> Result<aoidos_engine::turn::CancelledTurn, CmdError> {
         state
             .coordinator
             .cancel(&turn_id)
@@ -79,41 +79,41 @@ pub mod store_ipc {
     #[tauri::command]
     pub fn store_get_migration(
         state: Service<'_>,
-    ) -> Result<mythos_engine::migration::Snapshot, CmdError> {
+    ) -> Result<aoidos_engine::migration::Snapshot, CmdError> {
         store_commands::store_get_migration(state)
     }
     #[tauri::command]
     pub async fn store_get_ui_preferences(
         state: Service<'_>,
-    ) -> Result<mythos_engine::preferences::UiPreferences, CmdError> {
+    ) -> Result<aoidos_engine::preferences::UiPreferences, CmdError> {
         store_commands::store_get_ui_preferences(state).await
     }
     #[tauri::command]
     pub async fn store_set_ui_preferences(
         state: Service<'_>,
         request: Request<'_>,
-    ) -> Result<mythos_engine::preferences::UiPreferences, CmdError> {
+    ) -> Result<aoidos_engine::preferences::UiPreferences, CmdError> {
         store_commands::store_set_ui_preferences(state, request).await
     }
     #[tauri::command]
     pub async fn engine_get_record_page(
         state: Service<'_>,
         request: Request<'_>,
-    ) -> Result<mythos_engine::record::view::Page, CmdError> {
+    ) -> Result<aoidos_engine::record::view::Page, CmdError> {
         store_commands::engine_get_record_page(state, request).await
     }
     #[tauri::command]
     pub async fn engine_get_record_view(
         state: Service<'_>,
         request: Request<'_>,
-    ) -> Result<mythos_engine::record::view::View, CmdError> {
+    ) -> Result<aoidos_engine::record::view::View, CmdError> {
         store_commands::engine_get_record_view(state, request).await
     }
     #[tauri::command]
     pub async fn engine_get_record_body(
         state: Service<'_>,
         request: Request<'_>,
-    ) -> Result<mythos_engine::record::view::BodyPage, CmdError> {
+    ) -> Result<aoidos_engine::record::view::BodyPage, CmdError> {
         store_commands::engine_get_record_body(state, request).await
     }
 }
@@ -121,7 +121,7 @@ pub mod store_ipc {
 /// 产品阶段命令宏装配；原生夹具注册同一组入口。
 pub mod game_ipc {
     use super::{CmdError, game_commands};
-    use mythos_engine::game::{runtime::Service, state::*};
+    use aoidos_engine::game::{runtime::Service, state::*};
     #[tauri::command]
     pub async fn engine_submit_input(
         state: tauri::State<'_, Service>,
@@ -195,7 +195,7 @@ pub fn run() {
     let builder = tauri::Builder::default().setup(|app| {
         let dir = app.path().app_data_dir()?;
         // 配置 / 凭据也是数据根写者；持锁到应用退出，后续 store 服务复用。
-        app.manage(mythos_store::lock::acquire(&dir)?);
+        app.manage(aoidos_store::lock::acquire(&dir)?);
         commands::init_db_path(dir.join("storage.sqlite"));
         llm_commands::init_llm_dir(dir.join("llm"));
         let handle = app.handle().clone();
@@ -211,10 +211,10 @@ pub fn run() {
         app.manage(storage);
         let turns = turn_commands::TurnService::new(
             events,
-            mythos_llm::proxy::SystemProxySnapshot::capture(),
+            aoidos_llm::proxy::SystemProxySnapshot::capture(),
         )?;
         let factory = std::sync::Arc::new(game_commands::Factory::default());
-        app.manage(mythos_engine::game::runtime::Service::new(
+        app.manage(aoidos_engine::game::runtime::Service::new(
             turns.coordinator.clone(),
             factory.clone(),
         ));
@@ -245,7 +245,7 @@ pub fn run() {
                 let finished = finished.clone();
                 tauri::async_runtime::spawn(async move {
                     handle
-                        .state::<mythos_engine::game::runtime::Service>()
+                        .state::<aoidos_engine::game::runtime::Service>()
                         .shutdown()
                         .await;
                     coordinator.shutdown().await;
@@ -268,6 +268,6 @@ pub fn run() {
         }
     });
 }
-fn window_delivery_error(_: tauri::Error) -> mythos_engine::fault::Fault {
-    mythos_engine::fault::Fault::new("app.event-failed", "主窗口事件无法投递")
+fn window_delivery_error(_: tauri::Error) -> aoidos_engine::fault::Fault {
+    aoidos_engine::fault::Fault::new("app.event-failed", "主窗口事件无法投递")
 }

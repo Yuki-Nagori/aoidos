@@ -326,7 +326,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 ## 错误码目录
 
 - 形状：`{ code, message, detail? }`。`code` 是机器分支的唯一依据；`message` 是可展示中文，不参与分支；`detail` 可选结构化补充（如被拒的路径）。
-- 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`theme.*`（026）、`engine.*` 的码名在本文预留（映射随 022、023 等实现任务落地）。`llm.*` 十码分工：传输类 7 码（auth / quota / rate-limited / network / tls / bad-response / aborted）已由 018 的 `mythos-llm::ProviderError` 落地，`code()` 返回裸码、交付边界定码见 `code_at_boundary`；`stalled` / `empty-output` 由调度层 `RunError::Stalled` / `RunError::EmptyOutput` 变体承载（无 `code()`，020 域错误映射补码）；`missing-key` 是提交前未保存密钥的命令层判定，不在 crate 内。020 域错误与薄命令适配已统一加 `llm.` 前缀。`app.*` 属于命令层。
+- 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`theme.*`（026）、`engine.*` 的码名在本文预留（映射随 022、023 等实现任务落地）。`llm.*` 十码分工：传输类 7 码（auth / quota / rate-limited / network / tls / bad-response / aborted）已由 018 的 `aoidos-llm::ProviderError` 落地，`code()` 返回裸码、交付边界定码见 `code_at_boundary`；`stalled` / `empty-output` 由调度层 `RunError::Stalled` / `RunError::EmptyOutput` 变体承载（无 `code()`，020 域错误映射补码）；`missing-key` 是提交前未保存密钥的命令层判定，不在 crate 内。020 域错误与薄命令适配已统一加 `llm.` 前缀。`app.*` 属于命令层。
 - 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（所需业务存储未开放：初始化尚未完成，或运行期迁移失败后被冻结；后一种由 022 的共享 Storage 门禁实现。普通业务命令拒绝，但 store_get_migration 诊断仍可用；前端主动取该快照展示脱敏迁移失败，不持续轮询）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合；019 同型原生输入门禁也用此码拒绝第二个密码框，不占用业务 key 锁。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
@@ -359,7 +359,7 @@ else showGenericError(err);
 ```
 
 - 前端分支**反例**：`err.message.includes("rate")`（文案漂移即坏）；`switch (err.code)` 不写 default。
-- 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../standards/comments.md) 为映射器补直测（参照 `mythos-store` 的 `err_*` + stage_mappers 模式）。
+- 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../standards/comments.md) 为映射器补直测（参照 `aoidos-store` 的 `err_*` + stage_mappers 模式）。
 
 007 的[拟实施记忆端口](memory.md#高级设置与跨端接口)尚未注册 Tauri 命令，不改变本目录现有 API。参数 / 过期版本使用 app.bad-request、未知查询身份 app.not-found、门禁 app.busy、持久损坏 store.corrupt，网络错误沿用 `llm.*`；内部候选拒绝 reason 不作为供应商 quota。所需旧策略不可用时，拟端口返回 app.not-ready，保留原数据并开放只读诊断，不用 store.corrupt 指代仅版本不受支持。具体 DTO / 命令由后续实施同 commit 展开到本目录，遵循 Rust / TS 同型，不新增 `memory:*` 事件流或持续轮询。
 

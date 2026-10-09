@@ -23,7 +23,7 @@
 
 ## 实施步骤
 
-1. 加入拟新增 mythos-memory crate 与 workspace，复用 mythos-store，不引入 ORM。
+1. 加入拟新增 aoidos-memory crate 与 workspace，复用 aoidos-store，不引入 ORM。
 2. 实现源单元、版本 / 来源集合、effects、operations / targets；校验 sourceSetHash 与安全身份。
 3. 实现 prepared / ready / applied / rejected / quarantined、正文 / stateRevision 双 CAS、依赖组事务及提交不确定核验。
 4. 接入 022 有效路径 / pending 边界，回退撤回失效效果；损坏恢复不重新启用被有效纠正撤回的认知。
@@ -31,7 +31,7 @@
 
 ## 预计改动
 
-业务逻辑进入 `src-rust/` 的记忆模块（拟新增），存储原语复用现有 mythos-store；涉及命令时只在 src-tauri 做装配 / 薄转发，前端 API / 纯逻辑 / 设置视图按职责接入。新增路径与 DTO 是实施计划，当前尚不存在；实现 commit 同步架构、契约与 task。
+业务逻辑进入 `src-rust/` 的记忆模块（拟新增），存储原语复用现有 aoidos-store；涉及命令时只在 src-tauri 做装配 / 薄转发，前端 API / 纯逻辑 / 设置视图按职责接入。新增路径与 DTO 是实施计划，当前尚不存在；实现 commit 同步架构、契约与 task。
 
 ## 验收标准
 

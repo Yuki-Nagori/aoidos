@@ -58,7 +58,7 @@
 | 2026-10-07 | 本机 macOS，`bun run test:native`                     | 实际产品消费者在真实主 Webview 中通过提交 / 事件 / 快照 / 重复取消、重连、最后事件全丢后的主动恢复及卸载监听清理；真实原生 UI / OS 凭据集成也通过                                    |
 | 2026-10-07 | 隔离前端副本及独立 Vite 缓存的行为消融                | 十二项变异均由行为断言捕获：重复 / 缺口、终态缺正文、基线倒退、UTF-8 上限、缓存 / 读取上限、身份重置、旧响应、晚到终态、跨代次单在飞、监听释放；原树基线通过                         |
 | 2026-10-07 | Vue 官方约定、文档链接及依赖核对                      | ref / getter 跟踪、普通对象返回 refs、scope 清理与组件独立状态符合 Vue 模式；模块按 API / 纯消费 / 恢复 / 生命周期分层，task 状态与依赖无环                                          |
-| 2026-10-08 | GitHub Actions，Windows / Linux / macOS               | [PR 最终提交 CI](https://github.com/Yuki-Nagori/mythos/actions/runs/37648756283) 与[合并后 main CI](https://github.com/Yuki-Nagori/mythos/actions/runs/37650208938) 均三平台全部通过 |
+| 2026-10-08 | GitHub Actions，Windows / Linux / macOS               | [PR 最终提交 CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37648756283) 与[合并后 main CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37650208938) 均三平台全部通过 |
 
 ## 风险与回退
 
@@ -73,7 +73,7 @@
 - 2026-10-07：开始实施 021；按消费 / 恢复 / 生命周期分层，保留全事件丢失后的主动恢复边界。覆盖有界缓存、旧响应、三类空失败原因及晚到终态，并修复同步发布回调的重入时序。
 - 2026-10-07：真实 Webview 装载产品消费者，验证重连 / 主动恢复 / 卸载释放；生成资产整个目录忽略，手写夹具仍入库。按用户要求允许 import() 类型标注、补齐 Bun / Node 脚本类型和 .mts 导入选项。同步实际存储路径与明文降级的保护边界；issue #68 不新增 task。
 - 2026-10-07：最终 Vue 架构评审通过，补齐同 UUID 跨代次读取串行和未完成身份上限，防止旧读仍在飞时重复发读；本地完整门禁、真实消费者复验与十二项消融均通过。
-- 2026-10-08：PR 最终提交三平台 CI 全部通过，[PR #69](https://github.com/Yuki-Nagori/mythos/pull/69) 已合并，任务与索引同步 done；合并后 main CI 也全部通过。
+- 2026-10-08：PR 最终提交三平台 CI 全部通过，[PR #69](https://github.com/Yuki-Nagori/aoidos/pull/69) 已合并，任务与索引同步 done；合并后 main CI 也全部通过。
 - 2026-10-08：修复 issue #70 / #71 的文档收尾遗漏，恢复连续验证表与紧凑工作记录，补齐最终 CI / 合并证据并同步 LLM 头部状态；仅改文档，直接在 main 提交。
 
 ## 完成摘要

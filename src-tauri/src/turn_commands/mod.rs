@@ -1,16 +1,16 @@
-//! 回合命令只适配运行服务与 IPC；模型执行 / 提交 / 门禁归 mythos-engine。
+//! 回合命令只适配运行服务与 IPC；模型执行 / 提交 / 门禁归 aoidos-engine。
 
 use crate::{events, ipc::CmdError};
-use mythos_engine::fault::Fault;
-use mythos_engine::ports::{EventPort, PreparedEvent, TurnEvent};
-use mythos_engine::turn::Coordinator;
-use mythos_llm::proxy::SystemProxySnapshot;
+use aoidos_engine::fault::Fault;
+use aoidos_engine::ports::{EventPort, PreparedEvent, TurnEvent};
+use aoidos_engine::turn::Coordinator;
+use aoidos_llm::proxy::SystemProxySnapshot;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// 统一运行服务；产品后续接入同一个协调器，不新建调试 / private 门禁。
 pub struct TurnService {
     pub coordinator: Coordinator,
-    pub diagnostics: Arc<Mutex<mythos_engine::record::calibration::Calibration>>,
+    pub diagnostics: Arc<Mutex<aoidos_engine::record::calibration::Calibration>>,
     #[cfg(debug_assertions)]
     pub proxy_snapshot: SystemProxySnapshot,
 }
@@ -27,7 +27,7 @@ impl TurnService {
         Ok(Self {
             coordinator: Coordinator::new(events, 16)?,
             diagnostics: Arc::new(Mutex::new(
-                mythos_engine::record::calibration::Calibration::default(),
+                aoidos_engine::record::calibration::Calibration::default(),
             )),
             #[cfg(debug_assertions)]
             proxy_snapshot,
@@ -101,10 +101,10 @@ fn event_prepare_error(_: CmdError) -> Fault {
 /// 输入形状不符合 ProviderInput 返回 app.bad-request。
 pub fn decode_input(
     input: serde_json::Value,
-) -> Result<mythos_llm::provider::ProviderInput, CmdError> {
-    mythos_json::from_value(input).map_err(invalid_input)
+) -> Result<aoidos_llm::provider::ProviderInput, CmdError> {
+    aoidos_json::from_value(input).map_err(invalid_input)
 }
-fn invalid_input(_: mythos_json::Error) -> CmdError {
+fn invalid_input(_: aoidos_json::Error) -> CmdError {
     CmdError::new("app.bad-request", "回合输入形状不合法", None)
 }
 
@@ -123,11 +123,11 @@ pub struct AcceptedTurn {
 pub fn submit(
     service: &TurnService,
     profile_id: String,
-    input: mythos_llm::provider::ProviderInput,
+    input: aoidos_llm::provider::ProviderInput,
     guard_spec_id: String,
 ) -> Result<AcceptedTurn, CmdError> {
     // 未知护栏必须先拒绝；不得访问凭据或占用门禁。
-    if guard_spec_id != mythos_engine::fixture::GUARD_SPEC_ID {
+    if guard_spec_id != aoidos_engine::fixture::GUARD_SPEC_ID {
         return Err(CmdError::new("app.not-found", "护栏配置不存在", None));
     }
     let (profile, auth) = crate::llm_commands::freeze_submission(&profile_id)?;
@@ -137,11 +137,11 @@ pub fn submit(
 #[cfg(debug_assertions)]
 pub(crate) fn submit_frozen(
     service: &TurnService,
-    frozen: mythos_llm::config::FrozenProfile,
-    auth: Option<&mythos_llm::proxy::ProxyAuth>,
-    input: mythos_llm::provider::ProviderInput,
+    frozen: aoidos_llm::config::FrozenProfile,
+    auth: Option<&aoidos_llm::proxy::ProxyAuth>,
+    input: aoidos_llm::provider::ProviderInput,
 ) -> Result<AcceptedTurn, Fault> {
-    use mythos_engine::{ports::MemoryWriter, request::PreparedGeneration};
+    use aoidos_engine::{ports::MemoryWriter, request::PreparedGeneration};
     let request = PreparedGeneration::local_fixture_from_frozen(
         frozen,
         &service.proxy_snapshot,
@@ -150,7 +150,7 @@ pub(crate) fn submit_frozen(
     )?
     .with_calibration(
         "local-fixture",
-        &mythos_engine::record::estimator::EstimatorRevision::ConservativeV2,
+        &aoidos_engine::record::estimator::EstimatorRevision::ConservativeV2,
         service.diagnostics.clone(),
         false,
     );

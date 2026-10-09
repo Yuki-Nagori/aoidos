@@ -7,7 +7,7 @@
 
 ## 目标与背景
 
-LLM 接入是 Mythos 叙事驱动的地基，但直接开写实现会把「供应商选型、护栏规则、重试预算」这些关键决策散落在代码里。本 task 是**设计任务**：把宽泛机制敲定成规则与结构文档，由已规划的 018–024 实现 task 落地（实现时创建 `src-rust/mythos-llm`，践行 [职责边界](../architecture/ts-rust-boundary.md)）。
+LLM 接入是 Aoidos 叙事驱动的地基，但直接开写实现会把「供应商选型、护栏规则、重试预算」这些关键决策散落在代码里。本 task 是**设计任务**：把宽泛机制敲定成规则与结构文档，由已规划的 018–024 实现 task 落地（实现时创建 `src-rust/aoidos-llm`，践行 [职责边界](../architecture/ts-rust-boundary.md)）。
 
 ## 必读
 

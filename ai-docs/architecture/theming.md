@@ -1,12 +1,12 @@
 # 主题与剧本皮肤
 
-更新 / 官方资料核验日期：2026-10-06。[009](../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/mythos/issues/12)；实现由 [026](../task/026-theming-impl.md) 承接，尚未开始。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](ipc-contract.md)，存储与路径规则归[存储基建](storage.md)。
+更新 / 官方资料核验日期：2026-10-06。[009](../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/aoidos/issues/12)；实现由 [026](../task/026-theming-impl.md) 承接，尚未开始。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](ipc-contract.md)，存储与路径规则归[存储基建](storage.md)。
 
 ## 分层与真源
 
 采用方案 B：语义 CSS custom properties 是唯一运行时真源，声明在 `:root` / `:root[data-theme]`；Tailwind 的 `@theme inline` 仅将它们映射为工具类。组件消费语义 token，不以 Tailwind 默认色板或 `dark:` 分支再维护一套颜色。普通排版工具类可继续使用，皮肤只能写目录中明确允许的语义 token，不能写入 Tailwind 映射别名（如 `--color-*` / `--spacing-*`）或其他未登记变量；不能仅凭变量前缀判定权限。
 
-004 实现应用默认 token 与映射；026 的 Rust 业务 crate `mythos-theme` 维护目录元数据、类型化校验与规范输出，存储操作通过 store 访问，不能直接持有 SQL 连接。前端只应用 Rust 交出的值、维护显示代次，不读取 theme.css 或补一套解析器。该 crate 和命令均待创建，不把设计稿当已有 API。
+004 实现应用默认 token 与映射；026 的 Rust 业务 crate `aoidos-theme` 维护目录元数据、类型化校验与规范输出，存储操作通过 store 访问，不能直接持有 SQL 连接。前端只应用 Rust 交出的值、维护显示代次，不读取 theme.css 或补一套解析器。该 crate 和命令均待创建，不把设计稿当已有 API。
 
 实现时目录元数据逐项列出 name、域编号、valueKind、skinWritable、alias?，Rust 用封闭枚举 / 表；默认 CSS 与它做集合互校。值只在应用默认 CSS 维护，目录不再复制色板。004 先用设计目录夹具检查实际 CSS 与 Tailwind 映射；026 落地 Rust 目录后，由其导出同一夹具并补齐三方互校，不要求 004 等待 026。Rust 测试核验导出来自唯一目录，避免手写多份白名单。目录产物在同一提交更新，不依赖联网生成器。Rust 解析 var 的默认环境来自应用 CSS 的构建导出快照：026 经根 bun 脚本按目录提取双主题默认值、规范化并嵌入，verify 检查快照新鲜；不能手写第二份默认色值。默认 CSS 所需 token 均为可独立解析的常量，快照与实际 CSS 互校。
 

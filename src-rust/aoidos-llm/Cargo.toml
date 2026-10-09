@@ -1,0 +1,42 @@
+[package]
+name = "aoidos-llm"
+description = "LLM 供应商适配、流式护栏与单层请求策略（不依赖 tauri）"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aoidos-json.workspace = true
+uuid.workspace = true
+reqwest = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rustls = { workspace = true }
+bytes = { workspace = true }
+aoidos-store = { workspace = true }
+keyring = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[dev-dependencies]
+keyring-core.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-rustls = { workspace = true }
+rcgen = { workspace = true }
+
+[features]
+native-smoke = ["dep:block2"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+block2 = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk.workspace = true

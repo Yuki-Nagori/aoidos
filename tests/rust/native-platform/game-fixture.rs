@@ -1,6 +1,6 @@
 //! 可信场景及固定结束 / 失败注入；请求沿用真实模型能力，传输始终替换为本地 Provider。
 
-use mythos_engine::{
+use aoidos_engine::{
     fault::Fault,
     game::{catalog::*, domain::*, execution::Context},
     record::{
@@ -15,7 +15,7 @@ use mythos_engine::{
     storage::Storage,
     turn::Coordinator,
 };
-use mythos_llm::{
+use aoidos_llm::{
     config::ProfileStore,
     guard::GuardSpec,
     provider::{Provider, ProviderInput, RequestMode},
@@ -35,14 +35,14 @@ impl RoundFactory for Factory {
             .into_iter()
             .find(|profile| profile.profile_id == "ipc-fixture")
             .ok_or_else(|| Fault::new("app.not-found", "夹具配置不存在"))?;
-        let frozen = mythos_llm::config::freeze(
+        let frozen = aoidos_llm::config::freeze(
             &profile,
-            &mythos_llm::credentials::CredentialFile::new(&self.dir),
+            &aoidos_llm::credentials::CredentialFile::new(&self.dir),
         )
         .map_err(Fault::from)?;
-        let provider = mythos_llm::providers::build_provider(
+        let provider = aoidos_llm::providers::build_provider(
             frozen,
-            &mythos_llm::proxy::SystemProxySnapshot::default(),
+            &aoidos_llm::proxy::SystemProxySnapshot::default(),
             None,
         )
         .map_err(build_error)?;
@@ -55,22 +55,22 @@ impl RoundFactory for Factory {
             profile_revision: "fixture-v1".into(),
             dice_mode: mode,
             generation: Arc::new(LocalGeneration {
-                provider: Arc::new(mythos_engine::fixture::FixtureProvider(provider)),
+                provider: Arc::new(aoidos_engine::fixture::FixtureProvider(provider)),
                 profile,
                 budget,
             }),
         })
     }
 }
-fn build_error(_: mythos_llm::providers::ProviderBuildError) -> Fault {
+fn build_error(_: aoidos_llm::providers::ProviderBuildError) -> Fault {
     Fault::new("app.not-ready", "本地夹具请求构造失败")
 }
-fn projection_error(error: mythos_engine::record::projection::ProjectionError) -> Fault {
+fn projection_error(error: aoidos_engine::record::projection::ProjectionError) -> Fault {
     error.fault()
 }
 struct LocalGeneration {
     provider: Arc<dyn Provider>,
-    profile: mythos_llm::config::LlmProfile,
+    profile: aoidos_llm::config::LlmProfile,
     budget: Budget,
 }
 impl Generation for LocalGeneration {
@@ -92,7 +92,7 @@ impl Generation for LocalGeneration {
         PreparedGeneration::new(
             self.provider.clone(),
             GenerationRequest {
-                provider_request: mythos_llm::provider::ProviderRequest {
+                provider_request: aoidos_llm::provider::ProviderRequest {
                     model: self.profile.model.clone(),
                     input,
                     sampling: self.profile.sampling.clone(),
@@ -106,7 +106,7 @@ impl Generation for LocalGeneration {
     }
 }
 pub fn header() -> Header {
-    let prefix = "[MYTHOS:STATIC]\n只推进已知场景。\n[/MYTHOS:STATIC]\n".to_owned();
+    let prefix = "[AOIDOS:STATIC]\n只推进已知场景。\n[/AOIDOS:STATIC]\n".to_owned();
     Header {
         kind: "header".into(),
         format_version: 1,
@@ -131,12 +131,12 @@ impl WorldPort for LocalDomain {
     }
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault> {
         self.storage.with_database(|connection| {
-            mythos_store::applied::contains(connection, id, hash).map_err(Fault::from)
+            aoidos_store::applied::contains(connection, id, hash).map_err(Fault::from)
         })
     }
     fn apply(&mut self, mutation: &WorldMutation, hash: &str) -> Result<(), Fault> {
         self.storage.with_database(|connection| {
-            mythos_store::applied::apply_once(connection, &mutation.mutation_id, hash, &mut |_| {
+            aoidos_store::applied::apply_once(connection, &mutation.mutation_id, hash, &mut |_| {
                 Ok(())
             })
             .map(|_| ())
@@ -146,7 +146,7 @@ impl WorldPort for LocalDomain {
 }
 impl HistoryPort for LocalDomain {
     fn verify_target(&self, session: &Session, target: u64) -> Result<(), Fault> {
-        mythos_engine::game::control::verify_boundary(session, target)
+        aoidos_engine::game::control::verify_boundary(session, target)
     }
     fn verify_replay_target(
         &self,
@@ -154,7 +154,7 @@ impl HistoryPort for LocalDomain {
         parent: u64,
         target: u64,
     ) -> Result<(), Fault> {
-        mythos_engine::game::control::verify_replay_boundary(session, parent, target)
+        aoidos_engine::game::control::verify_replay_boundary(session, parent, target)
     }
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault> {
         WorldPort::applied(self, id, hash)
@@ -162,7 +162,7 @@ impl HistoryPort for LocalDomain {
     fn rebuild(&mut self, _: &Session, _: &[u64], id: &str, hash: &str) -> Result<(), Fault> {
         // 本夹具无领域变更，重建只确认原子控制标记；真实世界仍须登记自己的解释器。
         self.storage.with_database(|connection| {
-            mythos_store::applied::apply_once(connection, id, hash, &mut |_| Ok(()))
+            aoidos_store::applied::apply_once(connection, id, hash, &mut |_| Ok(()))
                 .map(|_| ())
                 .map_err(Fault::from)
         })
@@ -197,7 +197,7 @@ impl Domain for LocalDomain {
         if rule != "search" || actor != "player" {
             return Err(Fault::new("engine.invalid-phase", "夹具规则未登记"));
         }
-        mythos_engine::game::dice::freeze_pbta(mythos_engine::game::dice::PlanSpec {
+        aoidos_engine::game::dice::freeze_pbta(aoidos_engine::game::dice::PlanSpec {
             rule_id: rule,
             actor_id: actor,
             modifiers: vec![],
@@ -208,7 +208,7 @@ impl Domain for LocalDomain {
     fn consequences(
         &self,
         _: &Session,
-        _: &mythos_engine::game::recovery::RoundFacts,
+        _: &aoidos_engine::game::recovery::RoundFacts,
         _: &ConfirmedWorldView,
     ) -> Result<Vec<WorldMutation>, Fault> {
         if self.scenario.as_deref() == Some("failure") {
@@ -229,7 +229,7 @@ pub async fn context(
     storage: Arc<Storage>,
     session: Arc<std::sync::Mutex<Session>>,
     coordinator: Coordinator,
-    events: Arc<dyn mythos_engine::game::state::PhaseEvents>,
+    events: Arc<dyn aoidos_engine::game::state::PhaseEvents>,
     scenario: Option<String>,
 ) -> Result<Arc<Context>, Fault> {
     let script_revision = session

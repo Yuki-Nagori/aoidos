@@ -3,7 +3,7 @@ import { Bench } from "tinybench";
 import { formatGreeting } from "../utils/greet";
 
 const bench = new Bench({ warmupIterations: 100, iterations: 1_000 });
-bench.add("formatGreeting", () => formatGreeting("mythos"));
+bench.add("formatGreeting", () => formatGreeting("aoidos"));
 
 await bench.run();
 console.table(bench.table());

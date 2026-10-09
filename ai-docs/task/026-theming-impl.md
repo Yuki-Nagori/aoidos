@@ -15,7 +15,7 @@
 
 ## 范围与非目标
 
-- 新增不依赖 tauri 的 mythos-theme crate，目录元数据、CSS 子集 / 引用图校验、预算与规范化常量输出。
+- 新增不依赖 tauri 的 aoidos-theme crate，目录元数据、CSS 子集 / 引用图校验、预算与规范化常量输出。
 - store 中的独立 ThemePreference 项及迁移，thin theme 命令和同型 TS 类型；不完整替换 UiPreferences。
 - 已登记受控剧本目录的有界 theme.css 读取，缺失 / 非法 / IO 回退，内置与第三方同一验证。
 - 首窗初始化顺序、可信 head bootstrap、受控 main 构建；与 025 窗口状态插件共用入口。
@@ -40,7 +40,7 @@
 
 ## 预计改动
 
-待创建 `src-rust/mythos-theme/` 及 Rust 目录导出 / 校验测试；修改 workspace / Cargo.lock、mythos-store 配置与受控文件读取、src-tauri 命令 / 错误映射 / main 装配和窗口 / CSP 配置。前端修改 index.html、src-web/app.css、主题 API / utils / composable 与最小入口；测试镜像目录，并更新 004 过渡目录夹具。确需脚本通过根 package.json 注册，不用运行时联网生成目录。
+待创建 `src-rust/aoidos-theme/` 及 Rust 目录导出 / 校验测试；修改 workspace / Cargo.lock、aoidos-store 配置与受控文件读取、src-tauri 命令 / 错误映射 / main 装配和窗口 / CSP 配置。前端修改 index.html、src-web/app.css、主题 API / utils / composable 与最小入口；测试镜像目录，并更新 004 过渡目录夹具。确需脚本通过根 package.json 注册，不用运行时联网生成目录。
 
 ## 验收标准
 

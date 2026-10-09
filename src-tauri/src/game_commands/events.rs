@@ -1,7 +1,7 @@
 //! 四个阶段流复用窗口生命周期；快照确认与窗口投递仍由 engine 分开执行。
 
 use crate::{events, turn_commands::WindowEvents};
-use mythos_engine::{
+use aoidos_engine::{
     fault::Fault,
     game::state::{PhaseEvent, PhaseEvents},
 };
