@@ -599,12 +599,17 @@ mod tests {
         let dir = tdir("commands");
         init_llm_dir(dir);
         let profile = deepseek_profile(&unique("rt"));
+        let retained = deepseek_profile(&unique("rt-retained"));
         llm_save_profile(profile.clone()).unwrap();
+        llm_save_profile(retained.clone()).unwrap();
         let items = llm_list_profiles().unwrap().items;
         assert!(items.iter().any(|p| p.profile_id == profile.profile_id));
         llm_delete_profile(profile.profile_id.clone()).unwrap();
         let items = llm_list_profiles().unwrap().items;
+        // 删除隔离必须由本测试的第二个 profile 验证，不能依赖并行测试留下数据。
         assert!(!items.iter().any(|p| p.profile_id == profile.profile_id));
+        assert!(items.iter().any(|p| p.profile_id == retained.profile_id));
+        llm_delete_profile(retained.profile_id).unwrap();
     }
 
     #[test]
