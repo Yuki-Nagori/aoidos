@@ -62,6 +62,11 @@ impl Fixture {
         std::fs::create_dir_all(&root).unwrap();
         let repo = Repository::new(&root);
         let mut conn = Connection::open(root.join("memory.sqlite")).unwrap();
+        // 与产品使用同一 WAL 模式；保留同步要求，避免批量夹具反复创建 rollback journal。
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
         conn.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE store_applied(id TEXT PRIMARY KEY,content_hash TEXT NOT NULL);").unwrap();
         conn.execute_batch(crate::schema::SCHEMA).unwrap();
         let port = Port {
