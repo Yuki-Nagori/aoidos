@@ -2,8 +2,7 @@
 
 mod events;
 use crate::ipc::CmdError;
-pub use events::StorageEvents;
-use mythos_engine::{
+use aoidos_engine::{
     fault::Fault,
     preferences::UiPreferences,
     record::{
@@ -12,6 +11,7 @@ use mythos_engine::{
     },
     storage::Storage,
 };
+pub use events::StorageEvents;
 use std::{path::Path, sync::Arc};
 
 pub struct StorageService {
@@ -35,7 +35,7 @@ impl StorageService {
 /// 服务缺失由壳初始化处理，快照包含真实 SQL 成败与事件基线。
 pub fn store_get_migration(
     state: tauri::State<'_, StorageService>,
-) -> Result<mythos_engine::migration::Snapshot, CmdError> {
+) -> Result<aoidos_engine::migration::Snapshot, CmdError> {
     Ok(state.storage.migration.snapshot())
 }
 /// # Errors
@@ -156,7 +156,7 @@ pub async fn engine_get_record_body(
 async fn storage_job<T: Send + 'static>(
     job: impl FnOnce() -> Result<T, Fault> + Send + 'static,
 ) -> Result<T, CmdError> {
-    mythos_engine::blocking::run(job)
+    aoidos_engine::blocking::run(job)
         .await
         .map_err(CmdError::from)
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::turn_commands::WindowEvents;
-use mythos_engine::{fault::Fault, game::state::PhaseEvents, turn::Coordinator};
+use aoidos_engine::{fault::Fault, game::state::PhaseEvents, turn::Coordinator};
 use tauri::{
     Manager,
     test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets},
@@ -149,7 +149,7 @@ fn phase_window_adapter_keeps_independent_sequences_and_closed_window_errors() {
         PhaseEvent::Done {
             state: state.clone(),
             operation_id: id.clone(),
-            outcome: mythos_engine::ports::Outcome::Completed,
+            outcome: aoidos_engine::ports::Outcome::Completed,
         },
         PhaseEvent::Failed {
             state: state.clone(),

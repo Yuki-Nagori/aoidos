@@ -7,7 +7,7 @@
 
 ## 目标与背景
 
-[职责边界](../architecture/ts-rust-boundary.md)把 path / 文件 IO、shell 与进程、存储划给 Rust，但一直没有落地载体——006（记录持久化）、007（记忆载体）都在等它的选型与工具。本 task 是**设计任务**：把存储引擎、目录与路径规范、原子写工具、shell / 进程使用边界敲定成结构文档，供全部业务 crate 复用；实现 task 待定稿后新增（业务 crate `src-rust/mythos-store` 或工具 crate）。
+[职责边界](../architecture/ts-rust-boundary.md)把 path / 文件 IO、shell 与进程、存储划给 Rust，但一直没有落地载体——006（记录持久化）、007（记忆载体）都在等它的选型与工具。本 task 是**设计任务**：把存储引擎、目录与路径规范、原子写工具、shell / 进程使用边界敲定成结构文档，供全部业务 crate 复用；实现 task 待定稿后新增（业务 crate `src-rust/aoidos-store` 或工具 crate）。
 
 ## 必读
 

@@ -40,7 +40,7 @@
 
 ## 实施结果
 
-1. `mythos-llm` 提供 `config` / `credentials` / `proxy` / `platform`；配置冻结不重新读取热更新密钥。
+1. `aoidos-llm` 提供 `config` / `credentials` / `proxy` / `platform`；配置冻结不重新读取热更新密钥。
 2. `src-tauri/src/llm_commands.rs` 提供 profile 与凭据命令；`src-web/api/llm.ts` 同型声明及薄调用。
 3. 应用 setup 获取实例锁并持有到退出；私有文件先收紧空临时文件权限，再写入和发布。
 4. 原生集成放 `tests/rust/native-platform` 测试 crate，显式桌面会话且 `harness = false`；CI 三平台另跑该测试。
@@ -63,11 +63,11 @@
 | ---------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | 2026-10-07 | Windows 初次实现；`bun run verify`                                                          | 十三项通过；真实 CredUI 取消与 keyring 读写清通过                    |
 | 2026-10-07 | 本机 macOS；`bun run test:native`                                                           | AppKit 真实确认 / 取消与 Keychain 读写清通过，测试条目已清除         |
-| 2026-10-07 | [CI 37591267085](https://github.com/Yuki-Nagori/mythos/actions/runs/37591267085)            | macOS / Linux 原生集成通过；Windows 暴露父路径为文件的错误分类问题   |
-| 2026-10-07 | [CI 37593897448](https://github.com/Yuki-Nagori/mythos/actions/runs/37593897448)            | Windows 行为通过，覆盖率暴露未执行的文件打开失败路径；补目录目标用例 |
-| 2026-10-07 | [CI 37612885510](https://github.com/Yuki-Nagori/mythos/actions/runs/37612885510)，`d10276d` | 三平台全量门禁及真实原生 / OS 凭据集成全部通过                       |
+| 2026-10-07 | [CI 37591267085](https://github.com/Yuki-Nagori/aoidos/actions/runs/37591267085)            | macOS / Linux 原生集成通过；Windows 暴露父路径为文件的错误分类问题   |
+| 2026-10-07 | [CI 37593897448](https://github.com/Yuki-Nagori/aoidos/actions/runs/37593897448)            | Windows 行为通过，覆盖率暴露未执行的文件打开失败路径；补目录目标用例 |
+| 2026-10-07 | [CI 37612885510](https://github.com/Yuki-Nagori/aoidos/actions/runs/37612885510)，`d10276d` | 三平台全量门禁及真实原生 / OS 凭据集成全部通过                       |
 | 2026-10-07 | 独立评审优化，`6d4f8b6`；本机 macOS                                                         | `lint:rust:fix` 与 `bun run verify` 十三项通过；二轮只读复核无阻塞   |
-| 2026-10-07 | [CI 37615530871](https://github.com/Yuki-Nagori/mythos/actions/runs/37615530871)，`6097cfc` | 优化及文档整理后三平台门禁与真实原生 / OS 凭据集成全部通过           |
+| 2026-10-07 | [CI 37615530871](https://github.com/Yuki-Nagori/aoidos/actions/runs/37615530871)，`6097cfc` | 优化及文档整理后三平台门禁与真实原生 / OS 凭据集成全部通过           |
 
 ### 消融验证
 

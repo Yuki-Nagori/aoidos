@@ -25,13 +25,13 @@
 
 ## 实施步骤
 
-1. `src-tauri` 增加 `mythos-store` 依赖（workspace 内路径依赖）。
+1. `src-tauri` 增加 `aoidos-store` 依赖（workspace 内路径依赖）。
 2. 实现 `ipc.rs`（CmdError + From + 中文映射器）与单测：serde 形状、九个 store 码的前缀与文案、`detail.path`。
 3. `greet` 改签名；`commands.rs` 测试同步；`bun run verify` 十项。
 
 ## 预计改动
 
-新建 `src-tauri/src/ipc.rs`；修改 `src-tauri/src/lib.rs`（挂模块）、`src-tauri/src/commands.rs`（greet 签名与测试）、`src-tauri/Cargo.toml`（依赖 mythos-store 与 rusqlite dev-dep）、根 `Cargo.toml`（workspace 依赖登记 mythos-store 路径）。
+新建 `src-tauri/src/ipc.rs`；修改 `src-tauri/src/lib.rs`（挂模块）、`src-tauri/src/commands.rs`（greet 签名与测试）、`src-tauri/Cargo.toml`（依赖 aoidos-store 与 rusqlite dev-dep）、根 `Cargo.toml`（workspace 依赖登记 aoidos-store 路径）。
 
 ## 验收标准
 

@@ -7,7 +7,7 @@
 
 ## 目标与背景
 
-仓库无注释约定，注释风格散落于各文档的零星表述。参考 panta 同名规范（`ai-docs/standards/comments.md`）裁剪为 Mythos 技术栈（Rust / TypeScript / Vue），落档为独立规范篇。过程中沉淀了一条本仓特有的实现约定：**错误映射等一行体委托用具名函数，不写 `map_err(|e| …)` 闭包**——闭包体的错误分支几乎不可触达，llvm-cov 行覆盖会因此永远差若干百分点，而具名函数可直接单测（动机：mythos-store 实现中的实测）。
+仓库无注释约定，注释风格散落于各文档的零星表述。参考 panta 同名规范（`ai-docs/standards/comments.md`）裁剪为 Aoidos 技术栈（Rust / TypeScript / Vue），落档为独立规范篇。过程中沉淀了一条本仓特有的实现约定：**错误映射等一行体委托用具名函数，不写 `map_err(|e| …)` 闭包**——闭包体的错误分支几乎不可触达，llvm-cov 行覆盖会因此永远差若干百分点，而具名函数可直接单测（动机：aoidos-store 实现中的实测）。
 
 ## 必读
 

@@ -91,6 +91,6 @@ jobs:
         timeout-minutes: 5
         run: |
           dbus-run-session -- bash -c '
-            printf "mythos-session-fixture" | gnome-keyring-daemon --unlock --components=secrets
+            printf "aoidos-session-fixture" | gnome-keyring-daemon --unlock --components=secrets
             xvfb-run -a bun run test:native
           '

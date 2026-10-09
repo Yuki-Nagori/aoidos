@@ -1,6 +1,6 @@
 {
-  "productName": "Mythos IPC fixture",
-  "identifier": "com.yuki.mythos.ipcfixture",
+  "productName": "Aoidos IPC fixture",
+  "identifier": "com.yuki.aoidos.ipcfixture",
   "build": {
     "frontendDist": "gen/webview"
   },

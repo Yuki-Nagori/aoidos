@@ -1,15 +1,15 @@
 # LLM 接入与护栏
 
-更新日期：2026-10-08；供应商资料核验日期：2026-10-05。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/mythos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；阶段机与产品联调由 023 / 024 承接，当前验收状态见任务记录。实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
+更新日期：2026-10-08；供应商资料核验日期：2026-10-05。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/aoidos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；阶段机与产品联调由 023 / 024 承接，当前验收状态见任务记录。实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
 
 ## 架构与职责
 
-采用薄 Provider trait、reqwest 和独立 SSE 解析器。mythos-llm 负责供应商适配、传输、取消、护栏与单层请求策略，不依赖 Tauri；引擎负责回合接纳、记录投影和持久化；src-tauri 只适配命令及窗口事件。正常产品入口是 engine_submit_input，llm_submit 仅用于内部调试，并与引擎共用在飞回合门禁。
+采用薄 Provider trait、reqwest 和独立 SSE 解析器。aoidos-llm 负责供应商适配、传输、取消、护栏与单层请求策略，不依赖 Tauri；引擎负责回合接纳、记录投影和持久化；src-tauri 只适配命令及窗口事件。正常产品入口是 engine_submit_input，llm_submit 仅用于内部调试，并与引擎共用在飞回合门禁。
 
 ```text
 006 记录投影 + GuardSpec
   → 引擎接纳回合、分配 turnId
-  → mythos-llm：Provider → SSE → 增量护栏 → 安全文本
+  → aoidos-llm：Provider → SSE → 增量护栏 → 安全文本
   → 平台适配预留事件序号 → 引擎提交记录 / 更新快照基线
   → src-tauri 投递已准备事件
 ```
@@ -289,7 +289,7 @@ TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地
 
 ## 实现承接
 
-实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `mythos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `mythos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 / 024 仍待产品接线。
+实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `aoidos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `aoidos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 / 024 仍待产品接线。
 
 | 任务                                                          | 承接边界                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------- |

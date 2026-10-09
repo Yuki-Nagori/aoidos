@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-06。状态：**主要产品规则已确认，工程协议 v1 已评审，待实施，算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/mythos/issues/13)。本文维护已确认的产品规则与工程边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，任务状态见 [007](../task/007-memory-design.md)。已确认产品规则作为后续设计约束，工程协议为实施依据；算法开发参数与生产默认分开，生产值须实测审定。当前没有记忆运行时；[029–033 实施任务](../task-index.md) 已登记，依赖未满足保持 planned。
+更新日期：2026-10-06。状态：**主要产品规则已确认，工程协议 v1 已评审，待实施，算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护已确认的产品规则与工程边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，任务状态见 [007](../task/007-memory-design.md)。已确认产品规则作为后续设计约束，工程协议为实施依据；算法开发参数与生产默认分开，生产值须实测审定。当前没有记忆运行时；[029–033 实施任务](../task-index.md) 已登记，依赖未满足保持 planned。
 
 ## 阅读路径
 
@@ -297,7 +297,7 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 ## 存储与失败边界
 
-已确定载体为 SQLite manifest 与 `workspaces/<script-id>/memory/` 文件正文；覆写前保留 `backups/`。复用 [mythos-store 与存储基建](storage.md)，不引入 ORM；跨剧本不共享。cycle 使用独立表 / 目录和生命周期，不混入会话条目的 strength 归档流程。
+已确定载体为 SQLite manifest 与 `workspaces/<script-id>/memory/` 文件正文；覆写前保留 `backups/`。复用 [aoidos-store 与存储基建](storage.md)，不引入 ORM；跨剧本不共享。cycle 使用独立表 / 目录和生命周期，不混入会话条目的 strength 归档流程。
 
 manifest 需要关联条目身份、正文版本与校验信息、状态、来源、周目和计分原因，才能识别重复提交、过期候选与文件 / 索引不一致。此处是所需信息，尚非数据库 schema 或 Rust / TS API 定义。
 
@@ -483,7 +483,7 @@ recordSeq / historyRevision 沿用 006 / 012 的安全整数范围；正文 hash
 
 候选没有 strength、分数、文件路径、SQL、事实 patch、自由引文、实体登记或权限覆盖字段。新事件没有旧 targetRef；无法确定关联须 uncertain。repeat 只计划有效强化 / 复活或 no-op，不用其摘要或态度覆盖旧内容；有内容 / 态度变化须 supplement 或 correction。classification=new 的源素材主体 / 维度 anchor 已处理时拒绝或转待关联问题，不能换 candidateId 创建重复 entry。分类相互依赖时由程序形成依赖操作组，模型不能用任意组号改变原子边界。
 
-PromptPlan 由 Rust 构造：可信任务说明 / schema → 冻结批次身份 → 主体 / 实体目录与旧记忆版本 → 来源片段和获知证据 → 输出要求。玩家 / 历史文本标作数据，沿 006 的保留括号转义规则生成 prompt 副本，原文与引用映射不变。任务要求只返回上述 JSON，不创造实体或权限，不以强度判真，无法关联返回 uncertain，不值得记返回 notWorthy；不请求内部推理。目标为 `[MYTHOS:MEMORY-PROPOSAL]`，由 GrammarSpec 注册目标闭合 stop 与 outer / forged-close 护栏，不新增正式 JSONL kind。
+PromptPlan 由 Rust 构造：可信任务说明 / schema → 冻结批次身份 → 主体 / 实体目录与旧记忆版本 → 来源片段和获知证据 → 输出要求。玩家 / 历史文本标作数据，沿 006 的保留括号转义规则生成 prompt 副本，原文与引用映射不变。任务要求只返回上述 JSON，不创造实体或权限，不以强度判真，无法关联返回 uncertain，不值得记返回 notWorthy；不请求内部推理。目标为 `[AOIDOS:MEMORY-PROPOSAL]`，由 GrammarSpec 注册目标闭合 stop 与 outer / forged-close 护栏，不新增正式 JSONL kind。
 
 逐字引文由程序按 sourceIds 提取；模型摘要是认知内容，不能当原话。独立候选的局部拒绝不撤销其他合格候选；输入 / 顶层失败则不处理整批。拒绝原因保存脱敏诊断，不增加自动 JSON 修复调用。
 
@@ -554,7 +554,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### manifest、操作状态机与恢复
 
-SQLite 拟新增窄表：memory_runs（完整策略与时钟）、memory_run_sessions、memory_materials / memory_batches / memory_spans、memory_entries / memory_versions / memory_version_sources、memory_effects、memory_operations / memory_operation_targets、memory_aliases / memory_questions。实体 canonical 数据只经可信引擎端口访问。表名是迁移设计，尚未创建；迁移由 mythos-store 的有序事务 / user_version 管理，业务 crate 拥有 schema 和读写逻辑。
+SQLite 拟新增窄表：memory_runs（完整策略与时钟）、memory_run_sessions、memory_materials / memory_batches / memory_spans、memory_entries / memory_versions / memory_version_sources、memory_effects、memory_operations / memory_operation_targets、memory_aliases / memory_questions。实体 canonical 数据只经可信引擎端口访问。表名是迁移设计，尚未创建；迁移由 aoidos-store 的有序事务 / user_version 管理，业务 crate 拥有 schema 和读写逻辑。
 
 entries 当前指向 versions，并保存 stateRevision；正文指向、强度效果、归档 / 复活状态等任一确认变化都递增它，避免正文未变时旧数值计划仍通过 CAS。versions 保留父版本、正文 hash / 长度与有效来源；effects 保留 event / source 依据及加分 / 复活原因，计算时仅装载当前有效路径。外键、唯一幂等索引与 `(run_id,status,entry_id)` 分页索引在迁移中建立；应用字段长度校验与 SQL CHECK 联合保证合法状态。状态 / applied / targets 在同一事务更新，不依赖内存标记。没有正文变化的 no-op / notWorthy 仅事务保存处理结果；需要正文时才准备新 version 文件，不能为记一个拒绝原因反复复制正文。
 
@@ -649,7 +649,7 @@ v1 记忆处理是单独授权的维护批次，在回合释放 lease 后取得�
 
 | 阶段                                                                   | 实施主责与依赖                                                      | 验收边界                                                              |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [029 A：记忆版本与恢复](../task/029-memory-storage-recovery-impl.md)   | 依赖 007、013、022；拟新增 mythos-memory，复用 store 和记录读取端口 | 迁移、正文 / manifest、状态机、幂等、回退、故障 / 清理验证            |
+| [029 A：记忆版本与恢复](../task/029-memory-storage-recovery-impl.md)   | 依赖 007、013、022；拟新增 aoidos-memory，复用 store 和记录读取端口 | 迁移、正文 / manifest、状态机、幂等、回退、故障 / 清理验证            |
 | [030 B：门控与批次](../task/030-memory-gates-batches-impl.md)          | 依赖 A、018–020、023、035 计费实施                                  | 来源映射、实体 / 获知证据端口、候选 schema、别名 / 待确认、取消及租约 |
 | [031 C：高级设置与查询](../task/031-memory-settings-queries-impl.md)   | 依赖 A、B、025、034 国际化实施                                      | 参数保存 / 继承 / 周目冻结、同型 IPC、待确认 / 诊断查询，设置失败恢复 |
 | [032 D：轮回与节点接入](../task/032-memory-cycle-nodes-impl.md)        | 依赖 A、B、022、023                                                 | 授权刻痕、独立去重 / 归档、条件提示；不加入检索热路径                 |

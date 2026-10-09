@@ -33,7 +33,7 @@
 
 ## 预计改动
 
-拟新增 src-rust 计价业务模块与测试，扩展 mythos-store；src-tauri 仅薄命令 / 装配，src-web API / utils / 费用视图消费 025 / 034。根 scripts、workspace、锁文件、架构及任务同步实际实现；现在不创建占位 API。
+拟新增 src-rust 计价业务模块与测试，扩展 aoidos-store；src-tauri 仅薄命令 / 装配，src-web API / utils / 费用视图消费 025 / 034。根 scripts、workspace、锁文件、架构及任务同步实际实现；现在不创建占位 API。
 
 ## 验收标准
 

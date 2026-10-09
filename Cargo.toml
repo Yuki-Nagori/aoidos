@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-rust/mythos-json", "src-tauri", "src-rust/mythos-store", "src-rust/mythos-llm", "src-rust/mythos-engine", "tests/rust/native-platform"]
+members = ["src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,11 +19,11 @@ tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
-mythos-json = { path = "src-rust/mythos-json" }
-mythos-store = { path = "src-rust/mythos-store" }
-mythos-llm = { path = "src-rust/mythos-llm" }
-mythos-engine = { path = "src-rust/mythos-engine" }
-mythos = { path = "src-tauri" }
+aoidos-json = { path = "src-rust/aoidos-json" }
+aoidos-store = { path = "src-rust/aoidos-store" }
+aoidos-llm = { path = "src-rust/aoidos-llm" }
+aoidos-engine = { path = "src-rust/aoidos-engine" }
+aoidos = { path = "src-tauri" }
 uuid = { version = "1", features = ["v4"] }
 # 密钥存储：v1 默认特性 = Windows Credential Manager / macOS Keychain / Linux Secret Service（019）。
 keyring = "4"
@@ -36,7 +36,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 block2 = "0.6"
 gtk = "0.18"
 # Windows 原生能力（019）：CredUI 凭据输入 + 降级文件 DACL。虚拟 manifest 不允许
-# target 段，按 crate 形态放各成员（见 src-rust/mythos-llm）。
+# target 段，按 crate 形态放各成员（见 src-rust/aoidos-llm）。
 windows-sys = { version = "0.60", features = [
   "Win32_Foundation",
   "Win32_Security",

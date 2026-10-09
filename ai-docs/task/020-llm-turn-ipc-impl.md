@@ -37,7 +37,7 @@
 
 ## 改动范围
 
-新增 `src-rust/mythos-engine/` 协调器、请求冻结和输出 / 事件端口；扩展 LLM 调度器的提交确认及物理尝试身份 / 生命周期，接入 Tauri 薄命令、同型 TS API 和真实主 Webview 集成夹具。同步 workspace、锁文件、聚合原生测试入口与依赖 / 目录文档。
+新增 `src-rust/aoidos-engine/` 协调器、请求冻结和输出 / 事件端口；扩展 LLM 调度器的提交确认及物理尝试身份 / 生命周期，接入 Tauri 薄命令、同型 TS API 和真实主 Webview 集成夹具。同步 workspace、锁文件、聚合原生测试入口与依赖 / 目录文档。
 
 ## 验收标准
 
@@ -61,7 +61,7 @@
 | 2026-10-07 | `bun run typecheck:rust --release`                                                          | 通过，生产不编译 / 注册调试 submit                                                                                                                                         |
 | 2026-10-07 | 隔离副本故障消融                                                                            | 八项变异均被行为断言捕获：共享门禁、已提交正文、废弃序号、finishReason、取消尾文、序号清退、正文 / 终态写入失败；原树基线通过，无编译失败冒充捕获                          |
 | 2026-10-07 | 故障注入、虚拟时间与并发竞争                                                                | 准备 / 写入 / 封口 / 全事件丢失、慢提交、空输出 stop / guard / length、private 隔离及门禁释放有定向断言；多线程执行 64 轮取消 / 完成竞争，全部通过                         |
-| 2026-10-07 | [CI 37630403410](https://github.com/Yuki-Nagori/mythos/actions/runs/37630403410)，`dba2fbb` | Windows / macOS / Linux 全部门禁及真实原生 UI / OS 凭据 / 主 Webview IPC 验证通过；文档完成状态提交后的复验见 [PR #67](https://github.com/Yuki-Nagori/mythos/pull/67) 检查 |
+| 2026-10-07 | [CI 37630403410](https://github.com/Yuki-Nagori/aoidos/actions/runs/37630403410)，`dba2fbb` | Windows / macOS / Linux 全部门禁及真实原生 UI / OS 凭据 / 主 Webview IPC 验证通过；文档完成状态提交后的复验见 [PR #67](https://github.com/Yuki-Nagori/aoidos/pull/67) 检查 |
 
 ## 风险与回退
 

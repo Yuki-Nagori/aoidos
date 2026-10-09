@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Mythos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScript + Tauri 2。本文件是全部文档的索引（面向 AI 编码代理，人均可读），改代码前按需读所引文档。
+Aoidos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScript + Tauri 2。本文件是全部文档的索引（面向 AI 编码代理，人均可读），改代码前按需读所引文档。
 
 ## 文档路由
 

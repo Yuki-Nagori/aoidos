@@ -75,7 +75,7 @@ pub fn prepare<T: Serialize + ?Sized>(
     stream_id: &str,
     data: &T,
 ) -> Result<PreparedEnvelope, CmdError> {
-    let data = mythos_json::to_value(data).map_err(payload_error)?;
+    let data = aoidos_json::to_value(data).map_err(payload_error)?;
     let seq = next_seq(event, stream_id)?;
     Ok(PreparedEnvelope {
         seq,
@@ -91,7 +91,7 @@ pub fn retire_stream(stream_id: &str) {
         .retain(|(_, id), _| id != stream_id);
 }
 
-fn payload_error(_: mythos_json::Error) -> CmdError {
+fn payload_error(_: aoidos_json::Error) -> CmdError {
     event_error("事件载荷无法序列化")
 }
 #[cfg(test)]

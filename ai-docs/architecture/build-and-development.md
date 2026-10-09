@@ -24,11 +24,14 @@
 | `bun run format` / `format:rust`       | Prettier / rustfmt（`:check` 为只读检查）                                                          |
 | `bun run typecheck` / `typecheck:rust` | vue-tsc + 仓库脚本 tsc / cargo check                                                               |
 | `bun run bench`                        | tinybench 基准示例                                                                                 |
+| `bun run clean:rust`                   | 清理 Rust 生成缓存；可追加 `-- -p <crate>` 限定包                                                  |
 | `bun run doc:rust`                     | rustdoc 构建并拒绝警告（文档内链契约）                                                             |
 | `bun run knip`                         | 死依赖 / 死导出检查                                                                                |
 | `bun run tauri:build`                  | 发布打包                                                                                           |
 
 前端与夹具源代码按根 `tsconfig.json` 检查；仓库 `.mts` 脚本使用 `scripts/tsconfig.json`，继承严格检查并单独启用 Bun / Node 类型及 `allowImportingTsExtensions`，保持 `noEmit`。`typecheck` 聚合两项，前端配置不增加脚本运行环境类型。`@types/bun` / `@types/node` 作为直接开发依赖，版本由 `bun.lock` 固定。
+
+目录移动后若 Tauri 构建缓存仍引用旧绝对路径，先运行 `bun run clean:rust -- -p tauri`；仍存在其他旧缓存时用 `bun run clean:rust` 完整清理，再重跑门禁。
 
 ## verify 构成
 
@@ -48,7 +51,7 @@ CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原
 
 `bun run test:native` 是独立于本地 verify 十三项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
 
-入口聚合 `mythos-native-tests` 全部桌面会话目标，新增目标只登记 Cargo；定向排查用 `bun run test:native --test ipc-platform`。根脚本先构建手写 `webview/main.ts` 到 `gen/webview/`，测试配置加载生成目录；`webview/` 与 `tauri.conf.json` 入库，整个 `gen/` 从 Git / ESLint 排除。
+入口聚合 `aoidos-native-tests` 全部桌面会话目标，新增目标只登记 Cargo；定向排查用 `bun run test:native --test ipc-platform`。根脚本先构建手写 `webview/main.ts` 到 `gen/webview/`，测试配置加载生成目录；`webview/` 与 `tauri.conf.json` 入库，整个 `gen/` 从 Git / ESLint 排除。
 
 `ipc-platform` 使用真实主 Webview、产品命令及实际前端消费者，覆盖回合、记录、迁移、阶段 / 骰判、回退 / 重启和恢复 / 监听释放；`game-fixture.rs` 提供可信场景，不调用收费 API。具体断言与验证结果见 019–023 对应 task。
 

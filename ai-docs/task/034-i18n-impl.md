@@ -32,7 +32,7 @@
 
 ## 预计改动
 
-拟新增 locales、src-web 国际化模块 / utils / API 与测试；修改现存 `index.html` 的静态 lang / 可信 head bootstrap、Vite / ESLint / 根 scripts 与依赖锁、src-tauri build.rs / 装配，复用 mythos-store。当前新路径及接口尚不存在，实现时同步契约与目录文档。
+拟新增 locales、src-web 国际化模块 / utils / API 与测试；修改现存 `index.html` 的静态 lang / 可信 head bootstrap、Vite / ESLint / 根 scripts 与依赖锁、src-tauri build.rs / 装配，复用 aoidos-store。当前新路径及接口尚不存在，实现时同步契约与目录文档。
 
 ## 验收标准
 

@@ -16,11 +16,11 @@ Windows / macOS / Linux 的原生能力由平台模块分别实现，通过 `#[c
 
 原生交互统一经平台壳调度到 UI 主线程，等待用户期间不持业务锁；保存逻辑与 UI 生命周期分开，便于用注入器验证确认 / 取消 / 失败。平台模块实现存在不等于已验证：每个平台的真实 UI 与 OS 服务结果分别记录，纯逻辑或模拟测试不替代平台验收。
 
-模块封装按业务职责，标准库的通用类型不需要统一转发。共享存储规则归 `mythos-store`，业务 schema 留在消费 crate；具体归属见[目录规划](../architecture/repository-layout.md#归属规则)。
+模块封装按业务职责，标准库的通用类型不需要统一转发。共享存储规则归 `aoidos-store`，业务 schema 留在消费 crate；具体归属见[目录规划](../architecture/repository-layout.md#归属规则)。
 
 ## Rust 模块目录
 
-小模块保留单文件与内联 `#[cfg(test)] mod tests`。当测试体拆成 `tests.rs` 或实现拆成子模块、已经形成模块目录时，入口统一放该目录的 `mod.rs`，与子模块并列；适用于 `src-tauri` 和业务 crate。例如 `mythos-engine/src/turn/{mod.rs,tests.rs}`、`src-tauri/src/turn_commands/{mod.rs,tests.rs}`。迁移不改变对外模块名，同时更新目录文档与路径引用，不给单文件模块预建目录。
+小模块保留单文件与内联 `#[cfg(test)] mod tests`。当测试体拆成 `tests.rs` 或实现拆成子模块、已经形成模块目录时，入口统一放该目录的 `mod.rs`，与子模块并列；适用于 `src-tauri` 和业务 crate。例如 `aoidos-engine/src/turn/{mod.rs,tests.rs}`、`src-tauri/src/turn_commands/{mod.rs,tests.rs}`。迁移不改变对外模块名，同时更新目录文档与路径引用，不给单文件模块预建目录。
 
 ## Cargo 工作区
 

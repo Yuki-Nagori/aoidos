@@ -1,9 +1,9 @@
 //! 真实主 Webview 的命令 / 事件往返；本地夹具不发送收费 HTTP，独立进程主线程运行。
 
-use mythos_engine::fault::Fault;
-use mythos_lib::store_commands::{StorageEvents, StorageService};
-use mythos_lib::turn_commands::{TurnService, WindowEvents};
-use mythos_llm::{
+use aoidos_engine::fault::Fault;
+use aoidos_lib::store_commands::{StorageEvents, StorageService};
+use aoidos_lib::turn_commands::{TurnService, WindowEvents};
+use aoidos_llm::{
     config::{LlmProfile, ProfileMode, ProfileStore, ProxyConfig},
     credentials::{CredentialFile, CredentialStore},
     proxy::SystemProxySnapshot,
@@ -34,7 +34,7 @@ async fn report_smoke(
     if !passed {
         eprintln!("IPC fixture failed: {diagnostic}");
     }
-    app.state::<mythos_engine::game::runtime::Service>()
+    app.state::<aoidos_engine::game::runtime::Service>()
         .shutdown()
         .await;
     service.coordinator.shutdown().await;
@@ -58,7 +58,7 @@ async fn record_smoke(
     service: tauri::State<'_, TurnService>,
     storage: tauri::State<'_, StorageService>,
 ) -> Result<serde_json::Value, String> {
-    use mythos_engine::{
+    use aoidos_engine::{
         record::{
             format::{Header, hash, now},
             grammar,
@@ -67,7 +67,7 @@ async fn record_smoke(
         request::PreparedGeneration,
     };
     let id = uuid::Uuid::new_v4().to_string();
-    let prefix = "[MYTHOS:STATIC]\n只推进已知场景。\n[/MYTHOS:STATIC]\n".to_owned();
+    let prefix = "[AOIDOS:STATIC]\n只推进已知场景。\n[/AOIDOS:STATIC]\n".to_owned();
     let header = Header {
         kind: "header".into(),
         format_version: 1,
@@ -88,13 +88,13 @@ async fn record_smoke(
     let profiles = ProfileStore::new(&report.dir)
         .load()
         .map_err(smoke_store_error)?;
-    let frozen = mythos_llm::config::freeze(&profiles[0], &CredentialFile::new(&report.dir))
+    let frozen = aoidos_llm::config::freeze(&profiles[0], &CredentialFile::new(&report.dir))
         .map_err(smoke_store_error)?;
     let request = PreparedGeneration::local_fixture_with_guard(
         frozen,
         &service.proxy_snapshot,
         None,
-        mythos_llm::provider::ProviderInput::Completion(mythos_llm::provider::CompletionInput {
+        aoidos_llm::provider::ProviderInput::Completion(aoidos_llm::provider::CompletionInput {
             prompt: format!("{prefix}{}", grammar::open(&Target::Narration)),
         }),
         grammar::guard(&Target::Narration),
@@ -113,7 +113,7 @@ async fn record_smoke(
         .map_err(smoke_snapshot_error)?;
     Ok(serde_json::json!({"sessionId":id,"turnId":turn}))
 }
-fn smoke_store_error(error: mythos_store::error::StoreError) -> String {
+fn smoke_store_error(error: aoidos_store::error::StoreError) -> String {
     format!("store.{}", error.code())
 }
 
@@ -135,7 +135,7 @@ fn emit_smoke(
     service: tauri::State<'_, TurnService>,
     turn_id: String,
     session_id: String,
-    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
+    game: tauri::State<'_, aoidos_engine::game::runtime::Service>,
 ) -> Result<(), String> {
     let phase = game.get_phase(&session_id).map_err(smoke_snapshot_error)?;
     app.emit_to(
@@ -173,7 +173,7 @@ fn delivery_failed(_: tauri::Error) -> Fault {
 #[tauri::command]
 async fn game_smoke(
     scenario: Option<String>,
-    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
+    game: tauri::State<'_, aoidos_engine::game::runtime::Service>,
     storage: tauri::State<'_, StorageService>,
     turns: tauri::State<'_, TurnService>,
     events: tauri::State<'_, Arc<WindowEvents>>,
@@ -199,7 +199,7 @@ async fn game_smoke(
 }
 #[tauri::command]
 async fn game_restart_smoke(
-    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
+    game: tauri::State<'_, aoidos_engine::game::runtime::Service>,
     storage: tauri::State<'_, StorageService>,
     turns: tauri::State<'_, TurnService>,
     events: tauri::State<'_, Arc<WindowEvents>>,
@@ -233,7 +233,7 @@ async fn game_restart_smoke(
 // 仅原生测试等待确认快照；产品消费者没有定时轮询。
 #[tauri::command]
 async fn game_wait_smoke(
-    game: tauri::State<'_, mythos_engine::game::runtime::Service>,
+    game: tauri::State<'_, aoidos_engine::game::runtime::Service>,
     session_id: String,
     operation_id: String,
 ) -> Result<(), String> {
@@ -242,7 +242,7 @@ async fn game_wait_smoke(
             let snapshot = game.get_phase(&session_id).map_err(smoke_snapshot_error)?;
             if snapshot.state.last_operation.is_some_and(|operation| {
                 operation.operation_id == operation_id
-                    && operation.outcome == mythos_engine::game::state::OperationOutcome::Completed
+                    && operation.outcome == aoidos_engine::game::state::OperationOutcome::Completed
             }) {
                 return Ok(());
             }
@@ -257,7 +257,7 @@ fn smoke_timeout_error(_: tokio::time::error::Elapsed) -> String {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = std::env::temp_dir().join(format!("mythos-ipc-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("aoidos-ipc-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     ProfileStore::new(&dir).save(&[LlmProfile {
         profile_id: "ipc-fixture".into(),
@@ -273,9 +273,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }])?;
     CredentialFile::new(&dir).set_key(
         "deepseek",
-        secrecy::SecretString::from("mythos-local-fixture".to_owned()),
+        secrecy::SecretString::from("aoidos-local-fixture".to_owned()),
     )?;
-    mythos_lib::llm_commands::init_llm_dir(dir.clone());
+    aoidos_lib::llm_commands::init_llm_dir(dir.clone());
     let passed = Arc::new(AtomicBool::new(false));
     let observed = passed.clone();
     let fixture_dir = dir.clone();
@@ -294,7 +294,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.manage(events.clone());
             let storage = StorageService::new(&fixture_dir, StorageEvents::new(events.clone()));
             let turns = TurnService::new(events, SystemProxySnapshot::default())?;
-            app.manage(mythos_engine::game::runtime::Service::new(
+            app.manage(aoidos_engine::game::runtime::Service::new(
                 turns.coordinator.clone(),
                 Arc::new(game_fixture::Factory {
                     dir: fixture_dir.clone(),
@@ -308,7 +308,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("Mythos IPC fixture")
+            .title("Aoidos IPC fixture")
             .visible(false)
             .build()?;
             // 超时只用于集成测试兜底，不是产品正文轮询或恢复策略。
@@ -320,23 +320,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            mythos_lib::turn_ipc::llm_submit,
-            mythos_lib::turn_ipc::llm_get_turn,
-            mythos_lib::turn_ipc::llm_cancel,
-            mythos_lib::store_ipc::store_get_migration,
-            mythos_lib::store_ipc::store_get_ui_preferences,
-            mythos_lib::store_ipc::store_set_ui_preferences,
-            mythos_lib::store_ipc::engine_get_record_page,
-            mythos_lib::store_ipc::engine_get_record_view,
-            mythos_lib::store_ipc::engine_get_record_body,
-            mythos_lib::game_ipc::engine_submit_input,
-            mythos_lib::game_ipc::engine_interrupt,
-            mythos_lib::game_ipc::engine_cancel_round,
-            mythos_lib::game_ipc::engine_resume,
-            mythos_lib::game_ipc::engine_regenerate,
-            mythos_lib::game_ipc::engine_rewind,
-            mythos_lib::game_ipc::engine_submit_check,
-            mythos_lib::game_ipc::engine_get_phase,
+            aoidos_lib::turn_ipc::llm_submit,
+            aoidos_lib::turn_ipc::llm_get_turn,
+            aoidos_lib::turn_ipc::llm_cancel,
+            aoidos_lib::store_ipc::store_get_migration,
+            aoidos_lib::store_ipc::store_get_ui_preferences,
+            aoidos_lib::store_ipc::store_set_ui_preferences,
+            aoidos_lib::store_ipc::engine_get_record_page,
+            aoidos_lib::store_ipc::engine_get_record_view,
+            aoidos_lib::store_ipc::engine_get_record_body,
+            aoidos_lib::game_ipc::engine_submit_input,
+            aoidos_lib::game_ipc::engine_interrupt,
+            aoidos_lib::game_ipc::engine_cancel_round,
+            aoidos_lib::game_ipc::engine_resume,
+            aoidos_lib::game_ipc::engine_regenerate,
+            aoidos_lib::game_ipc::engine_rewind,
+            aoidos_lib::game_ipc::engine_submit_check,
+            aoidos_lib::game_ipc::engine_get_phase,
             game_smoke,
             game_restart_smoke,
             game_wait_smoke,

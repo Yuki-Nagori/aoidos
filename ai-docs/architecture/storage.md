@@ -56,16 +56,16 @@ CREATE TABLE point_allocations (
 
 ## 目录与路径规范
 
-数据根由装配层调用 Tauri `app_data_dir()` 取得，当前应用标识为 `com.yuki.mythos`，没有自定义目录覆盖。默认 macOS 为 `~/Library/Application Support/com.yuki.mythos/`，Windows 为 `%APPDATA%\com.yuki.mythos\`，Linux 为 `$XDG_DATA_HOME/com.yuki.mythos/`（未设置时使用 `~/.local/share/com.yuki.mythos/`），不使用 `~/.mythos`。实际系统重定向由 Tauri 解析，不在业务层拼接用户主目录。
+数据根由装配层调用 Tauri `app_data_dir()` 取得，当前应用标识为 `com.yuki.aoidos`，没有自定义目录覆盖。默认 macOS 为 `~/Library/Application Support/com.yuki.aoidos/`，Windows 为 `%APPDATA%\com.yuki.aoidos\`，Linux 为 `$XDG_DATA_HOME/com.yuki.aoidos/`（未设置时使用 `~/.local/share/com.yuki.aoidos/`），不使用 `~/.aoidos`。实际系统重定向由 Tauri 解析，不在业务层拼接用户主目录。
 
-`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `mythos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。对话记录及两字段 UI 偏好已由 022 实现；记忆目录仍为后续设计布局。020 的调试正文仅存内存，产品持久化使用独立 OutputWriter。
+`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `aoidos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。对话记录及两字段 UI 偏好已由 022 实现；记忆目录仍为后续设计布局。020 的调试正文仅存内存，产品持久化使用独立 OutputWriter。
 
 ```text
 <app-data>/                       # tauri PathResolver::app_data_dir，注入业务 crate
 ├── storage.sqlite                # 业务状态（含 WAL/SHM）
 ├── storage.lock                  # InstanceLock：OS 独占锁，释放不删除
 ├── llm/                          # 019 配置与凭据
-│   ├── profiles.json             # profile 集合；业务 schema 由 mythos-llm 管理
+│   ├── profiles.json             # profile 集合；业务 schema 由 aoidos-llm 管理
 │   └── credentials.json          # 权威后端指针 / 墓碑及私有降级值
 ├── migrations/…                  # SQL 迁移（编译期内嵌，目录仅调试导出）
 ├── workspaces/<script-id>/       # 每剧本一个工作区
@@ -116,7 +116,7 @@ CREATE TABLE point_allocations (
 
 ## 业务存储所有权
 
-`mythos-engine::Storage` 统一打开 `storage.sqlite` 并核验共享 applied 表，保存真实迁移状态；后续主题 / 计费 / 记忆模块复用此所有者及迁移编号，不创建第二套业务连接生命周期。`mythos-store::applied` 提供 operationId + contentHash 幂等提交原语，业务 schema 和解释器由消费模块所有。
+`aoidos-engine::Storage` 统一打开 `storage.sqlite` 并核验共享 applied 表，保存真实迁移状态；后续主题 / 计费 / 记忆模块复用此所有者及迁移编号，不创建第二套业务连接生命周期。`aoidos-store::applied` 提供 operationId + contentHash 幂等提交原语，业务 schema 和解释器由消费模块所有。
 
 `ui-preferences.json` 在系统应用数据根保存版本 1 的 `panelPinned` / `diceMode`。文件缺失返回默认值，坏格式或未知版本明确拒绝，不静默覆盖；单文件上限 4 KiB，保存经原子写成功才确认。主题和语言偏好仍遵循各自架构，不扩充这两个字段。
 

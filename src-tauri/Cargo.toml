@@ -1,25 +1,25 @@
 [package]
-name = "mythos"
+name = "aoidos"
 description = "AI 驱动的剧情跑团桌面应用"
 version.workspace = true
 edition.workspace = true
 
 [lib]
-name = "mythos_lib"
+name = "aoidos_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build.workspace = true
 
 [dependencies]
-mythos-json.workspace = true
+aoidos-json.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
-mythos-store.workspace = true
-mythos-llm.workspace = true
-mythos-engine.workspace = true
+aoidos-store.workspace = true
+aoidos-llm.workspace = true
+aoidos-engine.workspace = true
 secrecy.workspace = true
 
 [dev-dependencies]

@@ -1,10 +1,10 @@
 use crate::ipc::CmdError;
-use mythos_llm::config::{
+use aoidos_llm::config::{
     LlmProfile, MAX_PROFILES, ProfileError, ProfileStore, validate_identifier,
 };
-use mythos_llm::credentials::{CredentialStore, CredentialVault, KeyStatus};
-use mythos_llm::platform::NativePrompt;
-use mythos_store::error::StoreError;
+use aoidos_llm::credentials::{CredentialStore, CredentialVault, KeyStatus};
+use aoidos_llm::platform::NativePrompt;
+use aoidos_store::error::StoreError;
 use secrecy::SecretString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -138,8 +138,8 @@ pub(crate) fn freeze_submission(
     profile_id: &str,
 ) -> Result<
     (
-        mythos_llm::config::FrozenProfile,
-        Option<mythos_llm::proxy::ProxyAuth>,
+        aoidos_llm::config::FrozenProfile,
+        Option<aoidos_llm::proxy::ProxyAuth>,
     ),
     CmdError,
 > {
@@ -155,13 +155,13 @@ pub(crate) fn freeze_submission(
     };
     let _guard = key_lock();
     let credentials = credential_vault()?;
-    let frozen = mythos_llm::config::freeze(&profile, &credentials).map_err(CmdError::from)?;
+    let frozen = aoidos_llm::config::freeze(&profile, &credentials).map_err(CmdError::from)?;
     let auth_ref = match &profile.proxy {
-        mythos_llm::config::ProxyConfig::Manual { auth_ref, .. } => auth_ref.as_deref(),
+        aoidos_llm::config::ProxyConfig::Manual { auth_ref, .. } => auth_ref.as_deref(),
         _ => None,
     };
     let auth =
-        mythos_llm::proxy::resolve_proxy_auth(&credentials, auth_ref).map_err(CmdError::from)?;
+        aoidos_llm::proxy::resolve_proxy_auth(&credentials, auth_ref).map_err(CmdError::from)?;
     Ok((frozen, auth))
 }
 #[cfg(debug_assertions)]
@@ -296,8 +296,8 @@ fn native_receive_error(_: tokio::sync::oneshot::error::RecvError) -> CmdError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mythos_llm::platform::platform_prompt;
-    use mythos_store::error::Result;
+    use aoidos_llm::platform::platform_prompt;
+    use aoidos_store::error::Result;
     use secrecy::ExposeSecret;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
@@ -305,7 +305,7 @@ mod tests {
 
     fn tdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "mythos-cmd-llm-{}-{}",
+            "aoidos-cmd-llm-{}-{}",
             tag,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -358,9 +358,9 @@ mod tests {
             profile_id: profile_id.into(),
             provider_id: "deepseek".into(),
             model: "deepseek-v4-pro".into(),
-            mode: mythos_llm::config::ProfileMode::Completion,
+            mode: aoidos_llm::config::ProfileMode::Completion,
             thinking: false,
-            sampling: mythos_llm::sampling::Sampling {
+            sampling: aoidos_llm::sampling::Sampling {
                 temperature: 1.0,
                 max_tokens: 2048,
             },
@@ -443,7 +443,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            mythos_json::to_value(status).unwrap(),
+            aoidos_json::to_value(status).unwrap(),
             serde_json::json!({"set": true, "hint": "1234"})
         );
         assert_eq!(
@@ -465,7 +465,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code(), "store.io");
         assert!(
-            !mythos_json::to_string(&err)
+            !aoidos_json::to_string(&err)
                 .unwrap()
                 .contains("sk-new-1234")
         );
@@ -578,7 +578,7 @@ mod tests {
         let err = save_profile_in(&store, profile.clone()).unwrap_err();
         assert_eq!(err.code(), "app.bad-request");
         profile.model = "m".into();
-        profile.proxy = mythos_llm::config::ProxyConfig::Manual {
+        profile.proxy = aoidos_llm::config::ProxyConfig::Manual {
             url: "file://x".into(),
             auth_ref: None,
         };
@@ -607,7 +607,7 @@ mod tests {
             .unwrap();
         let status = key_status_with("deepseek", &keys).unwrap();
         assert_eq!(
-            mythos_json::to_value(&status).unwrap(),
+            aoidos_json::to_value(&status).unwrap(),
             serde_json::json!({ "set": true, "hint": "ef99" })
         );
         assert!(!key_status_with("missing", &keys).unwrap().set);
@@ -633,7 +633,7 @@ mod tests {
         // 未设置时再清：仍成功。
         let status = clear_action(&keys).unwrap();
         assert_eq!(
-            mythos_json::to_value(status).unwrap(),
+            aoidos_json::to_value(status).unwrap(),
             serde_json::json!({ "set": false, "hint": null })
         );
     }
@@ -655,14 +655,14 @@ mod tests {
         let id = unique("turn-profile");
         let mut profile = deepseek_profile(&id);
         profile.model = "deepseek-v4-pro".into();
-        profile.proxy = mythos_llm::config::ProxyConfig::Manual {
+        profile.proxy = aoidos_llm::config::ProxyConfig::Manual {
             url: "http://127.0.0.1:3128".into(),
             auth_ref: Some("turn-proxy-auth".into()),
         };
         llm_save_profile(profile).unwrap();
         {
             let _guard = key_lock();
-            let file = mythos_llm::credentials::CredentialFile::new(llm_dir().unwrap());
+            let file = aoidos_llm::credentials::CredentialFile::new(llm_dir().unwrap());
             file.set_key("deepseek", SecretString::from("local-fixture".to_owned()))
                 .unwrap();
             file.set_key(
@@ -675,9 +675,9 @@ mod tests {
         assert_eq!(frozen.credential.unwrap().expose_secret(), "local-fixture");
         assert!(auth.is_some());
         for proxy in [
-            mythos_llm::config::ProxyConfig::None,
-            mythos_llm::config::ProxyConfig::System,
-            mythos_llm::config::ProxyConfig::Manual {
+            aoidos_llm::config::ProxyConfig::None,
+            aoidos_llm::config::ProxyConfig::System,
+            aoidos_llm::config::ProxyConfig::Manual {
                 url: "http://127.0.0.1:3128".into(),
                 auth_ref: None,
             },
@@ -699,11 +699,11 @@ mod tests {
         );
         let service = crate::turn_commands::TurnService::new(
             std::sync::Arc::new(crate::turn_commands::WindowEvents::new(|_, _| Ok(()))),
-            mythos_llm::proxy::SystemProxySnapshot::default(),
+            aoidos_llm::proxy::SystemProxySnapshot::default(),
         )
         .unwrap();
-        let input = mythos_llm::provider::ProviderInput::Completion(
-            mythos_llm::provider::CompletionInput {
+        let input = aoidos_llm::provider::ProviderInput::Completion(
+            aoidos_llm::provider::CompletionInput {
                 prompt: "local".into(),
             },
         );
@@ -717,7 +717,7 @@ mod tests {
             &service,
             id,
             input,
-            mythos_engine::fixture::GUARD_SPEC_ID.into(),
+            aoidos_engine::fixture::GUARD_SPEC_ID.into(),
         )
         .unwrap();
         service.coordinator.cancel(&accepted.turn_id).await.unwrap();

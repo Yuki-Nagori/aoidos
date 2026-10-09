@@ -35,7 +35,7 @@ LLM 安全文本需要真正持久化；017 推迟的迁移事件与快照也需
 
 ## 预计改动
 
-已扩展 `src-rust/mythos-engine/` 记录模块、store 存储原语、Tauri 命令及前端 API / 恢复设施，并同步 006 的记录结构专题文档。完成范围与验证证据见下方记录及完成摘要。
+已扩展 `src-rust/aoidos-engine/` 记录模块、store 存储原语、Tauri 命令及前端 API / 恢复设施，并同步 006 的记录结构专题文档。完成范围与验证证据见下方记录及完成摘要。
 
 ## 验收标准
 
@@ -60,7 +60,7 @@ LLM 安全文本需要真正持久化；017 推迟的迁移事件与快照也需
 | 2026-10-08 | `bun run test:native`（macOS） | 真实 Webview 回合 / 记录 / 迁移 / 偏好 IPC 及原生凭据成功 | 已通过；Windows / Linux 已通过最终 PR CI 的真实原生验证                           |
 | 2026-10-08 | 本机 macOS，`bun run verify`   | 最终十三项通过                                            | 十三项全部通过                                                                    |
 
-2026-10-08：[最终 PR CI](https://github.com/Yuki-Nagori/mythos/actions/runs/37766694407) 三平台全过，包含真实原生输入、OS 凭据库与主 Webview 记录 / 迁移 / 偏好 / 恢复验证；[PR #72](https://github.com/Yuki-Nagori/mythos/pull/72) 已合并。
+2026-10-08：[最终 PR CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37766694407) 三平台全过，包含真实原生输入、OS 凭据库与主 Webview 记录 / 迁移 / 偏好 / 恢复验证；[PR #72](https://github.com/Yuki-Nagori/aoidos/pull/72) 已合并。
 
 ## 风险与回退
 

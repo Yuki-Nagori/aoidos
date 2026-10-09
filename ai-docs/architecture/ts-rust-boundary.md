@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-09。均为项目约定。状态：**部分落地**——业务 crate `src-rust/mythos-store`（013）、`src-rust/mythos-llm`（018，供应商适配层在 `providers/` 目录按厂商拆分）及回合协调 `src-rust/mythos-engine`（020，本地夹具接线）与 IPC 基座（015–017）已按本文分工落地并通过质量门禁（业务 crate 不依赖 tauri、装配 `lib.rs` 不计覆盖、域逻辑 100% 行覆盖）；后续 crate 与域落地时继续按本文检验并回写。工程纪律部分借鉴 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-09。均为项目约定。状态：**部分落地**——业务 crate `src-rust/aoidos-store`（013）、`src-rust/aoidos-llm`（018，供应商适配层在 `providers/` 目录按厂商拆分）及回合协调 `src-rust/aoidos-engine`（020，本地夹具接线）与 IPC 基座（015–017）已按本文分工落地并通过质量门禁（业务 crate 不依赖 tauri、装配 `lib.rs` 不计覆盖、域逻辑 100% 行覆盖）；后续 crate 与域落地时继续按本文检验并回写。工程纪律部分借鉴 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -15,7 +15,7 @@
 
 ```text
 src-tauri/            # 仅 Tauri 装配：Builder、命令层、capabilities，不沉淀业务
-src-rust/<crate>/     # 业务 crate，按域拆分（如 mythos-llm / mythos-engine / mythos-store）
+src-rust/<crate>/     # 业务 crate，按域拆分（如 aoidos-llm / aoidos-engine / aoidos-store）
 ```
 
 - 业务 crate 放 `src-rust/` 下，出现真实需求时创建，不预建空 crate；创建即加入根 `Cargo.toml` 的 `members`。
@@ -28,15 +28,15 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 mythos-llm / mythos-en
 
 ```text
 src-tauri（装配、命令、窗口事件适配）
-  ├─→ mythos-engine（lease、回合所有者、快照、输出 / 事件端口）
-  │     ├─→ mythos-json（共用编解码与静态错误类别）
-  │     ├─→ mythos-store（记录追加与 applied 原语）
-  │     └─→ mythos-llm（Provider、护栏、唯一请求调度器与预算端口）
-  │           ├─→ mythos-json（配置 / 凭据及 SSE 编解码）
-  │           └─→ mythos-store（配置 / 凭据复用的文件基建）
-  ├─→ mythos-llm（配置 / 凭据的薄命令适配）
-  ├─→ mythos-store（实例锁与存储装配）
-  └─→ mythos-json（IPC 值解码与信封编码）
+  ├─→ aoidos-engine（lease、回合所有者、快照、输出 / 事件端口）
+  │     ├─→ aoidos-json（共用编解码与静态错误类别）
+  │     ├─→ aoidos-store（记录追加与 applied 原语）
+  │     └─→ aoidos-llm（Provider、护栏、唯一请求调度器与预算端口）
+  │           ├─→ aoidos-json（配置 / 凭据及 SSE 编解码）
+  │           └─→ aoidos-store（配置 / 凭据复用的文件基建）
+  ├─→ aoidos-llm（配置 / 凭据的薄命令适配）
+  ├─→ aoidos-store（实例锁与存储装配）
+  └─→ aoidos-json（IPC 值解码与信封编码）
 ```
 
 - **事件端口**：`EventPort` 和回合载荷由 engine 定义；Tauri adapter 负责序列化、序号预留、主窗口投递与清退。engine 不引用 `AppHandle`、`CmdError` 或前端类型。
@@ -44,7 +44,7 @@ src-tauri（装配、命令、窗口事件适配）
 - **调度确认端口**：`OutputPort` 属 llm，engine 通过确认通道接入；LLM 仅在接纳后确认首交付，不能引用 engine 的快照。准备 / 写入错误由 engine 映射为事件和快照，LLM 不承担记录持久化。
 - **预算端口**：`BudgetPort` 属 llm，020 提供每个 turn 和物理 request 的唯一身份；035 在调用方注入账本实现，补齐价格 / 周期上下文。LLM 不反向依赖计费模块，engine 不把账本写成第二套调度器。
 
-`mythos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
+`aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
 
 后续记录和计费接入时，先核对上述方向，再声明 Cargo 依赖；不能为复用字段让 store 依赖 engine / llm，或让 llm 依赖 engine / 计费实现。确需共享词汇时放到双方可单向消费的模块；不预建空的公共 crate。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 

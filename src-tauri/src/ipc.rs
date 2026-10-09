@@ -1,7 +1,7 @@
 //! 命令层错误形状：`CmdError` 序列化为 `{ code, message, detail? }`，
 //! 命名空间与映射规则见 ai-docs/architecture/ipc-contract.md。
 
-use mythos_store::error::StoreError;
+use aoidos_store::error::StoreError;
 use serde::Serialize;
 
 /// 解码完整 JSON 参数，未知字段的拒绝由各命令的 deny_unknown_fields DTO 决定。
@@ -14,7 +14,7 @@ pub(crate) fn decode_request<T: serde::de::DeserializeOwned>(
     let tauri::ipc::InvokeBody::Json(value) = request.body() else {
         return Err(CmdError::new("app.bad-request", message, None));
     };
-    match mythos_json::decode_value(value) {
+    match aoidos_json::decode_value(value) {
         Ok(decoded) => Ok(decoded),
         Err(_) => Err(CmdError::new("app.bad-request", message, None)),
     }
@@ -52,8 +52,8 @@ impl CmdError {
     }
 }
 
-impl From<mythos_engine::fault::Fault> for CmdError {
-    fn from(error: mythos_engine::fault::Fault) -> Self {
+impl From<aoidos_engine::fault::Fault> for CmdError {
+    fn from(error: aoidos_engine::fault::Fault) -> Self {
         Self::new(error.code, error.message, None)
     }
 }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn cmd_error_serializes_contract_shape() {
         let with_detail: CmdError = StoreError::LockedTimeout { path: "t".into() }.into();
-        let value = mythos_json::to_value(&with_detail).unwrap();
+        let value = aoidos_json::to_value(&with_detail).unwrap();
         assert_eq!(value["code"], "store.locked");
         assert_eq!(value["detail"]["path"], "t");
 
@@ -187,7 +187,7 @@ mod tests {
         }
         .into();
         assert_eq!(plain.code(), "store.io");
-        let value = mythos_json::to_value(&plain).unwrap();
+        let value = aoidos_json::to_value(&plain).unwrap();
         assert_eq!(value["code"], "store.io");
         assert!(
             value.get("detail").is_none(),
@@ -220,9 +220,9 @@ mod tests {
     #[test]
     fn engine_fault_retains_only_public_fields() {
         let error: CmdError =
-            mythos_engine::fault::Fault::new("llm.empty-output", "生成未返回正文").into();
+            aoidos_engine::fault::Fault::new("llm.empty-output", "生成未返回正文").into();
         assert_eq!(
-            mythos_json::to_value(error).unwrap(),
+            aoidos_json::to_value(error).unwrap(),
             serde_json::json!({"code":"llm.empty-output","message":"生成未返回正文"})
         );
     }

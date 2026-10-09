@@ -1,6 +1,6 @@
 # 架构总览
 
-Mythos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
+Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
 ## 主题导航
 
@@ -63,7 +63,7 @@ src-web（Vue + TypeScript：展示、交互与 IPC 薄调用）
 src-tauri（Tauri 装配、命令注册与平台事件适配）
   │ 调用业务 API
   ▼
-src-rust/（独立业务 crate：mythos-engine → mythos-llm → mythos-store）
+src-rust/（独立业务 crate：aoidos-engine → aoidos-llm → aoidos-store）
 ```
 
 ### Rust 工作区依赖图
@@ -72,15 +72,15 @@ src-rust/（独立业务 crate：mythos-engine → mythos-llm → mythos-store�
 
 ```text
 src-tauri
-  ├─→ mythos-engine
-  │     ├─→ mythos-llm
-  │     │     ├─→ mythos-store
-  │     │     └─→ mythos-json
-  │     ├─→ mythos-store
-  │     └─→ mythos-json
-  ├─→ mythos-llm
-  ├─→ mythos-store
-  └─→ mythos-json
+  ├─→ aoidos-engine
+  │     ├─→ aoidos-llm
+  │     │     ├─→ aoidos-store
+  │     │     └─→ aoidos-json
+  │     ├─→ aoidos-store
+  │     └─→ aoidos-json
+  ├─→ aoidos-llm
+  ├─→ aoidos-store
+  └─→ aoidos-json
 ```
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。后续记录、阶段机、记忆与计费接入时，补齐实际链路并核对无环；端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
@@ -89,7 +89,7 @@ src-tauri
 
 ### JSON 共用能力
 
-`mythos-json` 基于 serde / serde_json，供 engine、llm 和 Tauri 单向消费，只依赖第三方序列化库。公共 API 使用 `serde_json::Value`；消费方显式依赖 serde_json，不由工具 crate 转导出其类型或宏。
+`aoidos-json` 基于 serde / serde_json，供 engine、llm 和 Tauri 单向消费，只依赖第三方序列化库。公共 API 使用 `serde_json::Value`；消费方显式依赖 serde_json，不由工具 crate 转导出其类型或宏。
 
 共用能力包括按 UTF-8 字节限制输入、递归拒绝重复键、完整值解码、类型转换、紧凑编码及显式规范化。错误只保留静态类别，区分容量、UTF-8、JSON、schema 与编码失败，不携带原文。`InvalidShape` 统一覆盖缺字段与类型错误，不匹配第三方错误字符串。
 

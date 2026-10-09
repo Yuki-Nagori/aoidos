@@ -1,6 +1,6 @@
 # 界面结构与交互
 
-更新 / 官方资料核验日期：2026-10-06。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/mythos/issues/11)；尚未实现。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
+更新 / 官方资料核验日期：2026-10-06。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；尚未实现。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
 
 ## 舞台与覆盖层
 

@@ -2,7 +2,7 @@
 
 mod events;
 use crate::ipc::CmdError;
-use mythos_engine::game::{
+use aoidos_engine::game::{
     domain::{FrozenRound, RoundFactory},
     runtime::Service,
     state::*,
@@ -23,14 +23,14 @@ impl Factory {
     }
 }
 impl RoundFactory for Factory {
-    fn freeze(&self) -> Result<FrozenRound, mythos_engine::fault::Fault> {
+    fn freeze(&self) -> Result<FrozenRound, aoidos_engine::fault::Fault> {
         let factory = self
             .current
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or_else(|| {
-                mythos_engine::fault::Fault::new("app.not-ready", "尚未登记回合配置入口")
+                aoidos_engine::fault::Fault::new("app.not-ready", "尚未登记回合配置入口")
             })?;
         factory.freeze()
     }
