@@ -77,4 +77,4 @@ Windows / MSVC 的 Tauri 构建按 Cargo 目标平台判断，共用 `scripts/ru
 
 剧本原文 `resources/scripts/**` 是编译资源，修改正文或许可触发三平台 CI；普通 Markdown 与 `ai-docs/**` 仍跳过纯文档流水线。
 
-Rust lint / lint:rust:fix 启用测试 crate 的 `desktop-session`，以编译检查原生集成 target；clippy 不执行原生窗口，实际会话验证由 `test:native` 执行。
+Rust lint / lint:rust:fix 启用测试 crate 的 `desktop-session`，以编译检查原生集成 target；两入口先调用 `build:native-fixture` 生成 Tauri 宏所需的 Webview 资源，不能依赖本地遗留 `gen/`。clippy 不执行原生窗口，实际会话验证由 `test:native` 执行；它复用同一夹具构建入口。
