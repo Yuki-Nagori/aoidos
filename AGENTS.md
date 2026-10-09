@@ -29,6 +29,7 @@ Aoidos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScri
 | 测试、覆盖率门槛、knip、基准              | [ai-docs/standards/testing.md](ai-docs/standards/testing.md)                                   |
 | 文档怎么写、图表规则                      | [ai-docs/standards/documentation.md](ai-docs/standards/documentation.md)                       |
 | 注释怎么写（Rust / TS·Vue / TODO）        | [ai-docs/standards/comments.md](ai-docs/standards/comments.md)                                 |
+| 剧本格式、来源记录、解析与可信登记        | [ai-docs/standards/scenarios.md](ai-docs/standards/scenarios.md)                               |
 | 提交一致性与消息格式                      | [ai-docs/standards/commits.md](ai-docs/standards/commits.md)                                   |
 | 当前任务与状态                            | [ai-docs/task-index.md](ai-docs/task-index.md)                                                 |
 | 建新任务                                  | [ai-docs/task/_template.md](ai-docs/task/_template.md)                                         |
