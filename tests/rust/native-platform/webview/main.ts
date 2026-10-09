@@ -217,9 +217,12 @@ async function smoke(): Promise<void> {
       "lost-events-recovery-mismatch",
     );
     await migration.reconnect();
+    const migrated = migration.state.value.snapshot;
     check(
-      migration.state.value.snapshot?.phase === "completed" &&
-        migration.state.value.snapshot.current === 1,
+      migrated?.phase === "completed" &&
+        migrated.current === migrated.to &&
+        migrated.to > 0 &&
+        migrated.error === undefined,
       "migration-terminal-mismatch",
     );
     await setUiPreferences(true, "auto");

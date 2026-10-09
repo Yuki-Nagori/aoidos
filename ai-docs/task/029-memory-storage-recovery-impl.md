@@ -52,6 +52,7 @@
 | 2026-10-10 | `cargo test --workspace --no-default-features` | 全工作区通过；loopback 测试在受限环境重跑通过 |
 | 2026-10-10 | `cargo tree -p aoidos-memory -e normal`        | 未发现 engine / llm 依赖，依赖方向无环        |
 | 2026-10-10 | 独立 subagent 最终 review                      | 未发现新的 P1 / P2 阻塞                       |
+| 2026-10-10 | `bun run test:native --test ipc-platform`      | 真实 macOS Webview 端到端通过                 |
 | —          | CI 三平台                                      | 待提交后验证                                  |
 
 ## 风险与恢复
@@ -60,6 +61,7 @@
 
 ## 工作记录
 
+- 2026-10-10：PR #93 首轮 Linux / macOS 的 Rust 门禁通过，但原生 IPC 夹具仍固定断言迁移版本 1；改为核验后端目标版本、completed 与无错误，真实 macOS Webview 复验通过，独立 review 确认未放宽完成条件，等待三平台复验。
 - 2026-10-10：整体独立评审通过 public API 复现效果去重索引审计遗漏、额外效果 / 素材集合遗漏及已应用目标缺失未冻结；修复后补齐效果直接消费审计和 operation 索引，独立复验均阻断损坏数据及后续写入，未发现剩余 P1 / P2 阻塞。
 - 2026-10-10：完成 memory crate / schema / 版本存储 / 幂等状态机 / 因果恢复初版；根据 review 增加预复制 BLOB 上限、持久 run freeze、Character effect fail-closed 与实际关系字节预算。`bun run verify` 13 项、无默认特性工作区测试、crate 全行覆盖和独立 review 均通过；等待 CI 复验。
 - 2026-10-09：开始 029；依赖 007、013、022 已满足。memory 只依赖 store / json 等基础库，由 engine 提供记录有效性端口并借用共享 SQLite 连接，避免依赖环。
