@@ -95,7 +95,7 @@ impl Generation for LocalGeneration {
                 provider_request: aoidos_llm::provider::ProviderRequest {
                     model: self.profile.model.clone(),
                     input,
-                    sampling: self.profile.sampling.clone(),
+                    sampling: self.profile.sampling,
                     stops: vec![],
                 },
                 guard,

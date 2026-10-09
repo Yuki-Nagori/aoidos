@@ -117,3 +117,28 @@ export function listenPhaseEvent<K extends keyof PhaseEventMap>(
     target: { kind: "AnyLabel", label: "main" },
   });
 }
+
+/** 对应 Rust 随应用内嵌的剧本摘要；许可正文与资源同时发布。 */
+export interface ScriptInfo {
+  scriptId: string;
+  title: string;
+  attributions: string;
+}
+export interface OpenedSession {
+  sessionId: string;
+  profileId: string;
+  scriptId: string;
+  title: string;
+}
+/** 只读内嵌资源，不读取外部文件或发生成请求。 */
+export function listScripts(): Promise<ScriptInfo[]> {
+  return invoke("engine_list_scripts");
+}
+/** 明确选择配置和剧本；startNew=false 重开，恢复生成须另行显式提交。 */
+export function openSession(
+  profileId: string,
+  scriptId: string,
+  startNew: boolean,
+): Promise<OpenedSession> {
+  return invoke("engine_open_session", { profileId, scriptId, startNew });
+}

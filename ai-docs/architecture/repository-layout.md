@@ -6,12 +6,12 @@
 ├── index.html                 # Vite 入口 HTML（挂载点 #app）
 ├── src-web/                   # 前端：Vue 3 + TypeScript
 │   ├── main.ts                # 应用入口：挂载根组件
-│   ├── App.vue                # 根组件：greet 示例（IPC 往返 + 浏览器回退 + 主题切换）
+│   ├── App.vue                # 根组件：配置 / 默认剧本选择与最小正式对局入口
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
 │   ├── utils/                 # 纯消费规则 / 恢复协调及其他纯逻辑，配单测
 │   ├── composables/           # Vue 身份、监听与 scope 清理，消费 utils
-│   └── bench/                 # tinybench 基准示例
+│   └── bench/                 # tinybench 正文消费基准
 ├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
 │   ├── src/commands.rs        # #[tauri::command] 命令层、类型化载荷与命令单测

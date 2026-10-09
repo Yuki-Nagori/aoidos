@@ -3,7 +3,7 @@
 use super::{
     facts::Fact,
     format::Body,
-    session::{Session, store_fault},
+    session::{Entry, Session, store_fault},
 };
 use crate::fault::Fault;
 use sha2::{Digest, Sha256};
@@ -39,6 +39,14 @@ pub trait HistoryPort {
     ) -> Result<(), Fault>;
 }
 impl Session {
+    // 根分支省略 branchSeq，读取时与 0 同义；恢复路径只冻结祖先，后续追加仍可见。
+    pub(super) fn includes_record(&self, seq: u64, entry: &Entry) -> bool {
+        self.effective
+            .as_ref()
+            .is_some_and(|path| path.contains(&seq))
+            || entry.branch_seq.unwrap_or(0) == self.history_revision
+    }
+
     /// 通过已 applied 的父控制链计算有效物理 seq；控制本身不进入 prefix hash。
     /// # Errors
     /// 缺引用、循环 / 非祖先控制或 hash 不符返回 corrupt。

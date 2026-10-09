@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+aoidos-script.workspace = true
 aoidos-json.workspace = true
 aoidos-store.workspace = true
 rusqlite.workspace = true

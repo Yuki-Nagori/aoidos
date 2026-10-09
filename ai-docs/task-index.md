@@ -71,7 +71,7 @@ ai-docs/
 | 021  | [实现：前端 LLM 调用与快照恢复](task/021-llm-web-recovery-impl.md)            | **底层·LLM 链路** | 020                               | done      |
 | 022  | [实现：对局记录、投影与迁移运行期协议](task/022-record-engine-impl.md)        | **底层·LLM 链路** | 006、013、020                     | done      |
 | 023  | [实现：回合阶段机与产品提交入口](task/023-turn-state-machine-impl.md)         | **底层·LLM 链路** | 012、020、022、036                | done      |
-| 024  | [实现：LLM 产品链路与故障联调](task/024-llm-engine-integration.md)            | **底层·LLM 链路** | 021、023                          | **ready** |
+| 024  | [实现：LLM 产品链路与故障联调](task/024-llm-engine-integration.md)            | **底层·LLM 链路** | 021、023、040、041                | done      |
 | 025  | [实现：舞台与对话面板](task/025-ui-shell-impl.md)                             | 界面·交互         | 004、008、024、026、034           | planned   |
 | 026  | [实现：主题偏好与剧本皮肤](task/026-theming-impl.md)                          | 界面·主题         | 004、009、013                     | planned   |
 | 029  | [实现：记忆版本存储与恢复](task/029-memory-storage-recovery-impl.md)          | **底层·记忆**     | 007、013、022                     | **ready** |

@@ -133,7 +133,6 @@ fn bad_profile(error: ProfileError) -> CmdError {
 ///
 /// # Errors
 /// 未知 profile 为 app.not-found；存储 / 凭据不可读按 store.* 透传。
-#[cfg(debug_assertions)]
 pub(crate) fn freeze_submission(
     profile_id: &str,
 ) -> Result<
@@ -164,7 +163,6 @@ pub(crate) fn freeze_submission(
         aoidos_llm::proxy::resolve_proxy_auth(&credentials, auth_ref).map_err(CmdError::from)?;
     Ok((frozen, auth))
 }
-#[cfg(debug_assertions)]
 fn profile_missing() -> CmdError {
     CmdError::new("app.not-found", "配置不存在", None)
 }
@@ -504,11 +502,20 @@ mod tests {
         let provider = unique("async-probe");
         // 未知操作必须在原生交互前拒绝，装配入口也覆盖。
         assert_eq!(
-            set_key_with_dispatch(provider, "bogus".into(), platform_prompt(), &direct)
+            set_key_with_dispatch(provider.clone(), "bogus".into(), platform_prompt(), &direct)
                 .await
                 .unwrap_err()
                 .code(),
             "app.bad-request"
+        );
+        // 同一异步装配入口也必须覆盖成功返回；取消不写真实 OS 凭据。
+        // 先清理唯一测试 id 的墓碑，使无凭据服务的平台也能确定性读到未设置。
+        let _ = clear_key_in(&provider, &credential_vault().unwrap());
+        assert!(
+            !set_key_with_dispatch(provider, "set".into(), |_| Ok(None), &direct)
+                .await
+                .unwrap()
+                .set
         );
     }
 
@@ -592,12 +599,17 @@ mod tests {
         let dir = tdir("commands");
         init_llm_dir(dir);
         let profile = deepseek_profile(&unique("rt"));
+        let retained = deepseek_profile(&unique("rt-retained"));
         llm_save_profile(profile.clone()).unwrap();
+        llm_save_profile(retained.clone()).unwrap();
         let items = llm_list_profiles().unwrap().items;
         assert!(items.iter().any(|p| p.profile_id == profile.profile_id));
         llm_delete_profile(profile.profile_id.clone()).unwrap();
         let items = llm_list_profiles().unwrap().items;
+        // 删除隔离必须由本测试的第二个 profile 验证，不能依赖并行测试留下数据。
         assert!(!items.iter().any(|p| p.profile_id == profile.profile_id));
+        assert!(items.iter().any(|p| p.profile_id == retained.profile_id));
+        llm_delete_profile(retained.profile_id).unwrap();
     }
 
     #[test]
@@ -671,9 +683,13 @@ mod tests {
             )
             .unwrap();
         }
-        let (frozen, auth) = freeze_submission(&id).unwrap();
-        assert_eq!(frozen.credential.unwrap().expose_secret(), "local-fixture");
-        assert!(auth.is_some());
+        use aoidos_engine::game::product::ProfileSource;
+        let resolved = crate::game_commands::SavedProfiles.freeze(&id).unwrap();
+        assert_eq!(
+            resolved.frozen.credential.unwrap().expose_secret(),
+            "local-fixture"
+        );
+        assert!(resolved.proxy_auth.is_some());
         for proxy in [
             aoidos_llm::config::ProxyConfig::None,
             aoidos_llm::config::ProxyConfig::System,

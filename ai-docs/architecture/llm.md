@@ -1,17 +1,18 @@
 # LLM 接入与护栏
 
-更新日期：2026-10-09；供应商资料核验日期：2026-10-05。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/aoidos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；023 已交付阶段机和产品提交入口，实际剧本 / 配置联调由 024 承接。实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
+更新日期：2026-10-09；能力资料核验日期：2026-10-05；模型目录核验日期：2026-10-09。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/aoidos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；023 已交付阶段机和产品提交入口，024 已接最小正式剧本 / 配置入口，本地验证已完成，三平台 CI 仍待本分支复验。实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
 
 ## 架构与职责
 
 采用薄 Provider trait、reqwest 和独立 SSE 解析器。aoidos-llm 负责供应商适配、传输、取消、护栏与单层请求策略，不依赖 Tauri；引擎负责回合接纳、记录投影和持久化；src-tauri 只适配命令及窗口事件。正常产品入口是 engine_submit_input，llm_submit 仅用于内部调试，并与引擎共用在飞回合门禁。
 
 ```text
-006 记录投影 + GuardSpec
-  → 引擎接纳回合、分配 turnId
+engine_open_session：选择已保存 profile + 内嵌剧本 → 原文 / 修订预检 → 持久活动选择
+engine_submit_input：冻结配置 / 凭据 / 代理 → 记录投影 + 正式 GuardSpec
+  → aoidos-engine 接纳操作 / 回合，分配子调用 turnId，复用同一 lease
   → aoidos-llm：Provider → SSE → 增量护栏 → 安全文本
-  → 平台适配预留事件序号 → 引擎提交记录 / 更新快照基线
-  → src-tauri 投递已准备事件
+  → 预留事件序号 → 提交记录 → 更新快照基线 → 窗口事件
+  → useEnginePhase / useLlmTurn / useRecordView 消费
 ```
 
 Provider 用可作为 trait object 的异步接口，返回 Send 的 boxed future / stream；若锁定的 Rust 版本不能对 async trait 直接做动态分派，使用显式装箱，不把某个 SDK 类型暴露给业务层。下表约定语义边界；实现时可调整装箱和所有权表达，但不能改变请求次数及输出含义：
@@ -66,7 +67,7 @@ v1 不把 async-openai / rig / genai 作为主路径，原因是本项目需要�
 
 ## 供应商能力与初始 profile
 
-优先 DeepSeek；叙事候选 deepseek-v4-pro，成本优先候选 deepseek-flash，最终按黄金剧本的人设稳定性、玩家前缀泄漏、延迟及用量选择。其他 OpenAI 兼容端点只能按已声明能力使用，不自动假定支持 completion / prefix。
+首版提供 DeepSeek V4.1 Flash（`deepseek-flash`，默认）与 V4 Pro（`deepseek-v4-pro`）两项选择，不手动填写模型名；2026-10-09 核验 [官方模型列表](https://api-docs.deepseek.com/quick_start/pricing/)。叙事质量仍按黄金剧本的人设稳定性、玩家前缀泄漏、延迟及用量标定。其他 OpenAI 兼容端点只能按已声明能力使用，不自动假定支持 completion / prefix。
 
 官方资料确认了 Beta FIM 与 Chat Prefix 两条路径，FIM 为非 thinking；Chat API 默认启用 thinking，因此叙事 adapter 要显式关闭，而不能依赖服务端默认值。[模型能力](https://api-docs.deepseek.com/quick_start/pricing/)、[FIM](https://api-docs.deepseek.com/guides/fim_completion/)、[Chat Prefix](https://api-docs.deepseek.com/guides/chat_prefix_completion/)、[thinking](https://api-docs.deepseek.com/guides/thinking_mode/)
 
@@ -109,7 +110,7 @@ GuardSpec 是按优先级排序的规则集合；编译时建立匹配所需状�
 4. 若没有完整命中，只交付确定安全的部分；保留最长的有效 stop 前缀后缀及待判定 CR。LineStart 的候选必须符合其真实位置，正文中相同字串不扣留。
 5. 正常结束时交付不属于保留候选的安全尾部；疑似 stop 前缀保守丢弃，这种护栏截短按 guard 收尾，零正文时返回 empty-output 且不温度重试。错误 / 取消直接丢弃剩余候选。已交付内容永不撤销。
 
-下列标记只是算法测试夹具，006 必须给出正式语法，不把示例字符串当作产品默认。规则为 Anywhere `</narration>`、LineStart `[PLAYER]` 和 LineStart `### SYSTEM`：
+下列标记只是算法测试夹具，006 已给出正式语法，022 已实现，不把示例字符串当作产品默认。规则为 Anywhere `</narration>`、LineStart `[PLAYER]` 和 LineStart `### SYSTEM`：
 
 | 输入分片                             | 交付正文 / 结果                              |
 | ------------------------------------ | -------------------------------------------- |
@@ -127,7 +128,7 @@ GuardSpec 是按优先级排序的规则集合；编译时建立匹配所需状�
 
 “流式 == 落库”指拼接生成端成功接纳的 chunk.delta 后，与该回合已提交的生成正文逐字节相同；漏事件窗口在按契约恢复快照后对齐，不承诺投递失败时窗口即时一致；不包含 reasoning、keep-alive、usage、标签或护栏扣住的尾部。它不承诺崩溃前未持久化的输出已经落盘。
 
-产品路径先由 006 的记录写入方接纳并持久化安全增量，再更新内存快照和发送事件，所有者串行处理同一 turn。006 的[记录引擎](record-engine.md)定义安全文本批次、partial sidecar、封口和崩溃恢复；该批提交前不发送对应 chunk，不要求逐 token 写盘。写入失败不发送对应 chunk，回合以 store.* 错误终止；已提交的前文保留。调试路径明确为内存模式，不冒充对局持久化。006 必须定义增量写入和失败收尾协议，不能由 LLM crate 越过引擎直接写记录。
+产品路径先由 006 的记录写入方接纳并持久化安全增量，再更新内存快照和发送事件，所有者串行处理同一 turn。006 的[记录引擎](record-engine.md)定义安全文本批次、partial sidecar、封口和崩溃恢复；该批提交前不发送对应 chunk，不要求逐 token 写盘。写入失败不发送对应 chunk，回合以 store.* 错误终止；已提交的前文保留。调试路径明确为内存模式，不冒充对局持久化。增量写入和失败收尾遵循 006 / 022 协议，不能由 LLM crate 越过引擎直接写记录。
 
 快照文本、终态和三种事件的 seq 基线必须是一致副本。一次增量按以下顺序提交：
 
@@ -217,7 +218,7 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 ## IPC 与回合生命周期
 
-精确命令 / 事件 / 快照类型见通信契约，不在本文维护第二份载荷表。命令接纳后只返回 turnId，不等待完整生成；命令 Err 仅表示未接纳。调试 submit 使用已保存 profile、受类型约束的 input 与 Rust 记录语法登记的 guardSpecId，不允许任意 endpoint、key、stop 由 TS 传入。
+精确命令 / 事件 / 快照类型见通信契约，不在本文维护第二份载荷表。游戏提交接纳后返回 operationId / roundId，子调用 turnId 由阶段快照发现；调试提交返回 turnId。两者不等待完整生成，命令 Err 仅表示未接纳。调试 submit 使用已保存 profile、受类型约束的 input 与 Rust 记录语法登记的 guardSpecId，不允许任意 endpoint、key、stop 由 TS 传入。
 
 全应用同一时间最多一个前台回合，包括调试调用；原子检查和占用门禁先于启动任务，重复调用返回 app.busy。turnId 由 Rust 生成不可复用的 UUID。未知 profileId / guardSpecId 返回 app.not-found，形态与能力不符返回 app.bad-request，校验失败不占用回合门禁。调试入口只在开发构建注册；生产发布包不暴露原始 prompt 的提交命令。
 
@@ -289,7 +290,7 @@ TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地
 
 ## 实现承接
 
-实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `aoidos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `aoidos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 已交付阶段机与产品提交入口，024 待实际剧本 / 配置联调。
+实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `aoidos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `aoidos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 已交付阶段机与产品提交入口，024 已接真实 Provider 与内置原文，本地验收已完成，三平台 CI 推送后复验。
 
 | 任务                                                          | 承接边界                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -302,10 +303,20 @@ TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地
 | [024 产品联调](../task/024-llm-engine-integration.md)         | 真实窗口、持久记录与失败恢复的三平台验证                      |
 | [035 计价与费用控制](../task/035-llm-cost-control-impl.md)    | 计价、统一预算端口与费用设置 / 明细（018 已预留可注入端口）   |
 
-018 的 GuardSpec 使用测试夹具验证匹配机制；产品语法使用 006 的[正式 GrammarSpec](record-engine.md#正式-prompt-语法与-guardspec)，由 022 的 grammar 同源实现，023 已消费，024 接实际剧本 / 配置，不能把样例标记当默认协议。020 的内存调试仅验证协调机制，产品路径必须接入 022 的持久化写入方。007 记忆与 008 完整游戏 UI 各自另有设计任务，不混入本轮 LLM 接线验收。
+018 的 GuardSpec 使用测试夹具验证匹配机制；产品语法使用 006 的[正式 GrammarSpec](record-engine.md#正式-prompt-语法与-guardspec)，由 022 的 grammar 同源实现，023 已消费，024 的最小入口接实际剧本 / 配置，不能把样例标记当默认协议。020 的内存调试仅验证协调机制，产品路径必须接入 022 的持久化写入方。007 记忆与 008 完整游戏 UI 各自另有设计任务，不混入本轮 LLM 接线验收。
 
 ### 模型窗口与估算诊断
 
 `ProviderCapabilities.context_limit` 是已核验的模型窗口，未知模型返回 None，投影在本地拒绝。当前 DeepSeek 已登记模型按官方 1M context 文档设置保守的 1,000,000 Token；输出上限仍按各形态能力校验。[DeepSeek 官方能力与价格](https://api-docs.deepseek.com/quick_start/pricing/)。切换模型须重新冻结预算，不用前一个模型窗口。
 
-PreparedGeneration 的估算诊断包装真实 BudgetPort，每次物理请求记录冻结估算与真实 usage，重装包装不会重复统计。缺失 usage 不补零，自动暂停与恢复规则见[记录引擎](record-engine.md)。当前调试 IPC 使用 local-fixture provider 标识；实际供应商诊断及费用账本由产品接线 / 035 注入，不把夹具用量当真实费用。
+PreparedGeneration 的估算诊断包装真实 BudgetPort，每次物理请求记录冻结估算与真实 usage，重装包装不会重复统计。缺失 usage 不补零，自动暂停与恢复规则见[记录引擎](record-engine.md)。当前调试 IPC 使用 local-fixture provider 标识；024 正式入口按实际 providerId 统计供应商诊断，费用账本由 035 注入，不把夹具用量当真实费用。
+
+### 最小正式产品入口（024）
+
+`engine_list_scripts` 只返回内嵌正文摘要与署名；`engine_open_session` 接收 profileId、scriptId、startNew，禁止 Webview 提供端点、路径或密钥。可信资源固定编译嵌入；`aoidos-script` 保留原文，业务执行配置由 engine 单独登记。默认 Mistbell 只接最小探索章节，不自动执行作者稿的多幕计数 / 结局或 D&D d20。
+
+配置源复用现有 profile / credential 锁；`ProfileFactory` 每轮冻结一次，`ProfileGeneration` 按能力选择 Completion / ChatPrefix / Chat，并在一个 round 内复用不可变 Provider、采样和预算。预检不发送请求；活动会话重新打开不会自动续行，手动确认计划不重掷。无可推进候选时本地确认 stay，省略场景提议请求。
+
+主窗口使用已有阶段、正文与记录消费者；重连 / 主动恢复不加入持续轮询。最后事件全部丢失仍需要玩家主动恢复；取消及网络失败保留已提交前文。凭据只通过三平台系统输入设置，明文不进入前端。
+
+当前预算端口使用无账本实现，035 的价格登记 / 金额额度尚未上线。联调仅访问本地合成 HTTP/SSE 服务，不替代真实模型叙事质量、温度与用量标定；未经 API / 费用授权不自动执行付费测试。

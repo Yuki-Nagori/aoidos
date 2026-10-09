@@ -244,3 +244,43 @@ fn pagination_boundary_and_epoch_are_independent_of_later_appends() {
     drop(session);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn reopening_the_root_branch_keeps_later_records_visible_in_pages_and_projection() {
+    struct Root;
+    impl crate::record::history::HistoryPort for Root {
+        fn verify_target(&self, _: &Session, _: u64) -> Result<(), Fault> {
+            Ok(())
+        }
+        fn applied(&self, _: &str, _: &str) -> Result<bool, Fault> {
+            Ok(false)
+        }
+        fn rebuild(&mut self, _: &Session, _: &[u64], _: &str, _: &str) -> Result<(), Fault> {
+            Ok(())
+        }
+    }
+    let mut session = create();
+    session.append(player("重开前")).unwrap();
+    let path = session.path.clone();
+    drop(session);
+    let mut session =
+        Session::open(path.clone(), std::sync::Arc::new(Events(AtomicU64::new(0)))).unwrap();
+    session.recover_history(&mut Root).unwrap();
+    session.append(player("重开后的新输入")).unwrap();
+    let page = session.page(None, None).unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.record_seq)
+            .collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    assert_eq!(
+        page.items[0].body.as_ref().unwrap()["text"],
+        "重开后的新输入"
+    );
+    let working = session.projection_working_set().unwrap();
+    assert!(working.records().iter().any(|record| record.seq == 2));
+    drop(session);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}

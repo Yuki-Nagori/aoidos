@@ -17,7 +17,7 @@
 
 交付：db::open 便捷封装和 open_with_progress 的已提交进度回调、只读 current_version、排序后的备份枚举，以及 store_list_backups / store_get_migration 命令。Rust 使用 Serialize 载荷，TS api/store.ts 同步类型和薄调用；接口形状、时间戳精度与列表上限只在通信契约维护。
 
-备份查询保留 setup 注入的库路径；022 已建立共享 Storage 打开流程并替换静态迁移快照。真实迁移事件、在飞状态及序号快照由 [022](022-record-engine-impl.md) 接入；greet 和 UI 占位的退役随 008。备份恢复 / 删除、剧本导入导出不在本任务。
+备份查询保留 setup 注入的库路径；022 已建立共享 Storage 打开流程并替换静态迁移快照。真实迁移事件、在飞状态及序号快照由 [022](022-record-engine-impl.md) 接入；greet 退役归 024，完整 UI 归 025。备份恢复 / 删除、剧本导入导出不在本任务。
 
 ## 实施步骤与改动
 

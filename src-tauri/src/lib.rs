@@ -123,6 +123,18 @@ pub mod game_ipc {
     use super::{CmdError, game_commands};
     use aoidos_engine::game::{runtime::Service, state::*};
     #[tauri::command]
+    pub fn engine_list_scripts() -> Result<Vec<aoidos_engine::game::assets::ScriptInfo>, CmdError> {
+        game_commands::list_scripts()
+    }
+    #[tauri::command]
+    pub async fn engine_open_session(
+        product: tauri::State<'_, aoidos_engine::game::product::Product>,
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<aoidos_engine::game::product::OpenedSession, CmdError> {
+        game_commands::open_session(&product, &state, request).await
+    }
+    #[tauri::command]
     pub async fn engine_submit_input(
         state: tauri::State<'_, Service>,
         request: tauri::ipc::Request<'_>,
@@ -182,8 +194,8 @@ pub mod game_ipc {
 
 macro_rules! command_handler {
     ($($extra:path),* $(,)?) => { tauri::generate_handler![
-        game_ipc::engine_submit_input, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase,
-        commands::greet, commands::store_list_backups, store_ipc::store_get_migration,
+        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase,
+        commands::store_list_backups, store_ipc::store_get_migration,
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
         llm_commands::llm_get_key_status, llm_set_key, turn_ipc::llm_get_turn, turn_ipc::llm_cancel, $($extra),*
@@ -208,12 +220,24 @@ pub fn run() {
         app.manage(events.clone());
         let storage_events = store_commands::StorageEvents::new(events.clone());
         let storage = store_commands::StorageService::new(&dir, storage_events);
-        app.manage(storage);
         let turns = turn_commands::TurnService::new(
-            events,
+            events.clone(),
             aoidos_llm::proxy::SystemProxySnapshot::capture(),
         )?;
-        let factory = std::sync::Arc::new(game_commands::Factory::default());
+        let factory = aoidos_engine::game::product::ProfileFactory::new(
+            std::sync::Arc::new(game_commands::SavedProfiles),
+            storage.storage.clone(),
+            turns.proxy_snapshot.clone(),
+            turns.diagnostics.clone(),
+        );
+        app.manage(aoidos_engine::game::product::Product::new(
+            &dir,
+            storage.storage.clone(),
+            turns.coordinator.clone(),
+            events,
+            factory.clone(),
+        ));
+        app.manage(storage);
         app.manage(aoidos_engine::game::runtime::Service::new(
             turns.coordinator.clone(),
             factory.clone(),

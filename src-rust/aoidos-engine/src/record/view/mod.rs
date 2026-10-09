@@ -184,15 +184,7 @@ impl Session {
             .index
             .range(..cursor.before)
             .rev()
-            .filter(|(seq, index)| {
-                self.read_only
-                    || self.effective.as_ref().map_or(
-                        index.branch_seq.unwrap_or(0) == self.history_revision,
-                        |path| {
-                            path.contains(seq) || index.branch_seq == Some(self.history_revision)
-                        },
-                    )
-            })
+            .filter(|(seq, index)| self.read_only || self.includes_record(**seq, index))
             .enumerate()
         {
             let token = || {

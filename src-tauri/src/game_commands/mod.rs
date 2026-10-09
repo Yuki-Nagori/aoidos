@@ -2,39 +2,11 @@
 
 mod events;
 use crate::ipc::CmdError;
-use aoidos_engine::game::{
-    domain::{FrozenRound, RoundFactory},
-    runtime::Service,
-    state::*,
-};
-use std::sync::{Arc, Mutex};
+use aoidos_engine::game::{runtime::Service, state::*};
 
-/// 024 在可信初始化后登记明确的配置入口；不从保存列表猜默认 profile。
-#[derive(Default)]
-pub struct Factory {
-    current: Mutex<Option<Arc<dyn RoundFactory>>>,
-}
-impl Factory {
-    pub fn bind(&self, factory: Arc<dyn RoundFactory>) {
-        *self
-            .current
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(factory);
-    }
-}
-impl RoundFactory for Factory {
-    fn freeze(&self) -> Result<FrozenRound, aoidos_engine::fault::Fault> {
-        let factory = self
-            .current
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .ok_or_else(|| {
-                aoidos_engine::fault::Fault::new("app.not-ready", "尚未登记回合配置入口")
-            })?;
-        factory.freeze()
-    }
-}
+mod product;
+pub use product::SavedProfiles;
+pub use product::{list_scripts, open_session};
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

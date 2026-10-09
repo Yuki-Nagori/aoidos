@@ -24,7 +24,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 ## 工程现状
 
-存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。当前窗口仍使用 greet 示例，真实调用链通过独立原生夹具验证；验收证据见[任务索引](../task-index.md)。
+存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已将主窗口替换为最小正式入口，本地联调与验证已完成，三平台 CI 在推送后复验；已有阶段调用链通过独立原生夹具验证；验收证据见[任务索引](../task-index.md)。
 
 记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。记忆工程协议已评审，[算法与标定](memory-algorithms.md)仍待实测；设计定稿不等于产品能力已上线。
 
@@ -77,6 +77,7 @@ src-tauri
   │     │     ├─→ aoidos-store
   │     │     └─→ aoidos-json
   │     ├─→ aoidos-store
+  │     ├─→ aoidos-script（纯原文解析，无业务 crate 依赖）
   │     └─→ aoidos-json
   ├─→ aoidos-llm
   ├─→ aoidos-store
@@ -144,6 +145,19 @@ useEnginePhase → api/engine + listener-group
 
 架构文档维护模块边界和协议设计，规范记录长期工程规则，task 保存范围、决策与验证证据。依赖版本集中在技术栈，跨端接口与公共预算集中在通信契约，专题文档通过链接引用，避免同一规则出现多份口径。未排期构想放在 [ideas/](../ideas/)，调查依据放在 [research/](../research/)。
 
-### 剧本原文解析
+剧本格式及独立解析器由 [039](../task/039-script-format-design.md) / [040](../task/040-script-parser-impl.md) 承接；`aoidos-script` 只解析 Markdown 原文与校验结构，engine 单向消费可信映射，不让解析器依赖业务执行 crate。024 先使用内置最小剧本。
 
-040 已交付独立 `aoidos-script` 工作区 crate，只依赖标准库，解析 Markdown 原文并校验身份 / 标题 / 容量。生产接线由 024 承接，不反向依赖业务 crate。默认原文与许可保存在 `resources/scripts/`，格式契约见[剧本规范](../standards/scenarios.md)。
+### 最小正式入口
+
+```text
+App.vue → useProduct → api/engine → game_ipc
+  → Product（活动会话与默认资源登记）
+    ├─→ assets → aoidos-script（原文校验；固定编译资源）
+    ├─→ builtin（最小探索规则；原文不自动成为世界操作）
+    └─→ ProfileFactory → ProfileSource（壳中的配置 / 凭据锁）
+          → ProfileGeneration → aoidos-llm（正式 Provider / 代理 / 护栏）
+Service（同 factory / Coordinator）→ record 持久化 → 窗口事件 / 快照
+  → useEnginePhase / useLlmTurn / useRecordView
+```
+
+活动选择保存在数据根的 `active-session.json`；正文仍由 records 的 workspace / transcript 路径维护。打开前预检配置但不发 HTTP，重开只恢复磁盘事实；生成须提交行动或显式恢复。035 未交付费用账本，当前生成端口不宣称具备金额额度控制。完整作者稿的多幕玩法与完整界面分别由后续协议和 025 承接。

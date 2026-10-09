@@ -4,7 +4,7 @@
 
 ## 逻辑归属
 
-IPC 薄调用与 Rust 同型的 TS 载荷类型放 `src-web/api/`，不在组件中直接 invoke；模板 greet 示例暂保留直接调用，替换为产品命令时移入 API 层并删除示例。
+IPC 薄调用与 Rust 同型的 TS 载荷类型放 `src-web/api/`，不在组件中直接 invoke。
 
 组件只做编排与渲染；可复用、可测试的逻辑放 `src-web/utils/` 并配单测，`<script setup>` 顶层不堆过程式逻辑，超过十行就抽函数。全局状态与路由在需求真实出现前不引入（当前无 pinia / vueuse / vue-router）。
 
@@ -18,7 +18,7 @@ Composable 遵循 [Vue 官方约定](https://vuejs.org/guide/reusability/composa
 
 ## 测试
 
-测试目录镜像 `src-web`：`tests/web/utils/greet.test.ts` 对应 `src-web/utils/greet.ts`。mock IPC 统一写法：
+测试目录镜像 `src-web`：`tests/web/utils/turn-consumer.test.ts` 对应 `src-web/utils/turn-consumer.ts`。mock IPC 统一写法：
 
 ```ts
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));

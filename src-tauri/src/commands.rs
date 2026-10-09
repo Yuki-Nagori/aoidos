@@ -6,15 +6,6 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// 示例命令：前端 `invoke("greet", { name })` 调用。契约要求所有命令统一
-/// `Result<T, CmdError>` 形状；本命令当前无失败路径。
-/// store 域命令（`store_list_backups` / `store_get_migration`）已就位，
-/// 本占位在 008 界面落地、前端改用真实命令时退役。
-#[tauri::command]
-pub fn greet(name: &str) -> Result<String, CmdError> {
-    Ok(format!("Hello, {name}! You've been greeted from Rust!"))
-}
-
 // 应用数据目录下的业务库路径：lib.rs setup 注入（OnceLock 单例，进程内只设一次）。
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
 const MAX_BACKUP_ITEMS: usize = 50;
@@ -91,14 +82,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    #[test]
-    fn greets_the_given_name() {
-        assert_eq!(
-            greet("Tauri").unwrap(),
-            "Hello, Tauri! You've been greeted from Rust!"
-        );
     }
 
     #[test]
