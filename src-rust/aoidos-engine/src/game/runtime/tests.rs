@@ -1149,35 +1149,35 @@ async fn no_scene_or_quarantined_sessions_refuse_generation_before_profile_looku
 }
 
 #[tokio::test]
-async fn terminal_prepare_failure_quarantines_without_forgetting_the_last_known_round() {
+async fn waiting_cancellation_prepare_failure_quarantines_and_releases_the_owner() {
     let fixture = Fixture::new(true, "{}");
-    let service = service(&fixture, DiceMode::Manual);
-    let id = fixture.context.publisher.snapshot().state.session_id;
-    let accepted = service.submit_input(&id, "搜索".into()).await.unwrap();
-    wait(&service, &id, |state| state.check.is_some()).await;
+    let mut run = fixture.accept("搜索", DiceMode::Manual).await;
+    // 快照发布不代表提交回执已到达；等待真实 step 完成后验证等待态命令分支。
+    run.step(CancellationToken::new()).await.unwrap();
+    assert_eq!(run.stage(), Stage::Waiting);
+    let round = run.round_id().to_owned();
+    let before = lock(&fixture.context.session).next_sequence();
+    let (_tx, rx) = mpsc::channel(1);
+    let mut actor = actor_for_test(&fixture, Some(run), rx);
     fixture.events.fail_prepare.store(true, Ordering::SeqCst);
-    assert_eq!(
-        service
-            .cancel_round(&id, &accepted.round_id)
-            .await
-            .unwrap_err()
-            .code,
-        "app.event-failed"
-    );
-    let snapshot = service.get_phase(&id).unwrap().state;
+    let (reply, result) = oneshot::channel();
+    assert!(!actor.command(Command::Cancel(round.clone(), reply)).await);
+    assert_eq!(result.await.unwrap().unwrap_err().code, "app.event-failed");
+    assert!(actor.runner.is_none());
+    assert!(actor.terminal.is_empty());
+    assert!(fixture.context.coordinator.check_available().is_ok());
+    assert_eq!(lock(&fixture.context.session).next_sequence(), before);
+    let snapshot = fixture.context.publisher.snapshot().state;
     assert!(snapshot.needs_recovery);
     assert!(!snapshot.resume_required);
     assert!(snapshot.checkpoint.is_none());
+    let (reply, result) = oneshot::channel();
+    assert!(!actor.command(Command::Cancel(round, reply)).await);
     assert_eq!(
-        service
-            .cancel_round(&id, &accepted.round_id)
-            .await
-            .unwrap_err()
-            .code,
+        result.await.unwrap().unwrap_err().code,
         "engine.invalid-phase"
     );
-    fixture.events.fail_prepare.store(false, Ordering::SeqCst);
-    service.shutdown().await;
+    assert_eq!(lock(&fixture.context.session).next_sequence(), before);
 }
 
 #[tokio::test]
