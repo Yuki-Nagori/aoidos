@@ -23,10 +23,10 @@ import { useGameView } from "../../../../src-web/composables/useGameView";
 function check(value: boolean, message: string): void {
   if (!value) throw { code: message };
 }
-async function until(predicate: () => boolean): Promise<void> {
+async function until(predicate: () => boolean, stage: string): Promise<void> {
   const deadline = Date.now() + 5000;
   while (!predicate()) {
-    if (Date.now() > deadline) throw { code: "fixture.timeout" };
+    if (Date.now() > deadline) throw { code: `fixture.timeout.${stage}` };
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -84,7 +84,7 @@ async function smoke(): Promise<void> {
       const restored = await openSession("native-chat", "mistbell", false);
       sessionId.value = restored.sessionId;
       await game.recover();
-      await until(() => !!game.latestPublicRecord.value);
+      await until(() => !!game.latestPublicRecord.value, "restart.record");
       const body = game.latestPublicRecord.value?.body;
       check(
         !!body && "text" in body && body.text === "丢失的终态已恢复。",
@@ -107,13 +107,17 @@ async function smoke(): Promise<void> {
     await setUiPreferences(false, "auto");
     const opened = await openSession("native-product", "mistbell", true);
     sessionId.value = opened.sessionId;
-    await until(() => phase.state.value.snapshot?.sessionId === opened.sessionId);
+    await until(() => phase.state.value.snapshot?.sessionId === opened.sessionId, "open.phase");
     check((await count()) === 0, "open.must-not-request");
     const accepted = await submitInput(opened.sessionId, "我举起火把，听钟声。");
     const done = await terminal(accepted.roundId);
     check(done.lastOperation?.outcome === "completed", "normal.complete");
-    await until(() => turn.view.value.snapshot?.outcome === "completed");
-    const text = turn.view.value.snapshot!.text;
+    // 封口可能早于 Webview 消费阶段事件；完成正文以持久记录为准。
+    await game.recover();
+    check((game.latestPublicRecord.value?.recordSeq ?? 0) > 0, "normal.current-record");
+    const normalBody = game.latestPublicRecord.value?.body;
+    check(!!normalBody && "text" in normalBody, "normal.record-body");
+    const text = normalBody && "text" in normalBody ? normalBody.text : "";
     check(text === "钟声穿过雾气。🕯️", "unicode.text");
     check((await count()) === 2, "normal.two-children");
     await records.recover();
@@ -146,6 +150,7 @@ async function smoke(): Promise<void> {
     const partial = await submitInput(opened.sessionId, "/ooc 取消测试");
     await until(
       () => turn.view.value.snapshot?.text === text && !turn.view.value.snapshot?.outcome,
+      "cancel.partial",
     );
     const active = turn.view.value.snapshot!;
     try {
@@ -159,13 +164,23 @@ async function smoke(): Promise<void> {
     const sealed = await getTurn(active.turnId);
     check(sealed.text === text && sealed.outcome === "cancelled", "cancel.keeps-prefix");
     check((await count()) === beforeCancel + 1, "cancel.no-retry");
+    await game.recover();
+    const emptyFloor = game.latestPublicRecord.value?.recordSeq ?? 0;
     const beforeEmpty = await count(2);
     const empty = await submitInput(opened.sessionId, "/ooc 空输出测试");
     const emptyDone = await terminal(empty.roundId);
     check(emptyDone.lastOperation?.error?.code === "llm.empty-output", "empty.error");
-    await until(() => turn.view.value.snapshot?.outcome === "failed");
+    await game.recover();
+    check((game.latestPublicRecord.value?.recordSeq ?? 0) > emptyFloor, "empty.current-record");
+    const emptyBody = game.latestPublicRecord.value?.body;
     check(
-      turn.view.value.snapshot?.finishReason === "stop" && turn.view.value.snapshot.text === "",
+      !!emptyBody &&
+        "outcome" in emptyBody &&
+        emptyBody.outcome === "failed" &&
+        "finishReason" in emptyBody &&
+        emptyBody.finishReason === "stop" &&
+        "text" in emptyBody &&
+        emptyBody.text === "",
       "empty.finish-reason",
     );
     check((await count()) === beforeEmpty + 3, "empty.three-attempt-limit");
@@ -173,21 +188,33 @@ async function smoke(): Promise<void> {
     const auth = await submitInput(opened.sessionId, "/ooc 认证失败测试");
     check((await terminal(auth.roundId)).lastOperation?.error?.code === "llm.auth", "auth.error");
     check((await count()) === beforeAuth + 1, "auth.no-retry");
+    await game.recover();
+    const disconnectFloor = game.latestPublicRecord.value?.recordSeq ?? 0;
     const beforeDisconnect = await count(4);
     const disconnect = await submitInput(opened.sessionId, "/ooc 断流测试");
     check(
       (await terminal(disconnect.roundId)).lastOperation?.error?.code === "llm.aborted",
       "disconnect.error",
     );
-    await until(
-      () =>
-        turn.view.value.snapshot?.outcome === "failed" && turn.view.value.snapshot.text === text,
+    await game.recover();
+    check(
+      (game.latestPublicRecord.value?.recordSeq ?? 0) > disconnectFloor,
+      "disconnect.current-record",
+    );
+    const disconnectedBody = game.latestPublicRecord.value?.body;
+    check(
+      !!disconnectedBody &&
+        "outcome" in disconnectedBody &&
+        disconnectedBody.outcome === "failed" &&
+        "text" in disconnectedBody &&
+        disconnectedBody.text === text,
+      "disconnect.record-prefix",
     );
     check((await count()) === beforeDisconnect + 1, "partial.no-retry");
     const beforeCheck = await count(5);
     await setUiPreferences(false, "manual");
     const checked = await submitInput(opened.sessionId, "我试着打开古老的门。");
-    await until(() => phase.state.value.snapshot?.check?.status === "waiting");
+    await until(() => phase.state.value.snapshot?.check?.status === "waiting", "manual.check");
     const plan = phase.state.value.snapshot!.check!.planId;
     check((await count()) === beforeCheck + 1, "manual.no-request-before-confirmation");
     await submitCheck(opened.sessionId, checked.roundId, plan);
@@ -201,6 +228,8 @@ async function smoke(): Promise<void> {
       (await count()) === afterCheck && afterCheck === beforeCheck + 2,
       "manual.no-reroll-or-request",
     );
+    await game.recover();
+    const slowFloor = game.latestPublicRecord.value?.recordSeq ?? 0;
     await count(0);
     await invoke("product_commit_gate", { action: "arm" });
     const slow = await submitInput(opened.sessionId, "/ooc 慢提交取消测试");
@@ -220,9 +249,14 @@ async function smoke(): Promise<void> {
     const slowCancelled = await cancelDuringCommit;
     await terminal(slow.roundId);
     await game.recover();
+    check((game.latestPublicRecord.value?.recordSeq ?? 0) > slowFloor, "slow.current-record");
+    const slowBody = game.latestPublicRecord.value?.body;
     check(
-      turn.view.value.snapshot?.text === text &&
-        turn.view.value.snapshot.outcome === "completed" &&
+      !!slowBody &&
+        "text" in slowBody &&
+        slowBody.text === text &&
+        "outcome" in slowBody &&
+        slowBody.outcome === "completed" &&
         slowCancelled.outcome === "cancelled",
       "slow.seal-keeps-bytes",
     );
@@ -262,7 +296,7 @@ async function smoke(): Promise<void> {
     );
   } finally {
     scope.stop();
-    await until(() => live === 0);
+    await until(() => live === 0, "dispose.listeners");
   }
 }
 void smoke().then(

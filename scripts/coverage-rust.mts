@@ -40,11 +40,32 @@ for (const file of report.data[0].files) {
   if (uncovered > budget) {
     violations += 1;
     const registered = allowance ? `预算 ${budget} 行` : "未登记预算（缺省必须 100%）";
+    const lines = uncoveredLines(file);
     console.error(
-      `${path} 未覆盖 ${uncovered} 行，超过${registered}；` +
-        `未覆盖行号：${uncoveredLines(file).join(", ")}`,
+      `${path} 未覆盖 ${uncovered} 行，超过${registered}；` + `未覆盖行号：${lines.join(", ")}`,
     );
+    if (lines.length === 0) {
+      // 合并 segments 无法解释实例组缺口时，保留原始实例的零计数范围供排障。
+      for (const instance of report.data[0].functions as CoverageFunction[]) {
+        const index = instance.filenames.indexOf(file.filename);
+        if (index < 0) {
+          continue;
+        }
+        const ranges = instance.regions
+          .filter((region) => region[4] === 0 && region[5] === index && region[7] === 0)
+          .map((region) => `${region[0]}:${region[1]}-${region[2]}:${region[3]}`);
+        if (ranges.length > 0) {
+          console.error(`函数实例 ${instance.name}；零计数范围：${ranges.join(", ")}`);
+        }
+      }
+    }
   }
+}
+
+interface CoverageFunction {
+  name: string;
+  filenames: string[];
+  regions: number[][];
 }
 
 /** 从 segments 还原未覆盖行号：行内所有起始段计数为 0 即未覆盖。 */

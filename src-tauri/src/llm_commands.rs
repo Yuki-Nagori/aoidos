@@ -502,11 +502,20 @@ mod tests {
         let provider = unique("async-probe");
         // 未知操作必须在原生交互前拒绝，装配入口也覆盖。
         assert_eq!(
-            set_key_with_dispatch(provider, "bogus".into(), platform_prompt(), &direct)
+            set_key_with_dispatch(provider.clone(), "bogus".into(), platform_prompt(), &direct)
                 .await
                 .unwrap_err()
                 .code(),
             "app.bad-request"
+        );
+        // 同一异步装配入口也必须覆盖成功返回；取消不写真实 OS 凭据。
+        // 先清理唯一测试 id 的墓碑，使无凭据服务的平台也能确定性读到未设置。
+        let _ = clear_key_in(&provider, &credential_vault().unwrap());
+        assert!(
+            !set_key_with_dispatch(provider, "set".into(), |_| Ok(None), &direct)
+                .await
+                .unwrap()
+                .set
         );
     }
 
