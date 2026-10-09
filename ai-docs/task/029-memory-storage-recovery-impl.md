@@ -1,6 +1,6 @@
 # 029 — 实现：记忆版本存储与恢复
 
-- 状态：in-progress
+- 状态：done
 - 依赖：007、013、022
 - 优先级：P2
 - 创建 / 更新：2026-10-06 / 2026-10-10
@@ -39,7 +39,7 @@
 - [x] BLOB 长度在复制前检查；单次扫描的行数、字节数、正文、快照、计划及关联关系均有硬上限与预算耗尽恢复测试。
 - [x] 已应用状态任何审计不一致均可持久冻结；后续写路径统一拒绝，健康只读仍可用。
 - [x] Character effects 在缺少主体绑定获知证据校验前拒绝；与 007 / 022 边界一致，依赖图无环。
-- [ ] Rust 代码、注释、类型、架构文档和本 task 同步；`bun run lint:rust:fix`、`bun run lint:rust`、`bun run verify` 通过，CI 复验通过。
+- [x] Rust 代码、注释、类型、架构文档和本 task 同步；`bun run lint:rust:fix`、`bun run lint:rust`、`bun run verify` 通过，CI 复验通过。
 - [x] 覆盖率缺口由 subagent 修复；完成后由独立 subagent 整体 review，问题修复后复核。
 
 ## 验证计划与结果
@@ -53,7 +53,7 @@
 | 2026-10-10 | `cargo tree -p aoidos-memory -e normal`        | 未发现 engine / llm 依赖，依赖方向无环        |
 | 2026-10-10 | 独立 subagent 最终 review                      | 未发现新的 P1 / P2 阻塞                       |
 | 2026-10-10 | `bun run test:native --test ipc-platform`      | 真实 macOS Webview 端到端通过                 |
-| —          | CI 三平台                                      | 待提交后验证                                  |
+| 2026-10-10 | CI 三平台                                      | macOS / Windows / Linux 全部通过；见工作记录  |
 
 ## 风险与恢复
 
@@ -61,12 +61,13 @@
 
 ## 工作记录
 
+- 2026-10-10：[PR #93 三平台 CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37975437315) 全部通过，包含逐文件覆盖率与真实原生链路；已 squash 合并到 main（59ae208），完成 029 验收。
 - 2026-10-10：Windows 批量恢复夹具原使用默认 DELETE journal；改用与产品一致的真实 WAL 并断言切换成功，保留同步要求，独立 review 确认不削弱故障恢复测试。
-- 2026-10-10：PR #93 首轮 Linux / macOS 的 Rust 门禁通过，但原生 IPC 夹具仍固定断言迁移版本 1；改为核验后端目标版本、completed 与无错误，真实 macOS Webview 复验通过，独立 review 确认未放宽完成条件，等待三平台复验。
+- 2026-10-10：PR #93 首轮 Linux / macOS 的 Rust 门禁通过，但原生 IPC 夹具仍固定断言迁移版本 1；改为核验后端目标版本、completed 与无错误，真实 macOS Webview 复验通过，独立 review 确认未放宽完成条件，后续三平台复验通过。
 - 2026-10-10：整体独立评审通过 public API 复现效果去重索引审计遗漏、额外效果 / 素材集合遗漏及已应用目标缺失未冻结；修复后补齐效果直接消费审计和 operation 索引，独立复验均阻断损坏数据及后续写入，未发现剩余 P1 / P2 阻塞。
-- 2026-10-10：完成 memory crate / schema / 版本存储 / 幂等状态机 / 因果恢复初版；根据 review 增加预复制 BLOB 上限、持久 run freeze、Character effect fail-closed 与实际关系字节预算。`bun run verify` 13 项、无默认特性工作区测试、crate 全行覆盖和独立 review 均通过；等待 CI 复验。
+- 2026-10-10：完成 memory crate / schema / 版本存储 / 幂等状态机 / 因果恢复初版；根据 review 增加预复制 BLOB 上限、持久 run freeze、Character effect fail-closed 与实际关系字节预算。`bun run verify` 13 项、无默认特性工作区测试、crate 全行覆盖和独立 review 均通过；后续经 PR #93 三平台 CI 复验通过。
 - 2026-10-09：开始 029；依赖 007、013、022 已满足。memory 只依赖 store / json 等基础库，由 engine 提供记录有效性端口并借用共享 SQLite 连接，避免依赖环。
 
 ## 完成摘要
 
-尚未完成验收。全工作区测试、覆盖率、`bun run verify`、独立 review、CI 与最终文档同步完成后更新状态。
+已交付记忆版本存储、幂等操作、因果回退、有界恢复与故障冻结；memory 115 项测试、逐文件 100% 行覆盖、本地十三项验证、独立 subagent 评审及三平台 CI 全部通过。[PR #93](https://github.com/Yuki-Nagori/aoidos/pull/93) 已合并。产品候选 / 门控、查询 / 设置、轮回 / 节点及生产标定继续由 030–033 承接。

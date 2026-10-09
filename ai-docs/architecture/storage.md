@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-10。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；029 正在实现记忆 manifest / 正文存储与恢复，产品接入仍由后续任务负责；导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-10。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；029 已实现记忆 manifest / 正文存储与恢复，产品接入仍由后续任务负责；导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -112,7 +112,7 @@ CREATE TABLE point_allocations (
 ## 错误与对接
 
 - 裸码由 `StoreError::code()` 返回。IPC 的 `store.` 前缀、中文 `message` 与 `detail` 见[通信契约](ipc-contract.md)。磁盘满、权限、锁定超时、损坏、路径非法各占独立码。
-- 对接：006 用原子写 + JSONL 截断恢复；029 正在实现 007 的 SQLite manifest、不可变文件正文与恢复，产品记忆流程尚未接入；cycle 与依赖式清理边界见[记忆设计](memory.md)。SQLite 迁移备份与文件覆写备份遵守本文约定；019 的配置及私有凭据文件使用 `llm/`，schema 与权威后端规则见[通信契约](ipc-contract.md#工程纪律可检查版)。
+- 对接：006 用原子写 + JSONL 截断恢复；029 已实现 007 的 SQLite manifest、不可变文件正文与恢复，产品记忆流程尚未接入；cycle 与依赖式清理边界见[记忆设计](memory.md)。SQLite 迁移备份与文件覆写备份遵守本文约定；019 的配置及私有凭据文件使用 `llm/`，schema 与权威后端规则见[通信契约](ipc-contract.md#工程纪律可检查版)。
 
 ## 实现状态与后续范围
 

@@ -69,7 +69,7 @@ src-tauri（装配、命令、窗口事件适配）
 
 业务 crate 全部纳入现有 Rust 门禁：`cargo test --workspace` 与 `coverage:rust`（已是 `--workspace` 口径，行覆盖 100%）；忽略正则 `lib\.rs$` 对所有 crate 的 lib.rs 生效，入口只放模块声明 / 薄装配；src-tauri 的非忽略文件及域逻辑文件必须足额。
 
-## 记忆存储与记录协调（029 实施中）
+## 记忆存储与记录协调（029）
 
 `aoidos-memory` 拥有派生记忆的 schema、不可变正文、操作计划和有界恢复，单向依赖 `aoidos-store` / `aoidos-json`；不依赖 engine、LLM 或 Tauri，不创建模型请求、世界分支或独立数据库连接。`aoidos-engine` 提供记录有效路径与可信来源适配，并在现有业务单写者中借用同一个 SQLite 连接。
 

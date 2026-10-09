@@ -13,7 +13,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | LLM 设计     | [LLM 接入与护栏](llm.md)               | Provider、护栏、配置与回合协调；实际能力及后续接线边界           |
 | 计价与额度   | [计价与费用预算](billing.md)           | 金额额度、不可变价格、持久账本与周期恢复；已评审，待实现         |
 | 记录与上下文 | [记录引擎](record-engine.md)           | 块语法、流式持久化、投影预算、恢复与迁移；022 已实现并验收       |
-| 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；029 存储 / 恢复实施中            |
+| 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；029 存储 / 恢复已交付            |
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定   |
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收 |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；已评审，待实现             |
@@ -26,7 +26,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；[main CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37950951480) 三平台通过；已有阶段调用链通过独立原生夹具验证；验收证据见[任务索引](../task-index.md)。
 
-记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 正在实现记忆存储 / 恢复基础 crate，尚未接入产品记忆流程；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
+记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，尚未接入产品记忆流程；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
 
 ## 设计与实施对应
 
@@ -48,7 +48,7 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 025 依赖 004、008、024、026、034，024 经 021 / 023 覆盖业务依赖；024 保留最小提交链路和故障联调范围，完整界面验收归 025。026 提供受控 main 构建与主题 bootstrap，025 在该入口接窗口几何恢复；面板 / 骰判偏好存储归 022，回合冻结骰判偏好归 023，避免重复接线。
 
-007 已完成设计评审。029 正在实现独立存储 / 恢复 crate，依赖 007、013、022；完成后由 [030 门控批次](../task/030-memory-gates-batches-impl.md) 接入素材与授权流程，[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md) 再接入产品面；[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。031 等待 034 国际化，030 / 033 等待 035 费用实施。
+007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022；由 [030 门控批次](../task/030-memory-gates-batches-impl.md) 接入素材与授权流程，[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md) 再接入产品面；[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。031 等待 034 国际化，030 / 033 等待 035 费用实施。
 
 027 已定稿[计价与费用预算](billing.md)，035 接不可变价格、双作用域金额额度、持久预留 / 结算、周期恢复及明细 / 可选余额；参考 Token 只生成固定默认金额，不另设累计 Token 额度。当前尚未实施。
 
@@ -73,7 +73,7 @@ src-rust/（独立业务 crate：engine 按单向依赖组合 memory / llm / sto
 ```text
 src-tauri
   ├─→ aoidos-engine
-  │     ├─→ aoidos-memory（029 实施中）
+  │     ├─→ aoidos-memory（029 存储 / 恢复）
   │     │     ├─→ aoidos-store
   │     │     └─→ aoidos-json
   │     ├─→ aoidos-llm
