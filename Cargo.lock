@@ -152,6 +152,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "aoidos-script"
+version = "0.1.0"
+
+[[package]]
 name = "aoidos-store"
 version = "0.1.0"
 dependencies = [

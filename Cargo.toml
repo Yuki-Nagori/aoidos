@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "tests/rust/native-platform"]
+members = ["src-rust/aoidos-script", "src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
+aoidos-script = { path = "src-rust/aoidos-script" }
 aoidos-json = { path = "src-rust/aoidos-json" }
 aoidos-store = { path = "src-rust/aoidos-store" }
 aoidos-llm = { path = "src-rust/aoidos-llm" }
