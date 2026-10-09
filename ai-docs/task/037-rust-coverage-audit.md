@@ -28,6 +28,8 @@
 | 2026-10-09 | `bun run verify`        | 十三项通过，退出码 0；前端四指标 100%，Rust 单测 536 项通过                             |
 | 2026-10-09 | subagent 独立只读评审   | 未发现阻塞问题；核对本任务完整 diff、生产调用链、LLVM 源码与当前 JSON，未重复运行 Cargo |
 
+表中零缺口为当时 macOS 本机结果。023 合并后的 [main CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37837295003) 三平台在凭据命令缺 1 行失败，当时未同步此记录；issues #78 / #79 已要求补记与默认分支复验，不能以 PR 成功覆盖 main 失败。038 合并提交 `853aecc` 的 [main CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37906896119) 三平台全部通过；旧失败与新证据均保留，预算仍为空。
+
 原始覆盖率 JSON 位于 `target/coverage-rust.json`。完整 verify 首次在插桩引擎进程启动时被系统 SIGKILL；第二次完整运行通过。
 
 ## 风险与回退

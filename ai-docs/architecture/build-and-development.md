@@ -41,6 +41,8 @@ CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两�
 
 CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原生依赖并执行 rustdoc / clippy / Rust 覆盖率，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
 
+验收分别记录 PR 与合并提交的 main push CI。PR 成功后仍须核验默认分支运行；main 失败时补记失败、继续修复并复验，不能只引用 PR 成功宣称交付通过。纯文档提交若按路径过滤不触发 CI，保留最近一次对应代码提交的默认分支证据。
+
 触发范围：main push 与 pull request 仅修改 `ai-docs/**` 或 Markdown 文件时跳过全量 CI；代码、依赖、脚本、工作流及其他配置改动仍跑三平台。PR 按相对 base 的累计 diff 判断，代码 PR 后续补文档仍可能触发；新建的纯文档 PR 与合并后的纯文档 push 会跳过。文档提交保留本地 / husky 格式检查。
 
 覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件与视图旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `coverage:rust` 由根目录 `coverage-rust.config.mts` 声明、`scripts/coverage-rust.mts` 执行——逐文件未覆盖行预算，缺省 0（必须 100%），`lib.rs` 与 `platform/windows.rs` 等确属装配或无法注入的文件在配置登记豁免与理由，详见[测试规范](../standards/testing.md)；src-tauri 的 commands / events / ipc 等非忽略文件与业务逻辑均须足额。改口径属于门禁变更，先登记 task。

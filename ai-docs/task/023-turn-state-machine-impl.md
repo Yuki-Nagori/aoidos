@@ -64,6 +64,8 @@
 | 2026-10-09 | `bun run test:native`（macOS） | 真实桌面与 IPC 通过 | 原生确认 / 取消、凭据读写清、阶段 / 骰判 / fork / 重启 / 恢复 / 监听释放 PASS                                                  |
 | 2026-10-09 | 三平台 CI                      | 最终全项通过        | macOS / Windows / Linux 全通过，含覆盖率与原生联调；[运行记录](https://github.com/Yuki-Nagori/aoidos/actions/runs/37836567969) |
 
+PR 与默认分支分别验收：PR #77 的成功运行不代表随后 main push 成功。合并提交 `0db5f33` 的 [main CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37837295003) 三平台在凭据命令覆盖率缺 1 行失败；当时验收记录漏记该结果，issues #78 / #79 指出后补录。038 补充确定性故障测试并重新验证 main；默认分支合并提交 `853aecc` 的 [main CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37906896119) 三平台全部通过，含 Rust 测试 / 覆盖率及原生联调。
+
 ## 风险与回退
 
 阶段规则与产品节奏耦合；依赖设计冻结后再实现，回退保留记录事实并拒绝未知阶段。回退代码时同步撤销接口 / 依赖与文档；已有存档和凭据不因回退删除。

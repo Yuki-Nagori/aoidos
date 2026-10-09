@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-09。均为项目约定。状态：**部分落地**——业务 crate `src-rust/aoidos-store`（013）、`src-rust/aoidos-llm`（018，供应商适配层在 `providers/` 目录按厂商拆分）及回合协调 `src-rust/aoidos-engine`（020，本地夹具接线）与 IPC 基座（015–017）已按本文分工落地并通过质量门禁（业务 crate 不依赖 tauri、装配 `lib.rs` 不计覆盖、域逻辑 100% 行覆盖）；后续 crate 与域落地时继续按本文检验并回写。工程纪律部分借鉴 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-09。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、JSON 共用工具（036）及 IPC 基座（015–017）已按本文分工落地；验收证据见[任务索引](../task-index.md)。后续模块继续核验单向依赖及职责归属。工程纪律参考 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -40,13 +40,13 @@ src-tauri（装配、命令、窗口事件适配）
 ```
 
 - **事件端口**：`EventPort` 和回合载荷由 engine 定义；Tauri adapter 负责序列化、序号预留、主窗口投递与清退。engine 不引用 `AppHandle`、`CmdError` 或前端类型。
-- **输出端口**：`OutputWriter` 由 engine 定义；内存实现仅供调试。022 的记录模块实现增量提交 / 封口，并消费 store 原语；文件基建不反向依赖 engine 的终态或业务 schema。022 实施中，engine 已直接依赖 store 的记录日志与 applied 原语；数据库连接、业务格式与恢复状态归 engine，壳只持有服务。
+- **输出端口**：`OutputWriter` 由 engine 定义；内存实现仅供调试。022 的记录模块实现增量提交 / 封口，并消费 store 原语；文件基建不反向依赖 engine 的终态或业务 schema。022 已交付记录持久化，engine 直接消费 store 的记录日志与 applied 原语；数据库连接、业务格式与恢复状态归 engine，壳只持有服务。
 - **调度确认端口**：`OutputPort` 属 llm，engine 通过确认通道接入；LLM 仅在接纳后确认首交付，不能引用 engine 的快照。准备 / 写入错误由 engine 映射为事件和快照，LLM 不承担记录持久化。
 - **预算端口**：`BudgetPort` 属 llm，020 提供每个 turn 和物理 request 的唯一身份；035 在调用方注入账本实现，补齐价格 / 周期上下文。LLM 不反向依赖计费模块，engine 不把账本写成第二套调度器。
 
 `aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
 
-后续记录和计费接入时，先核对上述方向，再声明 Cargo 依赖；不能为复用字段让 store 依赖 engine / llm，或让 llm 依赖 engine / 计费实现。确需共享词汇时放到双方可单向消费的模块；不预建空的公共 crate。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
+后续计费（035）等模块接入时，先核对上述方向，再声明 Cargo 依赖；不能为复用字段让 store 依赖 engine / llm，或让 llm 依赖 engine / 计费实现。确需共享词汇时放到双方可单向消费的模块；不预建空的公共 crate。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 
 ## 通信契约
 

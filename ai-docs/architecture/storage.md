@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-07。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。业务记录、记忆与导入导出仍按各自任务规划；工程纪律前提见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-09。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；记忆与导入导出按后续任务推进；工程纪律前提见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -48,7 +48,7 @@ CREATE TABLE point_allocations (
 
 ## 访问层与迁移
 
-- 所有 SQL 集中在存储 crate；域 crate（记录 / 记忆 / 引擎）经 trait 访问，不直接持连接。
+- SQLite 基建及通用 applied 原语归 store，业务 schema / SQL 归对应领域。`aoidos-engine::Storage` 持有唯一业务连接，领域模块经其门禁与受控访问借用，不自行打开第二套连接；装配层持有服务，不持业务连接。
 - Schema 迁移：`PRAGMA user_version` + 按版本号排列的内嵌 SQL 切片；每次迁移用 IMMEDIATE 事务，执行或提交失败由 RAII 回滚，`user_version` 与 schema 同事务推进。SQL 不得自行 BEGIN / COMMIT / ROLLBACK；每个迁移配套回填测试。
 - 业务 crate 不依赖 tauri：数据根路径由装配层（src-tauri）解析后注入。
 
