@@ -5,7 +5,10 @@ import { mkdir } from "node:fs/promises";
 const output = "tests/rust/native-platform/gen/webview";
 await mkdir(output, { recursive: true });
 const result = await Bun.build({
-  entrypoints: ["tests/rust/native-platform/webview/main.ts"],
+  entrypoints: [
+    "tests/rust/native-platform/webview/main.ts",
+    "tests/rust/native-platform/webview/product.ts",
+  ],
   outdir: output,
   target: "browser",
   format: "esm",
@@ -15,3 +18,8 @@ if (!result.success) {
   exit(1);
 }
 await Bun.write(`${output}/index.html`, Bun.file("tests/rust/native-platform/webview/index.html"));
+
+await Bun.write(
+  `${output}/product.html`,
+  Bun.file("tests/rust/native-platform/webview/product.html"),
+);

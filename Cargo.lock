@@ -82,6 +82,7 @@ version = "0.1.0"
 dependencies = [
  "aoidos-json",
  "aoidos-llm",
+ "aoidos-script",
  "aoidos-store",
  "futures",
  "getrandom 0.4.3",
@@ -143,6 +144,7 @@ dependencies = [
  "aoidos-engine",
  "aoidos-llm",
  "aoidos-store",
+ "reqwest",
  "secrecy",
  "serde_json",
  "tauri",

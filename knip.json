@@ -4,7 +4,7 @@
     "index.html",
     "tests/web/**/*.test.ts",
     "src-web/bench/*.ts",
-    "tests/rust/native-platform/webview/main.ts"
+    "tests/rust/native-platform/webview/*.ts"
   ],
   "project": ["src-web/**/*.ts", "src-web/**/*.vue"],
   "ignoreDependencies": ["tailwindcss"]

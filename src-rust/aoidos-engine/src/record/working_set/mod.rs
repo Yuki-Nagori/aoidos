@@ -56,14 +56,7 @@ impl Session {
     pub fn projection_working_set(&self) -> Result<WorkingSet, Fault> {
         let eligible = |seq: u64| {
             let index = &self.index[&seq];
-            self.is_read_only()
-                || (!index.control
-                    && self.effective.as_ref().map_or(
-                        index.branch_seq.unwrap_or(0) == self.history_revision(),
-                        |path| {
-                            path.contains(&seq) || index.branch_seq == Some(self.history_revision())
-                        },
-                    ))
+            self.is_read_only() || (!index.control && self.includes_record(seq, index))
         };
         let player = self
             .index

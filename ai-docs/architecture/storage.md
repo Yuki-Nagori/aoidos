@@ -64,6 +64,7 @@ CREATE TABLE point_allocations (
 <app-data>/                       # tauri PathResolver::app_data_dir，注入业务 crate
 ├── storage.sqlite                # 业务状态（含 WAL/SHM）
 ├── storage.lock                  # InstanceLock：OS 独占锁，释放不删除
+├── active-session.json           # 024 活动会话 / profile / script 身份，原子提交确认
 ├── llm/                          # 019 配置与凭据
 │   ├── profiles.json             # profile 集合；业务 schema 由 aoidos-llm 管理
 │   └── credentials.json          # 权威后端指针 / 墓碑及私有降级值
@@ -81,8 +82,11 @@ CREATE TABLE point_allocations (
     └── storage-v<N>-<stamp>.sqlite  # SQLite 迁移备份；最近 3 份
 ```
 
-- **script-id 规范**：`[a-z0-9-]{1,64}`，由剧本名消毒生成（小写、空格转连字符、去非法字符）；超长截断后追加 8 位短 hash 防碰撞。
+`script-id` 是剧本注册时冻结的权威身份，遵循[剧本格式规范](../standards/scenarios.md)的合法值约束，不由显示标题重新消毒、截断或静默改名。`script_id_from_name` 只供尚未冻结身份的命名候选使用；已登记资源与存档路径必须验证原身份。
+
 - **路径规则**：装配层注入系统数据根，业务相对路径由 `join_under_root` 拼装——拒绝 `..`、分隔符、盘符，消毒 Windows 非法字符与保留名。该工具只校验组件文本，不解析符号链接；数据根及子目录必须由应用控制。不可信剧本包的完整解包防护与 Windows 长路径前缀尚未实现。`normalize` 只在 Windows 转换正斜杠，保留操作系统原始编码；Unix 反斜杠是合法文件名字符。
+
+活动选择文件有界 4 KiB，包含 version=1、sessionId、profileId、scriptId，拒绝额外字段、非法身份或版本；损坏时报 store.corrupt，不猜测或覆盖旧元数据。打开成功登记 actor / writer 后才原子确认选择；失败清退新登记者，已有记录保留。重开按 header 的原文修订和静态前缀核验，不将新资源静默应用到旧周目，也不启动生成。
 
 ## 原子写工具（全仓唯一实现）
 

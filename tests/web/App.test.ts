@@ -4,30 +4,40 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../src-web/App.vue";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 describe("App", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
   });
-
-  it("显示 Rust 后端经 IPC 返回的问候", async () => {
-    vi.mocked(invoke).mockResolvedValue("Hello, Tauri!");
-    const wrapper = mount(App);
-    await wrapper.find("input").setValue("Tauri");
-    await wrapper.find("form").trigger("submit");
-    await vi.waitFor(() => {
-      expect(wrapper.get("[data-testid='greeting']").text()).toBe("Hello, Tauri!");
+  it("展示正式入口，初始化不打开会话或发起生成", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "llm_list_profiles") return { items: [] };
+      if (command === "engine_list_scripts")
+        return [{ scriptId: "mistbell", title: "雾钟地窖", attributions: "CC BY 4.0" }];
+      throw new Error("unexpected invocation");
     });
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("greet", { name: "Tauri" });
+    const wrapper = mount(App);
+    await vi.waitFor(() => expect(wrapper.text()).toContain("雾钟地窖"));
+    expect(wrapper.text()).toContain("系统窗口");
+    const model = wrapper.get('select[aria-label="模型"]');
+    expect(model.findAll("option").map((option) => option.text())).toEqual([
+      "DeepSeek V4.1 Flash",
+      "DeepSeek V4 Pro",
+    ]);
+    expect((model.element as HTMLSelectElement).value).toBe("deepseek-flash");
+    expect(wrapper.find("input").exists()).toBe(false);
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.map(([command]) => command)
+        .sort(),
+    ).toEqual(["engine_list_scripts", "llm_list_profiles"]);
+    wrapper.unmount();
   });
-
-  it("IPC 不可用时回退到纯前端问候", async () => {
-    vi.mocked(invoke).mockRejectedValue(new Error("no ipc"));
+  it("浏览器缺 IPC 明确展示恢复错误，不伪造本地生成结果", async () => {
+    vi.mocked(invoke).mockRejectedValue({ code: "app.not-ready", message: "桌面 IPC 不可用" });
     const wrapper = mount(App);
-    await wrapper.find("input").setValue("Browser");
-    await wrapper.find("form").trigger("submit");
-    await vi.waitFor(() => {
-      expect(wrapper.get("[data-testid='greeting']").text()).toBe("Hello, Browser!");
-    });
+    await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toContain("app.not-ready"));
+    wrapper.unmount();
   });
 });

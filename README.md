@@ -2,7 +2,7 @@
 
 AI 驱动的剧情跑团桌面应用。你不是在和 AI 聊天，而是在和它共同编排一段有因果、有推进、有结局的故事。
 
-## 核心流程
+## 产品愿景
 
 1. **创建世界**：定义时代、地点、基调与规则——中世纪奇幻、赛博朋克、克苏鲁怪谈，或自己捏的设定，AI 据此构建自洽的世界观。
 2. **登台角色（Persona）**：创建角色——身份、性格、能力、目标；NPC 由 AI 分别扮演，各有独立的性格、动机与记忆，不是千篇一律的工具人。
@@ -22,7 +22,11 @@ AI 驱动的剧情跑团桌面应用。你不是在和 AI 聊天，而是在和�
 
 ## 当前状态
 
-可运行的工程骨架：`greet` 示例演示 IPC 往返（桌面 + 浏览器回退），一条 `bun run verify` 覆盖双端类型检查、ESLint / Clippy、Prettier / rustfmt、双端测试与 100% 覆盖率门槛、knip 死代码检查。产品功能尚未实现，路线图见 [ai-docs/task-index.md](ai-docs/task-index.md)。
+项目正接通最小对局链路：选择模型、通过系统窗口设置 API 密钥、打开内置剧本，提交行动后消费引擎阶段、流式正文和持久记录。默认剧本为 [雾钟地窖（Mistbell）](resources/scripts/mistbell/Mistbell.md)，原文与许可随应用嵌入。
+
+目前只登记最小探索章节与 PbtA 2d6 判定，原文中的完整多幕玩法与 D&D d20 尚未实现。完整界面、剧本导入、角色记忆和费用控制按[任务索引](ai-docs/task-index.md)继续推进；上面的产品愿景不表示这些能力已经上线。024 已完成本地正式链路验证，三平台 CI 在推送后复验，真实模型叙事质量未标定。
+
+`bun run verify` 包含十三项质量检查，覆盖双端类型、lint、格式、测试、覆盖率、死代码、基准、构建与 Rust 文档。运行期数据使用系统应用数据目录，凭据优先存入 OS 凭据库；实际路径和回退规则见[存储设计](ai-docs/architecture/storage.md)与[LLM 设计](ai-docs/architecture/llm.md)。
 
 ## 快速开始
 
@@ -31,8 +35,10 @@ AI 驱动的剧情跑团桌面应用。你不是在和 AI 聊天，而是在和�
 ```console
 $ bun install            # npm 依赖 + husky + Rust 工具链 + cargo-llvm-cov，一条到位
 $ bun run tauri:dev      # 桌面窗口（Vite HMR + cargo 增量编译）
-$ bun run dev            # 或：浏览器纯前端预览（无 IPC，示例命令走前端回退）
+$ bun run dev            # 或：浏览器界面预览（无桌面 IPC，不能开始对局）
 ```
+
+打开桌面窗口后，选择 DeepSeek V4.1 Flash（默认）或 V4 Pro，通过系统窗口设置密钥，再选择“重开 / 首次打开”或“新建周目”。行动提交会访问模型服务并可能产生费用；重开不自动请求，恢复必须显式操作。
 
 ## 常用命令
 
@@ -43,12 +49,12 @@ $ bun run dev            # 或：浏览器纯前端预览（无 IPC，示例命�
 | `bun run build`                     | 类型检查 + 前端构建                                  |
 | `bun run test` / `test:coverage`    | 测试 / 测试 + 覆盖率门槛                             |
 | `bun run lint` / `format`           | ESLint / Prettier（`:rust` 后缀为 Clippy / rustfmt） |
-| `bun run bench` / `knip`            | 基准示例 / 死代码检查                                |
+| `bun run bench` / `knip`            | 正文消费基准 / 死代码检查                            |
 
 ## 文档
 
-完整文档入口是 [AGENTS.md](AGENTS.md)，体系在 [ai-docs/](ai-docs/)：`architecture/` 说明结构与技术栈，`standards/` 是编码与提交规范，`task/` 承载工作记录。换图标、替换 greet 示例等见[构建与开发](ai-docs/architecture/build-and-development.md)。
+完整文档入口是 [AGENTS.md](AGENTS.md)，体系在 [ai-docs/](ai-docs/)：`architecture/` 说明结构与技术栈，`standards/` 是编码与提交规范，`task/` 承载工作记录。开发验证与打包见[构建与开发](ai-docs/architecture/build-and-development.md)。
 
 ## License
 
-Apache-2.0
+应用代码使用 Apache-2.0；内置剧本与第三方素材按各自[许可](resources/scripts/mistbell/LICENSE.md)及 [SRD 署名](resources/scripts/mistbell/SRD-5.2.1.md)发布。

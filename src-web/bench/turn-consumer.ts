@@ -1,9 +1,13 @@
-// tinybench 基准示例：bun run bench:web
+// 正文事件校验基准；数值只供本机比较，不作为性能验收结论。
 import { Bench } from "tinybench";
-import { formatGreeting } from "../utils/greet";
+import { validTurnEvent, type TurnNotification } from "../utils/turn-consumer";
+const event: TurnNotification = {
+  kind: "chunk",
+  envelope: { seq: 1, data: { turnId: "benchmark", delta: "雾钟地窖的钟声响起。" } },
+};
 
 const bench = new Bench({ warmupIterations: 100, iterations: 1_000 });
-bench.add("formatGreeting", () => formatGreeting("aoidos"));
+bench.add("validTurnEvent", () => validTurnEvent(event));
 
 await bench.run();
 console.table(bench.table());

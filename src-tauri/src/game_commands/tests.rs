@@ -1,6 +1,14 @@
 use super::*;
 use crate::turn_commands::WindowEvents;
-use aoidos_engine::{fault::Fault, game::state::PhaseEvents, turn::Coordinator};
+use aoidos_engine::{
+    fault::Fault,
+    game::{
+        domain::{FrozenRound, RoundFactory},
+        state::PhaseEvents,
+    },
+    turn::Coordinator,
+};
+use std::sync::{Arc, Mutex};
 use tauri::{
     Manager,
     test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets},
@@ -18,9 +26,7 @@ impl RoundFactory for Missing {
 async fn complete_product_request_bodies_reject_overrides_wrong_types_and_unknown_sessions() {
     let events = Arc::new(WindowEvents::new(|_, _| Ok(())));
     let coordinator = Coordinator::new(events, 16).unwrap();
-    let factory = Arc::new(Factory::default());
-    assert_eq!(factory.freeze().err().unwrap().code, "app.not-ready");
-    factory.bind(Arc::new(Missing));
+    let factory = Arc::new(Missing);
     assert_eq!(factory.freeze().err().unwrap().code, "llm.missing-key");
     let app = mock_builder()
         .manage(Service::new(coordinator, factory))

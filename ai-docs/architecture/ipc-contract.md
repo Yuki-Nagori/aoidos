@@ -2,7 +2,7 @@
 
 更新日期：2026-10-09。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及只读 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令，三平台原生验证证据见 [019](../task/019-llm-profile-credentials-impl.md)。回合发送、在飞状态与快照对齐由 020–023 承接，前端仍为 greet 示例。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及只读 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令，三平台原生验证证据见 [019](../task/019-llm-profile-credentials-impl.md)。回合发送、在飞状态与快照对齐由 020–023 承接，024 已接最小正式窗口，最终联调尚在进行。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -116,6 +116,31 @@ interface TurnSnapshot {
 text 仅包含护栏后的已接纳正文。产品模式已持久化后再更新快照和投递；调试模式为内存结果。缓存只含进行中与最近已结束回合，容量与驱逐规则见 llm.md；驱逐后的旧 turnId 为 app.not-found，持久记录归 006，不靠本命令跨进程恢复。
 
 021 的 `useLlmTurn` 消费上述载荷；读取错误保存在独立 recoveryError，不改写回合 error。subscribe / snapshot 竞态、终态补正文和最后全事件丢失的实际边界见 [LLM 恢复规则](llm.md)。
+
+## 剧本与活动会话（024 最小正式入口）
+
+| 命令                | 参数                                | 成功返回      |
+| ------------------- | ----------------------------------- | ------------- |
+| engine_list_scripts | 无                                  | ScriptInfo[]  |
+| engine_open_session | `{ profileId, scriptId, startNew }` | OpenedSession |
+
+```ts
+interface ScriptInfo {
+  scriptId: string;
+  title: string;
+  attributions: string;
+}
+interface OpenedSession {
+  sessionId: string;
+  profileId: string;
+  scriptId: string;
+  title: string;
+}
+```
+
+scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-found；不接受文件路径、正文、endpoint 或密钥。原文格式 / 修订不可用为 app.not-ready，配置、凭据与存储错误按公开码返回。startNew=true 创建新周目；false 重开同剧本的已保存活动周目，没有活动选择时首次创建。活动 profile 可显式切换，已生成记录不改写。
+
+打开只预检配置，不启动 HTTP。回合持有共享 lease 时切换 / 新建返回 app.busy；同配置同剧本的已登记会话允许只读重载，不重新读取凭据或占门禁。重开会话恢复持久检查点，生成只能由显式输入 / resume 接纳。窗口不能覆盖已有计划骰值、规则或世界状态。
 
 ## 引擎命令与阶段快照（012 设计，023 已实现）
 

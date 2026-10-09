@@ -133,7 +133,6 @@ fn bad_profile(error: ProfileError) -> CmdError {
 ///
 /// # Errors
 /// 未知 profile 为 app.not-found；存储 / 凭据不可读按 store.* 透传。
-#[cfg(debug_assertions)]
 pub(crate) fn freeze_submission(
     profile_id: &str,
 ) -> Result<
@@ -164,7 +163,6 @@ pub(crate) fn freeze_submission(
         aoidos_llm::proxy::resolve_proxy_auth(&credentials, auth_ref).map_err(CmdError::from)?;
     Ok((frozen, auth))
 }
-#[cfg(debug_assertions)]
 fn profile_missing() -> CmdError {
     CmdError::new("app.not-found", "配置不存在", None)
 }
@@ -671,9 +669,13 @@ mod tests {
             )
             .unwrap();
         }
-        let (frozen, auth) = freeze_submission(&id).unwrap();
-        assert_eq!(frozen.credential.unwrap().expose_secret(), "local-fixture");
-        assert!(auth.is_some());
+        use aoidos_engine::game::product::ProfileSource;
+        let resolved = crate::game_commands::SavedProfiles.freeze(&id).unwrap();
+        assert_eq!(
+            resolved.frozen.credential.unwrap().expose_secret(),
+            "local-fixture"
+        );
+        assert!(resolved.proxy_auth.is_some());
         for proxy in [
             aoidos_llm::config::ProxyConfig::None,
             aoidos_llm::config::ProxyConfig::System,

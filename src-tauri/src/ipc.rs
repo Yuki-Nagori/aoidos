@@ -38,6 +38,11 @@ impl CmdError {
         &self.code
     }
 
+    /// 配置读取已经脱敏；跨域端口只传稳定字段，不携带诊断 detail。
+    pub(crate) fn into_fault(self) -> aoidos_engine::fault::Fault {
+        aoidos_engine::fault::Fault::new(self.code, self.message)
+    }
+
     /// 命令层自建错误（`app.*` 命名空间）的统一入口；域错误走各自的 `From`。
     pub(crate) fn new(
         code: impl Into<String>,
@@ -215,6 +220,22 @@ mod tests {
         let detail = cmd.detail.unwrap();
         assert_eq!(detail["version"], 1);
         assert!(detail["reason"].as_str().is_some());
+    }
+
+    #[test]
+    fn cross_domain_fault_discards_detail_and_preserves_public_error() {
+        let fault = CmdError::new(
+            "llm.missing-key",
+            "请登记密钥",
+            Some(serde_json::json!({"private": "diagnostic"})),
+        )
+        .into_fault();
+        assert_eq!(fault.code, "llm.missing-key");
+        assert_eq!(fault.message, "请登记密钥");
+        assert_eq!(
+            aoidos_json::to_value(fault).unwrap(),
+            serde_json::json!({"code":"llm.missing-key","message":"请登记密钥"})
+        );
     }
 
     #[test]

@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 pub struct TurnService {
     pub coordinator: Coordinator,
     pub diagnostics: Arc<Mutex<aoidos_engine::record::calibration::Calibration>>,
-    #[cfg(debug_assertions)]
     pub proxy_snapshot: SystemProxySnapshot,
 }
 
@@ -22,14 +21,11 @@ impl TurnService {
         events: Arc<dyn EventPort>,
         proxy_snapshot: SystemProxySnapshot,
     ) -> Result<Self, Fault> {
-        #[cfg(not(debug_assertions))]
-        let _ = proxy_snapshot;
         Ok(Self {
             coordinator: Coordinator::new(events, 16)?,
             diagnostics: Arc::new(Mutex::new(
                 aoidos_engine::record::calibration::Calibration::default(),
             )),
-            #[cfg(debug_assertions)]
             proxy_snapshot,
         })
     }

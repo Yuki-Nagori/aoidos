@@ -49,7 +49,7 @@ src-tauri 的 commands / events / ipc 等非忽略文件及业务 crate 的逻�
 
 ## 死代码检查
 
-`bun run knip` 检查未用依赖、导出与文件，配置在 `knip.json`：entry 是 `index.html`、`tests/web/**/*.test.ts`、`src-web/bench/*.ts` 与原生夹具 `tests/rust/native-platform/webview/main.ts`。新依赖装了没用、导出无人消费，knip 会拦下；确属工具链需要而 knip 误报时，在 `knip.json` 的 `ignoreDependencies` 登记并在此处或对应 task 注明原因（JSON 不支持注释）。已登记：`tailwindcss`——经 app.css 的 `@import "tailwindcss"` 消费，knip 不追踪 CSS 导入（task 004）。`$schema` 指向 jsDelivr CDN（VS Code 对本地相对路径在部分工作区会按 git: 协议解析而报错；版本钉主版本 `@6` 与 package.json 对齐）。
+`bun run knip` 检查未用依赖、导出与文件，配置在 `knip.json`：entry 是 `index.html`、`tests/web/**/*.test.ts`、`src-web/bench/*.ts` 与原生夹具 `tests/rust/native-platform/webview/*.ts`。新依赖装了没用、导出无人消费，knip 会拦下；确属工具链需要而 knip 误报时，在 `knip.json` 的 `ignoreDependencies` 登记并在此处或对应 task 注明原因（JSON 不支持注释）。已登记：`tailwindcss`——经 app.css 的 `@import "tailwindcss"` 消费，knip 不追踪 CSS 导入（task 004）。`$schema` 指向 jsDelivr CDN（VS Code 对本地相对路径在部分工作区会按 git: 协议解析而报错；版本钉主版本 `@6` 与 package.json 对齐）。
 
 ## 基准
 

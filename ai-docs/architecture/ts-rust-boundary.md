@@ -29,6 +29,7 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 aoidos-llm / aoidos-en
 ```text
 src-tauri（装配、命令、窗口事件适配）
   ├─→ aoidos-engine（lease、回合所有者、快照、输出 / 事件端口）
+  │     ├─→ aoidos-script（纯剧本原文解析与格式校验，无业务反向依赖）
   │     ├─→ aoidos-json（共用编解码与静态错误类别）
   │     ├─→ aoidos-store（记录追加与 applied 原语）
   │     └─→ aoidos-llm（Provider、护栏、唯一请求调度器与预算端口）

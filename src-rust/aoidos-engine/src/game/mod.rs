@@ -18,3 +18,11 @@ mod test_support;
 pub(crate) fn invalid_phase() -> crate::fault::Fault {
     crate::fault::Fault::new("engine.invalid-phase", "当前阶段或检查点不允许此操作")
 }
+
+pub mod generation;
+
+pub mod builtin;
+
+pub mod product;
+
+pub mod assets;
