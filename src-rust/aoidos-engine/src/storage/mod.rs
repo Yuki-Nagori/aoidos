@@ -17,6 +17,7 @@ pub struct Storage {
     pub migration: Arc<Migration>,
     pub preferences: Arc<Preferences>,
     database: Mutex<Option<rusqlite::Connection>>,
+    memory: aoidos_memory::repository::Repository,
 }
 impl Storage {
     /// 共享迁移编号只有一个来源；失败保留诊断但拒绝业务入口。
@@ -29,10 +30,11 @@ impl Storage {
         let database = migration
             .open_verified(
                 &root.join("storage.sqlite"),
-                &[aoidos_store::applied::SCHEMA],
+                &[aoidos_store::applied::SCHEMA, aoidos_memory::schema::SCHEMA],
                 |connection| {
                     let valid:i64=connection.query_row("SELECT count(*)=2 AND sum(name='id' AND type='TEXT' AND pk=1)=1 AND sum(name='content_hash' AND type='TEXT' AND \"notnull\"=1)=1 FROM pragma_table_info('store_applied')",[],|row|row.get(0)).map_err(aoidos_store::db::sqlite_error)?;
                     if valid!=1 {return Err(aoidos_store::error::StoreError::Corrupt("business applied schema mismatch".into()));}
+                    aoidos_memory::schema::verify(connection)?;
                     Ok(())
                 },
             )
@@ -42,7 +44,28 @@ impl Storage {
             migration,
             preferences: Arc::new(Preferences::new(root)),
             database: Mutex::new(database),
+            memory: aoidos_memory::repository::Repository::new(root),
         }
+    }
+    /// 在会话锁 → 数据库锁内借用记忆仓储；回调不能递归取得这两个锁或 await。
+    /// # Errors
+    /// 未登记会话、pending 世界 / 回退、策略不可用或持久化失败拒绝。
+    pub fn with_memory<T>(
+        &self,
+        session_id: &str,
+        job: impl FnOnce(
+            &aoidos_memory::repository::Repository,
+            &mut rusqlite::Connection,
+            &crate::record::memory::SourcePort<'_>,
+        ) -> aoidos_memory::error::Result<T>,
+    ) -> aoidos_memory::error::Result<T> {
+        let session = self.records.get(session_id).map_err(memory_context_error)?;
+        let session = session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let port = crate::record::memory::SourcePort::new(&session);
+        self.with_database(|conn| Ok(job(&self.memory, conn, &port)))
+            .map_err(memory_context_error)?
     }
     /// 回合生产者退出后释放 SQLite 和记录句柄，偏好已在写入时确认。
     /// # Errors
@@ -78,3 +101,15 @@ impl Storage {
 fn not_ready() -> Fault {
     Fault::new("app.not-ready", "业务存储未开放，请查看迁移诊断")
 }
+
+fn memory_context_error(error: Fault) -> aoidos_memory::error::Error {
+    use aoidos_memory::error::{Error, Reason};
+    match error.code.as_str() {
+        "app.not-found" => Error::NotFound,
+        "app.bad-request" => Error::Rejected(Reason::InvalidSchema),
+        _ => Error::Rejected(Reason::RecoveryRequired),
+    }
+}
+
+#[cfg(test)]
+mod tests;

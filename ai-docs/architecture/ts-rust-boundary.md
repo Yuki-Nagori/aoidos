@@ -68,3 +68,11 @@ src-tauri（装配、命令、窗口事件适配）
 ## 门禁
 
 业务 crate 全部纳入现有 Rust 门禁：`cargo test --workspace` 与 `coverage:rust`（已是 `--workspace` 口径，行覆盖 100%）；忽略正则 `lib\.rs$` 对所有 crate 的 lib.rs 生效，入口只放模块声明 / 薄装配；src-tauri 的非忽略文件及域逻辑文件必须足额。
+
+## 记忆存储与记录协调（029 实施中）
+
+`aoidos-memory` 拥有派生记忆的 schema、不可变正文、操作计划和有界恢复，单向依赖 `aoidos-store` / `aoidos-json`；不依赖 engine、LLM 或 Tauri，不创建模型请求、世界分支或独立数据库连接。`aoidos-engine` 提供记录有效路径与可信来源适配，并在现有业务单写者中借用同一个 SQLite 连接。
+
+来源端口在 memory 定义，由 engine 实现；持有会话记录锁后再获取共享数据库锁，核验 pending 世界 / historyFork、historyRevision、正文 hash 与 UTF-8 区间，直至派生事务提交完成。锁不跨网络 await，不允许从数据库回调反向获取记录锁。记忆模块不能直接写世界表或追加正式记录。
+
+029 交付 Rust 存储与恢复端口，不提前注册前端记忆命令或事件；查询 / 高级设置及同型 TS DTO 由 031 接入。现有纯投影与前端正文恢复职责保持原边界，记忆正文不进入对局生成热路径。

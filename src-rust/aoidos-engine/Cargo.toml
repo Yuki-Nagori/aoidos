@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+aoidos-memory.workspace = true
 aoidos-script.workspace = true
 aoidos-json.workspace = true
 aoidos-store.workspace = true

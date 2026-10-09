@@ -29,6 +29,7 @@
 │   ├── aoidos-script/         # 剧本原文解析 / 格式校验，不执行内容规则
 │   ├── aoidos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
+│   ├── aoidos-memory/         # 029：记忆版本、SQLite manifest、幂等操作、因果核验与恢复
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── aoidos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
@@ -65,5 +66,7 @@ Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../
 `aoidos-engine/src/record/` 下按格式、注册事实、会话、世界协议、历史、工作集、投影、摘要候选、压缩和视图拆分；带外置单测的模块统一使用 `{mod.rs,tests.rs}`，包括 `facts/`。通用测试 Provider 位于 engine 的 `test_support.rs`，记录夹具位于 `record/test_support.rs`，均仅在测试构建编译。
 
 `aoidos-engine/src/game/` 分为串行驱动 / 执行、场景目录、骰判、转换、恢复、控制和阶段发布；`domain.rs` 定义可信域端口，`input.rs`、`proposal.rs`、`state.rs` 分别保存输入、提议与 IPC 数据。前端阶段链路见[架构总览](README.md#阶段机基础链路)，验收证据见 [023](../task/023-turn-state-machine-impl.md)。
+
+`aoidos-memory/src/repository/` 的 `mod.rs` 提供共享存储能力，materials、operations、reconciliation、recovery 各自使用同目录 `{mod.rs,tests.rs}`；跨模块 SQLite 夹具在 `test_support.rs`。engine 通过 `record/memory/{mod.rs,tests.rs}` 持有记忆端口与共享连接，memory 不反向依赖 engine，避免依赖环。029 的 crate 目前是存储 / 恢复基础，不代表产品记忆管线已接入。
 
 `tests/fixtures/record/token-estimation-v1.json` 保存匿名合成输入与离线 tokenizer 标定数据；不含玩家数据或密钥。原生窗口夹具继续放 `tests/rust/native-platform/`，不把需要私有实现访问的单测迁入此处。

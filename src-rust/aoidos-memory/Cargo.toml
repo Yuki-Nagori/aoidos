@@ -1,0 +1,14 @@
+[package]
+name = "aoidos-memory"
+description = "记忆派生版本、因果来源索引与有界存储恢复（不依赖引擎或模型）"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aoidos-store.workspace = true
+aoidos-json.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+uuid.workspace = true

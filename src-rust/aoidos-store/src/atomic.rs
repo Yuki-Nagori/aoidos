@@ -34,6 +34,32 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     write_atomic_prepared(path, bytes, None)
 }
 
+/// 排他发布不可变文件：先同步同目录临时文件，再用 hard link 原子登记新名称。
+/// 返回 false 表示目标已存在，调用方必须核验原字节，不覆盖目标或符号链接。
+///
+/// # Errors
+/// 文件系统不支持 hard link 或 I/O 失败返回错误，不降级成可覆盖 rename。
+/// 发布后同步失败可能已经存在目标，调用方按预登记身份恢复。
+pub fn write_new_atomic(path: &Path, bytes: &[u8]) -> Result<bool> {
+    fs::create_dir_all(parent_for_sync(path)).map_err(StoreError::from_io)?;
+    let tmp = tmp_sibling(path)?;
+    write_tmp(&tmp, bytes, None)?;
+    finish_new_publish(fs::hard_link(&tmp, path), &tmp, path)
+}
+fn finish_new_publish(published: io::Result<()>, tmp: &Path, path: &Path) -> Result<bool> {
+    let created = match published {
+        Ok(()) => true,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
+        Err(error) => {
+            let _ = fs::remove_file(tmp);
+            return Err(StoreError::from_io(error));
+        }
+    };
+    fs::remove_file(tmp).map_err(StoreError::from_io)?;
+    sync_parent(path)?;
+    Ok(created)
+}
+
 /// 私有文件原子写：空临时文件先由调用方收紧权限，再写入正文与发布。
 /// 权限失败不写明文，也不替换原文件。
 ///
@@ -257,7 +283,7 @@ fn directory_target_error() -> StoreError {
     }
 }
 
-/// rename 已经发布目录项之后，尽力刷父目录元数据。
+/// 发布或删除目录项后同步父目录元数据。
 ///
 /// 权限拒绝或卷不支持目录 flush 时，保留已经完成的替换结果（task 013）。
 /// 其它同步错误仍上抛，调用方不能据此认定替换尚未发生。
@@ -265,7 +291,7 @@ fn directory_target_error() -> StoreError {
 /// # Errors
 ///
 /// 打开父目录或 flush 失败，且不是「卷不支持目录同步」时返回。
-pub(crate) fn sync_parent(target: &Path) -> Result<()> {
+pub fn sync_parent(target: &Path) -> Result<()> {
     accept_dir_sync(sync_dir(parent_for_sync(target)))
 }
 
@@ -330,6 +356,61 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn immutable_publish_preserves_existing_bytes_and_cleans_staging() {
+        let dir = tdir("immutable-publish");
+        let target = dir.join("nested/version.json");
+        assert!(write_new_atomic(&target, b"original").unwrap());
+        assert!(!write_new_atomic(&target, b"replacement").unwrap());
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 1);
+        let blocked = dir.join("file-parent");
+        fs::write(&blocked, b"keep").unwrap();
+        assert!(write_new_atomic(&blocked.join("version.json"), b"new").is_err());
+        assert_eq!(fs::read(&blocked).unwrap(), b"keep");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn immutable_publish_failure_cleans_only_owned_staging() {
+        let dir = tdir("immutable-failure");
+        let target = dir.join("version.json");
+        let tmp = dir.join("owned.tmp");
+        fs::write(&target, b"original").unwrap();
+        fs::write(&tmp, b"staged").unwrap();
+        let error = finish_new_publish(
+            Err(io::Error::from(io::ErrorKind::Unsupported)),
+            &tmp,
+            &target,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "io");
+        assert!(!tmp.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert!(finish_new_publish(Ok(()), &tmp, &target).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immutable_publish_does_not_follow_existing_symlinks() {
+        let dir = tdir("immutable-symlink");
+        let original = dir.join("original");
+        let target = dir.join("version.json");
+        fs::write(&original, b"original").unwrap();
+        std::os::unix::fs::symlink(&original, &target).unwrap();
+        assert!(!write_new_atomic(&target, b"replacement").unwrap());
+        assert!(
+            fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&original).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

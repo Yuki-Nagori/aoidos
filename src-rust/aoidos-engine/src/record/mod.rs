@@ -6,6 +6,7 @@ pub mod facts;
 pub mod format;
 pub mod grammar;
 pub mod history;
+pub mod memory;
 pub mod projection;
 pub mod session;
 #[cfg(test)]

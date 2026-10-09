@@ -82,6 +82,7 @@ version = "0.1.0"
 dependencies = [
  "aoidos-json",
  "aoidos-llm",
+ "aoidos-memory",
  "aoidos-script",
  "aoidos-store",
  "futures",
@@ -134,6 +135,19 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "aoidos-memory"
+version = "0.1.0"
+dependencies = [
+ "aoidos-json",
+ "aoidos-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "uuid",
 ]
 
 [[package]]
