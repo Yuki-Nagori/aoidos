@@ -4,6 +4,7 @@ pub mod game_commands;
 pub mod ipc;
 pub mod llm_commands;
 pub mod store_commands;
+pub mod theme_commands;
 pub mod turn_commands;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -198,7 +199,8 @@ macro_rules! command_handler {
         commands::store_list_backups, store_ipc::store_get_migration,
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
-        llm_commands::llm_get_key_status, llm_set_key, turn_ipc::llm_get_turn, turn_ipc::llm_cancel, $($extra),*
+        llm_commands::llm_get_key_status, llm_set_key, turn_ipc::llm_get_turn, turn_ipc::llm_cancel,
+        theme_commands::theme_list, theme_commands::theme_get_preference, theme_commands::theme_set_preference, theme_commands::theme_skin_load, $($extra),*
     ] };
 }
 
@@ -244,6 +246,19 @@ pub fn run() {
         ));
         app.manage(factory);
         app.manage(turns);
+        let theme = storage_theme_bootstrap(
+            app.state::<store_commands::StorageService>()
+                .storage
+                .as_ref(),
+        );
+        let bootstrap = serde_json::to_string(&theme).expect("theme bootstrap serializes");
+        app.manage(theme_commands::ThemeService::new(theme_resource_root(app)?));
+        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+            .title("Aoidos")
+            .inner_size(960.0, 640.0)
+            .background_color(tauri::webview::Color(8, 16, 24, 255))
+            .initialization_script(format!("window.__AOIDOS_THEME_BOOTSTRAP__={bootstrap};"))
+            .build()?;
         Ok(())
     });
     #[cfg(debug_assertions)]
@@ -292,6 +307,92 @@ pub fn run() {
         }
     });
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThemeBootstrap {
+    version: u8,
+    theme: String,
+    color_scheme: String,
+    fallback_reason: Option<&'static str>,
+}
+
+fn storage_theme_bootstrap(storage: &aoidos_engine::storage::Storage) -> ThemeBootstrap {
+    match storage
+        .with_database(|connection| aoidos_theme::preference::get(connection).map_err(Into::into))
+    {
+        Ok(preference) => theme_bootstrap_for(preference),
+        Err(error) => ThemeBootstrap {
+            version: 1,
+            theme: "dark".into(),
+            color_scheme: "dark".into(),
+            fallback_reason: Some(if error.code == "store.corrupt" {
+                "invalidPreference"
+            } else {
+                "storageUnavailable"
+            }),
+        },
+    }
+}
+
+fn theme_bootstrap_for(preference: aoidos_theme::preference::ThemePreference) -> ThemeBootstrap {
+    let selected = aoidos_theme::catalog::themes().and_then(|themes| {
+        themes
+            .into_iter()
+            .find(|theme| theme.id == preference.theme)
+    });
+    match selected {
+        Some(theme) => ThemeBootstrap {
+            version: 1,
+            theme: theme.id,
+            color_scheme: theme.color_scheme,
+            fallback_reason: None,
+        },
+        None => ThemeBootstrap {
+            version: 1,
+            theme: "dark".into(),
+            color_scheme: "dark".into(),
+            fallback_reason: Some("themeUnavailable"),
+        },
+    }
+}
+
+fn theme_resource_root(
+    _app: &tauri::App,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    #[cfg(debug_assertions)]
+    {
+        Ok(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/scripts"))
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        Ok(_app.path().resource_dir()?.join("resources/scripts"))
+    }
+}
 fn window_delivery_error(_: tauri::Error) -> aoidos_engine::fault::Fault {
     aoidos_engine::fault::Fault::new("app.event-failed", "主窗口事件无法投递")
+}
+
+#[cfg(test)]
+mod theme_bootstrap_tests {
+    use super::*;
+
+    #[test]
+    fn registered_theme_is_used_and_retired_theme_falls_back_without_rewriting() {
+        let available = theme_bootstrap_for(aoidos_theme::preference::ThemePreference {
+            version: 1,
+            theme: "light".into(),
+        });
+        assert_eq!(available.theme, "light");
+        assert_eq!(available.color_scheme, "light");
+        assert_eq!(available.fallback_reason, None);
+
+        let unavailable = theme_bootstrap_for(aoidos_theme::preference::ThemePreference {
+            version: 1,
+            theme: "retired-theme".into(),
+        });
+        assert_eq!(unavailable.theme, "dark");
+        assert_eq!(unavailable.color_scheme, "dark");
+        assert_eq!(unavailable.fallback_reason, Some("themeUnavailable"));
+    }
 }

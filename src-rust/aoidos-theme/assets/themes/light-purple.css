@@ -1,0 +1,26 @@
+/* 浅紫 */
+:root {
+  color-scheme: light;
+  --ink: #333333;
+  --muted: #6c6c6c;
+  --accent: #705697;
+  --accent-violet: #9769dc;
+  --accent-warm: #9c5d27;
+  --panel: #f5f5f5;
+  --bubble-user: #e4f6d4;
+  --bubble-persona: #f2f2f2;
+  --hairline: #c9d0d9;
+  --led-active: #705697;
+  --diff-add: #448c27;
+  --diff-remove: #c73d20;
+  --warning: #9c5d27;
+  --danger: #cd3131;
+  --record-left: 8px;
+  --ease-signature: cubic-bezier(0.2, 0.85, 0.2, 1);
+  --dur-micro: 140ms;
+  --app-bg:
+    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.12) 0% 10%, transparent 30%),
+    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.1) 0% 8%, transparent 28%),
+    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.06) 0% 9%, transparent 26%),
+    linear-gradient(135deg, #eef6f4 0%, #f2f4f7 100%);
+}

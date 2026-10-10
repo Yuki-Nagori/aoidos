@@ -21,6 +21,7 @@ export default tseslint.config(
     ignores: [
       "dist/**",
       "coverage/**",
+      "public/theme-bootstrap.js",
       "src-tauri/**",
       "tests/rust/native-platform/gen/**",
       "target/**",

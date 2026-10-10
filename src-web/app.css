@@ -1,12 +1,13 @@
 /*
  * Tailwind v4 + 设计 token 接线（task 004）。
- * 分层：语义真源（:root[data-theme] 双主题值，目录见 theming.md）→
+ * 分层：语义真源（themes/*.css 生成的主题选择器，目录见 theming.md）→
  * `@theme inline` 映射（只做别名，清掉默认色板防误用）→ 原语层（white / black，
  * static 强制发射）→ base（星云背景 / 字体栈 / reduced-motion 保底）→
  * components（玻璃面板 / LED 指示）。
  * 真源永远是下面的 custom properties，改样式统一动 token 或组件层，不动映射。
  */
 @import "tailwindcss";
+@import "./styles/generated/theme-defaults.css";
 
 @theme {
   /* 清默认颜色命名空间，旧调色板类（text-blue-500 等）不再可用；
@@ -38,56 +39,6 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --spacing-record-left: var(--record-left);
-}
-
-/* 语义真源：默认深色（ui.md），data-theme 单属性切换，不跟随系统。
- * 值与 ai-docs/standards/ui.md 色板表 / 星云渐变初值一致。 */
-:root,
-:root[data-theme="dark"] {
-  --ink: #e6ebf1;
-  --muted: #7e8894;
-  --accent: #5cc8b4;
-  --accent-violet: #a88bff;
-  --accent-warm: #f0924a;
-  --panel: rgba(22, 28, 36, 0.72);
-  --bubble-user: rgba(40, 48, 58, 0.78);
-  --bubble-persona: rgba(26, 32, 40, 0.72);
-  --hairline: rgba(226, 236, 246, 0.09);
-  --led-active: #8b7cf6;
-  --diff-add: #6fa86f;
-  --diff-remove: #c4736b;
-  --warning: #d99a4e;
-  --danger: #ff9d92;
-  --record-left: 8px;
-  --ease-signature: cubic-bezier(0.2, 0.85, 0.2, 1);
-  --dur-micro: 140ms;
-  --app-bg:
-    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.14) 0% 10%, transparent 30%),
-    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.14) 0% 8%, transparent 28%),
-    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.08) 0% 9%, transparent 26%),
-    linear-gradient(135deg, #0c1a1d 0%, #0a1520 46%, #081018 100%);
-}
-
-:root[data-theme="light"] {
-  --ink: #111417;
-  --muted: #6f7782;
-  --accent: #1f7a68;
-  --accent-violet: #6d4fd4;
-  --accent-warm: #e8762d;
-  --panel: rgba(255, 255, 255, 0.72);
-  --bubble-user: rgba(236, 238, 240, 0.76);
-  --bubble-persona: rgba(255, 255, 255, 0.64);
-  --hairline: rgba(17, 20, 23, 0.08);
-  --led-active: #8b7cf6;
-  --diff-add: #3f7d50;
-  --diff-remove: #a4544c;
-  --warning: #b45309;
-  --danger: #9a5b5b;
-  --app-bg:
-    radial-gradient(circle at 18% 30%, rgba(92, 200, 180, 0.12) 0% 10%, transparent 30%),
-    radial-gradient(circle at 78% 18%, rgba(138, 124, 246, 0.1) 0% 8%, transparent 28%),
-    radial-gradient(circle at 62% 82%, rgba(232, 118, 45, 0.06) 0% 9%, transparent 26%),
-    linear-gradient(135deg, #eef6f4 0%, #f2f4f7 100%);
 }
 
 @layer base {

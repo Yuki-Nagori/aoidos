@@ -17,8 +17,18 @@ if (!result.success) {
   for (const diagnostic of result.logs) console.error(diagnostic);
   exit(1);
 }
+const bootstrap = await Bun.build({
+  entrypoints: ["src-web/theme-bootstrap.ts"],
+  outdir: output,
+  naming: "theme-bootstrap.js",
+  target: "browser",
+  format: "iife",
+});
+if (!bootstrap.success) {
+  for (const diagnostic of bootstrap.logs) console.error(diagnostic);
+  exit(1);
+}
 await Bun.write(`${output}/index.html`, Bun.file("tests/rust/native-platform/webview/index.html"));
-
 await Bun.write(
   `${output}/product.html`,
   Bun.file("tests/rust/native-platform/webview/product.html"),

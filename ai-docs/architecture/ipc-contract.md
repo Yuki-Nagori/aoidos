@@ -231,26 +231,34 @@ stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每
 
 UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "auto" }`，首次默认为 false / manual；未知枚举、额外可写字段为 app.bad-request，持久化失败为对应 store.*。Rust 拥有持久化，前端不写文件。偏好修改不改变当前 round 的冻结值；任务 022 接入存储，023 在接纳时使用，025 界面实施消费该类型。源 schema / 配置升级由存储规范约束，不能把焦点、草稿或凭据塞进偏好。
 
-## 主题与皮肤命令（009 设计，尚未实现）
+## 主题与皮肤命令（009 设计，026 实施中）
 
-[主题架构](theming.md)维护加载、目录、预算和防闪，026 实现。所有返回与 Rust 类型同型，当前不新增实际 invoke 注册。
+[主题架构](theming.md)维护加载、目录、预算和防闪，026 落地命令注册。所有返回与 Rust 类型同型。
 
-| 命令                 | 参数                           | 成功返回                                          |
-| -------------------- | ------------------------------ | ------------------------------------------------- |
-| theme_get_preference | 无                             | ThemePreference                                   |
-| theme_set_preference | `{ theme: "dark" 或 "light" }` | 已持久确认的 ThemePreference，仅更新主题项        |
-| theme_skin_load      | `{ scriptId }`                 | SkinLoadResult，返回规范常量，不返回原 CSS 或路径 |
+| 命令                 | 参数                 | 成功返回                                          |
+| -------------------- | -------------------- | ------------------------------------------------- |
+| theme_get_preference | 无                   | ThemePreference                                   |
+| theme_set_preference | `{ theme: ThemeId }` | 已持久确认的 ThemePreference，仅更新主题项        |
+| theme_get_catalog    | `{ scriptId? }`      | 当前可用的 ThemeDescriptor 列表                   |
+| theme_skin_load      | `{ scriptId }`       | SkinLoadResult，返回规范常量，不返回原 CSS 或路径 |
 
 ```ts
+type ThemeId = string; // 1–64 字节小写 ASCII slug；仅接受主题目录登记的 ID。
+interface ThemeDescriptor {
+  id: ThemeId;
+  label: string;
+  colorScheme: "light" | "dark"; // 原生控件 / 浏览器绘制提示，不是主题分类。
+}
 interface ThemePreference {
   version: 1;
-  theme: "dark" | "light";
+  theme: ThemeId;
 }
 // 原生首窗注入的只读值；降级值不是已持久化确认的偏好。
 interface ThemeBootstrap {
   version: 1;
-  theme: "dark" | "light";
-  fallbackReason?: "storageUnavailable" | "invalidPreference";
+  theme: ThemeId;
+  colorScheme: "light" | "dark";
+  fallbackReason?: "storageUnavailable" | "invalidPreference" | "themeUnavailable";
 }
 interface SkinToken {
   name: string;
@@ -264,7 +272,7 @@ interface SkinWarning {
     | "invalid-value"
     | "invalid-reference"
     | "cyclic-reference";
-  mode?: "dark" | "light";
+  theme?: ThemeId;
   token?: string;
   line?: number;
 }
@@ -272,15 +280,15 @@ interface SkinLoadResult {
   scriptId: string;
   status: "missing" | "valid";
   sourceHash?: string;
-  tokens: { dark: SkinToken[]; light: SkinToken[] };
+  tokens: Record<ThemeId, SkinToken[]>;
   warnings: SkinWarning[];
   warningsTruncated: boolean;
 }
 ```
 
-ThemeBootstrap 由 026 在窗口创建前注入，非 invoke 返回，也不带原 CSS / 路径 / 错误正文；普通浏览器开发确定性用 dark。首次缺偏好为 dark，未知持久枚举为 store.corrupt；非法 theme / scriptId 参数为 app.bad-request，未登记 scriptId 为 app.not-found。目录合法但 theme.css 不存在为 missing，省略 sourceHash，返回空两套 / 空 warnings；读取失败为 store.*。valid 必有 SHA-256 小写十六进制 sourceHash，空文件 / 全部声明被局部丢弃可返回空映射。结构 / 硬预算错误返回 theme.invalid-skin，无部分 tokens；前端收到失败须清退旧皮肤。
+ThemeBootstrap 由 026 在窗口创建前注入，包含已登记主题 ID 与 `colorScheme` 提示，不含原 CSS / 路径 / 错误正文；普通浏览器开发确定性用 dark。首次缺偏好为 dark。非法格式 / 损坏持久值为 store.corrupt；语法合法但当前不可用的 ID 以 themeUnavailable 降级，保留并返回原已确认 ThemePreference，不回写 dark。非法 theme / scriptId 参数为 app.bad-request，未登记 scriptId 为 app.not-found。目录合法但 theme.css 不存在为 missing，省略 sourceHash，返回空主题映射 / 空 warnings；读取失败为 store.*。valid 必有 SHA-256 小写十六进制 sourceHash，空文件 / 全部声明被局部丢弃可返回空映射。结构 / 硬预算错误返回 theme.invalid-skin，无部分 tokens；前端收到失败须清退旧皮肤。内置主题与剧本登记主题是平级 ID；模板元数据显式声明 ID、label、colorScheme 与完整 token 默认值，theme.css 只能覆盖已登记 ID。
 
-SkinToken.name 只取主题目录，value 只含 Rust 规范化常量，按目录顺序输出，每模式每名称最多一次。warning.token 仅目录名或受限 ASCII 候选（最多 64 字节），非安全名称省略，不泄露原值 / 路径；line 为 1 起安全整数。载荷 / warning / 缓存限额只在主题架构维护。theme 域无后台任务或事件流，响应即是已确认结果，不借主题切换取得游戏回合 lease。
+SkinToken.name 只取主题目录，value 只含 Rust 规范化常量，按目录顺序输出，每个 ThemeId 每名称最多一次。warning.token 仅目录名或受限 ASCII 候选（最多 64 字节），非安全名称省略，不泄露原值 / 路径；line 为 1 起安全整数。载荷 / warning / 缓存限额只在主题架构维护。theme 域无后台任务或事件流，响应即是已确认结果，不借主题切换取得游戏回合 lease。
 
 ## 记录命令与运行期迁移快照（006 设计，022 已实现）
 

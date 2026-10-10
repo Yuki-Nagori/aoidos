@@ -7,6 +7,7 @@
   "app": {
     "windows": [],
     "security": {
+      "csp": "default-src 'self'; script-src 'self' ipc: http://ipc.localhost; style-src 'self'; img-src 'self'; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'",
       "capabilities": [
         {
           "identifier": "ipc-fixture",

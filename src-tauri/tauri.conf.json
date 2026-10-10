@@ -9,14 +9,10 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Aoidos",
-        "width": 960,
-        "height": 640
-      }
-    ]
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' ipc: http://ipc.localhost; style-src 'self'; img-src 'self'; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' ipc: http://ipc.localhost; style-src 'self'; img-src 'self'; font-src 'self'; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'"
+    }
   },
   "bundle": {
     "active": true,
@@ -27,6 +23,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../resources/scripts/": "resources/scripts/"
+    }
   }
 }

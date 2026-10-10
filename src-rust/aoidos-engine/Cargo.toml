@@ -9,6 +9,7 @@ aoidos-memory.workspace = true
 aoidos-script.workspace = true
 aoidos-json.workspace = true
 aoidos-store.workspace = true
+aoidos-theme.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 hmac.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "aoidos-theme"
+description = "受限主题 token 目录、剧本皮肤校验与主题偏好存储"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cssparser.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+aoidos-store.workspace = true
