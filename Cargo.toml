@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-rust/aoidos-theme", "src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "tests/rust/native-platform"]
+members = ["src-rust/aoidos-theme", "src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "src-rust/aoidos-locale", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,7 +15,7 @@ rand_chacha = "0.9"
 rand_core = "0.9"
 getrandom = "0.4"
 time = { version = "0.3", features = ["formatting", "parsing"] }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
@@ -26,6 +26,8 @@ aoidos-llm = { path = "src-rust/aoidos-llm" }
 aoidos-engine = { path = "src-rust/aoidos-engine" }
 aoidos-memory = { path = "src-rust/aoidos-memory" }
 aoidos-theme = { path = "src-rust/aoidos-theme" }
+aoidos-locale = { path = "src-rust/aoidos-locale" }
+sys-locale = "0.3.2"
 cssparser = "0.38"
 aoidos = { path = "src-tauri" }
 uuid = { version = "1", features = ["v4"] }

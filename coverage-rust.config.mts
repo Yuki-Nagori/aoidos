@@ -18,6 +18,9 @@ export default {
     /platform[\\/]windows\.rs$/,
     // 真实 AppKit / GTK 主线程原生 UI，由 test:native 桌面烟测验证；不含存储业务。
     /platform[\\/](macos|linux)\.rs$/,
+    // Wry 菜单 / 托盘构造和主线程更新只能在真实桌面会话创建；对应双语表面由
+    // native-platform 集成测试运行。命令协调、持久化、状态聚合仍在门禁内。
+    /locale_commands[\\/]native\.rs$/,
   ],
   /** 缺省每文件未覆盖行上限；0 表示必须 100%。 */
   defaultMaxUncoveredLines: 0,
@@ -26,9 +29,9 @@ export default {
    * 额度为该文件允许的未覆盖行绝对数。
    */
   allowances: [
-    // Tauri async command 宏对 Request 参数统一生成 `?`；Request::from_command
-    // 当前始终返回 Ok，故该错误路径不可触发，LLVM 将区域映射到 set 命令属性行。
-    // 注册 IPC 测试覆盖可达业务路径，理由与证据见 testing.md。
+    // Tauri command 宏生成的 Request::from_command 当前恒为 Ok；其不可达错误区域
+    // 映射到 locale/theme set 命令属性行。注册 IPC 测试覆盖可达业务路径，见 testing.md。
+    { file: "src-tauri/src/locale_commands/mod.rs", maxUncoveredLines: 1 },
     { file: "src-tauri/src/theme_commands/mod.rs", maxUncoveredLines: 1 },
   ] as { file: string; maxUncoveredLines: number }[],
 };

@@ -5,6 +5,7 @@ bun.lockb
 # Build output
 dist/
 /public/theme-bootstrap.js
+/public/locale-bootstrap.js
 *.tsbuildinfo
 
 # Coverage

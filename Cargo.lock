@@ -65,6 +65,7 @@ dependencies = [
  "aoidos-engine",
  "aoidos-json",
  "aoidos-llm",
+ "aoidos-locale",
  "aoidos-store",
  "aoidos-theme",
  "rusqlite",
@@ -83,6 +84,7 @@ version = "0.1.0"
 dependencies = [
  "aoidos-json",
  "aoidos-llm",
+ "aoidos-locale",
  "aoidos-memory",
  "aoidos-script",
  "aoidos-store",
@@ -140,6 +142,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aoidos-locale"
+version = "0.1.0"
+dependencies = [
+ "aoidos-store",
+ "rusqlite",
+ "serde",
+ "sys-locale",
+]
+
+[[package]]
 name = "aoidos-memory"
 version = "0.1.0"
 dependencies = [
@@ -159,6 +171,7 @@ dependencies = [
  "aoidos",
  "aoidos-engine",
  "aoidos-llm",
+ "aoidos-locale",
  "aoidos-store",
  "reqwest",
  "secrecy",
@@ -4188,6 +4201,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

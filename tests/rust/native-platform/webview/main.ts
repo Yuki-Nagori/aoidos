@@ -34,6 +34,7 @@ import {
 // The fixture module runs after the trusted head bootstrap and product CSS,
 // but before Vue mounts. Capture that first application frame synchronously.
 const firstModuleTheme = document.documentElement.dataset.theme;
+const firstModuleLocale = document.documentElement.lang;
 const firstModuleInk = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
 const firstModuleBackground = getComputedStyle(document.body).backgroundImage;
 
@@ -148,6 +149,7 @@ async function smoke(): Promise<void> {
   let diagnostic = "";
   try {
     check(firstModuleTheme === "dark", "theme-bootstrap-not-applied-before-app");
+    check(firstModuleLocale === "zh-Hans", "locale-bootstrap-not-applied-before-app");
     check(
       firstModuleInk.length > 0 && firstModuleBackground.includes("gradient"),
       "product-css-not-applied-before-vue-mount",

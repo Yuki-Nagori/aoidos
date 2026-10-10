@@ -50,7 +50,15 @@ if (
 ) {
   throw new Error("Product theme bootstrap must run before the stylesheet");
 }
+if (
+  fixtureHtml.indexOf('src="/locale-bootstrap.js"') < 0 ||
+  fixtureHtml.indexOf('src="/locale-bootstrap.js"') >
+    fixtureHtml.indexOf('href="/assets/product.css"')
+) {
+  throw new Error("Product locale bootstrap must run before the stylesheet");
+}
 await Bun.write(`${output}/index.html`, fixtureHtml);
+await copyFile(`${distribution}/locale-bootstrap.js`, `${output}/locale-bootstrap.js`);
 const cssName = cssPath.split("/").at(-1);
 if (!cssName) throw new Error("Production stylesheet path is invalid");
 const assets = `${output}/assets`;

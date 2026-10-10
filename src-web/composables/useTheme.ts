@@ -11,6 +11,14 @@ import {
 
 // Rust owns the semantic allowlist; the UI only prevents a returned name escaping CSS syntax.
 const SAFE_TOKEN_NAME = /^--[a-z][a-z0-9-]*$/;
+type ThemeError =
+  | "storageUnavailable"
+  | "invalidPreference"
+  | "themeUnavailable"
+  | "saveFailed"
+  | "readFailed"
+  | "catalogUnavailable";
+type SkinError = "invalidValue" | "unsupportedWebView" | "applyFailed" | "readFailed";
 
 /** 主题只在 Rust 持久化确认后切换；剧本样式表由本 composable 独占并负责清退。 */
 export function useTheme(scriptId: Ref<string>) {
@@ -23,12 +31,12 @@ export function useTheme(scriptId: Ref<string>) {
   const themes = ref<ThemeInfo[]>([]);
   const saving = ref(false);
   const disabled = ref(false);
-  const themeError = ref("");
-  const skinError = ref("");
+  const themeError = ref<ThemeError | "">("");
+  const skinError = ref<SkinError | "">("");
   const fallbackMessages = {
-    storageUnavailable: "主题偏好不可用，已使用深色默认主题",
-    invalidPreference: "主题偏好损坏，已使用深色默认主题",
-    themeUnavailable: "所选主题当前不可用，已使用深色默认主题",
+    storageUnavailable: "storageUnavailable",
+    invalidPreference: "invalidPreference",
+    themeUnavailable: "themeUnavailable",
   } as const;
   const bootstrapFallback =
     bootstrap?.version === 1 && bootstrap.fallbackReason
@@ -79,9 +87,7 @@ export function useTheme(scriptId: Ref<string>) {
     const available =
       themes.value.length === 0 || themes.value.some((descriptor) => descriptor.id === confirmed);
     applyConfirmedTheme(available ? confirmed : "dark");
-    themeError.value = available
-      ? "主题保存失败，仍保留已确认主题"
-      : fallbackMessages.themeUnavailable;
+    themeError.value = available ? "saveFailed" : fallbackMessages.themeUnavailable;
   }
 
   function clearSheet(): void {
@@ -96,11 +102,11 @@ export function useTheme(scriptId: Ref<string>) {
     const entries = Object.entries(skin.tokens);
     if (!entries.length || skin.status !== "valid") return;
     if (entries.some(([name, value]) => !SAFE_TOKEN_NAME.test(name) || /[;{}\0]/.test(value))) {
-      skinError.value = "剧本皮肤返回了不支持的值";
+      skinError.value = "invalidValue";
       return;
     }
     if (typeof CSSStyleSheet === "undefined" || !("adoptedStyleSheets" in document)) {
-      skinError.value = "当前 WebView 不支持剧本皮肤样式";
+      skinError.value = "unsupportedWebView";
       return;
     }
     const candidate = new CSSStyleSheet();
@@ -111,7 +117,7 @@ export function useTheme(scriptId: Ref<string>) {
       sheet = candidate;
       document.documentElement.dataset.script = "mistbell";
     } catch {
-      skinError.value = "剧本皮肤无法应用，已恢复默认样式";
+      skinError.value = "applyFailed";
     }
   }
 
@@ -161,7 +167,7 @@ export function useTheme(scriptId: Ref<string>) {
     } catch {
       if (disposed || epoch !== generation) return;
       clearSheet();
-      skinError.value = "剧本皮肤读取失败；可重试或使用默认样式";
+      skinError.value = "readFailed";
     }
   }
 
@@ -206,7 +212,7 @@ export function useTheme(scriptId: Ref<string>) {
     })
     .catch(() => {
       if (!disposed && preferenceRevision === initialPreferenceRevision && !bootstrapFallback)
-        themeError.value = "主题读取失败，当前使用安全默认主题";
+        themeError.value = "readFailed";
     });
 
   void getThemes()
@@ -221,8 +227,7 @@ export function useTheme(scriptId: Ref<string>) {
       }
     })
     .catch(() => {
-      if (!disposed && !bootstrapFallback)
-        themeError.value = "主题目录读取失败，当前使用安全默认主题";
+      if (!disposed && !bootstrapFallback) themeError.value = "catalogUnavailable";
     });
 
   function toggleSkin(): void {

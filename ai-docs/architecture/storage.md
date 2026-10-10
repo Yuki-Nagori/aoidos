@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-10。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；029 已实现记忆 manifest / 正文存储与恢复，产品接入仍由后续任务负责；导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-10。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，产品接入仍由后续任务负责；导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -123,5 +123,7 @@ CREATE TABLE point_allocations (
 `aoidos-engine::Storage` 统一打开 `storage.sqlite` 并核验共享 applied 表，保存真实迁移状态；后续主题 / 计费 / 记忆模块复用此所有者及迁移编号，不创建第二套业务连接生命周期。`aoidos-store::applied` 提供 operationId + contentHash 幂等提交原语，业务 schema 和解释器由消费模块所有。
 
 `ui-preferences.json` 在系统应用数据根保存版本 1 的 `panelPinned` / `diceMode`。文件缺失返回默认值，坏格式或未知版本明确拒绝，不静默覆盖；单文件上限 4 KiB，保存经原子写成功才确认。主题和语言偏好仍遵循各自架构，不扩充这两个字段。
+
+`locale_preference` 是 `storage.sqlite` 中独立的单行表，由 `aoidos-locale` 定义 schema，engine 的统一迁移 / 连接负责建立与核验。缺行表示 `system`，读取不隐式写入；显式选择通过 SQLite IMMEDIATE 事务原子替换。它不占用或扩展 `ui-preferences.json`，损坏记录报 `store.corrupt` 且不会自动覆盖。
 
 `journal` 的已知 write / flush 失败回退至此前确认边界；sync 或回退结果不确定时冻结写者。尾行修复先保留原文件副本再截断；正式行与 partial 扫描均有界，未知记录保留原字节并只读。会话关闭不删除原记录，应用退出时关闭全部登记会话。

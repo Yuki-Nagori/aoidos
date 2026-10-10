@@ -2,5 +2,6 @@
 mod tauri_build_support;
 
 fn main() {
+    tauri_build_support::embed_native_locales();
     tauri_build_support::build("windows-app-manifest.xml");
 }

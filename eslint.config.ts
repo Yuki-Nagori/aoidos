@@ -1,11 +1,13 @@
 import eslint from "@eslint/js";
 import eslintConfigPrettier from "eslint-config-prettier";
+import vueI18n from "@intlify/eslint-plugin-vue-i18n";
 import tseslint from "typescript-eslint";
 import pluginVue from "eslint-plugin-vue";
 import type { Linter } from "eslint";
 
 // .ts 与 .vue 的 <script setup> 共用同一套 TS 规则。
 const tsRules: Linter.RulesRecord = {
+  "@typescript-eslint/no-empty-object-type": ["error", { allowInterfaces: "with-single-extends" }],
   "@typescript-eslint/consistent-type-imports": [
     "error",
     { prefer: "type-imports", fixStyle: "inline-type-imports", disallowTypeAnnotations: false },
@@ -30,6 +32,24 @@ export default tseslint.config(
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
+  ...(vueI18n.configs["flat/recommended"] as Linter.Config[]),
+  {
+    files: ["src-web/**/*.vue", "src-web/**/*.ts"],
+    rules: {
+      "@intlify/vue-i18n/no-unused-keys": [
+        "error",
+        {
+          src: "src-web",
+          extensions: [".vue", ".ts"],
+          ignores: ["native.**", "budget.**", "memory.**"],
+        },
+      ],
+      "@intlify/vue-i18n/no-missing-keys-in-other-locales": "error",
+    },
+  },
+  {
+    settings: { "vue-i18n": { localeDir: "./locales/*.json", messageSyntaxVersion: "^11.0.0" } },
+  },
   { files: ["**/*.ts"], rules: tsRules },
   // SFC 脚本块由 TS 解析器接管；no-undef 读不懂 TS 类型，真值检查归 vue-tsc。
   ...pluginVue.configs["flat/recommended"].map((config): Linter.Config => ({

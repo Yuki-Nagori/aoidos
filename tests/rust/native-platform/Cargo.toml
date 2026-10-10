@@ -9,6 +9,7 @@ desktop-session = []
 
 [build-dependencies]
 tauri-build.workspace = true
+serde_json.workspace = true
 
 [dependencies]
 tauri.workspace = true
@@ -19,6 +20,7 @@ tokio.workspace = true
 uuid.workspace = true
 aoidos.workspace = true
 aoidos-engine.workspace = true
+aoidos-locale.workspace = true
 aoidos-store.workspace = true
 serde_json.workspace = true
 

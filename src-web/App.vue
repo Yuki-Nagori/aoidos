@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { useProduct } from "./composables/useProduct";
 import { useGameView } from "./composables/useGameView";
 import { useGameInput } from "./composables/useGameInput";
 import { useGameControls } from "./composables/useGameControls";
 import { useTheme } from "./composables/useTheme";
+import { useLocale } from "./composables/useLocale";
 
+const { t } = useI18n();
 const product = useProduct();
 const theme = useTheme(product.scriptId);
+const locale = useLocale();
 const sessionId = computed(() => product.session.value?.sessionId);
 const game = useGameView(sessionId);
 const { phase, turn, records } = game;
@@ -37,20 +41,136 @@ const preview = computed(() =>
 const selectedScript = computed(() =>
   product.scripts.value.find((script) => script.scriptId === product.scriptId.value),
 );
+const errorMessage = computed(() => {
+  if (!error.value) return undefined;
+  switch (error.value.code) {
+    case "app.not-ready":
+      return t("errors.appNotReady");
+    case "app.not-found":
+      return t("errors.appNotFound");
+    case "app.bad-request":
+      return t("errors.badRequest");
+    case "store.corrupt":
+      return t("errors.storeCorrupt");
+    case "store.io":
+      return t("errors.storeIo");
+    case "app.event-failed":
+      return t("errors.appEventFailed");
+    case "app.busy":
+      return t("errors.appBusy");
+    default:
+      return t("errors.unknownWithCode", { code: error.value.code });
+  }
+});
+const localeNotice = computed(() => {
+  if (locale.notice.value === "pending") return t("settings.languagePending");
+  if (locale.notice.value === "saveFailed") return t("settings.languageSaveFailed");
+  if (locale.notice.value === "loadFailed") return t("settings.languageLoadFailed");
+  if (locale.fallback.value) return t("settings.languageFallback");
+  return undefined;
+});
+const themeErrorMessage = computed(() => {
+  switch (theme.themeError.value) {
+    case "storageUnavailable":
+      return t("settings.themeErrors.storageUnavailable");
+    case "invalidPreference":
+      return t("settings.themeErrors.invalidPreference");
+    case "themeUnavailable":
+      return t("settings.themeErrors.themeUnavailable");
+    case "saveFailed":
+      return t("settings.themeErrors.saveFailed");
+    case "readFailed":
+      return t("settings.themeErrors.readFailed");
+    case "catalogUnavailable":
+      return t("settings.themeErrors.catalogUnavailable");
+    default:
+      return undefined;
+  }
+});
+const skinErrorMessage = computed(() => {
+  switch (theme.skinError.value) {
+    case "invalidValue":
+      return t("settings.skinErrors.invalidValue");
+    case "unsupportedWebView":
+      return t("settings.skinErrors.unsupportedWebView");
+    case "applyFailed":
+      return t("settings.skinErrors.applyFailed");
+    case "readFailed":
+      return t("settings.skinErrors.readFailed");
+    default:
+      return undefined;
+  }
+});
+function phaseName(phase: string | undefined): string {
+  switch (phase) {
+    case "idle":
+      return t("game.phases.idle");
+    case "generating":
+      return t("game.phases.generating");
+    case "awaitingCheck":
+      return t("game.phases.awaitingCheck");
+    case "settling":
+      return t("game.phases.settling");
+    case "advancing":
+      return t("game.phases.advancing");
+    default:
+      return t("common.unknownError");
+  }
+}
+function outcomeName(outcome: string): string {
+  switch (outcome) {
+    case "completed":
+      return t("game.outcomes.completed");
+    case "cancelled":
+      return t("game.outcomes.cancelled");
+    case "failed":
+      return t("game.outcomes.failed");
+    default:
+      return outcome;
+  }
+}
+function finishReasonName(reason: string): string {
+  switch (reason) {
+    case "stop":
+      return t("game.finishReasons.stop");
+    case "guard":
+      return t("game.finishReasons.guard");
+    case "length":
+      return t("game.finishReasons.length");
+    default:
+      return reason;
+  }
+}
+function recordKindName(kind: string): string {
+  switch (kind) {
+    case "narration":
+      return t("game.recordKinds.narration");
+    case "character":
+      return t("game.recordKinds.character");
+    case "system":
+      return t("game.recordKinds.system");
+    case "check":
+      return t("game.recordKinds.check");
+    case "header":
+      return t("game.recordKinds.header");
+    default:
+      return kind;
+  }
+}
 void product.load();
 </script>
 
 <template>
   <main class="mx-auto grid min-h-screen max-w-4xl gap-6 p-6 text-ink">
     <section class="glass-panel">
-      <h1 class="text-2xl font-semibold">Aoidos</h1>
-      <p class="text-sm text-muted">选择剧本与模型后开始。重开周目不会自动生成。</p>
+      <h1 class="text-2xl font-semibold">{{ t("common.appName") }}</h1>
+      <p class="text-sm text-muted">{{ t("game.intro") }}</p>
       <div class="flex gap-3">
         <label>
-          主题
+          {{ t("settings.theme") }}
           <select
             :value="theme.theme.value"
-            aria-label="主题"
+            :aria-label="t('settings.theme')"
             :disabled="theme.saving.value"
             @change="theme.setTheme(($event.target as HTMLSelectElement).value)"
           >
@@ -60,30 +180,60 @@ void product.load();
           </select>
         </label>
         <button v-if="product.scriptId.value === 'mistbell'" @click="theme.toggleSkin">
-          {{ theme.disabled.value ? "启用剧本皮肤" : "关闭剧本皮肤" }}
+          {{ theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin") }}
         </button>
       </div>
-      <p v-if="theme.themeError.value" role="status">{{ theme.themeError.value }}</p>
-      <p v-if="theme.skinError.value" role="status">{{ theme.skinError.value }}</p>
+      <p v-if="themeErrorMessage" role="status">{{ themeErrorMessage }}</p>
+      <p v-if="skinErrorMessage" role="status">{{ skinErrorMessage }}</p>
       <p v-else-if="theme.warningCount.value">
-        剧本皮肤有 {{ theme.warningCount.value }} 条兼容性提示。
+        {{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}
       </p>
-      <label
-        >模型
-        <select v-model="product.model.value" aria-label="模型" :disabled="product.busy.value">
+      <label>
+        {{ t("settings.language") }}
+        <select
+          :value="locale.choice.value"
+          :aria-label="t('settings.language')"
+          :disabled="!locale.ready.value || locale.saving.value"
+          @change="
+            locale.setChoice(
+              ($event.target as HTMLSelectElement).value as 'system' | 'zh-Hans' | 'en',
+            )
+          "
+        >
+          <option value="system">
+            {{
+              t("settings.systemLanguageCurrent", {
+                locale: t(
+                  locale.resolved.value === "zh-Hans" ? "settings.chinese" : "settings.english",
+                ),
+              })
+            }}
+          </option>
+          <option value="zh-Hans">{{ t("settings.chinese") }}</option>
+          <option value="en">{{ t("settings.english") }}</option>
+        </select>
+      </label>
+      <p v-if="localeNotice" role="status">{{ localeNotice }}</p>
+      <label>
+        {{ t("settings.model") }}
+        <select
+          v-model="product.model.value"
+          :aria-label="t('settings.model')"
+          :disabled="product.busy.value"
+        >
           <option v-for="model in product.models" :key="model.id" :value="model.id">
             {{ model.label }}
           </option>
         </select></label
       >
       <button :disabled="product.busy.value" @click="product.configureKey">
-        设置 API 密钥（系统窗口）
+        {{ t("settings.setApiKey") }}
       </button>
       <p v-if="product.keyStatus.value">
-        {{ product.keyStatus.value.set ? "密钥已设置" : "密钥未设置" }}
+        {{ product.keyStatus.value.set ? t("settings.keySet") : t("settings.keyMissing") }}
       </p>
-      <label
-        >剧本
+      <label>
+        {{ t("settings.script") }}
         <select v-model="product.scriptId.value" :disabled="product.busy.value">
           <option
             v-for="script in product.scripts.value"
@@ -95,27 +245,31 @@ void product.load();
         </select></label
       >
       <div class="flex gap-4">
-        <button :disabled="product.busy.value" @click="product.open(false)">重开 / 首次打开</button
-        ><button :disabled="product.busy.value" @click="product.open(true)">新建周目</button
-        ><button @click="game.reconnect">重新连接</button>
+        <button :disabled="product.busy.value" @click="product.open(false)">
+          {{ t("game.restart") }}</button
+        ><button :disabled="product.busy.value" @click="product.open(true)">
+          {{ t("game.newCycle") }}</button
+        ><button @click="game.reconnect">{{ t("common.reconnect") }}</button>
       </div>
       <details v-if="selectedScript">
-        <summary>剧本署名与许可</summary>
+        <summary>{{ t("settings.credits") }}</summary>
         <pre class="whitespace-pre-wrap text-sm">{{ selectedScript.attributions }}</pre>
       </details>
-      <p v-if="error" role="alert">{{ error.code }}：{{ error.message }}</p>
+      <p v-if="errorMessage" role="alert">{{ errorMessage }}</p>
     </section>
     <section v-if="product.session.value" class="glass-panel">
       <h2>{{ product.session.value.title }}</h2>
-      <p>阶段：{{ current?.phase ?? "正在读取" }}</p>
-      <p v-if="current?.resumeRequired">已暂停，继续需要显式恢复。</p>
-      <p v-if="game.historyPending.value">记录尚未确认，请重新连接。</p>
+      <p>
+        {{ t("game.phase", { phase: current ? phaseName(current.phase) : t("common.loading") }) }}
+      </p>
+      <p v-if="current?.resumeRequired">{{ t("game.paused") }}</p>
+      <p v-if="game.historyPending.value">{{ t("game.historyPending") }}</p>
       <ol v-else>
         <li v-for="item in records.items.value" :key="item.recordSeq" class="whitespace-pre-wrap">
-          <span>{{ item.kind }}：</span
+          <span>{{ t("game.recordKind", { kind: recordKindName(item.kind) }) }}</span
           ><span v-if="item.body && 'text' in item.body">{{ item.body.text }}</span
           ><button v-else-if="item.bodyRef" @click="records.loadBody(item.bodyRef)">
-            读取完整正文</button
+            {{ t("common.readBody") }}</button
           ><span v-else>{{ item.body }}</span>
         </li>
       </ol>
@@ -127,17 +281,22 @@ void product.load();
         class="whitespace-pre-wrap"
         >{{ records.state.value.body }}</pre>
       <p v-if="committed && 'outcome' in committed">
-        生成：{{ committed.outcome }}
-        <span v-if="'finishReason' in committed">{{ committed.finishReason }}</span>
+        {{ t("game.generation", { outcome: outcomeName(committed.outcome) }) }}
+        <span v-if="'finishReason' in committed && committed.finishReason">{{
+          finishReasonName(committed.finishReason)
+        }}</span>
       </p>
       <p v-else-if="game.latestPublicRecord.value?.outcome">
-        生成：{{ game.latestPublicRecord.value.outcome }}
+        {{ t("game.generation", { outcome: outcomeName(game.latestPublicRecord.value.outcome) }) }}
       </p>
-      <p v-else-if="preview?.outcome">生成：{{ preview.outcome }} {{ preview.finishReason }}</p>
+      <p v-else-if="preview?.outcome">
+        {{ t("game.generation", { outcome: outcomeName(preview.outcome) }) }}
+        {{ finishReasonName(preview.finishReason ?? "") }}
+      </p>
       <form class="flex gap-2" @submit.prevent="input.send">
         <textarea
           v-model="input.draft.value"
-          aria-label="行动"
+          :aria-label="t('game.action')"
           class="w-full border border-hairline bg-transparent p-2"
           @compositionstart="input.composing.value = true"
           @compositionend="input.composing.value = false"
@@ -152,7 +311,7 @@ void product.load();
             current.resumeRequired
           "
         >
-          提交行动
+          {{ t("game.submitAction") }}
         </button>
       </form>
       <div class="flex gap-4">
@@ -161,19 +320,19 @@ void product.load();
           :disabled="controls.busy.value"
           @click="controls.control('cancel')"
         >
-          取消回合</button
+          {{ t("game.cancelTurn") }}</button
         ><button
           v-if="current?.resumeRequired"
           :disabled="controls.busy.value"
           @click="controls.control('resume')"
         >
-          恢复</button
+          {{ t("game.resume") }}</button
         ><button
           v-if="current?.check?.status === 'waiting' && current.inFlight?.roundId"
           :disabled="controls.busy.value"
           @click="controls.control('check')"
         >
-          确认判定（{{ current.check.expression }}）
+          {{ t("game.confirmCheck", { expression: current.check.expression }) }}
         </button>
       </div>
     </section>

@@ -131,7 +131,7 @@ it("restores the last committed preference when the newest coalesced save fails"
 
   expect(theme.theme.value).toBe("light");
   expect(document.documentElement.dataset.theme).toBe("light");
-  expect(theme.themeError.value).toContain("主题保存失败");
+  expect(theme.themeError.value).toBe("saveFailed");
 });
 
 it("reconciles a rejected save with the preference persisted by the backend", async () => {
@@ -144,7 +144,7 @@ it("reconciles a rejected save with the preference persisted by the backend", as
 
   expect(theme.theme.value).toBe("light");
   expect(document.documentElement.dataset.theme).toBe("light");
-  expect(theme.themeError.value).toContain("主题保存失败");
+  expect(theme.themeError.value).toBe("saveFailed");
 });
 
 it("continues with the newest preference when an earlier save fails", async () => {
@@ -177,7 +177,7 @@ it("keeps the last confirmed theme when save recovery cannot read a valid prefer
   vi.mocked(getThemePreference).mockResolvedValueOnce({ version: 2 as 1, theme: "dark" });
   await theme.setTheme("light-purple");
   expect(theme.theme.value).toBe("light");
-  expect(theme.themeError.value).toContain("主题保存失败");
+  expect(theme.themeError.value).toBe("saveFailed");
   vi.mocked(setThemePreference).mockImplementation(async (next) => ({ version: 1, theme: next }));
   scope.stop();
 });
@@ -190,7 +190,7 @@ it("falls back when the preference recovered after a rejected save has been reti
   await theme.setTheme("light");
   expect(theme.theme.value).toBe("dark");
   expect(document.documentElement.style.colorScheme).toBe("dark");
-  expect(theme.themeError.value).toContain("所选主题当前不可用");
+  expect(theme.themeError.value).toBe("themeUnavailable");
   scope.stop();
 });
 
@@ -203,7 +203,7 @@ it("preserves a recovered preference while the theme catalog is unavailable", as
   vi.mocked(getThemePreference).mockResolvedValueOnce({ version: 1, theme: "light" });
   await theme.setTheme("light");
   expect(theme.theme.value).toBe("light");
-  expect(theme.themeError.value).toContain("主题保存失败");
+  expect(theme.themeError.value).toBe("saveFailed");
   scope.stop();
 });
 
@@ -239,7 +239,7 @@ it("keeps the confirmed preference and reports a failed save", async () => {
   vi.mocked(setThemePreference).mockRejectedValueOnce(new Error("private failure"));
   await theme.setTheme("light");
   expect(theme.theme.value).toBe("dark");
-  expect(theme.themeError.value).toContain("主题保存失败");
+  expect(theme.themeError.value).toBe("saveFailed");
 });
 
 it("applies a recovered startup preference to the document theme and color scheme", async () => {
@@ -270,7 +270,7 @@ it("keeps a removed but valid preference and temporarily displays the safe defau
   await flush();
   expect(theme.theme.value).toBe("dark");
   expect(document.documentElement.dataset.theme).toBe("dark");
-  expect(theme.themeError.value).toContain("当前不可用");
+  expect(theme.themeError.value).toBe("themeUnavailable");
 });
 
 it("keeps the bootstrap color scheme when theme discovery returns no entries", async () => {
@@ -366,13 +366,13 @@ it("rejects unsafe CSS names and values, and falls back when CSSOM is unavailabl
   };
   const first = setup("mistbell", invalid);
   await flush();
-  expect(first.theme.skinError.value).toContain("不支持");
+  expect(first.theme.skinError.value).toBe("invalidValue");
   first.scope.stop();
 
   const second = setup("mistbell", skinWithAccent());
   vi.stubGlobal("CSSStyleSheet", undefined);
   await flush();
-  expect(second.theme.skinError.value).toContain("不支持剧本皮肤");
+  expect(second.theme.skinError.value).toBe("unsupportedWebView");
   second.scope.stop();
 });
 
@@ -388,7 +388,7 @@ it("reports a stylesheet application failure without leaking the candidate sheet
     );
   });
   await flush();
-  expect(theme.skinError.value).toContain("无法应用");
+  expect(theme.skinError.value).toBe("applyFailed");
   expect(document.adoptedStyleSheets).toEqual([]);
   expect(document.documentElement.dataset.script).toBeUndefined();
   scope.stop();
@@ -401,7 +401,7 @@ it("retries a skin load when it is enabled again after the initial load failed",
       .mockResolvedValueOnce(skinWithAccent());
   });
   await flush();
-  expect(theme.skinError.value).toContain("读取失败");
+  expect(theme.skinError.value).toBe("readFailed");
 
   theme.toggleSkin();
   theme.toggleSkin();
@@ -423,10 +423,10 @@ it("reports skin and preference read failures and bootstrap recovery", async () 
       fallbackReason: "storageUnavailable",
     };
   });
-  expect(theme.themeError.value).toContain("已使用深色默认主题");
+  expect(theme.themeError.value).toBe("storageUnavailable");
   await flush();
-  expect(theme.themeError.value).toContain("偏好不可用");
-  expect(theme.skinError.value).toContain("读取失败");
+  expect(theme.themeError.value).toBe("storageUnavailable");
+  expect(theme.skinError.value).toBe("readFailed");
   scope.stop();
 });
 
@@ -435,12 +435,12 @@ it("keeps theme save diagnostics independent from later skin success", async () 
   await flush();
   vi.mocked(setThemePreference).mockRejectedValueOnce(new Error("private storage error"));
   await theme.setTheme("light");
-  expect(theme.themeError.value).toContain("主题保存失败");
+  expect(theme.themeError.value).toBe("saveFailed");
 
   id.value = "mistbell";
   await nextTick();
   await flush();
-  expect(theme.themeError.value).toContain("主题保存失败");
+  expect(theme.themeError.value).toBe("saveFailed");
   expect(theme.skinError.value).toBe("");
 });
 
@@ -496,7 +496,7 @@ it("clears a bootstrap fallback message when the saved preference is recovered",
       fallbackReason: "storageUnavailable",
     };
   });
-  expect(theme.themeError.value).toContain("已使用深色默认主题");
+  expect(theme.themeError.value).toBe("storageUnavailable");
   await flush();
   expect(theme.themeError.value).toBe("");
   scope.stop();
@@ -525,7 +525,7 @@ it("does not replace a bootstrap warning when asynchronous reads fail", async ()
     vi.mocked(getThemes).mockRejectedValueOnce(new Error("catalog unavailable"));
   });
   await flush();
-  expect(theme.themeError.value).toContain("偏好不可用");
+  expect(theme.themeError.value).toBe("storageUnavailable");
   scope.stop();
 });
 

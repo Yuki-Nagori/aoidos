@@ -1,0 +1,108 @@
+{
+  "common": {
+    "appName": "Aoidos",
+    "loading": "Loading",
+    "readBody": "Read full text",
+    "reconnect": "Reconnect",
+    "unknownError": "Something went wrong"
+  },
+  "settings": {
+    "language": "Interface language",
+    "systemLanguageCurrent": "System default ({locale})",
+    "chinese": "简体中文",
+    "english": "English",
+    "languagePending": "The language preference was saved. Some native UI will update next time the app starts.",
+    "languageSaveFailed": "The language preference could not be saved. The last confirmed language is still active.",
+    "languageLoadFailed": "The language preference could not be read. The first-run language is active for now.",
+    "languageFallback": "The language preference is unavailable. This language applies to this launch only.",
+    "theme": "Theme",
+    "themeErrors": {
+      "storageUnavailable": "The theme preference is unavailable. The dark default theme is active.",
+      "invalidPreference": "The theme preference is invalid. The dark default theme is active.",
+      "themeUnavailable": "The selected theme is unavailable. The dark default theme is active.",
+      "saveFailed": "The theme could not be saved. The last confirmed theme is still active.",
+      "readFailed": "The theme preference could not be read. A safe default theme is active.",
+      "catalogUnavailable": "The theme catalog is unavailable. A safe default theme is active."
+    },
+    "skinErrors": {
+      "invalidValue": "The scenario skin returned an unsupported value.",
+      "unsupportedWebView": "This WebView does not support scenario skin styles.",
+      "applyFailed": "The scenario skin could not be applied. Default styles were restored.",
+      "readFailed": "The scenario skin could not be read. Retry or use the default style."
+    },
+    "enableSkin": "Enable scenario skin",
+    "disableSkin": "Disable scenario skin",
+    "skinWarnings": "The scenario skin has {count} compatibility warnings.",
+    "model": "Model",
+    "setApiKey": "Set API key (system dialog)",
+    "keySet": "Key is set",
+    "keyMissing": "Key is not set",
+    "script": "Scenario",
+    "credits": "Scenario credits and license"
+  },
+  "game": {
+    "intro": "Choose a scenario and model to begin. Reopening a cycle does not generate text automatically.",
+    "restart": "Reopen / open for the first time",
+    "newCycle": "Start a new cycle",
+    "phase": "Phase: {phase}",
+    "paused": "Paused. Resume explicitly to continue.",
+    "historyPending": "The record is not confirmed. Reconnect to continue.",
+    "recordKind": "{kind}: ",
+    "generation": "Generation: {outcome}",
+    "action": "Action",
+    "submitAction": "Submit action",
+    "cancelTurn": "Cancel turn",
+    "resume": "Resume",
+    "confirmCheck": "Confirm check ({expression})",
+    "outcomes": {
+      "completed": "Completed",
+      "cancelled": "Cancelled",
+      "failed": "Failed"
+    },
+    "finishReasons": {
+      "stop": "Completed normally",
+      "guard": "Stopped by a guard",
+      "length": "Length limit reached"
+    },
+    "recordKinds": {
+      "narration": "Narration",
+      "character": "Character speech",
+      "system": "System record",
+      "check": "Check",
+      "header": "Session info"
+    },
+    "phases": {
+      "idle": "Waiting for action",
+      "generating": "Generating",
+      "awaitingCheck": "Waiting for check",
+      "settling": "Resolving",
+      "advancing": "Advancing"
+    }
+  },
+  "native": {
+    "windowTitle": "Aoidos",
+    "menuShow": "Show Aoidos",
+    "menuQuit": "Quit Aoidos",
+    "credentialTitle": "Aoidos API key",
+    "credentialPrompt": "Enter the API key for {provider}. Cancel to keep the currently saved key.",
+    "credentialSave": "Save",
+    "credentialCancel": "Cancel"
+  },
+  "errors": {
+    "appNotReady": "The app is still starting. Try again shortly.",
+    "appNotFound": "The requested item could not be found.",
+    "badRequest": "The request is invalid.",
+    "storeCorrupt": "Saved data could not be read.",
+    "storeIo": "An error occurred while reading or saving data.",
+    "appEventFailed": "State synchronization failed. Reconnect to restore it.",
+    "appBusy": "Another operation is still in progress. Try again shortly.",
+    "unknownWithCode": "Something went wrong ({code})."
+  },
+  "budget": {
+    "currency": "Amount",
+    "tokens": "Tokens"
+  },
+  "memory": {
+    "pendingConfirmation": "An item is waiting for confirmation."
+  }
+}

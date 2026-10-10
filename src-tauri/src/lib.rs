@@ -3,6 +3,7 @@ pub mod events;
 pub mod game_commands;
 pub mod ipc;
 pub mod llm_commands;
+pub mod locale_commands;
 pub mod store_commands;
 pub mod theme_commands;
 pub mod turn_commands;
@@ -18,10 +19,14 @@ async fn llm_set_key(
     provider_id: String,
     action: String,
 ) -> Result<aoidos_llm::credentials::KeyStatus, CmdError> {
-    llm_commands::set_key_with_dispatch(
+    let prompt_text = locale_commands::native_prompt_text(
+        app.state::<locale_commands::LocaleService>().current(),
+    );
+    llm_commands::set_key_with_text_and_dispatch(
         provider_id,
         action,
         aoidos_llm::platform::platform_prompt(),
+        prompt_text,
         &move |job| app.run_on_main_thread(job),
     )
     .await
@@ -200,13 +205,16 @@ macro_rules! command_handler {
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
         llm_commands::llm_get_key_status, llm_set_key, turn_ipc::llm_get_turn, turn_ipc::llm_cancel,
-        theme_commands::theme_list, theme_commands::theme_get_preference, theme_commands::theme_set_preference, theme_commands::theme_skin_load, $($extra),*
+        theme_commands::theme_list, theme_commands::theme_get_preference, theme_commands::theme_set_preference, theme_commands::theme_skin_load,
+        locale_commands::locale_get_preference, locale_commands::locale_set_preference, $($extra),*
     ] };
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().setup(|app| {
+    let builder = tauri::Builder::default()
+        .on_menu_event(locale_commands::handle_menu_event)
+        .setup(|app| {
         let dir = app.path().app_data_dir()?;
         // 配置 / 凭据也是数据根写者；持锁到应用退出，后续 store 服务复用。
         app.manage(aoidos_store::lock::acquire(&dir)?);
@@ -252,12 +260,23 @@ pub fn run() {
                 .as_ref(),
         );
         let bootstrap = serde_json::to_string(&theme).expect("theme bootstrap serializes");
+        let (locale_bootstrap, resolved_locale) = storage_locale_bootstrap(
+            app.state::<store_commands::StorageService>()
+                .storage
+                .as_ref(),
+        );
+        let locale_script = serde_json::to_string(&locale_bootstrap)
+            .expect("locale bootstrap serializes");
+        let locale_service = locale_commands::LocaleService::install(app, resolved_locale)?;
+        let locale_menu = locale_service.window_menu();
+        app.manage(locale_service);
         app.manage(theme_commands::ThemeService::new(theme_resource_root(app)?));
         tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-            .title("Aoidos")
+            .menu(locale_menu)
+            .title(locale_commands::native_message(resolved_locale, "windowTitle"))
             .inner_size(960.0, 640.0)
             .background_color(tauri::webview::Color(8, 16, 24, 255))
-            .initialization_script(format!("window.__AOIDOS_THEME_BOOTSTRAP__={bootstrap};"))
+            .initialization_script(format!("window.__AOIDOS_THEME_BOOTSTRAP__={bootstrap};window.__AOIDOS_LOCALE_BOOTSTRAP__={locale_script};"))
             .build()?;
         Ok(())
     });
@@ -315,6 +334,51 @@ struct ThemeBootstrap {
     theme: String,
     color_scheme: String,
     fallback_reason: Option<&'static str>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocaleBootstrap {
+    version: u8,
+    locale: aoidos_locale::preference::Locale,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_reason: Option<&'static str>,
+}
+
+fn storage_locale_bootstrap(
+    storage: &aoidos_engine::storage::Storage,
+) -> (LocaleBootstrap, aoidos_locale::preference::Locale) {
+    use aoidos_locale::preference::Locale;
+    let preference = storage
+        .with_database(|connection| aoidos_locale::preference::get(connection).map_err(Into::into));
+    match preference {
+        Ok(preference) => {
+            let resolved = preference.locale.resolve();
+            (
+                LocaleBootstrap {
+                    version: 1,
+                    locale: resolved,
+                    fallback_reason: None,
+                },
+                resolved,
+            )
+        }
+        Err(error) => {
+            let resolved = Locale::En;
+            (
+                LocaleBootstrap {
+                    version: 1,
+                    locale: resolved,
+                    fallback_reason: Some(if error.code == "store.corrupt" {
+                        "invalidPreference"
+                    } else {
+                        "storageUnavailable"
+                    }),
+                },
+                resolved,
+            )
+        }
+    }
 }
 
 fn storage_theme_bootstrap(storage: &aoidos_engine::storage::Storage) -> ThemeBootstrap {

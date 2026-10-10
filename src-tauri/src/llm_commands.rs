@@ -3,7 +3,7 @@ use aoidos_llm::config::{
     LlmProfile, MAX_PROFILES, ProfileError, ProfileStore, validate_identifier,
 };
 use aoidos_llm::credentials::{CredentialStore, CredentialVault, KeyStatus};
-use aoidos_llm::platform::NativePrompt;
+use aoidos_llm::platform::{NativePrompt, NativePromptText};
 use aoidos_store::error::StoreError;
 use secrecy::SecretString;
 use std::path::PathBuf;
@@ -216,22 +216,61 @@ pub async fn set_key_with_dispatch(
     prompt: NativePrompt,
     dispatch: &NativeDispatch,
 ) -> Result<KeyStatus, CmdError> {
-    validate_identifier("providerId", &provider_id).map_err(bad_profile)?;
-    set_key_in(
-        &provider_id,
-        &action,
-        &credential_vault()?,
+    set_key_with_text_and_dispatch(
+        provider_id,
+        action,
         prompt,
+        NativePromptText::default(),
         dispatch,
     )
     .await
 }
 
+/// 同 `set_key_with_dispatch`，并把当前受信任语言的对话框文案传给平台适配器。
+pub async fn set_key_with_text_and_dispatch(
+    provider_id: String,
+    action: String,
+    prompt: NativePrompt,
+    prompt_text: NativePromptText,
+    dispatch: &NativeDispatch,
+) -> Result<KeyStatus, CmdError> {
+    validate_identifier("providerId", &provider_id).map_err(bad_profile)?;
+    set_key_in_with_text(
+        &provider_id,
+        &action,
+        &credential_vault()?,
+        prompt,
+        prompt_text,
+        dispatch,
+    )
+    .await
+}
+
+#[cfg(test)]
 async fn set_key_in(
     provider_id: &str,
     action: &str,
     store: &dyn CredentialStore,
     prompt: NativePrompt,
+    dispatch: &NativeDispatch,
+) -> Result<KeyStatus, CmdError> {
+    set_key_in_with_text(
+        provider_id,
+        action,
+        store,
+        prompt,
+        NativePromptText::default(),
+        dispatch,
+    )
+    .await
+}
+
+async fn set_key_in_with_text(
+    provider_id: &str,
+    action: &str,
+    store: &dyn CredentialStore,
+    prompt: NativePrompt,
+    prompt_text: NativePromptText,
     dispatch: &NativeDispatch,
 ) -> Result<KeyStatus, CmdError> {
     validate_identifier("providerId", provider_id).map_err(bad_profile)?;
@@ -244,7 +283,7 @@ async fn set_key_in(
     let (tx, rx) = tokio::sync::oneshot::channel();
     let label = format!("provider {provider_id}");
     dispatch(Box::new(move || {
-        let result = prompt(&label);
+        let result = prompt(&label, &prompt_text);
         drop(permit);
         let _ = tx.send(result);
     }))
@@ -404,7 +443,7 @@ mod tests {
         assert_eq!(key_status_with("p", &keys).unwrap(), status);
         pending_job.lock().unwrap().take().unwrap()();
         assert_eq!(first.await.unwrap(), status);
-        let cancelled = set_key_in("p", "set", &keys, |_| Ok(None), &direct)
+        let cancelled = set_key_in("p", "set", &keys, |_, _| Ok(None), &direct)
             .await
             .unwrap();
         assert_eq!(status, cancelled);
@@ -432,7 +471,7 @@ mod tests {
             "deepseek",
             "set",
             &keys,
-            |label| {
+            |label, _| {
                 assert!(label.contains("deepseek"));
                 Ok(Some("sk-new-1234".into()))
             },
@@ -452,7 +491,7 @@ mod tests {
             "deepseek",
             "set",
             &keys,
-            |_| {
+            |_, _| {
                 Err(StoreError::from_io(std::io::Error::other(
                     "credential ui failed",
                 )))
@@ -512,7 +551,7 @@ mod tests {
         // 先清理唯一测试 id 的墓碑，使无凭据服务的平台也能确定性读到未设置。
         let _ = clear_key_in(&provider, &credential_vault().unwrap());
         assert!(
-            !set_key_with_dispatch(provider, "set".into(), |_| Ok(None), &direct)
+            !set_key_with_dispatch(provider, "set".into(), |_, _| Ok(None), &direct)
                 .await
                 .unwrap()
                 .set
@@ -627,7 +666,7 @@ mod tests {
 
     /// clear 路径绝不触发输入；传入的 Ready 注入器若被误用会替换出可见的
     /// 新值，由断言暴露（函数体同时被 set 用例复用覆盖）。
-    fn fake_prompt(label: &str) -> Result<Option<String>> {
+    fn fake_prompt(label: &str, _: &NativePromptText) -> Result<Option<String>> {
         Ok(Some(format!("sk-prompted-{label}")))
     }
 

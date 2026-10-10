@@ -1,20 +1,25 @@
 //! GTK 原生密码输入；无 DISPLAY / Wayland 会话时明确失败，不转 Webview。
+use super::NativePromptText;
 use aoidos_store::error::{Result, StoreError};
 use gtk::prelude::*;
 
-pub(super) fn prompt_native_key(label: &str) -> Result<Option<String>> {
-    prompt(label, None)
+pub(super) fn prompt_native_key(label: &str, text: &NativePromptText) -> Result<Option<String>> {
+    prompt(label, text, None)
 }
 
-fn prompt(label: &str, verification: Option<bool>) -> Result<Option<String>> {
+fn prompt(
+    label: &str,
+    text: &NativePromptText,
+    verification: Option<bool>,
+) -> Result<Option<String>> {
     gtk::init().map_err(init_error)?;
     let dialog = gtk::Dialog::with_buttons(
-        Some("Aoidos API 密钥"),
+        Some(&text.title),
         None::<&gtk::Window>,
         gtk::DialogFlags::MODAL,
         &[
-            ("取消", gtk::ResponseType::Cancel),
-            ("保存", gtk::ResponseType::Accept),
+            (&text.cancel, gtk::ResponseType::Cancel),
+            (&text.save, gtk::ResponseType::Accept),
         ],
     );
     let entry = gtk::Entry::new();
@@ -22,9 +27,8 @@ fn prompt(label: &str, verification: Option<bool>) -> Result<Option<String>> {
     entry.set_input_purpose(gtk::InputPurpose::Password);
     entry.set_activates_default(true);
     dialog.set_default_response(gtk::ResponseType::Accept);
-    dialog.content_area().add(&gtk::Label::new(Some(&format!(
-        "输入 {label} 的 API 密钥；取消保留旧值。"
-    ))));
+    let message = text.message.replace("{provider}", label);
+    dialog.content_area().add(&gtk::Label::new(Some(&message)));
     dialog.content_area().add(&entry);
     dialog.show_all();
     #[cfg(feature = "native-smoke")]
@@ -60,8 +64,9 @@ fn init_error(_: gtk::glib::BoolError) -> StoreError {
 
 #[cfg(feature = "native-smoke")]
 pub fn verify_native_input() -> Result<()> {
-    if prompt("test fixture", Some(true))?.as_deref() != Some("aoidos-native-fixture")
-        || prompt("test fixture", Some(false))?.is_some()
+    let text = NativePromptText::default();
+    if prompt("test fixture", &text, Some(true))?.as_deref() != Some("aoidos-native-fixture")
+        || prompt("test fixture", &text, Some(false))?.is_some()
     {
         return Err(StoreError::Corrupt(
             "native input verification failed".into(),

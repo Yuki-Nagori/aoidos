@@ -1,0 +1,11 @@
+[package]
+name = "aoidos-locale"
+description = "界面语言偏好、系统语言规范化与 SQLite schema"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+serde.workspace = true
+sys-locale.workspace = true
+aoidos-store.workspace = true

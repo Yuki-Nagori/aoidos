@@ -79,7 +79,7 @@ ai-docs/
 | 031  | [实现：记忆高级设置与查询](task/031-memory-settings-queries-impl.md)          | 界面·记忆         | 007、029、030、025、028、034      | planned |
 | 032  | [实现：轮回刻痕与节点收束接入](task/032-memory-cycle-nodes-impl.md)           | **底层·记忆**     | 007、029、030、022、023           | planned |
 | 033  | [实现：记忆算法标定与产品验收](task/033-memory-calibration-integration.md)    | **底层·记忆**     | 007、030、031、032、027、035      | planned |
-| 034  | [实现：界面国际化与本地化](task/034-i18n-impl.md)                             | 界面·语言         | 028、013、026                     | ready   |
+| 034  | [实现：界面国际化与本地化](task/034-i18n-impl.md)                             | 界面·语言         | 028、013、026                     | done    |
 | 035  | [实现：LLM 计价与费用控制](task/035-llm-cost-control-impl.md)                 | 底层·LLM          | 027、013、018、019、020、025、034 | planned |
 | 036  | [实现：共用 JSON 编解码与规范化](task/036-json-tools-impl.md)                 | 底层·共用工具     | 013、018、022                     | done    |
 | 037  | [Rust 覆盖率预算审计与消除](task/037-rust-coverage-audit.md)                  | 底层·门禁         | 019、022、023                     | done    |
