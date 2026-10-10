@@ -58,7 +58,7 @@
 
 ## 剧本皮肤
 
-每个已登记剧本可携带 theme.css，只覆盖[主题架构](../architecture/theming.md)白名单中的 custom properties。Rust 校验并解析为常量，前端在受控 data-script / data-theme 作用域应用；原文件不进入 Webview。单条语义错误丢弃并告警，结构 / 预算错误整份作废；缺当前主题套或加载失败回应用默认。内置与第三方走同一校验，v1 禁止包内 / 外部图和字体引用。
+每个已登记剧本可携带 `theme.css`，只覆盖[主题架构](../architecture/theming.md)白名单中的 custom properties。Rust 校验并解析为常量，前端将合法覆盖应用在受控的 `:root[data-script="…"]` 作用域；原文件不进入 Webview。单条语义错误丢弃并告警，结构 / 预算错误整份作废；缺少 `theme.css`、没有合法覆盖或加载失败时，使用当前基础主题的默认值。内置与第三方走同一校验，v1 禁止包内 / 外部图和字体引用。
 
 主题偏好由 Rust 持久化为一个平级主题 ID；内置主题与模板登记主题遵循同一选择协议。首窗 bootstrap、失败确认与皮肤代次按主题架构实施。颜色 / 字体 / 圆角等只有登记具名 token 后才可换肤；不允许任意 CSS 选择器、样式或动态资源。
 
