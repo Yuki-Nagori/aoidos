@@ -1,6 +1,6 @@
 # 025 — 实现：舞台与对话面板
 
-- 状态：in-progress
+- 状态：implemented
 - 依赖：004、008、024、026、034
 - 优先级：P1
 - 创建 / 更新：2026-10-06 / 2026-10-10
@@ -61,6 +61,7 @@
 | 2026-10-10 | `vue-tsc`、ESLint、i18n 检查、`cargo check -p aoidos` | 类型、文案和窗口插件接线通过         | 已通过；全量 verify、三平台与原生 WebView 验收未完成                                                                   |
 | 2026-10-10 | Vitest（GameStage、RecordFeed、ActionComposer、App）  | 展示 / 交互边界及回归通过            | 9 项通过；全量 verify 与三平台实机验收待复验                                                                           |
 | 2026-10-10 | `bun run verify`                                      | 完整本地门禁通过                     | 266 项前端测试，四项覆盖率均 100%；Rust 覆盖门禁、基准、Web 构建与 rustdoc 通过；原生 WebView / 三平台实机验收仍待完成 |
+| 2026-10-10 | macOS 26.3.1 / Apple M4 / `bun run test:native`       | 原生集成 target 通过                 | 全部 target 通过；UI / DPI / IME / 辅助技术 / P95 未测；linker 有重复 `__EMBED_INFO_PLIST` 警告                        |
 | 2026-10-10 | 025 独立 subagent review（gpt-6.1-sol medium）        | 检查焦点、输入、恢复、滚动和异步身份 | 发现均已修复并复核；未留可复现 findings，平台实机验收不由代码 review 代替                                              |
 
 ## 风险与回退
@@ -77,7 +78,9 @@
 - 2026-10-10：新增 `GameStage`、`RecordFeed`、`ActionComposer`、四态面板状态、串行偏好写入、slash 预览与受确认回退 / 重生成；活动对局中设置折叠为紧凑摘要，舞台保持 16:9。接入窗口状态插件及 640×480 最小客户区；新增组件交互测试。全量门禁复验和三平台实机验收仍待完成。
 - 2026-10-10：修正面板关闭后的焦点回开、Rust 输入首部 / Unicode 空白分类、跨会话迟到控制响应、IME 操作、滚动保护与 viewEpoch 未读隔离；恢复最新视图时取消展开正文。追加针对测试并通过完整 `bun run verify`。当前依然缺真实 WebView、辅助技术、DPI 与三平台记录，任务保持 in-progress。
 - 2026-10-10：整体 UI review 后移除 Mistbell 示例皮肤对基础背景 / 面板的固定深色覆盖，浅色主题现在沿用自己的表面；新增按主题 / 皮肤配套的 `--on-accent`，提升提交按钮对比度。提交按钮按 slash 命令可用性启停并显示对应动作标签；减少动态效果偏好同时覆盖记录区滚动。补齐命令可用分支覆盖后，`bun run verify` 全项通过；真实 WebView 与平台验收仍未完成。
+- 2026-10-10：在 macOS 26.3.1 / Apple M4 再次运行 `bun run test:native`，原生 HMR、IPC 与生产主 Webview 集成夹具全部通过；生产档案、HTTP SSE、手动判定、取消、失败、恢复及磁盘重开均有结果。该测试未挂载舞台 / 面板组件，不能证明实际布局、窗口缩放、IME、辅助技术或滚动性能；完整三平台实机矩阵仍未完成，任务保持 in-progress。
+- 2026-10-10：按用户决定将实现交付与外部验收分开跟踪；代码及仓库内自动化验证已完成，状态改为 implemented。剩余三平台 DPI、原生边框、键盘 / 辅助技术、IME 与滚动性能验收仍待实机条件，未验证项目继续保持未通过。
 
 ## 完成摘要
 
-未完成。全部验收有证据后与索引一起标 done。
+实现及仓库内验证已完成；三平台实机验收未完成，因此当前为 implemented 而非 done。补齐全部验收证据后再与索引一起标 done。

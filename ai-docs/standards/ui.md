@@ -1,6 +1,6 @@
 # UI 风格规范
 
-更新日期：2026-10-10。定义 Aoidos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Aoidos 品牌调整）。状态：**基线已接线**——task 004 已把 app.css 按本规范落地（token 真源 + Tailwind v4 映射 + 多主题 + 星云背景），首个真实界面（025）以本规范为准，偏差回写。
+更新日期：2026-10-11。定义 Aoidos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Aoidos 品牌调整）。状态：**基线已接线**——task 004 已把 app.css 按本规范落地（token 真源 + Tailwind v4 映射 + 多主题 + 星云背景）；025 的界面基础实现已接通，真实 WebView、辅助技术、DPI 与三平台验收仍待完成，偏差回写。
 
 ## 设计基调
 
@@ -85,7 +85,7 @@
 - **机器（骰子、判定、系统、脱敏工作状态）**：通栏 12px 等宽行 + 7px LED 圆点（活动 `var(--led-active)` 脉冲 / 静止灰），运行中的行用文字 shimmer 渐变；结果类行（如 `命中 · 伤害 12`）静态 LED + 等宽汇总。
 - 状态徽章克制：警示琥珀是唯一高饱和强调，diff 绿红刻意去饱和，不让机器行盖过台词。
 
-记录块、生成预览、recap、中断和未知 kind 的语义映射见[记录引擎](../architecture/record-engine.md#ui-映射与验收)；一个事实块可渲染多段气泡，不能反向改变持久记录粒度。面板四态、舞台缩放、输入、骰判与异常交互以已定稿的[界面交互规范](../architecture/ui-shell.md)为准，尚未实现。
+记录块、生成预览、recap、中断和未知 kind 的语义映射见[记录引擎](../architecture/record-engine.md#ui-映射与验收)；一个事实块可渲染多段气泡，不能反向改变持久记录粒度。面板四态、舞台缩放、输入、骰判与异常交互已按[界面交互规范](../architecture/ui-shell.md)接通；真实 WebView、辅助技术、DPI 与三平台验收仍由 025 跟踪。
 
 ## 动效
 
@@ -96,7 +96,7 @@
 ## 禁则
 
 - 样式选型 **Tailwind v4**（CSS-first，`@tailwindcss/vite` 插件，无 JS 配置，落地见 task 004）：token 真源仍是本规范的 custom properties（`@theme inline` 只做映射，并清除 Tailwind 默认色板），日常排版用工具类；反复出现的模式沉淀 `@layer components` 小组件类（气泡、机器行等），命名 BEM-ish + `is-*` 状态类。不引 UI 组件库。
-- chrome（导航、按钮、侧栏）不可选中（`user-select: none`），内容区（气泡、diff、文本）显式恢复 `text`。
+- chrome（导航、按钮、侧栏）不可选中（`user-select: none`）；内容容器与表单输入显式使用 `user-select: text`。全局规则及当前适用范围见 `src-web/app.css`。
 - 图标不引库：内联 SVG，描边 14/18px，`stroke-width 1.3–1.5` 圆头，hover 由 CSS 变色加粗。
 - 只借 Herta 的设计语言，**不使用其任何美术资产**（游戏素材不在 MIT 内）。
 

@@ -1,5 +1,6 @@
 //! 对局引擎基座：串行回合协调、持久记录与恢复；产品阶段决策由 023 接入。
 
+pub mod billing;
 pub mod blocking;
 pub mod fault;
 pub mod game;

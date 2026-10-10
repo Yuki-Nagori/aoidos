@@ -9,6 +9,8 @@ use serde::Serialize;
 pub struct Fault {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
 }
 
 impl Fault {
@@ -17,7 +19,15 @@ impl Fault {
         Self {
             code: code.into(),
             message: message.into(),
+            detail: None,
         }
+    }
+
+    /// Adds bounded, non-sensitive structured context for command errors.
+    #[must_use]
+    pub fn with_detail(mut self, detail: serde_json::Value) -> Self {
+        self.detail = Some(detail);
+        self
     }
     pub(crate) fn bad_request() -> Self {
         Self::new("app.bad-request", "回合参数不合法")
@@ -101,5 +111,17 @@ mod tests {
         assert!(error.to_string().starts_with("store.corrupt:"));
         assert!(!error.to_string().contains("private raw data"));
         let _: &dyn std::error::Error = &error;
+    }
+
+    #[test]
+    fn basic_fault_constructors_and_structured_detail_keep_public_shape() {
+        assert_eq!(Fault::bad_request().code, "app.bad-request");
+        assert_eq!(Fault::not_found().code, "app.not-found");
+        assert_eq!(Fault::busy().code, "app.busy");
+        assert_eq!(Fault::event().code, "app.event-failed");
+        assert_eq!(Fault::limit().code, "llm.bad-response");
+        let detailed = Fault::new("engine.invalid-phase", "暂停")
+            .with_detail(serde_json::json!({"reason":"budget"}));
+        assert_eq!(detailed.detail.unwrap()["reason"], "budget");
     }
 }

@@ -1,3 +1,4 @@
+pub mod billing_commands;
 mod commands;
 pub mod events;
 pub mod game_commands;
@@ -206,7 +207,12 @@ macro_rules! command_handler {
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
         llm_commands::llm_get_key_status, llm_set_key, turn_ipc::llm_get_turn, turn_ipc::llm_cancel,
         theme_commands::theme_list, theme_commands::theme_get_preference, theme_commands::theme_set_preference, theme_commands::theme_skin_load,
-        locale_commands::locale_get_preference, locale_commands::locale_set_preference, $($extra),*
+        locale_commands::locale_get_preference, locale_commands::locale_set_preference,
+        billing_commands::budget_get_settings, billing_commands::budget_set_settings,
+        billing_commands::budget_get_period, billing_commands::budget_list_requests,
+        billing_commands::budget_get_suggested_limits, billing_commands::budget_get_price,
+        billing_commands::budget_get_selected_price, billing_commands::budget_select_price,
+        billing_commands::budget_get_monthly, billing_commands::budget_register_price, $($extra),*
     ] };
 }
 

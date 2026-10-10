@@ -1,0 +1,15 @@
+[package]
+name = "aoidos-billing"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rust_decimal.workspace = true
+serde.workspace = true
+rusqlite.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+rusqlite = { workspace = true, features = ["hooks"] }
+serde_json.workspace = true

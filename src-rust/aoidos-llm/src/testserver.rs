@@ -529,7 +529,7 @@ pub(crate) fn sse_finish_frame(reason: &str) -> String {
 /// usage-only 帧（空 choices 合法）。
 pub(crate) fn sse_usage_frame(prompt_tokens: u64, completion_tokens: u64) -> String {
     format!(
-        "data: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":{prompt_tokens},\"completion_tokens\":{completion_tokens}}}}}\n\n"
+        "data: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":{prompt_tokens},\"completion_tokens\":{completion_tokens},\"prompt_cache_hit_tokens\":0}}}}\n\n"
     )
 }
 

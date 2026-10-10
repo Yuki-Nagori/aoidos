@@ -1,8 +1,8 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-10。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
+更新日期：2026-10-11。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过，验收状态见 [task 034](../task/034-i18n-impl.md)。真实模型账单联调尚未执行，由 035 承接。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要和分页明细；历史补价、余额适配器与真实供应商账单核对未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -15,7 +15,7 @@
 
 ## 命令命名
 
-- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine` / `theme`（026 已实现）/ `locale`（034 已实现）/ `budget`（035 待实现）。
+- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine` / `theme`（026 已实现）/ `locale`（034 已实现）/ `budget`（035 已实现基础账务 API）。
 - 动词约定：`get_` 取单值、`list_` 取列表、`set_` 替换一项配置、`create_ / update_ / delete_ / save_` 写实体、`submit_` 提交长流程、`cancel_` 取消在飞流程。
 - 形参：Rust snake_case；Tauri 默认把前端 camelCase 键映射到 snake_case 形参。**两侧固定「Rust snake_case ↔ 前端 camelCase」**，不使用 `rename` 特例。
 - 分页：可能超过一页的 `list_*` 使用 `{ cursor?, limit? }`，返回 `{ items, nextCursor? }`。省略 `limit` 时为 50，最大 200；`0` 或大于 200 返回 `app.bad-request`。cursor 是不透明字符串，前端只透传不解析。文档写明硬上限不超过 50 的列表可以不带分页，例如 `store_list_backups {}` 返回 `{ items }`。
@@ -26,9 +26,18 @@
 
 `locale_get_preference {}` / `locale_set_preference { preference }` 已注册；同型载荷、nativeStatus 与失败语义见[国际化架构](i18n.md)。`preference` 为 `{ version: 1, locale: "system" | "zh-Hans" | "en" }`；返回 `{ preference, resolvedLocale, nativeStatus }`，其中 `resolvedLocale` 为 `zh-Hans | en`，`nativeStatus` 为 `applied | pending`。单项写入不替换主题 / UiPreferences；非法参数为 `app.bad-request`，持久化 / 迁移沿用 `store.*` / `app.not-ready`。原生应用失败返回 pending，不冒充持久保存失败。
 
-## 费用与预算接口（027 已评审，035 待实现）
+## 费用与预算接口（027 已评审，035 实施中）
 
-命令族、精确金额、设置 revision、查询 / 补价、物理请求身份与两作用域结算见[计价架构](billing.md)。金额一律十进制字符串 + 明确币种，不用 JS number / f64；列表复用默认 50 / 最大 200 分页。当前未注册这些 API；035 同 commit 定型 Rust / TS 载荷，不扩张现有回合事件。
+未列出的补价与余额命令仍是设计接口；035 目前仅注册下列基础账务命令。金额一律十进制字符串 + 明确币种，不用 JS number / f64；请求列表默认 50、最大 200 并绑定账本 revision，不扩张现有回合事件。
+
+| 命令                                                | 参数                                                    | 返回                                 | 边界                                                        |
+| --------------------------------------------------- | ------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------- |
+| `budget_get_settings` / `budget_set_settings`       | `runId`；设置写入另含两个原币上限与 `expectedRevision?` | 双币种上限与 revision                | CNY / USD 分开校验，旧 revision 拒绝                        |
+| `budget_get_period` / `budget_get_monthly`          | 周目 ID；或月份与检测到的时区                           | 按服务商、币种、模型分组的用量与提醒 | 月报采用首次持久化时区，不跨币相加                          |
+| `budget_list_requests`                              | `runId`、`cursor?`、`limit?`                            | 有界请求页与 `nextCursor?`           | 游标绑定全局账本 revision；写入后旧游标返回 `staleRevision` |
+| `budget_get_suggested_limits`                       | provider / model / route                                | CNY / USD 独立建议值                 | 仅从该路由已登记价格计算                                    |
+| `budget_get_price` / `budget_register_price`        | 价格身份 / 版本                                         | 精确十进制单价版本                   | 版本不可变，来源由用户登记                                  |
+| `budget_get_selected_price` / `budget_select_price` | profile 与精确 provider / model / route                 | 当前 profile 选中的价格版本          | 币种选择绑定 profile；未匹配时发送门禁关闭                  |
 
 ## 已落地的 store 命令
 
@@ -363,7 +372,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合；019 同型原生输入门禁也用此码拒绝第二个密码框，不占用业务 key 锁。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - theme 预留（009 设计，026 待实现）：`theme.invalid-skin` 表示存在的皮肤结构 / 硬预算不合法；缺文件为成功 missing、单条语义失败为 warnings、读取失败为 store.*，不自动重试。
-- budget 预留（027 已评审，035 待实现）：`budget.exceeded`（本地费用不足）、`budget.price-missing`（未登记 / 必需价格缺失）、`budget.fx-missing`（无有效换汇）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）；结构化 detail 与触发语义见[计价架构](billing.md)。不自动重试，不冒充供应商 llm.quota；旧配置 / 游标使用 app.bad-request + detail.reason=staleRevision，存储失败沿用 store.*。
+- budget（027 已评审，035 已接入基础运行时）：`budget.exceeded`（对应币种的本地单局上限不足）、`budget.price-missing`（未登记 / profile 未选择精确路由价格）、`budget.price-history-limit`（单一计价身份价格版本达到 1,024 个上限）、`budget.run-limit-missing`（该局缺少对应币种上限）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）。不自动重试，不冒充供应商 llm.quota；旧设置 revision / 请求页游标使用 `app.bad-request` + `detail.reason=staleRevision`，存储失败沿用 store.*。历史补价与余额错误尚无 API。
 - llm 预留（005 已评审设计；crate 侧类别 018 已落地，020 已接入域错误 / 命令映射）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
 
 | 码               | 触发条件                                                                                                                                                                                            | 自动重试边界                                                      |

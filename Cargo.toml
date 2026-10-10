@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-rust/aoidos-theme", "src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "src-rust/aoidos-locale", "tests/rust/native-platform"]
+members = ["src-rust/aoidos-theme", "src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-rust/aoidos-billing", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "src-rust/aoidos-locale", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,6 +22,7 @@ rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"
 aoidos-script = { path = "src-rust/aoidos-script" }
 aoidos-json = { path = "src-rust/aoidos-json" }
+aoidos-billing = { path = "src-rust/aoidos-billing" }
 aoidos-store = { path = "src-rust/aoidos-store" }
 aoidos-llm = { path = "src-rust/aoidos-llm" }
 aoidos-engine = { path = "src-rust/aoidos-engine" }
@@ -29,6 +30,8 @@ aoidos-memory = { path = "src-rust/aoidos-memory" }
 aoidos-theme = { path = "src-rust/aoidos-theme" }
 aoidos-locale = { path = "src-rust/aoidos-locale" }
 sys-locale = "0.3.2"
+jiff = { version = "0.2.38", features = ["serde"] }
+rust_decimal = "1.43"
 cssparser = "0.38"
 aoidos = { path = "src-tauri" }
 uuid = { version = "1", features = ["v4"] }

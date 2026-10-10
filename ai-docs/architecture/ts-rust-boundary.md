@@ -52,11 +52,11 @@ src-tauri（装配、命令、窗口事件适配）
 - **事件端口**：`EventPort` 和回合载荷由 engine 定义；Tauri adapter 负责序列化、序号预留、主窗口投递与清退。engine 不引用 `AppHandle`、`CmdError` 或前端类型。
 - **输出端口**：`OutputWriter` 由 engine 定义；内存实现仅供调试。022 的记录模块实现增量提交 / 封口，并消费 store 原语；文件基建不反向依赖 engine 的终态或业务 schema。022 已交付记录持久化，engine 直接消费 store 的记录日志与 applied 原语；数据库连接、业务格式与恢复状态归 engine，壳只持有服务。
 - **调度确认端口**：`OutputPort` 属 llm，engine 通过确认通道接入；LLM 仅在接纳后确认首交付，不能引用 engine 的快照。准备 / 写入错误由 engine 映射为事件和快照，LLM 不承担记录持久化。
-- **预算端口**：`BudgetPort` 属 llm，020 提供每个 turn 和物理 request 的唯一身份；035 在调用方注入账本实现，补齐价格 / 周期上下文。LLM 不反向依赖计费模块，engine 不把账本写成第二套调度器。
+- **预算端口**：`BudgetPort` 属 llm，020 提供每个 turn 和物理 request 的唯一身份；035 由 engine 注入账本实现，冻结价格与周期上下文。LLM 不反向依赖计费模块，engine 不把账本写成第二套调度器。
 
 `aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
 
-后续计费（035）等模块接入时，先核对上述方向，再声明 Cargo 依赖；不能为复用字段让 store 依赖 engine / llm，或让 llm 依赖 engine / 计费实现。确需共享词汇时放到双方可单向消费的模块；不预建空的公共 crate。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
+计费由 engine 依赖纯领域 crate `aoidos-billing`，并实现 llm 定义的 `BudgetPort`；Tauri 只注册薄命令，前端只传递同型 DTO。store 不依赖计费、engine 或 llm，llm 也不依赖 engine / 计费实现。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 
 034 的语言偏好 crate 只消费 store 的 SQLite 类型与存储错误；engine 负责共享连接和迁移，Tauri 负责命令及窗口 / 菜单 / 托盘应用，前端只消费同型载荷并呈现。`aoidos-locale` 不依赖 engine 或 Tauri，因此不形成反向依赖。
 

@@ -19,22 +19,25 @@ ai-docs/
 
 1. 复制[模板](task/_template.md)为 `task/NNN-kebab-case.md`，编号取当前最大编号加一，不复用；填写范围与可判断的验收条件。
 2. 在下方队列表登记，核对依赖无环。
-3. 开始实现标 in-progress，只做该任务范围；范围变化先改 task。
-4. 每次 commit 更新 task 的工作记录与验证；全部验收有证据后与索引一起标 done。提交前检查见[提交规范](standards/commits.md)。
+3. 依赖满足后标 ready；开始实现标 in-progress，只做该任务范围；范围变化先改 task。
+4. 每次 commit 更新 task 的工作记录与验证；全部验收有证据后与索引一起标 done。若实现和仓库内验证已完成、只剩明确记录的外部验收，可标 implemented；这种状态不等于 done。提交前检查见[提交规范](standards/commits.md)。
 5. 既有范围内的小修复补充原 task 的工作记录，不另建任务；新增功能或独立交付范围先建 task。CI 修复、门禁机械修正等无所属 task 的平凡改动可直接提交，消息 `Task:` 字段写「无」并注明缘由。
 
 ## 状态约定
 
-| 状态        | 含义                      |
-| ----------- | ------------------------- |
-| draft       | 缺少范围 / 验收，不能开始 |
-| planned     | 已编排，依赖未满足        |
-| ready       | 可开始，尚无实现          |
-| in-progress | 正在实施                  |
-| blocked     | 有具体阻塞，记录解除条件  |
-| done        | 验收完成且有证据          |
-| deferred    | 暂不排入                  |
-| cancelled   | 已取消，保留编号与原因    |
+| 状态        | 含义                                              |
+| ----------- | ------------------------------------------------- |
+| draft       | 缺少范围 / 验收，不能开始                         |
+| planned     | 已编排，依赖未满足                                |
+| ready       | 可开始，尚无实现                                  |
+| in-progress | 正在实施                                          |
+| implemented | 实现及仓库内验证已完成；外部验收待补，不等于 done |
+| blocked     | 有具体阻塞，记录解除条件                          |
+| done        | 验收完成且有证据                                  |
+| deferred    | 暂不排入                                          |
+| cancelled   | 已取消，保留编号与原因                            |
+
+`implemented` 可满足下游对实现产物的依赖，但仅当下游 task 明确声明接受该状态；未完成的外部验收仍保留在原 task，不能据此宣称整体验收通过。若外部验收是下游功能的安全 / 正确性前置，仍须等待原 task 为 done。
 
 ## 任务队列
 
@@ -72,7 +75,7 @@ ai-docs/
 | 022  | [实现：对局记录、投影与迁移运行期协议](task/022-record-engine-impl.md)        | **底层·LLM 链路** | 006、013、020                     | done        |
 | 023  | [实现：回合阶段机与产品提交入口](task/023-turn-state-machine-impl.md)         | **底层·LLM 链路** | 012、020、022、036                | done        |
 | 024  | [实现：LLM 产品链路与故障联调](task/024-llm-engine-integration.md)            | **底层·LLM 链路** | 021、023、040、041                | done        |
-| 025  | [实现：舞台与对话面板](task/025-ui-shell-impl.md)                             | 界面·交互         | 004、008、024、026、034           | in-progress |
+| 025  | [实现：舞台与对话面板](task/025-ui-shell-impl.md)                             | 界面·交互         | 004、008、024、026、034           | implemented |
 | 026  | [实现：主题偏好与剧本皮肤](task/026-theming-impl.md)                          | 界面·主题         | 004、009、013                     | done        |
 | 029  | [实现：记忆版本存储与恢复](task/029-memory-storage-recovery-impl.md)          | **底层·记忆**     | 007、013、022                     | done        |
 | 030  | [实现：记忆门控与授权批次](task/030-memory-gates-batches-impl.md)             | **底层·记忆**     | 007、029、018、020、023、027、035 | planned     |
@@ -80,14 +83,14 @@ ai-docs/
 | 032  | [实现：轮回刻痕与节点收束接入](task/032-memory-cycle-nodes-impl.md)           | **底层·记忆**     | 007、029、030、022、023           | planned     |
 | 033  | [实现：记忆算法标定与产品验收](task/033-memory-calibration-integration.md)    | **底层·记忆**     | 007、030、031、032、027、035      | planned     |
 | 034  | [实现：界面国际化与本地化](task/034-i18n-impl.md)                             | 界面·语言         | 028、013、026                     | done        |
-| 035  | [实现：LLM 计价与费用控制](task/035-llm-cost-control-impl.md)                 | 底层·LLM          | 027、013、018、019、020、025、034 | planned     |
+| 035  | [实现：LLM 计价与费用控制](task/035-llm-cost-control-impl.md)                 | 底层·LLM          | 027、013、018、019、020、025、034 | in-progress |
 | 036  | [实现：共用 JSON 编解码与规范化](task/036-json-tools-impl.md)                 | 底层·共用工具     | 013、018、022                     | done        |
 | 037  | [Rust 覆盖率预算审计与消除](task/037-rust-coverage-audit.md)                  | 底层·门禁         | 019、022、023                     | done        |
 | 038  | [统一项目命名为 Aoidos](task/038-rename-aoidos.md)                            | 底层·工程         | 023、037                          | done        |
 | 040  | [实现：独立剧本解析器](task/040-script-parser-impl.md)                        | 底层·剧本         | 039、023                          | done        |
 | 041  | [默认原创奇幻剧本与玩法验证](task/041-default-scenario.md)                    | 剧本·内容         | 012、023、038                     | done        |
 
-实施按表中依赖推进，设计未定稿或前置未完成时保持 planned。018–024 承接 LLM 链路；029–033 承接记忆，030 / 033 直接依赖 035 计费，031 依赖 034 国际化。025 交付完整界面，不扩大 004 样式底座或 024 联调范围。
+实施按表中依赖推进，设计未定稿或前置未完成时保持 planned。035 明确消费 025 已交付的设置容器，因此接受 025 的 implemented 状态；025 的三平台实机验收仍独立待完成。018–024 承接 LLM 链路；029–033 承接记忆，030 / 033 直接依赖 035 计费，031 依赖 034 国际化。025 交付完整界面，不扩大 004 样式底座或 024 联调范围。
 
 ### 文档与基线
 

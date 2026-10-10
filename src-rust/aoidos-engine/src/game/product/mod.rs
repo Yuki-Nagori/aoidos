@@ -42,6 +42,7 @@ pub struct ProfileFactory {
     builder: Arc<ProviderBuilder>,
     diagnostics: Arc<Mutex<Calibration>>,
     budget: Arc<dyn BudgetPort>,
+    durable_billing: bool,
 }
 impl ProfileFactory {
     pub fn new(
@@ -50,14 +51,16 @@ impl ProfileFactory {
         snapshot: SystemProxySnapshot,
         diagnostics: Arc<Mutex<Calibration>>,
     ) -> Arc<Self> {
-        Self::with_builder(
+        Arc::new(Self {
+            selected: Mutex::new(None),
             source,
-            storage,
             snapshot,
+            storage,
+            builder: Arc::new(production_provider),
             diagnostics,
-            Arc::new(production_provider),
-            Arc::new(AllowAll),
-        )
+            budget: Arc::new(AllowAll),
+            durable_billing: true,
+        })
     }
     /// 仅可信装配注入构造器及预算；配置 / 能力和投影校验不被绕开。
     pub fn with_builder(
@@ -76,9 +79,10 @@ impl ProfileFactory {
             builder,
             diagnostics,
             budget,
+            durable_billing: false,
         })
     }
-    fn for_profile(&self, id: &str) -> Result<FrozenRound, Fault> {
+    fn for_profile(&self, id: &str, run_id: Option<&str>) -> Result<FrozenRound, Fault> {
         aoidos_llm::config::validate_identifier("profileId", id).map_err(invalid_profile)?;
         self.storage.ready()?;
         let resolved = self.source.freeze(id)?;
@@ -92,13 +96,27 @@ impl ProfileFactory {
             resolved.proxy_auth.as_ref(),
         )?;
         let dice = self.storage.preferences.get()?.dice_mode;
-        ProfileGeneration::with_provider(
-            profile,
-            provider,
-            dice,
-            self.budget.clone(),
-            self.diagnostics.clone(),
-        )
+        let budget: Arc<dyn BudgetPort> = match (self.durable_billing, run_id) {
+            (true, Some(run_id)) => {
+                let route = billing_route_policy(&profile.provider_id);
+                let capabilities = provider.capabilities(
+                    &profile.model,
+                    aoidos_llm::provider::RequestMode::from(profile.mode),
+                );
+                let max_input_tokens = u64::from(capabilities.context_limit.unwrap_or(0));
+                Arc::new(crate::billing::LedgerBudgetPort::new(
+                    self.storage.clone(),
+                    run_id.to_owned(),
+                    profile.profile_id.clone(),
+                    profile.provider_id.clone(),
+                    profile.model.clone(),
+                    route.to_owned(),
+                    max_input_tokens,
+                ))
+            }
+            _ => self.budget.clone(),
+        };
+        ProfileGeneration::with_provider(profile, provider, dice, budget, self.diagnostics.clone())
     }
     fn select(&self, id: String) {
         *self
@@ -109,13 +127,35 @@ impl ProfileFactory {
 }
 impl RoundFactory for ProfileFactory {
     fn freeze(&self) -> Result<FrozenRound, Fault> {
+        if self.durable_billing {
+            return Err(Fault::new(
+                "budget.run-limit-missing",
+                "缺少本局费用预算身份",
+            ));
+        }
         let id = self
             .selected
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or_else(no_selection)?;
-        self.for_profile(&id)
+        self.for_profile(&id, None)
+    }
+    fn freeze_for_run(&self, run_id: &str) -> Result<FrozenRound, Fault> {
+        let id = self
+            .selected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .ok_or_else(no_selection)?;
+        self.for_profile(&id, Some(run_id))
+    }
+}
+fn billing_route_policy(provider_id: &str) -> &str {
+    if provider_id == "openrouter" {
+        "openrouter"
+    } else {
+        "direct"
     }
 }
 fn production_provider(
@@ -205,7 +245,7 @@ impl Product {
         let _lease = self.coordinator.acquire()?;
         let factory = self.factory.clone();
         let check_id = profile_id.clone();
-        crate::blocking::run(move || factory.for_profile(&check_id).map(|_| ())).await?;
+        crate::blocking::run(move || factory.for_profile(&check_id, None).map(|_| ())).await?;
         if let Some(previous) = &previous {
             match service.get_phase(&previous.session_id) {
                 Ok(_) => {

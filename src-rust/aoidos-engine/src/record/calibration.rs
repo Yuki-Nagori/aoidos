@@ -133,6 +133,7 @@ impl BudgetPort for CalibrationBudget {
                 Some(Usage {
                     prompt_tokens,
                     completion_tokens,
+                    ..
                 }),
         } = outcome
         {
@@ -327,14 +328,17 @@ mod tests {
             Some(Usage {
                 prompt_tokens: 100,
                 completion_tokens: 2,
+                ..Usage::default()
             }),
             Some(Usage {
                 prompt_tokens: 100,
                 completion_tokens: 2,
+                ..Usage::default()
             }),
             Some(Usage {
                 prompt_tokens: 100,
                 completion_tokens: 2,
+                ..Usage::default()
             }),
         ] {
             let mut deltas = vec![Ok(ProviderDelta::Text("合成摘要".into()))];
@@ -385,6 +389,7 @@ mod tests {
                 Ok(ProviderDelta::Usage(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 2,
+                    ..Usage::default()
                 })),
                 Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
             ],

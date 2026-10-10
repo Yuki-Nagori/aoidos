@@ -40,6 +40,12 @@ pub trait RoundFactory: Send + Sync {
     /// # Errors
     /// 未登记 profile、凭据缺失、代理 / 能力或偏好不合法均拒绝接纳。
     fn freeze(&self) -> Result<FrozenRound, Fault>;
+
+    /// Freezes a round with its stable billing scope when the runtime knows the session identity.
+    /// Custom/test factories may keep the legacy behavior; product billing overrides this method.
+    fn freeze_for_run(&self, _run_id: &str) -> Result<FrozenRound, Fault> {
+        self.freeze()
+    }
 }
 
 /// 只读完成通知；消费者绑定当前因果修订幂等消费，不能反向改写本轮事实。
