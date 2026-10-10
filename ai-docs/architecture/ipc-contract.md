@@ -2,7 +2,7 @@
 
 更新日期：2026-10-10。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 正在接入语言命令和本地化，验收状态见 [task 034](../task/034-i18n-impl.md)。真实模型账单联调尚未执行，由 035 承接。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过，验收状态见 [task 034](../task/034-i18n-impl.md)。真实模型账单联调尚未执行，由 035 承接。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -15,14 +15,14 @@
 
 ## 命令命名
 
-- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine` / `theme`（026 已实现）/ `locale`（034 验收中）/ `budget`（035 待实现）。
+- `<域>_<动词>[<宾语>]`，snake_case；域 = 消费的业务 crate：`store` / `llm` / `engine` / `theme`（026 已实现）/ `locale`（034 已实现）/ `budget`（035 待实现）。
 - 动词约定：`get_` 取单值、`list_` 取列表、`set_` 替换一项配置、`create_ / update_ / delete_ / save_` 写实体、`submit_` 提交长流程、`cancel_` 取消在飞流程。
 - 形参：Rust snake_case；Tauri 默认把前端 camelCase 键映射到 snake_case 形参。**两侧固定「Rust snake_case ↔ 前端 camelCase」**，不使用 `rename` 特例。
 - 分页：可能超过一页的 `list_*` 使用 `{ cursor?, limit? }`，返回 `{ items, nextCursor? }`。省略 `limit` 时为 50，最大 200；`0` 或大于 200 返回 `app.bad-request`。cursor 是不透明字符串，前端只透传不解析。文档写明硬上限不超过 50 的列表可以不带分页，例如 `store_list_backups {}` 返回 `{ items }`。
 - 正例：`llm_set_key`、`engine_submit_input { sessionId, text }`、`store_list_backups {}`。
 - 反例：`getScriptsData`（无域前缀）、`do_thing`（动词无信息量）、`llm_generate_stream`（流式不是命令——提交用 `llm_submit`，增量走事件）。
 
-## 语言偏好命令（028 已评审，034 实现中）
+## 语言偏好命令（028 已评审，034 已实现）
 
 `locale_get_preference {}` / `locale_set_preference { preference }` 已注册；同型载荷、nativeStatus 与失败语义见[国际化架构](i18n.md)。`preference` 为 `{ version: 1, locale: "system" | "zh-Hans" | "en" }`；返回 `{ preference, resolvedLocale, nativeStatus }`，其中 `resolvedLocale` 为 `zh-Hans | en`，`nativeStatus` 为 `applied | pending`。单项写入不替换主题 / UiPreferences；非法参数为 `app.bad-request`，持久化 / 迁移沿用 `store.*` / `app.not-ready`。原生应用失败返回 pending，不冒充持久保存失败。
 
