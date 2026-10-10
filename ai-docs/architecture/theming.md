@@ -1,6 +1,6 @@
 # 主题与剧本皮肤
 
-更新 / 官方资料核验日期：2026-10-10。[009](../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/aoidos/issues/12)；实现由 [026](../task/026-theming-impl.md) 承接，本机验收已过，等待三平台 CI。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](ipc-contract.md)，存储与路径规则归[存储基建](storage.md)。
+更新 / 官方资料核验日期：2026-10-10。[009](../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/aoidos/issues/12)；实现由 [026](../task/026-theming-impl.md) 交付，PR #105 三平台 CI 与本机验收通过。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](ipc-contract.md)，存储与路径规则归[存储基建](storage.md)。
 
 ## 分层与真源
 
@@ -215,7 +215,7 @@ warnings 只有固定 code、token?、line?，token 仅目录名或最多 64 字
 
 CSP 是兜底，不替代 Rust 校验。生产配置只允许受信任应用脚本 / 样式、`img-src 'self'`、应用内字体和 Tauri IPC；不开放 localhost、网络、data / blob 图像、unsafe-eval 或 asset 协议。`devCsp` 仅开放精确 Vite origin、HMR WebSocket，并允许 Vite CSS HMR 注入的 inline style；这项放宽只存在于开发配置，发布策略不含 localhost 或 `unsafe-inline`。原生生产夹具验证网络请求被 CSP 阻断；开发夹具加载产品 `devCsp` 并验证真实 CSS 热更新不重载文档。v1 本地字体依系统栈，不下载网络字体。[Tauri CSP 官方说明](https://v2.tauri.app/security/csp/)
 
-026 在 macOS 原生 WebView 验证构造样式表与生产 CSP 共存、head bootstrap 后且 Vue 挂载前的主题 / 产品 CSS、favicon、IPC 和开发 CSS 热更新；这证明首个应用模块执行时的计算样式，不等同于录制物理屏幕帧。三平台证据见任务记录。未来受控剧情资产需独立任务冻结路径 / MIME / CSP 权限，不借换肤开放任意读取。
+026 在 macOS 原生 WebView 与 Windows / macOS / Linux CI 验证构造样式表与生产 CSP 共存、head bootstrap 后且 Vue 挂载前的主题 / 产品 CSS、favicon、IPC 和开发 CSS 热更新；这证明首个应用模块执行时的计算样式，不等同于录制物理屏幕帧。三平台证据及 PR #105 见任务记录。未来受控剧情资产需独立任务冻结路径 / MIME / CSP 权限，不借换肤开放任意读取。
 
 对比度告警在导入 / 开发时可选，首版不阻止加载；受保护状态色不能保证任意背景上都可读。透明色与玻璃 / 渐变组合须在实际合成背景上测试并给出文字 / 图标，不能仅检查两个色值就宣称可访问性通过。未知皮肤仍可通过不合适色值降低可读性，用户可暂时关闭当前皮肤回应用默认，离开该剧本前保持关闭，主题切换不重新启用；不新增持久偏好字段，无须改主题偏好或删除剧本。
 
@@ -225,4 +225,4 @@ CSP 是兜底，不替代 Rust 校验。生产配置只允许受信任应用脚�
 
 026 必须覆盖每个内置主题与模板登记主题、缺套回退、坏结构整份失败 / 单条丢弃、非法重复、变量循环与依赖、转义 url、恶意 selector / at 规则、输入 / 返回预算、有界 IO / 符号链接前提、旧响应和样式表清退、偏好保存失败及重载 bootstrap。目录 / 默认 CSS / Tailwind 映射 / Rust 白名单共同检查，首帧无错误主题与三平台 CSP / CSSOM 单独留证。最终 `bun run verify` 十三项通过。
 
-009 的设计走查与参考例已完成；Rust 目录 / 生成 CSS / Tailwind aliases 交叉校验、macOS Vue 挂载前主题 / 产品 CSS、favicon / CSP / HMR 已通过，Windows 与 Linux 证据及完整 verify 由 026 的 PR CI 补齐，不以候选依赖文档代替运行时验收。
+009 的设计走查与参考例已完成；Rust 目录 / 生成 CSS / Tailwind aliases 交叉校验、macOS Vue 挂载前主题 / 产品 CSS、favicon / CSP / HMR，以及 Windows、macOS、Linux 原生 CI 和完整 `bun run verify` 均通过。PR #105 已于 2026-10-10 合并；不以候选依赖文档代替运行时验收。

@@ -18,13 +18,13 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收 |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；已评审，待实现             |
 | 国际化       | [界面国际化](i18n.md)                  | 语言、单源资源、首窗与原生文案、精确格式化；已评审，待实现       |
-| 主题与皮肤   | [主题架构](theming.md)                 | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 等待三平台 CI     |
+| 主题与皮肤   | [主题架构](theming.md)                 | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 已三平台验收      |
 | 存储基建     | [存储基建](storage.md)                 | 数据目录、SQLite、实例锁与原子写                                 |
 | 开发与交付   | [构建与开发](build-and-development.md) | 本地命令、质量门禁、打包与图标                                   |
 
 ## 工程现状
 
-存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；[main CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/37950951480) 三平台通过；已有阶段调用链通过独立原生夹具验证；验收证据见[任务索引](../task-index.md)。
+存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过；验收证据见[任务索引](../task-index.md)。
 
 记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，尚未接入产品记忆流程；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
 
@@ -52,7 +52,7 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 027 已定稿[计价与费用预算](billing.md)，035 接不可变价格、双作用域金额额度、持久预留 / 结算、周期恢复及明细 / 可选余额；参考 Token 只生成固定默认金额，不另设累计 Token 额度。当前尚未实施。
 
-028 已定稿 zh-Hans / en、单源资源、独立偏好与精确格式化；034 复用 026 首窗入口交付底座与原生界面，025 / 031 消费，尚未实现。语言不隐式改写玩家原文或计价币种。
+028 已定稿 zh-Hans / en、单源资源、独立偏好与精确格式化；034 的前置 028 / 013 / 026 已满足，现可开始实施并复用 026 首窗入口；025 / 031 后续消费。语言不隐式改写玩家原文或计价币种。
 
 ## 分层和依赖方向
 
@@ -140,7 +140,7 @@ src-web composable → theme API → theme_commands → aoidos-theme 目录 / CS
   → aoidos-store 偏好 / 受控文件访问 → 同型 IPC 结果 → 有界 CSSStyleSheet 生命周期
 ```
 
-默认主题文件由 `aoidos-theme/assets/themes/*.css` 提供，生成 CSS 提交在 `src-web/styles/generated/`；Rust 集成测试逐主题对照生成值和 Tailwind aliases。皮肤结果只包含经校验的常量与基础 token 引用，UI 不解析原始 CSS。首帧、生产 CSP 与开发 HMR 的验收证据由 [026](../task/026-theming-impl.md) 维护。
+默认主题文件由 `aoidos-theme/assets/themes/*.css` 提供，生成 CSS 提交在 `src-web/styles/generated/`；Rust 集成测试逐主题对照生成值和 Tailwind aliases。皮肤结果只包含经校验的常量与基础 token 引用，UI 不解析原始 CSS。macOS 本机及 Windows / macOS / Linux CI 的首模块样式、生产 CSP 与开发 HMR 验收证据由 [026](../task/026-theming-impl.md) 维护。
 
 ### 阶段机基础链路
 

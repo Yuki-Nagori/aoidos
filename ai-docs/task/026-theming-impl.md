@@ -1,6 +1,6 @@
 # 026 — 实现：主题偏好与剧本皮肤
 
-- 状态：in-progress
+- 状态：done
 - 依赖：004、009、013
 - 优先级：P1
 - 创建 / 更新：2026-10-06 / 2026-10-10
@@ -44,27 +44,28 @@
 
 ## 验收标准
 
-- [ ] Rust 目录、生成默认 CSS 与 Tailwind inline aliases 互校；默认色板不可误用，未登记 / 状态色 / Z 不可覆盖。
-- [ ] `dark`、`light`、`light-purple` 与模板登记主题作为平级 ID；缺套、空文件 / 全部单条丢弃按所选主题默认值正确回退；结构 / 硬预算错无部分输出；警告有界且无原文 / 路径。
-- [ ] 变量循环 / 依赖 / 类型与非法重复有黄金例，规范输出是常量；转义资源函数、坏字符串、选择器 / at 规则、深度与计数攻击均拒绝。
-- [ ] theme.css 读取有界且遵守稳定受控目录前提；未登记 id、缺文件、符号链接、IO 和损坏路径分别有明确结果，不伪装成缺皮肤。
-- [ ] 主题写入独立且串行，快速写入中的较早成功成为新的确认值；较晚失败恢复该确认值，主题诊断不被皮肤响应清除；不确定提交主动读取核验。
-- [ ] `colorScheme` 只作为每个主题的绘制提示；非法持久 ID 报损坏，合法但当前不可用的 ID 保留已确认偏好并仅临时降级。
-- [ ] main 唯一、标签 / 事件 / capability / 几何配置保留，025 可复用构建入口，不重复持实例锁 / store 写者。
-- [ ] 快速切换 script / theme、旧响应、缺套、关闭皮肤和卸载正确清退；皮肤最多一个加载请求在飞且只保留最新目标，有界主题缓存，没有轮询或任意 CSS 注入。
-- [ ] Windows / macOS / Linux 的 CSSOM / CSP、首帧、IPC / favicon 与 dev HMR 留证，失败平台明确降级，不用 happy-dom 代替实测。
-- [ ] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十三项通过。
+- [x] Rust 目录、生成默认 CSS 与 Tailwind inline aliases 互校；默认色板不可误用，未登记 / 状态色 / Z 不可覆盖。
+- [x] `dark`、`light`、`light-purple` 与模板登记主题作为平级 ID；缺套、空文件 / 全部单条丢弃按所选主题默认值正确回退；结构 / 硬预算错无部分输出；警告有界且无原文 / 路径。
+- [x] 变量循环 / 依赖 / 类型与非法重复有黄金例，规范输出是常量；转义资源函数、坏字符串、选择器 / at 规则、深度与计数攻击均拒绝。
+- [x] theme.css 读取有界且遵守稳定受控目录前提；未登记 id、缺文件、符号链接、IO 和损坏路径分别有明确结果，不伪装成缺皮肤。
+- [x] 主题写入独立且串行，快速写入中的较早成功成为新的确认值；较晚失败恢复该确认值，主题诊断不被皮肤响应清除；不确定提交主动读取核验。
+- [x] `colorScheme` 只作为每个主题的绘制提示；非法持久 ID 报损坏，合法但当前不可用的 ID 保留已确认偏好并仅临时降级。
+- [x] main 唯一、标签 / 事件 / capability / 几何配置保留，025 可复用构建入口，不重复持实例锁 / store 写者。
+- [x] 快速切换 script / theme、旧响应、缺套、关闭皮肤和卸载正确清退；皮肤最多一个加载请求在飞且只保留最新目标，有界主题缓存，没有轮询或任意 CSS 注入。
+- [x] Windows / macOS / Linux 的 CSSOM / CSP、首模块计算样式、IPC / favicon 与 dev HMR 留证，不用 happy-dom 代替原生实测。
+- [x] 代码、注释、类型、文档与 task 同步；最终状态 `bun run verify` 十三项通过。
 
 ## 验证计划与结果
 
 Rust 解析 / 图解析 / IO / 配置失败注入；Web 纯逻辑与订阅 / 样式表生命周期测试；目录 / aliases 及编译后 CSS 互校。真实窗口录制首帧内置及模板登记主题与错误降级，三平台验证实际 CSP、窗口重建 / 几何恢复和非法皮肤无资源请求。构造样式表不支持时验证默认主题可用与明确降级；所有自动命令走根 bun scripts。
 
-| 日期       | 环境 / 命令                                                                                 | 预期                                                                                | 实际结果                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 2026-10-10 | `cargo test -p aoidos-theme`                                                                | Rust 目录、生成 CSS 与 Tailwind aliases 同源                                        | 37 项通过；新增逐主题值和 aliases 交叉校验                                               |
-| 2026-10-10 | `bun run test:native`（macOS）                                                              | Vue 挂载前主题 bootstrap / 产品 CSS、三内置主题 CSS、favicon、生产 CSP、IPC / CSSOM | 通过；原生 WebView 加载实际生产 CSS / icon，首模块同步采样，三内置主题选择器均有计算样式 |
-| 2026-10-10 | `cargo test -p aoidos-native-tests --features desktop-session --test hmr-platform`（macOS） | 精确 dev CSP 下 CSS HMR 生效且文档不重载                                            | 通过；Vite 更新 `--hmr-marker`，文档身份保持不变                                         |
-| —          | 三平台 CI 原生验收与 `bun run verify`                                                       | Windows / macOS / Linux 及十三项本地门禁通过                                        | 待 PR CI；本地完整 verify 待最终复跑                                                     |
+| 日期       | 环境 / 命令                                                                                 | 预期                                                                                | 实际结果                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 2026-10-10 | `cargo test -p aoidos-theme`                                                                | Rust 目录、生成 CSS 与 Tailwind aliases 同源                                        | 37 项通过；新增逐主题值和 aliases 交叉校验                                                |
+| 2026-10-10 | `bun run test:native`（macOS）                                                              | Vue 挂载前主题 bootstrap / 产品 CSS、三内置主题 CSS、favicon、生产 CSP、IPC / CSSOM | 通过；原生 WebView 加载实际生产 CSS / icon，首模块同步采样，三内置主题选择器均有计算样式  |
+| 2026-10-10 | `cargo test -p aoidos-native-tests --features desktop-session --test hmr-platform`（macOS） | 精确 dev CSP 下 CSS HMR 生效且文档不重载                                            | 通过；Vite 更新 `--hmr-marker`，文档身份保持不变                                          |
+| 2026-10-10 | `bun run verify`                                                                            | 十三项本地门禁全部通过                                                              | 通过；Web 覆盖率 100%，Rust coverage / 文档 / 构建门禁通过                                |
+| 2026-10-10 | [PR #105 三平台 CI](https://github.com/Yuki-Nagori/aoidos/actions/runs/38040410478)         | Windows / macOS / Linux verify 与原生验收通过                                       | 三个平台均通过；Windows / macOS 原生 WebView 与凭据、Linux xvfb / Secret Service 原生验证 |
 
 ## 风险与回退
 
@@ -74,11 +75,11 @@ CSS 解析容错、CSP / Webview 差异和早期窗口创建可能导致皮肤�
 
 - 2026-10-10：开始实施；004 / 009 / 013 已完成。先复核共享 store、首窗创建与默认 token 真源，保持 theme 偏好独立于现有 UiPreferences。
 - 2026-10-10：根据用户意见简化主题模型：内置 dark / light / light-purple 与模板显式登记主题均是平级 ThemeId；偏好、bootstrap、CSS 选择器、皮肤覆盖和 TS / IPC 映射不得再区分模式与预设。
-- 2026-10-10：独立验收发现 Rust 目录与 Web / Tailwind 默认 CSS 缺少直接交叉校验，原生夹具也未加载真实产品样式 / favicon，dev CSP 缺 Vite 脚本来源并阻止内联 HMR 样式。补目录值 / aliases 互校、复用 dist CSS 与图标的 Vue 挂载前首模块 / CSP 烟测，以及从生产 `devCsp` 读取策略的真实 WebView HMR 测试；原生夹具同步验证三个内置主题的生产 CSS，CSP 探针等待精确违规事件，HMR 专项测试每次从源 fixture 恢复初值。本机 macOS 通过，等待三平台 CI。
+- 2026-10-10：独立验收发现 Rust 目录与 Web / Tailwind 默认 CSS 缺少直接交叉校验，原生夹具也未加载真实产品样式 / favicon，dev CSP 缺 Vite 脚本来源并阻止内联 HMR 样式。补目录值 / aliases 互校、复用 dist CSS 与图标的 Vue 挂载前首模块 / CSP 烟测，以及从生产 `devCsp` 读取策略的真实 WebView HMR 测试；原生夹具同步验证三个内置主题的生产 CSS，CSP 探针等待精确违规事件，HMR 专项测试每次从源 fixture 恢复初值。macOS 本机验收与 PR #105 三平台 CI 全部通过。
 - 2026-10-10：内置主题 CSS 是唯一默认值来源；`src-web/styles/generated/theme-defaults.css` 固定提交，源主题变更时重新生成并提交，CI 通过 check 防止生成物漂移。生成文件不再排除，旧根目录副本移除。
 - 2026-10-06：按 issue #12 设计定稿新增独立实施任务；默认样式归 004、主题运行时归 026、完整界面归 025。当时处于规划状态，平台 / 解析器证据由实施记录补充。
 - 2026-10-06：issue #28 补充实施夹具：默认 app-bg 必须通过 GradientList 子集，无单位 0 位置仍拒绝；M01 的 --ease-* 名称不代表 Tailwind 别名权限，仍按精确目录校验。
 
 ## 完成摘要
 
-实现与本机验收已完成；原生记录证明可信 head bootstrap 后、Vue 挂载前的主题与生产 CSS 状态，以及生产 CSP / favicon / CSSOM / IPC 和开发 CSS HMR。它不声称录制了物理显示帧或完成模板主题 / 错误降级的全场景录像。三平台 CI 和完整 verify 证据待补；未通过前保持 in-progress。
+实现、独立评审与验收已完成。`bun run verify` 十三项通过，PR #105 的 Windows、macOS、Linux CI 全绿；原生记录证明可信 head bootstrap 后、Vue 挂载前的主题与生产 CSS 状态，以及生产 CSP / favicon / CSSOM / IPC 和开发 CSS HMR。该证据测量首个应用模块执行时的计算样式，不等同于物理屏幕录像。PR #105 已于 2026-10-10 合并。
