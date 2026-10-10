@@ -519,6 +519,10 @@ fn loading_rejects_missing_roots_non_files_invalid_utf8_and_oversize_files() {
     assert_eq!(load(&root, "mistbell").unwrap_err(), SkinError::Storage);
 
     let script = root.join("mistbell");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(&script, "not a script directory").unwrap();
+    assert_eq!(load(&root, "mistbell").unwrap_err(), SkinError::Storage);
+    std::fs::remove_file(&script).unwrap();
     std::fs::create_dir_all(script.join("theme.css")).unwrap();
     assert_eq!(load(&root, "mistbell").unwrap_err(), SkinError::Storage);
     std::fs::remove_dir_all(script.join("theme.css")).unwrap();
