@@ -44,6 +44,7 @@
 @layer base {
   body {
     min-height: 100vh;
+    user-select: none;
     font-family:
       Inter,
       ui-sans-serif,
@@ -56,6 +57,14 @@
     /* 星云渐变直接画在 body（渐变本身即软边），不逐帧 backdrop-filter（ui.md 性能决策）。 */
     background: var(--app-bg) fixed;
     color: var(--ink);
+  }
+
+  :where(main, .stage-scene, .record-feed, dialog, input, textarea, select) {
+    user-select: text;
+  }
+
+  :where(nav, button, summary, .stage-header, .dialogue-panel-header, .panel-edge-trigger) {
+    user-select: none;
   }
 
   /* 全局 reduced-motion 保底：组件层不必逐动效重复声明降级
