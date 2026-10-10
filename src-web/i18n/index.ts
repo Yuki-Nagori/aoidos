@@ -3,10 +3,10 @@ import en from "../../locales/en.json";
 import zhHans from "../../locales/zh-Hans.json";
 import type { Locale } from "../api/locale";
 
-export type MessageSchema = typeof zhHans;
+export type MessageSchema = typeof en;
 
 declare module "vue-i18n" {
-  // 中文资源作为键与占位参数的编译期 schema。
+  // 英文资源作为键与占位参数的编译期 schema。
   export interface DefineLocaleMessage extends MessageSchema {}
 }
 

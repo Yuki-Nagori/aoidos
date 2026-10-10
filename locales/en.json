@@ -16,6 +16,11 @@
     "languageLoadFailed": "The language preference could not be read. The first-run language is active for now.",
     "languageFallback": "The language preference is unavailable. This language applies to this launch only.",
     "theme": "Theme",
+    "themeNames": {
+      "dark": "Dark",
+      "light": "Light",
+      "lightPurple": "Light Purple"
+    },
     "themeErrors": {
       "storageUnavailable": "The theme preference is unavailable. The dark default theme is active.",
       "invalidPreference": "The theme preference is invalid. The dark default theme is active.",

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { TurnEnvelope, TurnOutcome } from "./llm";
+import type { Locale } from "./locale";
 
 type Phase = "idle" | "generating" | "awaitingCheck" | "settling" | "advancing";
 interface ScenePosition {
@@ -122,6 +123,7 @@ export function listenPhaseEvent<K extends keyof PhaseEventMap>(
 export interface ScriptInfo {
   scriptId: string;
   title: string;
+  displayNames: Record<Locale, string>;
   attributions: string;
 }
 export interface OpenedSession {

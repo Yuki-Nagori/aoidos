@@ -16,6 +16,11 @@
     "languageLoadFailed": "无法读取语言偏好，当前暂用首次运行语言。",
     "languageFallback": "语言偏好不可用，当前显示语言只用于本次启动。",
     "theme": "主题",
+    "themeNames": {
+      "dark": "深色",
+      "light": "浅色",
+      "lightPurple": "浅紫"
+    },
     "themeErrors": {
       "storageUnavailable": "主题偏好不可用，已使用深色默认主题。",
       "invalidPreference": "主题偏好损坏，已使用深色默认主题。",

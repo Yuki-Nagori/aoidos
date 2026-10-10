@@ -101,6 +101,18 @@ const skinErrorMessage = computed(() => {
       return undefined;
   }
 });
+function themeName(id: string, fallback: string): string {
+  switch (id) {
+    case "dark":
+      return t("settings.themeNames.dark");
+    case "light":
+      return t("settings.themeNames.light");
+    case "light-purple":
+      return t("settings.themeNames.lightPurple");
+    default:
+      return fallback;
+  }
+}
 function phaseName(phase: string | undefined): string {
   switch (phase) {
     case "idle":
@@ -175,7 +187,7 @@ void product.load();
             @change="theme.setTheme(($event.target as HTMLSelectElement).value)"
           >
             <option v-for="option in theme.themes.value" :key="option.id" :value="option.id">
-              {{ option.name }}
+              {{ themeName(option.id, option.name) }}
             </option>
           </select>
         </label>
@@ -240,7 +252,7 @@ void product.load();
             :key="script.scriptId"
             :value="script.scriptId"
           >
-            {{ script.title }}
+            {{ script.displayNames[locale.resolved.value] ?? script.title }}
           </option>
         </select></label
       >

@@ -8,7 +8,7 @@
 
 主题以单一、平级的 `ThemeId` 建模：`dark`、`light`、`light-purple` 与模板登记主题都是同一类可选主题，不再区分 `ThemeMode` / `ThemePreset` 层级。ID 使用 1–64 字节小写 ASCII slug：字母或数字开头结尾，中间只允许字母、数字和单连字符；内置 ID 保留，模板 ID 以稳定 `scriptId` 为前缀避免冲突。每个 ID 对应一套完整默认 token 和 `colorScheme: "light" | "dark"`。`colorScheme` 只提示原生控件 / 浏览器绘制，不是主题分类、父主题或偏好字段，不得从 ID 推断。模板主题须在受信任的模板元数据中显式登记，不从剧本文本或 CSS selector 推断，且不改变 039 的原文解析边界。ID 冲突时拒绝注册，不按加载顺序覆盖。
 
-每个主题文件是唯一默认值真源；文件名（不含扩展名）是稳定 ThemeId，首行注释提供显示名，根块声明 `color-scheme` 和完整 token。Bun 生成器检查 slug、唯一 ID、token 集合并生成运行 CSS；Rust 目录再按封闭 token 类型校验每个内置值，并从同一目录导出动态主题选项，不在 TS 或命令层维护主题枚举。新增主题只需添加符合格式的 CSS 文件并通过生成检查和 Rust 校验。剧本 `theme.css` 只覆盖可写 token，不定义基础主题、不区分 light / dark，也不能自行创建 ThemeId。任意剧本包导入仍在本任务范围之外。
+每个主题文件是唯一默认值真源；文件名（不含扩展名）是稳定 ThemeId，首行注释提供目录回退显示名，根块声明 `color-scheme` 和完整 token。内置主题的用户可见名称按 ThemeId 从界面 locale 资源读取，不能依赖 CSS 注释的语言；未知主题 ID 才回退到目录名称。Bun 生成器检查 slug、唯一 ID、token 集合并生成运行 CSS；Rust 目录再按封闭 token 类型校验每个内置值，并从同一目录导出动态主题选项，不在 TS 或命令层维护主题枚举。新增主题只需添加符合格式的 CSS 文件并通过生成检查和 Rust 校验。剧本 `theme.css` 只覆盖可写 token，不定义基础主题、不区分 light / dark，也不能自行创建 ThemeId。任意剧本包导入仍在本任务范围之外。
 
 004 实现应用默认 token 与映射；026 的 Rust 业务 crate `aoidos-theme` 维护目录元数据、类型化校验与规范输出，存储操作通过 store 访问，不能直接持有 SQL 连接。前端只应用 Rust 交出的值、维护显示代次，不读取 `theme.css` 或补一套解析器。实现状态以 [026](../task/026-theming-impl.md) 的验收记录为准。
 
@@ -84,7 +84,7 @@ UI：沿用 bootstrap 主题 → 获取剧本登记主题 → 订阅 / 查询业
 
 Tauri 的 initialization_script 在 HTML 解析前运行，documentElement 可能不存在。脚本只注入经目录校验的 ThemeId、对应的 `colorScheme` 和可选 fallbackReason 枚举（storageUnavailable / invalidPreference / themeUnavailable）；HTML head 的首个受信任脚本在根节点创建后、任何应用 CSS / module 前设置 data-theme 与 color-scheme。不能对 null 根直接赋值后就宣称防闪，也不能等 Vue mounted / 异步 invoke 才修色。[Tauri Builder 文档](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html#method.initialization_script)
 
-034 在同一初始化脚本内追加独立 LocaleBootstrap，语言 / 主题各自版本，不二次创建 main；细节见[国际化架构](i18n.md)。026 保留主题主责，不自行实现翻译。
+034 在同一初始化脚本内追加独立 LocaleBootstrap，语言 / 主题各自版本，不二次创建 main；细节见[国际化架构](i18n.md)。026 保留主题真值和偏好主责；034 按稳定 ThemeId 提供本地化名称，不把语言字符串塞进主题 CSS。
 
 bootstrap 的主题值由 Rust 从已登记目录读取并 JSON 序列化后注入；head 脚本再次检查版本、值形状和 ID 格式，不拼接主题文件、路径或用户输入。生产不加载第三方 frame。普通浏览器开发没有 Rust bootstrap 时确定性用 dark，不读旧网页偏好；未知 ID 回退到 dark 并报告诊断。
 
@@ -223,6 +223,6 @@ CSP 是兜底，不替代 Rust 校验。生产配置只允许受信任应用脚�
 
 004 先接语义真源 / inline / 清默认色板；026 接校验器、主题偏好、首窗 bootstrap、命令及样式生命周期；025 消费主题设置与皮肤接口，完整界面不复制校验 / 存储。026 可用受控夹具和最小主题入口验证，不等待完整游戏 UI；025 依赖 026 避免二次构建 main。
 
-026 必须覆盖每个内置主题与模板登记主题、缺套回退、坏结构整份失败 / 单条丢弃、非法重复、变量循环与依赖、转义 url、恶意 selector / at 规则、输入 / 返回预算、有界 IO / 符号链接前提、旧响应和样式表清退、偏好保存失败及重载 bootstrap。目录 / 默认 CSS / Tailwind 映射 / Rust 白名单共同检查，首帧无错误主题与三平台 CSP / CSSOM 单独留证。最终 `bun run verify` 十三项通过。
+026 必须覆盖每个内置主题与模板登记主题、缺套回退、坏结构整份失败 / 单条丢弃、非法重复、变量循环与依赖、转义 url、恶意 selector / at 规则、输入 / 返回预算、有界 IO / 符号链接前提、旧响应和样式表清退、偏好保存失败；未来加入重载 / 重建入口时，另行覆盖重新读取偏好并生成 bootstrap 的行为。目录 / 默认 CSS / Tailwind 映射 / Rust 白名单共同检查，首帧无错误主题与三平台 CSP / CSSOM 单独留证。最终 `bun run verify` 十三项通过。
 
 009 的设计走查与参考例已完成；Rust 目录 / 生成 CSS / Tailwind aliases 交叉校验、macOS Vue 挂载前主题 / 产品 CSS、favicon / CSP / HMR，以及 Windows、macOS、Linux 原生 CI 和完整 `bun run verify` 均通过。PR #105 已于 2026-10-10 合并；不以候选依赖文档代替运行时验收。

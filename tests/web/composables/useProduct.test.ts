@@ -20,7 +20,14 @@ const profile: LlmProfile = {
   sampling: { temperature: 1, maxTokens: 2048 },
   proxy: { mode: "system" },
 };
-const scripts = [{ scriptId: "mistbell", title: "雾钟地窖", attributions: "notice" }];
+const scripts = [
+  {
+    scriptId: "mistbell",
+    title: "雾钟地窖",
+    displayNames: { en: "Mistbell Cellar", "zh-Hans": "雾钟地窖" },
+    attributions: "notice",
+  },
+];
 const opened = {
   sessionId: "session",
   profileId: "default",

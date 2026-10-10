@@ -18,7 +18,14 @@ describe("App", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "llm_list_profiles") return { items: [] };
       if (command === "engine_list_scripts")
-        return [{ scriptId: "mistbell", title: "雾钟地窖", attributions: "CC BY 4.0" }];
+        return [
+          {
+            scriptId: "mistbell",
+            title: "雾钟地窖",
+            displayNames: { en: "Mistbell Cellar", "zh-Hans": "雾钟地窖" },
+            attributions: "CC BY 4.0",
+          },
+        ];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
       if (command === "theme_list")
         return [
@@ -40,17 +47,43 @@ describe("App", () => {
           resolvedLocale: "en",
           nativeStatus: "applied",
         };
+      if (command === "locale_set_preference")
+        return {
+          preference: { version: 1, locale: "zh-Hans" },
+          resolvedLocale: "zh-Hans",
+          nativeStatus: "applied",
+        };
       throw new Error("unexpected invocation");
     });
     const wrapper = mount(App, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(wrapper.text()).toContain("雾钟地窖"));
+    await vi.waitFor(() => expect(wrapper.text()).toContain("Mistbell Cellar"));
     expect(wrapper.text()).toContain("system dialog");
+    const theme = wrapper.get('select[aria-label="Theme"]');
+    expect(theme.findAll("option").map((option) => option.text())).toEqual([
+      "Dark",
+      "Light",
+      "Light Purple",
+    ]);
+    const script = wrapper
+      .findAll("label")
+      .find((label) => label.text().includes("Scenario"))!
+      .get("select");
+    expect(script.findAll("option").map((option) => option.text())).toEqual(["Mistbell Cellar"]);
     const model = wrapper.get('select[aria-label="Model"]');
     expect(model.findAll("option").map((option) => option.text())).toEqual([
       "DeepSeek V4.1 Flash",
       "DeepSeek V4 Pro",
     ]);
     expect((model.element as HTMLSelectElement).value).toBe("deepseek-flash");
+    await wrapper.get('select[aria-label="Interface language"]').setValue("zh-Hans");
+    await vi.waitFor(() => {
+      expect(theme.findAll("option").map((option) => option.text())).toEqual([
+        "深色",
+        "浅色",
+        "浅紫",
+      ]);
+      expect(script.findAll("option").map((option) => option.text())).toEqual(["雾钟地窖"]);
+    });
     expect(wrapper.find("input").exists()).toBe(false);
     expect(
       vi
@@ -61,6 +94,7 @@ describe("App", () => {
       "engine_list_scripts",
       "llm_list_profiles",
       "locale_get_preference",
+      "locale_set_preference",
       "theme_get_preference",
       "theme_list",
       "theme_skin_load",
