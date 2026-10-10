@@ -18,7 +18,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收 |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；已评审，待实现             |
 | 国际化       | [界面国际化](i18n.md)                  | 语言、单源资源、首窗与原生文案、精确格式化；已评审，待实现       |
-| 主题与皮肤   | [主题架构](theming.md)                 | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 实施中            |
+| 主题与皮肤   | [主题架构](theming.md)                 | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 等待三平台 CI     |
 | 存储基建     | [存储基建](storage.md)                 | 数据目录、SQLite、实例锁与原子写                                 |
 | 开发与交付   | [构建与开发](build-and-development.md) | 本地命令、质量门禁、打包与图标                                   |
 
@@ -85,6 +85,8 @@ src-tauri
   │     └─→ aoidos-json
   ├─→ aoidos-llm
   ├─→ aoidos-store
+  ├─→ aoidos-theme
+  │     └─→ aoidos-store
   └─→ aoidos-json
 ```
 
@@ -127,6 +129,18 @@ useRecordView / useMigration / useLlmTurn → listener-group（逐项持有资�
 ```
 
 记录事实、估算与压缩属于 engine；存储原语属于 store，供应商 / 传输仍属于 llm。生产依赖保持单向，测试夹具不进入生产链路；023 接领域决策，024 接最小产品联调，025 接完整界面。
+
+### 主题启动与皮肤链路
+
+```text
+Tauri setup → aoidos-store 主题偏好读取 → Rust 冻结 ThemeBootstrap
+  → Webview initialization_script → HTML head theme-bootstrap.js → 生产主题 CSS → Vue
+
+src-web composable → theme API → theme_commands → aoidos-theme 目录 / CSS 校验
+  → aoidos-store 偏好 / 受控文件访问 → 同型 IPC 结果 → 有界 CSSStyleSheet 生命周期
+```
+
+默认主题文件由 `aoidos-theme/assets/themes/*.css` 提供，生成 CSS 提交在 `src-web/styles/generated/`；Rust 集成测试逐主题对照生成值和 Tailwind aliases。皮肤结果只包含经校验的常量与基础 token 引用，UI 不解析原始 CSS。首帧、生产 CSP 与开发 HMR 的验收证据由 [026](../task/026-theming-impl.md) 维护。
 
 ### 阶段机基础链路
 

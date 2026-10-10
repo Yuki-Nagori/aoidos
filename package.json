@@ -14,7 +14,7 @@
     "test": "bun run theme:defaults:check && vitest run",
     "test:watch": "vitest",
     "test:coverage": "bun run theme:defaults:check && vitest run --coverage",
-    "test:native": "bun run build:native-fixture && cargo test -p aoidos-native-tests --features desktop-session",
+    "test:native": "bun run build:web && bun run build:native-fixture && cargo test -p aoidos-native-tests --features desktop-session",
     "test:rust": "bun run theme:defaults:check && cargo test --workspace",
     "theme:defaults:build": "bun scripts/theme-defaults.mts --write",
     "theme:defaults:check": "bun scripts/theme-defaults.mts --check",
