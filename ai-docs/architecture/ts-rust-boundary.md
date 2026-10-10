@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-10。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）及国际化底座（034，已验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。后续模块继续核验单向依赖及职责归属。工程纪律参考 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-11。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）及国际化底座（034，已验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。后续模块继续核验单向依赖及职责归属。工程纪律参考 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -29,6 +29,8 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 aoidos-llm / aoidos-en
 ```text
 src-tauri（装配、命令、窗口事件适配）
   ├─→ aoidos-engine（lease、回合所有者、快照、输出 / 事件端口）
+  │     ├─→ aoidos-theme（主题 schema / 偏好）
+  │     │     └─→ aoidos-store
   │     ├─→ aoidos-locale（语言偏好与系统语言解析）
   │     │     └─→ aoidos-store
   │     ├─→ aoidos-script（纯剧本原文解析与格式校验，无业务反向依赖）
@@ -42,6 +44,7 @@ src-tauri（装配、命令、窗口事件适配）
   │           └─→ aoidos-store（配置 / 凭据复用的文件基建）
   ├─→ aoidos-llm（配置 / 凭据的薄命令适配）
   ├─→ aoidos-store（实例锁与存储装配）
+  ├─→ aoidos-theme（主题命令 / 目录）
   ├─→ aoidos-locale（语言偏好与原生 UI 文案适配）
   └─→ aoidos-json（IPC 值解码与信封编码）
 ```
@@ -56,6 +59,8 @@ src-tauri（装配、命令、窗口事件适配）
 后续计费（035）等模块接入时，先核对上述方向，再声明 Cargo 依赖；不能为复用字段让 store 依赖 engine / llm，或让 llm 依赖 engine / 计费实现。确需共享词汇时放到双方可单向消费的模块；不预建空的公共 crate。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 
 034 的语言偏好 crate 只消费 store 的 SQLite 类型与存储错误；engine 负责共享连接和迁移，Tauri 负责命令及窗口 / 菜单 / 托盘应用，前端只消费同型载荷并呈现。`aoidos-locale` 不依赖 engine 或 Tauri，因此不形成反向依赖。
+
+026 的主题 crate 只消费 store 的 SQLite 类型与存储错误；engine 统一装配 schema 与验证，Tauri 负责偏好命令及主题目录查询。`aoidos-theme` 不依赖 engine 或 Tauri。
 
 ## 通信契约
 

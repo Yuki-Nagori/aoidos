@@ -1,6 +1,6 @@
 # 测试规范
 
-更新日期：2026-10-10。均为项目约定。
+更新日期：2026-10-11。均为项目约定。
 
 ## 测试位置与写法
 
@@ -18,8 +18,8 @@
 - 前端 `bun run test:coverage`：v8 provider，只统计逻辑层——`src-web/{utils,stores,composables}` 与组件旁 `use*.ts`；行 / 分支 / 函数 / 语句四项 100%。`main.ts` 是装配、api 是薄封装、`bench/` 是基准，均不入门槛。
 - Rust `bun run coverage:rust`：**逐文件行覆盖门禁**，规则集中在根目录 [`coverage-rust.config.mts`](../../coverage-rust.config.mts)，由 `scripts/coverage-rust.mts` 消费执行（跑 `cargo llvm-cov --workspace --lib --json` 后逐文件裁决）。规则只有三条：
   1. 缺省每文件未覆盖行 = 0，即必须 100%。
-  2. 忽略清单（文件名正则）：`lib.rs` 与以平台模块路径匹配的 `platform/windows.rs`、`platform/macos.rs`、`platform/linux.rs`，理由见下方台账。
-  3. 逐文件预算：确属工具伪影的文件才在配置登记理由与额度；当前仅登记 Tauri async command 的 1 个宏映射区域，其余非忽略文件要求 100%。
+  2. 忽略清单（文件名正则）：`lib.rs`、`locale_commands/native.rs`，以及以平台模块路径匹配的 `platform/windows.rs`、`platform/macos.rs`、`platform/linux.rs`，理由见下方台账。
+  3. 逐文件预算：确属工具伪影的文件才在配置登记理由与额度；当前为 locale / theme 两个 set 命令各登记 1 行 Tauri 宏映射区域，其余非忽略文件要求 100%。
 
 ### Rust 覆盖豁免台账
 

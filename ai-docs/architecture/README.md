@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-10。
+更新日期：2026-10-11。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -180,9 +180,12 @@ useEnginePhase → api/engine + listener-group
   → phase-recovery（有界缓存、单在飞快照与恢复代次）
     → phase-consumer（独立事件基线与跨流修订）
 
-App.vue → useGameView / useGameInput / useGameControls
-  ├─ GameStage → usePanelState + useUiPreferences（UI 状态 / Rust 持久偏好）
-  └─ RecordView → chronological feed（预览、历史分页、正文展开与未读）
+App.vue → useGameView / useGameInput / useGameControls / useUiPreferences
+  ├─ usePanelState（面板交互状态）
+  ├─ GameStage（props / emits 驱动的展示组件；处理舞台内键盘与焦点交互）
+  └─ #panel slot（App 投影）
+       ├─ RecordFeed（组件；预览、历史分页、正文展开与未读）
+       └─ ActionComposer（玩家输入）
 ```
 
 `game::domain` 定义可信世界解释器、冻结请求构造器和只读 completed 通知的内部端口，不引用 Tauri，也不虚构世界属性。实现与验证状态见 [023](../task/023-turn-state-machine-impl.md)，生产 crate 依赖保持单向。

@@ -166,7 +166,7 @@ v1 普通历史项用 content-visibility: auto + contain-intrinsic-size 降低�
 
 ## 偏好、依赖与实施边界
 
-拟新增 Rust 拥有的 UiPreferences：version=1、panelPinned=false、diceMode=manual；只保存这两个产品偏好，不持久化焦点 / 滚动 DOM / 草稿。通过 store_get_ui_preferences / store_set_ui_preferences 薄命令读写；SQLite / 受控原子配置存储按 011 既有迁移与文件规则选用，具体 schema 在实现中定型。偏好写入使用应用级单队列，发送时合并两字段的最新意图，至多一个请求在飞，防止完整替换覆盖另一次设置。响应按设置代次处理，失败保留上次确认值并提示，不把乐观状态当已保存；钉住保存失败撤回至已确认偏好，但不清草稿。初始化恢复只应用一次，迟到快照不得覆盖用户已操作的状态。
+`UiPreferences` 已由 Rust 持有，version=1，包含 `panelPinned=false` 与 `diceMode=manual`；只保存这两个产品偏好，不持久化焦点 / 滚动 DOM / 草稿。`store_get_ui_preferences` / `store_set_ui_preferences` 通过薄命令读写，数据存于应用数据根的 `ui-preferences.json`，读取有 4 KiB 上限并通过 `write_atomic` 原子替换；未知版本按 `store.corrupt` 失败关闭。实现细节见[存储架构](storage.md)与[通信契约](ipc-contract.md)。偏好写入使用应用级单队列，发送时合并两字段的最新意图，至多一个请求在飞，防止完整替换覆盖另一次设置。响应按设置代次处理，失败保留上次确认值并提示，不把乐观状态当已保存；钉住保存失败撤回至已确认偏好，但不清草稿。初始化恢复只应用一次，迟到快照不得覆盖用户已操作的状态。
 
 窗口位置 / 尺寸复用 026 的受控 main 构建入口，使用 tauri-plugin-window-state 的 Rust 装配，插件只负责窗口，不负责面板钉住；恢复到已断开的显示器时约束到当前可见工作区。无须为保存窗口状态把文件权限开放给 Webview，确需 JS 插件命令时按官方权限单独登记。[官方插件文档](https://v2.tauri.app/plugin/window-state/)
 
