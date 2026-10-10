@@ -28,7 +28,7 @@
 
 ## 费用与预算接口（027 已评审，035 待实现）
 
-命令族、精确金额、设置 revision、查询 / 补价、物理请求身份与两作用域结算见[计价架构](billing.md)。金额一律十进制字符串 + 明确币种，不用 JS number / f64；列表复用默认 50 / 最大 200 分页。当前未注册这些 API；035 同 commit 定型 Rust / TS 载荷，不扩张现有回合事件。
+命令族、精确金额、设置 revision、查询 / 补价、物理请求身份与单局分币种结算见[计价架构](billing.md)。金额一律十进制字符串 + 明确币种，不用 JS number / f64；列表复用默认 50 / 最大 200 分页。当前未注册这些 API；035 同 commit 定型 Rust / TS 载荷，不扩张现有回合事件。
 
 ## 已落地的 store 命令
 
@@ -363,7 +363,7 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合；019 同型原生输入门禁也用此码拒绝第二个密码框，不占用业务 key 锁。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
 - store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。
 - theme 预留（009 设计，026 待实现）：`theme.invalid-skin` 表示存在的皮肤结构 / 硬预算不合法；缺文件为成功 missing、单条语义失败为 warnings、读取失败为 store.*，不自动重试。
-- budget 预留（027 已评审，035 待实现）：`budget.exceeded`（本地费用不足）、`budget.price-missing`（未登记 / 必需价格缺失）、`budget.fx-missing`（无有效换汇）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）；结构化 detail 与触发语义见[计价架构](billing.md)。不自动重试，不冒充供应商 llm.quota；旧配置 / 游标使用 app.bad-request + detail.reason=staleRevision，存储失败沿用 store.*。
+- budget 预留（027 已评审，035 待实现）：`budget.exceeded`（对应币种的本地单局上限不足）、`budget.price-missing`（未登记 / 必需价格缺失）、`budget.run-limit-missing`（该局缺少对应币种上限）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）；结构化 detail 与触发语义见[计价架构](billing.md)。不自动重试，不冒充供应商 llm.quota；旧配置 / 游标使用 app.bad-request + detail.reason=staleRevision，存储失败沿用 store.*。
 - llm 预留（005 已评审设计；crate 侧类别 018 已落地，020 已接入域错误 / 命令映射）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
 
 | 码               | 触发条件                                                                                                                                                                                            | 自动重试边界                                                      |

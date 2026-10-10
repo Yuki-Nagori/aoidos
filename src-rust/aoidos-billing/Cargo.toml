@@ -1,0 +1,12 @@
+[package]
+name = "aoidos-billing"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rust_decimal.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
