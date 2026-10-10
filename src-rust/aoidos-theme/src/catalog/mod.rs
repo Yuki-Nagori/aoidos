@@ -23,7 +23,7 @@ pub struct Token {
     pub alias: Option<&'static str>,
 }
 
-pub const TOKENS: [Token; 18] = [
+pub const TOKENS: [Token; 19] = [
     Token {
         id: "C01",
         name: "--ink",
@@ -128,6 +128,13 @@ pub const TOKENS: [Token; 18] = [
         kind: ValueKind::Color,
         skin_writable: false,
         alias: Some("--color-danger"),
+    },
+    Token {
+        id: "C19",
+        name: "--on-accent",
+        kind: ValueKind::Color,
+        skin_writable: true,
+        alias: Some("--color-on-accent"),
     },
     Token {
         id: "S01",

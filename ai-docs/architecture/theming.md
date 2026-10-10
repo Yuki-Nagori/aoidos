@@ -35,6 +35,7 @@
 | C13  | `--diff-remove`    | Color        | 否       | `--color-diff-remove`                    |
 | C14  | `--warning`        | Color        | 否       | `--color-warning`                        |
 | C15  | `--danger`         | Color        | 否       | `--color-danger`                         |
+| C19  | `--on-accent`      | Color        | 是       | `--color-on-accent`                      |
 | S01  | `--record-left`    | PixelLength  | 是       | `--spacing-record-left`                  |
 | M01  | `--ease-signature` | Easing       | 是       | 组件 transition-timing-function 直接消费 |
 | M02  | `--dur-micro`      | Duration     | 是       | 组件 transition-duration 直接消费        |
@@ -59,6 +60,7 @@
 @theme inline {
   --color-ink: var(--ink);
   --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
   --color-warning: var(--warning);
   --spacing-record-left: var(--record-left);
 }
@@ -104,7 +106,7 @@ Rust 只为已登记的 scriptId 查可信目录映射，读取固定 theme.css�
 
 包目录由应用控制、只读且在读取时稳定；拒绝符号链接 / 非普通文件、核验受控根内路径，使用有界读取（上限加 1 字节检测）而非先读完整文件。不以单次 canonicalize 抵御不可信进程的并发替换；不满足稳定目录前提时拒绝加载。theme.css 缺失不是错误，返回 missing；存在但读取失败返回 store.* 并移除旧皮肤。
 
-剧本 `theme.css` 只接受一个通用 `:root { ... }` 规则，针对当前基础主题叠加同一份覆盖；文件不能按 dark / light 或 ThemeId 分叉。选择器列表、组合器、伪元素、类 / id、属性选择器及其它规则均拒绝，剧本作用域由应用生成的 `data-script` 提供。
+剧本 `theme.css` 只接受一个通用 `:root { ... }` 规则，针对当前基础主题叠加同一份覆盖；文件不能按 dark / light 或 ThemeId 分叉。单份皮肤会用于所有基础主题，因此优先覆盖强调色和布局 token；若覆盖前景、面板、气泡或背景渐变，必须确保这些固定值在所有基础主题中仍然可读。选择器列表、组合器、伪元素、类 / id、属性选择器及其它规则均拒绝，剧本作用域由应用生成的 `data-script` 提供。
 
 ```css
 :root {

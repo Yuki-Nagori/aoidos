@@ -204,7 +204,10 @@ fn bundled_mistbell_example_is_a_valid_script_skin() {
 
     assert_eq!(skin.status, SkinStatus::Valid);
     assert!(skin.warnings.is_empty());
-    assert_eq!(skin.tokens["--accent"], "#86c9d0ff");
+    assert_eq!(skin.tokens["--accent"], "#477d80ff");
+    assert_eq!(skin.tokens["--on-accent"], "#ffffffff");
+    assert!(!skin.tokens.contains_key("--app-bg"));
+    assert!(!skin.tokens.contains_key("--panel"));
 }
 
 #[test]

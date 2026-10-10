@@ -18,7 +18,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；029 存储 / 恢复已交付            |
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定   |
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收 |
-| 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；已评审，待实现             |
+| 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；025 实施中                 |
 | 国际化       | [界面国际化](i18n.md)                  | zh-Hans / en、语言偏好、首窗原生文案与精确格式化；034 已验收     |
 | 主题与皮肤   | [主题架构](theming.md)                 | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 已三平台验收      |
 | 存储基建     | [存储基建](storage.md)                 | 数据目录、SQLite、实例锁与原子写                                 |
@@ -26,7 +26,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 ## 工程现状
 
-存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 已交付界面语言、持久偏好与本地化格式；后续补齐英文消息 schema 基准、主题名和剧本目录展示名本地化。[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 三平台 CI 与本机全量 verify 均通过；验收证据见[任务索引](../task-index.md)。
+存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 已交付界面语言、持久偏好与本地化格式；后续补齐英文消息 schema 基准、主题名和剧本目录展示名本地化。[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 三平台 CI 与本机全量 verify 均通过。025 实施中：舞台、四态面板、有界记录呈现、composer、偏好及窗口恢复已接通；本机 `bun run verify` 全项通过。跨平台原生 WebView、DPI、IME 与辅助技术验收仍未完成，任务保持 in-progress。证据见[任务索引](../task-index.md)。
 
 记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，尚未接入产品记忆流程；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
 
@@ -179,6 +179,10 @@ game::publication → PhaseSnapshot / PhaseEvents（原子确认与投递分离�
 useEnginePhase → api/engine + listener-group
   → phase-recovery（有界缓存、单在飞快照与恢复代次）
     → phase-consumer（独立事件基线与跨流修订）
+
+App.vue → useGameView / useGameInput / useGameControls
+  ├─ GameStage → usePanelState + useUiPreferences（UI 状态 / Rust 持久偏好）
+  └─ RecordView → chronological feed（预览、历史分页、正文展开与未读）
 ```
 
 `game::domain` 定义可信世界解释器、冻结请求构造器和只读 completed 通知的内部端口，不引用 Tauri，也不虚构世界属性。实现与验证状态见 [023](../task/023-turn-state-machine-impl.md)，生产 crate 依赖保持单向。

@@ -106,5 +106,6 @@ export function useRecordView(
     reconnect,
     loadPage: recovery.loadPage,
     loadBody: recovery.loadBody,
+    clearBody: recovery.clearBody,
   };
 }

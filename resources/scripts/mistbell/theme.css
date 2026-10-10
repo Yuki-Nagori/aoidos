@@ -1,13 +1,7 @@
 /* Mistbell 的雾蓝与铜金强调色；只覆盖应用公开的剧本可写 token。 */
 :root {
-  --accent: #86c9d0;
+  --accent: #477d80;
+  --on-accent: #ffffff;
   --accent-violet: #a9a0d8;
   --accent-warm: #d5a36f;
-  --panel: rgba(24, 34, 43, 0.82);
-  --bubble-persona: rgba(27, 39, 48, 0.84);
-  --hairline: rgba(166, 205, 211, 0.16);
-  --app-bg:
-    radial-gradient(circle at 78% 18%, rgba(134, 201, 208, 0.12), transparent 32%),
-    radial-gradient(circle at 18% 78%, rgba(169, 160, 216, 0.1), transparent 30%),
-    linear-gradient(135deg, #101c24 0%, #17232b 52%, #0d171e 100%);
 }

@@ -18,12 +18,13 @@ interface CatalogEntry {
   invariant?: boolean;
 }
 
-// theming.md「首版 token 目录」：C01–C15 / S01 / M01 / M02。
+// theming.md「首版 token 目录」：C01–C15 / C19 / S01 / M01 / M02。
 // C 域与 --app-bg 随主题切换；S / M 域在内置主题之间保持一致。
 const CATALOG: CatalogEntry[] = [
   { name: "--ink", mapping: "--color-ink" },
   { name: "--muted", mapping: "--color-muted" },
   { name: "--accent", mapping: "--color-accent" },
+  { name: "--on-accent", mapping: "--color-on-accent" },
   { name: "--accent-violet", mapping: "--color-accent-violet" },
   { name: "--accent-warm", mapping: "--color-accent-warm" },
   { name: "--panel", mapping: "--color-panel" },
@@ -133,5 +134,12 @@ describe("token 目录与 app.css 互校", () => {
     );
     expect(staticBlock).toContain("--color-white: #ffffff");
     expect(staticBlock).toContain("--color-black: #000000");
+  });
+
+  it("为减少动态效果的用户禁用记录区平滑滚动", () => {
+    expect(css).toMatch(
+      /prefers-reduced-motion:\s*reduce[\s\S]*?\.record-feed\s*\{[\s\S]*?scroll-behavior:\s*auto/,
+    );
+    expect(css).not.toMatch(/\.record-feed\s*\{[^}]*scroll-behavior:\s*smooth/);
   });
 });

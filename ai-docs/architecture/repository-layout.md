@@ -8,12 +8,13 @@
 ├── index.html                 # Vite 入口 HTML（挂载点 #app）
 ├── src-web/                   # 前端：Vue 3 + TypeScript
 │   ├── main.ts                # 应用入口：挂载根组件
-│   ├── App.vue                # 根组件：配置 / 默认剧本选择与最小正式对局入口
+│   ├── App.vue                # 根编排：产品生命周期、IPC 消费与界面状态连接
+│   ├── components/            # 展示边界：GameStage、RecordFeed、ActionComposer
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
 │   ├── i18n/                  # vue-i18n 实例与挂载前持久语言同步
 │   ├── utils/                 # 纯消费规则 / 恢复协调及其他纯逻辑，配单测
-│   ├── composables/           # Vue 身份、监听与 scope 清理，消费 utils
+│   ├── composables/           # Vue 身份、监听、偏好与 scope 清理，消费 utils
 │   ├── styles/                # 全局样式扩展；generated/ 仅放构建生成的 CSS
 │   ├── theme-bootstrap.ts     # 首帧主题引导（构建为 /theme-bootstrap.js）
 │   ├── locale-bootstrap.ts    # 首帧语言引导（构建为 /locale-bootstrap.js）
