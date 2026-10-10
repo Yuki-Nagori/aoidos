@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "tests/rust/native-platform"]
+members = ["src-rust/aoidos-theme", "src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,8 @@ aoidos-store = { path = "src-rust/aoidos-store" }
 aoidos-llm = { path = "src-rust/aoidos-llm" }
 aoidos-engine = { path = "src-rust/aoidos-engine" }
 aoidos-memory = { path = "src-rust/aoidos-memory" }
+aoidos-theme = { path = "src-rust/aoidos-theme" }
+cssparser = "0.38"
 aoidos = { path = "src-tauri" }
 uuid = { version = "1", features = ["v4"] }
 # 密钥存储：v1 默认特性 = Windows Credential Manager / macOS Keychain / Linux Secret Service（019）。

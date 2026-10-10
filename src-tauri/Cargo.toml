@@ -20,6 +20,7 @@ tauri.workspace = true
 aoidos-store.workspace = true
 aoidos-llm.workspace = true
 aoidos-engine.workspace = true
+aoidos-theme.workspace = true
 secrecy.workspace = true
 
 [dev-dependencies]

@@ -4,6 +4,7 @@ bun.lockb
 
 # Build output
 dist/
+/public/theme-bootstrap.js
 *.tsbuildinfo
 
 # Coverage
@@ -23,7 +24,6 @@ src-tauri/target/
 src-tauri/gen/schemas/
 /tests/rust/native-platform/gen/
 cov.info
-
 # zcode
 .zcode/
 

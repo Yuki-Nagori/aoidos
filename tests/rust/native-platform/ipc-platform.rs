@@ -293,6 +293,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }));
             app.manage(events.clone());
             let storage = StorageService::new(&fixture_dir, StorageEvents::new(events.clone()));
+            let theme_root = fixture_dir.join("scripts");
+            std::fs::create_dir_all(theme_root.join("mistbell"))?;
+            app.manage(aoidos_lib::theme_commands::ThemeService::new(theme_root));
             let turns = TurnService::new(events, SystemProxySnapshot::default())?;
             app.manage(aoidos_engine::game::runtime::Service::new(
                 turns.coordinator.clone(),
@@ -309,6 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("Aoidos IPC fixture")
+            .initialization_script("window.__AOIDOS_THEME_BOOTSTRAP__={version:1,theme:'dark'};")
             .visible(false)
             .build()?;
             // 超时只用于集成测试兜底，不是产品正文轮询或恢复策略。
@@ -329,6 +333,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             aoidos_lib::store_ipc::engine_get_record_page,
             aoidos_lib::store_ipc::engine_get_record_view,
             aoidos_lib::store_ipc::engine_get_record_body,
+            aoidos_lib::theme_commands::theme_get_preference,
+            aoidos_lib::theme_commands::theme_set_preference,
+            aoidos_lib::theme_commands::theme_skin_load,
             aoidos_lib::game_ipc::engine_submit_input,
             aoidos_lib::game_ipc::engine_interrupt,
             aoidos_lib::game_ipc::engine_cancel_round,

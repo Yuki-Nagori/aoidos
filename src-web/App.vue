@@ -4,8 +4,10 @@ import { useProduct } from "./composables/useProduct";
 import { useGameView } from "./composables/useGameView";
 import { useGameInput } from "./composables/useGameInput";
 import { useGameControls } from "./composables/useGameControls";
+import { useTheme } from "./composables/useTheme";
 
 const product = useProduct();
+const theme = useTheme(product.scriptId);
 const sessionId = computed(() => product.session.value?.sessionId);
 const game = useGameView(sessionId);
 const { phase, turn, records } = game;
@@ -43,6 +45,29 @@ void product.load();
     <section class="glass-panel">
       <h1 class="text-2xl font-semibold">Aoidos</h1>
       <p class="text-sm text-muted">选择剧本与模型后开始。重开周目不会自动生成。</p>
+      <div class="flex gap-3">
+        <label>
+          主题
+          <select
+            :value="theme.theme.value"
+            aria-label="主题"
+            :disabled="theme.saving.value"
+            @change="theme.setTheme(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="option in theme.themes.value" :key="option.id" :value="option.id">
+              {{ option.name }}
+            </option>
+          </select>
+        </label>
+        <button v-if="product.scriptId.value === 'mistbell'" @click="theme.toggleSkin">
+          {{ theme.disabled.value ? "启用剧本皮肤" : "关闭剧本皮肤" }}
+        </button>
+      </div>
+      <p v-if="theme.themeError.value" role="status">{{ theme.themeError.value }}</p>
+      <p v-if="theme.skinError.value" role="status">{{ theme.skinError.value }}</p>
+      <p v-else-if="theme.warningCount.value">
+        剧本皮肤有 {{ theme.warningCount.value }} 条兼容性提示。
+      </p>
       <label
         >模型
         <select v-model="product.model.value" aria-label="模型" :disabled="product.busy.value">

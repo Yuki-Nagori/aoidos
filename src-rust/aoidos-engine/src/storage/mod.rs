@@ -30,11 +30,16 @@ impl Storage {
         let database = migration
             .open_verified(
                 &root.join("storage.sqlite"),
-                &[aoidos_store::applied::SCHEMA, aoidos_memory::schema::SCHEMA],
+                &[
+                    aoidos_store::applied::SCHEMA,
+                    aoidos_memory::schema::SCHEMA,
+                    aoidos_theme::schema::SCHEMA,
+                ],
                 |connection| {
                     let valid:i64=connection.query_row("SELECT count(*)=2 AND sum(name='id' AND type='TEXT' AND pk=1)=1 AND sum(name='content_hash' AND type='TEXT' AND \"notnull\"=1)=1 FROM pragma_table_info('store_applied')",[],|row|row.get(0)).map_err(aoidos_store::db::sqlite_error)?;
                     if valid!=1 {return Err(aoidos_store::error::StoreError::Corrupt("business applied schema mismatch".into()));}
                     aoidos_memory::schema::verify(connection)?;
+                    aoidos_theme::schema::verify(connection)?;
                     Ok(())
                 },
             )

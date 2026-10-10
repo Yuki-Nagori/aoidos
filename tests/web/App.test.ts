@@ -14,6 +14,21 @@ describe("App", () => {
       if (command === "llm_list_profiles") return { items: [] };
       if (command === "engine_list_scripts")
         return [{ scriptId: "mistbell", title: "雾钟地窖", attributions: "CC BY 4.0" }];
+      if (command === "theme_get_preference") return { version: 1, theme: "dark" };
+      if (command === "theme_list")
+        return [
+          { id: "dark", name: "深色", colorScheme: "dark" },
+          { id: "light", name: "浅色", colorScheme: "light" },
+          { id: "light-purple", name: "浅紫", colorScheme: "light" },
+        ];
+      if (command === "theme_skin_load")
+        return {
+          scriptId: "mistbell",
+          status: "missing",
+          tokens: {},
+          warnings: [],
+          warningsTruncated: false,
+        };
       throw new Error("unexpected invocation");
     });
     const wrapper = mount(App);
@@ -31,7 +46,13 @@ describe("App", () => {
         .mocked(invoke)
         .mock.calls.map(([command]) => command)
         .sort(),
-    ).toEqual(["engine_list_scripts", "llm_list_profiles"]);
+    ).toEqual([
+      "engine_list_scripts",
+      "llm_list_profiles",
+      "theme_get_preference",
+      "theme_list",
+      "theme_skin_load",
+    ]);
     wrapper.unmount();
   });
   it("浏览器缺 IPC 明确展示恢复错误，不伪造本地生成结果", async () => {

@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 
 /**
  * 设计目录（theming.md 首版 token 目录）与 app.css 的互校，防三处漂移：
- * 语义真源双主题完整性、@theme inline 映射一一对应、直接消费项不进映射。
- * 另钉 Tailwind 原语层（white / black 静态发射）。Rust 侧目录导出互校由
- * 026 落地后补，不阻塞本测试。
+ * 语义真源主题完整性、@theme inline 映射一一对应、直接消费项不进映射。
+ * 另钉 Tailwind 原语层（white / black 静态发射）；Rust 目录测试独立验证 CSS
+ * 文件发现和 token 完整性。
  */
 
 interface CatalogEntry {
@@ -14,12 +14,12 @@ interface CatalogEntry {
   name: string;
   /** 进入 @theme inline 映射（如 --color-ink）；空串 = 组件直接消费不进映射 */
   mapping: string;
-  /** 主题无关（只在 :root 默认块定义，light 继承），如间距与动效 token */
+  /** 主题间固定的 token，如间距与动效 token */
   invariant?: boolean;
 }
 
 // theming.md「首版 token 目录」：C01–C15 / S01 / M01 / M02。
-// C 域与 --app-bg 随主题切换（双块必须有）；S / M 域主题无关。
+// C 域与 --app-bg 随主题切换；S / M 域在内置主题之间保持一致。
 const CATALOG: CatalogEntry[] = [
   { name: "--ink", mapping: "--color-ink" },
   { name: "--muted", mapping: "--color-muted" },
@@ -42,18 +42,22 @@ const CATALOG: CatalogEntry[] = [
 ];
 
 const css = readFileSync(resolve(__dirname, "../../src-web/app.css"), "utf-8");
+const themeCss = readFileSync(
+  resolve(__dirname, "../../src-web/styles/generated/theme-defaults.css"),
+  "utf-8",
+);
 
 /** 花括号配平截取选择器规则块正文；找不到时报错而不是静默返回空。 */
 function blockOf(selector: string): string {
-  const start = css.indexOf(selector);
+  const start = themeCss.indexOf(selector);
   if (start < 0) throw new Error(`选择器缺失：${selector}`);
-  const open = css.indexOf("{", start);
+  const open = themeCss.indexOf("{", start);
   let depth = 0;
-  for (let i = open; i < css.length; i += 1) {
-    if (css[i] === "{") depth += 1;
-    else if (css[i] === "}") {
+  for (let i = open; i < themeCss.length; i += 1) {
+    if (themeCss[i] === "{") depth += 1;
+    else if (themeCss[i] === "}") {
       depth -= 1;
-      if (depth === 0) return css.slice(open + 1, i);
+      if (depth === 0) return themeCss.slice(open + 1, i);
     }
   }
   throw new Error(`规则块未闭合：${selector}`);
@@ -73,6 +77,7 @@ function varsOf(block: string): Map<string, string> {
 
 const darkVars = varsOf(blockOf(':root[data-theme="dark"]'));
 const lightVars = varsOf(blockOf(':root[data-theme="light"]'));
+const lightPurpleVars = varsOf(blockOf(':root[data-theme="light-purple"]'));
 
 function themeInlineBlock(): string {
   const start = css.indexOf("@theme inline {");
@@ -81,17 +86,18 @@ function themeInlineBlock(): string {
 }
 
 describe("token 目录与 app.css 互校", () => {
-  it("随主题切换的 token 在深浅两个真源块都有定义", () => {
+  it("默认 CSS 为每个内置主题提供完整 token", () => {
     for (const { name, invariant } of CATALOG) {
-      expect(darkVars.has(name), `${name} 不在深色/:root 块`).toBe(true);
+      expect(darkVars.has(name), `${name} 不在深色主题块`).toBe(true);
       if (!invariant) {
-        expect(lightVars.has(name), `${name} 不在浅色块`).toBe(true);
+        expect(lightVars.has(name), `${name} 不在浅色主题块`).toBe(true);
       }
     }
   });
 
   it("主题切换真实生效：ink 深浅取值不同（防两块被改成同值）", () => {
     expect(darkVars.get("--ink")).not.toBe(lightVars.get("--ink"));
+    expect(lightPurpleVars.get("--ink")).not.toBe(lightVars.get("--ink"));
   });
 
   it("目录映射项与 @theme inline 一一对应", () => {
@@ -113,9 +119,10 @@ describe("token 目录与 app.css 互校", () => {
     expect(theme).not.toContain("--dur-micro");
   });
 
-  it("默认深色 + data-theme 单属性切换的结构成立", () => {
-    expect(css).toContain(':root,\n:root[data-theme="dark"]');
-    expect(css).toContain(':root[data-theme="light"]');
+  it("生成选择器覆盖每个内置主题，且深色是根属性默认值", () => {
+    expect(themeCss).toContain(':root,\n:root[data-theme="dark"]');
+    expect(themeCss).toContain(':root[data-theme="light"]');
+    expect(themeCss).toContain(':root[data-theme="light-purple"]');
   });
 
   it("清默认色板，且 white / black 原语经 @theme static 强制发射", () => {

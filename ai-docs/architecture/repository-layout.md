@@ -11,6 +11,7 @@
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
 │   ├── utils/                 # 纯消费规则 / 恢复协调及其他纯逻辑，配单测
 │   ├── composables/           # Vue 身份、监听与 scope 清理，消费 utils
+│   ├── styles/                # 全局样式扩展；generated/ 仅放构建生成的 CSS
 │   └── bench/                 # tinybench 正文消费基准
 ├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛

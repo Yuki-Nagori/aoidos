@@ -16,6 +16,7 @@ import { useRecordView } from "../../../../src-web/composables/useRecordView";
 import { useMigration } from "../../../../src-web/composables/useMigration";
 import { getUiPreferences, setUiPreferences } from "../../../../src-web/api/store";
 import { getRecordPage } from "../../../../src-web/api/records";
+import { getThemePreference, loadSkin, setThemePreference } from "../../../../src-web/api/theme";
 import { useEnginePhase } from "../../../../src-web/composables/useEnginePhase";
 import {
   submitInput,
@@ -50,6 +51,7 @@ async function smoke(): Promise<void> {
   let consumer!: ReturnType<typeof useLlmTurn>;
   let requests = 0;
   let callbacks = 0;
+  let registered = 0;
   let released = 0;
   let dropAll = false;
   const transport: TurnTransport = {
@@ -61,9 +63,12 @@ async function smoke(): Promise<void> {
       return listenTurnEvent(name, (payload) => {
         callbacks += 1;
         if (!dropAll) handler(payload);
-      }).then((unlisten) => () => {
-        released += 1;
-        unlisten();
+      }).then((unlisten) => {
+        registered += 1;
+        return () => {
+          released += 1;
+          unlisten();
+        };
       });
     },
   };
@@ -136,6 +141,31 @@ async function smoke(): Promise<void> {
   let passed = false;
   let diagnostic = "";
   try {
+    check(
+      document.documentElement.dataset.theme === "dark",
+      "theme-bootstrap-not-applied-before-app",
+    );
+    const initialTheme = await getThemePreference();
+    check(
+      initialTheme.version === 1 && initialTheme.theme === "dark",
+      "theme-preference-default-mismatch",
+    );
+    check((await setThemePreference("light")).theme === "light", "theme-preference-write-mismatch");
+    check((await setThemePreference("dark")).theme === "dark", "theme-preference-restore-mismatch");
+    const absentSkin = await loadSkin("mistbell");
+    check(
+      absentSkin.status === "missing" && absentSkin.sourceHash === undefined,
+      "missing-skin-contract-mismatch",
+    );
+    const stylesheet = new CSSStyleSheet();
+    stylesheet.replaceSync(':root[data-theme="dark"] { --accent: #aabbccff; }');
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, stylesheet];
+    check(stylesheet.cssRules.length === 1, "constructed-stylesheet-not-parsed");
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((item) => item !== stylesheet);
+    check(
+      document.adoptedStyleSheets.every((item) => item !== stylesheet),
+      "constructed-stylesheet-not-released",
+    );
     await consumer.reconnect();
     observers.push(
       await listenTurnEvent("llm:turn:chunk", (envelope) => {
@@ -193,10 +223,12 @@ async function smoke(): Promise<void> {
         snapshot.seq.failed === 0,
       "event-sequence-mismatch",
     );
+    const releasedBeforeReconnect = released;
     await consumer.reconnect();
+    const reconnectSnapshot = consumer.view.value.snapshot;
     check(
-      released === 3 && consumer.view.value.snapshot?.text === snapshot.text,
-      "reconnect-mismatch",
+      released - releasedBeforeReconnect === 3 && reconnectSnapshot?.text === snapshot.text,
+      `reconnect-mismatch:released=${released - releasedBeforeReconnect},textMatches=${reconnectSnapshot?.text === snapshot.text}`,
     );
     dropAll = true;
     const second = await submitTurn(
@@ -367,7 +399,7 @@ async function smoke(): Promise<void> {
     app.unmount();
     unmounted = true;
     check(phaseReleased === phaseListeners, "phase-listener-release-mismatch");
-    check(released === 6, "listener-release-mismatch");
+    check(released === registered, "listener-release-mismatch");
     const seen = new Promise<void>((resolve) => {
       barrier = resolve;
     });
