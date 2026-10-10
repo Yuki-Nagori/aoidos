@@ -5,6 +5,7 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
+use super::NativePromptText;
 use aoidos_store::error::{Result, StoreError};
 
 use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
@@ -191,17 +192,15 @@ const PROMPT_CAPTION: &str = "Aoidos API 密钥";
 ///
 /// # Errors
 /// `CredUI` 初始化或调用失败（非用户取消）时返回 store 域 `io` 错误。
-pub fn prompt_native_key(provider_label: &str) -> Result<Option<String>> {
-    let caption: Vec<u16> = OsStr::new(PROMPT_CAPTION)
+pub fn prompt_native_key(provider_label: &str, text: &NativePromptText) -> Result<Option<String>> {
+    let caption: Vec<u16> = OsStr::new(&text.title)
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let message: Vec<u16> = OsStr::new(&format!(
-        "输入 {provider_label} 的 API 密钥；取消将保留当前已保存的密钥。"
-    ))
-    .encode_wide()
-    .chain(Some(0))
-    .collect();
+    let message: Vec<u16> = OsStr::new(&text.message.replace("{provider}", provider_label))
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
     let info = CREDUI_INFOW {
         cbSize: std::mem::size_of::<CREDUI_INFOW>() as u32,
         hwndParent: std::ptr::null_mut(),
@@ -328,7 +327,7 @@ pub fn verify_native_input() -> Result<()> {
             }
             false
         });
-        let result = prompt_native_key("test fixture")?;
+        let result = prompt_native_key("test fixture", &NativePromptText::default())?;
         if !helper.join().unwrap_or(false)
             || (accept && result.as_deref() != Some("aoidos-native-fixture"))
             || (!accept && result.is_some())
@@ -415,7 +414,9 @@ mod tests {
     #[test]
     fn cred_ui_dialog_cancel_returns_none() {
         let caption: Vec<u16> = PROMPT_CAPTION.encode_utf16().chain(Some(0)).collect();
-        let handle = std::thread::spawn(|| prompt_native_key("provider deepseek"));
+        let handle = std::thread::spawn(|| {
+            prompt_native_key("provider deepseek", &NativePromptText::default())
+        });
         let mut closed = false;
         for _ in 0..600 {
             let hwnd = own_prompt_window(&caption);

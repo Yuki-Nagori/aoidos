@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run theme:defaults:build && bun run build:theme-bootstrap && vite",
+    "dev": "bun run theme:defaults:build && bun run build:theme-bootstrap && bun run build:locale-bootstrap && vite",
     "build": "bun run typecheck && bun run build:web",
     "preview": "vite preview",
     "postinstall": "bun scripts/setup.mts",
@@ -22,7 +22,7 @@
     "doc:rust": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps --workspace",
     "bench": "bun run bench:web",
     "bench:web": "bun src-web/bench/turn-consumer.ts",
-    "build:web": "bun run theme:defaults:build && bun run build:theme-bootstrap && vite build",
+    "build:web": "bun run theme:defaults:build && bun run build:theme-bootstrap && bun run build:locale-bootstrap && bun run i18n:check && vite build",
     "typecheck": "vue-tsc --noEmit && tsc --noEmit -p scripts/tsconfig.json",
     "typecheck:rust": "cargo check --workspace",
     "lint": "eslint . --max-warnings 0",
@@ -38,10 +38,14 @@
     "prepare": "husky",
     "clean:rust": "cargo clean",
     "build:native-fixture": "bun scripts/build-native-fixture.mts",
-    "build:theme-bootstrap": "bun scripts/build-theme-bootstrap.mts"
+    "build:theme-bootstrap": "bun scripts/build-theme-bootstrap.mts",
+    "build:locale-bootstrap": "bun scripts/build-locale-bootstrap.mts",
+    "i18n:check": "bun scripts/i18n-check.mts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@intlify/eslint-plugin-vue-i18n": "^4.5.1",
+    "@intlify/unplugin-vue-i18n": "^11.2.5",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.12.1",
     "@types/bun": "^1.4.2",
@@ -66,6 +70,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.1",
-    "vue": "^3.5.43"
+    "vue": "^3.5.43",
+    "vue-i18n": "^11.4.13"
   }
 }

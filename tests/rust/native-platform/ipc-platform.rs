@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("Aoidos IPC fixture")
-            .initialization_script("window.__AOIDOS_THEME_BOOTSTRAP__={version:1,theme:'dark'};")
+            .initialization_script("window.__AOIDOS_THEME_BOOTSTRAP__={version:1,theme:'dark'};window.__AOIDOS_LOCALE_BOOTSTRAP__={version:1,locale:'zh-Hans'};")
             .visible(false)
             .build()?;
             // 超时只用于集成测试兜底，不是产品正文轮询或恢复策略。

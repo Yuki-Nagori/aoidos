@@ -1,5 +1,7 @@
 # 架构总览
 
+更新日期：2026-10-10。
+
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
 ## 主题导航
@@ -17,14 +19,14 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定   |
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收 |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；已评审，待实现             |
-| 国际化       | [界面国际化](i18n.md)                  | 语言、单源资源、首窗与原生文案、精确格式化；已评审，待实现       |
+| 国际化       | [界面国际化](i18n.md)                  | zh-Hans / en、语言偏好、首窗原生文案与精确格式化；034 实施中     |
 | 主题与皮肤   | [主题架构](theming.md)                 | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 已三平台验收      |
 | 存储基建     | [存储基建](storage.md)                 | 数据目录、SQLite、实例锁与原子写                                 |
 | 开发与交付   | [构建与开发](build-and-development.md) | 本地命令、质量门禁、打包与图标                                   |
 
 ## 工程现状
 
-存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过；验收证据见[任务索引](../task-index.md)。
+存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 正在接入界面语言、持久偏好与本地化格式；验收证据见[任务索引](../task-index.md)。
 
 记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，尚未接入产品记忆流程；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
 
@@ -52,7 +54,7 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 027 已定稿[计价与费用预算](billing.md)，035 接不可变价格、双作用域金额额度、持久预留 / 结算、周期恢复及明细 / 可选余额；参考 Token 只生成固定默认金额，不另设累计 Token 额度。当前尚未实施。
 
-028 已定稿 zh-Hans / en、单源资源、独立偏好与精确格式化；034 的前置 028 / 013 / 026 已满足，现可开始实施并复用 026 首窗入口；025 / 031 后续消费。语言不隐式改写玩家原文或计价币种。
+028 定稿 zh-Hans / en、单源资源、独立偏好与精确格式化；034 复用 026 的首窗入口和 013 的共享存储，正在完成验收。025 / 031 / 035 消费后续界面与金额格式化能力。语言不隐式改写玩家原文或计价币种。
 
 ## 分层和依赖方向
 
@@ -87,7 +89,12 @@ src-tauri
   ├─→ aoidos-store
   ├─→ aoidos-theme
   │     └─→ aoidos-store
+  ├─→ aoidos-locale
+  │     └─→ aoidos-store
   └─→ aoidos-json
+
+aoidos-engine
+  └─→ aoidos-locale → aoidos-store
 ```
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。后续记忆产品流程与计费接入时，补齐实际链路并核对无环；端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
@@ -141,6 +148,23 @@ src-web composable → theme API → theme_commands → aoidos-theme 目录 / CS
 ```
 
 默认主题文件由 `aoidos-theme/assets/themes/*.css` 提供，生成 CSS 提交在 `src-web/styles/generated/`；Rust 集成测试逐主题对照生成值和 Tailwind aliases。皮肤结果只包含经校验的常量与基础 token 引用，UI 不解析原始 CSS。macOS 本机及 Windows / macOS / Linux CI 的首模块样式、生产 CSP 与开发 HMR 验收证据由 [026](../task/026-theming-impl.md) 维护。
+
+### 语言启动与展示链路
+
+```text
+engine::Storage（共享 SQLite 迁移 / 连接）← aoidos-locale（偏好与系统语言归一化）
+  → Tauri locale_commands（保存、应用原生文案与返回状态）
+  → 单一 WebView 初始化脚本（LocaleBootstrap）→ locale-bootstrap.js
+  → 每次文档加载、Vue 挂载前读取 Rust 偏好 → html lang / vue-i18n
+
+src-web/i18n/startup → locale API → locale_commands → 同型 IPC 结果
+  → 首次挂载前对齐持久偏好并注入 useLocale
+src-web/composables/useLocale → 最新意图与回读确认
+  → 当前视图代次确认 → html lang / 界面消息
+src-web/utils/format → Intl + 字符串 / BigInt 精确格式化
+```
+
+`aoidos-locale` 只依赖 `aoidos-store`，由 engine 和 Tauri 单向消费；偏好与主题 / 游戏 UI 偏好分别持有。Task 034 的三平台与最终 verify 证据记在[任务](../task/034-i18n-impl.md)。
 
 ### 阶段机基础链路
 

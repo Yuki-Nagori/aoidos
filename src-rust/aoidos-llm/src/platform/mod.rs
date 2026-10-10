@@ -23,8 +23,28 @@ use windows::prompt_native_key;
 #[cfg(windows)]
 pub(crate) use windows::restrict_to_current_user;
 
+/// 各平台共享的原生输入文案；参数内容由受信任的 locale 资源提供。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativePromptText {
+    pub title: String,
+    pub message: String,
+    pub save: String,
+    pub cancel: String,
+}
+
+impl Default for NativePromptText {
+    fn default() -> Self {
+        Self {
+            title: "Aoidos API 密钥".into(),
+            message: "输入 {provider} 的 API 密钥；取消将保留当前已保存的密钥。".into(),
+            save: "保存".into(),
+            cancel: "取消".into(),
+        }
+    }
+}
+
 /// 同型原生输入入口；调用方需在 UI 主线程执行。取消为 None，失败是 store.*。
-pub type NativePrompt = fn(&str) -> Result<Option<String>>;
+pub type NativePrompt = fn(&str, &NativePromptText) -> Result<Option<String>>;
 
 /// 返回本平台原生输入器；不把运行期平台差异暴露给使用点。
 #[must_use]

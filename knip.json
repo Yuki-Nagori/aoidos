@@ -3,6 +3,7 @@
   "entry": [
     "index.html",
     "src-web/theme-bootstrap.ts",
+    "src-web/locale-bootstrap.ts",
     "tests/web/**/*.test.ts",
     "src-web/bench/*.ts",
     "tests/rust/native-platform/webview/*.ts"

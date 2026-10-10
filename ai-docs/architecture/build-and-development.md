@@ -1,5 +1,7 @@
 # 构建与开发
 
+更新日期：2026-10-10。
+
 [架构总览](README.md)
 
 ## 环境
@@ -27,6 +29,7 @@
 | `bun run clean:rust`                   | 清理 Rust 生成缓存；可追加 `-- -p <crate>` 限定包                                                  |
 | `bun run doc:rust`                     | rustdoc 构建并拒绝警告（文档内链契约）                                                             |
 | `bun run knip`                         | 死依赖 / 死导出检查                                                                                |
+| `bun run i18n:check`                   | 校验语言资源键、占位参数、静态引用及保留命名空间                                                   |
 | `bun run tauri:build`                  | 发布打包                                                                                           |
 
 前端与夹具源代码按根 `tsconfig.json` 检查；仓库 `.mts` 脚本使用 `scripts/tsconfig.json`，继承严格检查并单独启用 Bun / Node 类型及 `allowImportingTsExtensions`，保持 `noEmit`。`typecheck` 聚合两项，前端配置不增加脚本运行环境类型。`@types/bun` / `@types/node` 作为直接开发依赖，版本由 `bun.lock` 固定。

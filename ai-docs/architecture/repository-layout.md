@@ -1,5 +1,7 @@
 # 目录与模块规划
 
+更新日期：2026-10-10。
+
 [架构总览](README.md)
 
 ```text
@@ -9,10 +11,12 @@
 │   ├── App.vue                # 根组件：配置 / 默认剧本选择与最小正式对局入口
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
+│   ├── i18n/                  # vue-i18n 实例与挂载前持久语言同步
 │   ├── utils/                 # 纯消费规则 / 恢复协调及其他纯逻辑，配单测
 │   ├── composables/           # Vue 身份、监听与 scope 清理，消费 utils
 │   ├── styles/                # 全局样式扩展；generated/ 仅放构建生成的 CSS
 │   ├── theme-bootstrap.ts     # 首帧主题引导（构建为 /theme-bootstrap.js）
+│   ├── locale-bootstrap.ts    # 首帧语言引导（构建为 /locale-bootstrap.js）
 │   └── bench/                 # tinybench 正文消费基准
 ├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
@@ -20,6 +24,7 @@
 │   ├── src/game_commands/     # 产品阶段 DTO / 命令适配，业务由 engine actor 执行
 │   ├── src/turn_commands/     # 回合服务 / 事件适配，mod.rs 与 tests.rs 并列
 │   ├── src/theme_commands/    # 主题目录、偏好与剧本皮肤命令适配
+│   ├── src/locale_commands/   # 语言偏好 IPC；native.rs 单独封装真实 Wry 菜单 / 托盘适配
 │   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；平台原生输入经 aoidos-llm 分发
 │   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
 │   ├── src/events.rs          # 每流序号与事件信封，窗口投递由 turn_commands 适配
@@ -34,14 +39,17 @@
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
 │   ├── aoidos-theme/          # 主题目录 / 偏好 / 剧本皮肤校验，含 assets/themes/ 与 build.rs
 │   ├── aoidos-memory/         # 029：记忆版本、SQLite manifest、幂等操作、因果核验与恢复
+│   ├── aoidos-locale/         # 034：受限语言偏好、系统语言归一化与独立 SQLite schema
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── aoidos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
 ├── resources/scripts/        # 已发布剧本原文与署名 / 许可，编译期内嵌
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
 ├── tests/web/                 # Vitest 单测（目录镜像 src-web）
+│   └── i18n/                  # 启动语言同步测试
 ├── scripts/                   # 仓库脚本（环境 / 覆盖率 / 原生夹具与 Rust 构建适配；TS 独立 tsconfig）
 ├── coverage-rust.config.mts   # Rust 覆盖率门禁的忽略清单与逐文件预算（scripts/coverage-rust.mts 消费）
+├── locales/                  # zh-Hans / en 单源 JSON；Vite 与原生构建共用
 ├── .github/workflows/ci.yml   # 三平台 CI
 ├── .husky/pre-commit          # 提交前查双端格式（全量门禁在 CI）
 ├── ai-docs/                   # 本文档体系

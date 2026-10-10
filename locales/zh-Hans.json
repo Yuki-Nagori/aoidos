@@ -1,0 +1,108 @@
+{
+  "common": {
+    "appName": "Aoidos",
+    "loading": "正在读取",
+    "readBody": "读取完整正文",
+    "reconnect": "重新连接",
+    "unknownError": "发生了意外错误"
+  },
+  "settings": {
+    "language": "界面语言",
+    "systemLanguageCurrent": "跟随系统（{locale}）",
+    "chinese": "简体中文",
+    "english": "English",
+    "languagePending": "语言偏好已保存；部分原生界面将在下次启动时更新。",
+    "languageSaveFailed": "语言偏好保存失败，仍使用上次确认的语言。",
+    "languageLoadFailed": "无法读取语言偏好，当前暂用首次运行语言。",
+    "languageFallback": "语言偏好不可用，当前显示语言只用于本次启动。",
+    "theme": "主题",
+    "themeErrors": {
+      "storageUnavailable": "主题偏好不可用，已使用深色默认主题。",
+      "invalidPreference": "主题偏好损坏，已使用深色默认主题。",
+      "themeUnavailable": "所选主题当前不可用，已使用深色默认主题。",
+      "saveFailed": "主题保存失败，仍保留已确认主题。",
+      "readFailed": "主题偏好读取失败，当前使用安全默认主题。",
+      "catalogUnavailable": "主题目录不可用，当前使用安全默认主题。"
+    },
+    "skinErrors": {
+      "invalidValue": "剧本皮肤返回了不支持的值。",
+      "unsupportedWebView": "当前 WebView 不支持剧本皮肤样式。",
+      "applyFailed": "剧本皮肤无法应用，已恢复默认样式。",
+      "readFailed": "剧本皮肤读取失败；可重试或使用默认样式。"
+    },
+    "enableSkin": "启用剧本皮肤",
+    "disableSkin": "关闭剧本皮肤",
+    "skinWarnings": "剧本皮肤有 {count} 条兼容性提示。",
+    "model": "模型",
+    "setApiKey": "设置 API 密钥（系统窗口）",
+    "keySet": "密钥已设置",
+    "keyMissing": "密钥未设置",
+    "script": "剧本",
+    "credits": "剧本署名与许可"
+  },
+  "game": {
+    "intro": "选择剧本与模型后开始。重开周目不会自动生成。",
+    "restart": "重开 / 首次打开",
+    "newCycle": "新建周目",
+    "phase": "阶段：{phase}",
+    "paused": "已暂停，继续需要显式恢复。",
+    "historyPending": "记录尚未确认，请重新连接。",
+    "recordKind": "{kind}：",
+    "generation": "生成：{outcome}",
+    "action": "行动",
+    "submitAction": "提交行动",
+    "cancelTurn": "取消回合",
+    "resume": "恢复",
+    "confirmCheck": "确认判定（{expression}）",
+    "outcomes": {
+      "completed": "已完成",
+      "cancelled": "已取消",
+      "failed": "失败"
+    },
+    "finishReasons": {
+      "stop": "正常结束",
+      "guard": "护栏结束",
+      "length": "达到长度上限"
+    },
+    "recordKinds": {
+      "narration": "叙事",
+      "character": "角色发言",
+      "system": "系统记录",
+      "check": "判定",
+      "header": "会话信息"
+    },
+    "phases": {
+      "idle": "等待行动",
+      "generating": "生成中",
+      "awaitingCheck": "等待判定",
+      "settling": "结算中",
+      "advancing": "推进中"
+    }
+  },
+  "native": {
+    "windowTitle": "Aoidos",
+    "menuShow": "显示 Aoidos",
+    "menuQuit": "退出 Aoidos",
+    "credentialTitle": "Aoidos API 密钥",
+    "credentialPrompt": "输入 {provider} 的 API 密钥；取消将保留当前已保存的密钥。",
+    "credentialSave": "保存",
+    "credentialCancel": "取消"
+  },
+  "errors": {
+    "appNotReady": "应用仍在准备，请稍后重试。",
+    "appNotFound": "找不到请求的内容。",
+    "badRequest": "请求内容无效。",
+    "storeCorrupt": "保存的数据无法读取。",
+    "storeIo": "读取或保存数据时发生错误。",
+    "appEventFailed": "状态同步暂时失败，可以重新连接后恢复。",
+    "appBusy": "当前操作仍在处理中，请稍后重试。",
+    "unknownWithCode": "发生了意外错误（{code}）。"
+  },
+  "budget": {
+    "currency": "金额",
+    "tokens": "Tokens"
+  },
+  "memory": {
+    "pendingConfirmation": "有一项内容待确认。"
+  }
+}

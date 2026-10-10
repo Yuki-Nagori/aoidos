@@ -1,23 +1,28 @@
 //! AppKit 原生密码输入。仅 UI 主线程可用；密码字段不使用普通文本框。
+use super::NativePromptText;
 use aoidos_store::error::{Result, StoreError};
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSAlert, NSApplication, NSSecureTextField};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-pub(super) fn prompt_native_key(label: &str) -> Result<Option<String>> {
-    prompt(label, None)
+pub(super) fn prompt_native_key(label: &str, text: &NativePromptText) -> Result<Option<String>> {
+    prompt(label, text, None)
 }
 
-fn prompt(label: &str, verification: Option<bool>) -> Result<Option<String>> {
+fn prompt(
+    label: &str,
+    text: &NativePromptText,
+    verification: Option<bool>,
+) -> Result<Option<String>> {
     let mtm = MainThreadMarker::new().ok_or_else(wrong_thread)?;
     let app = NSApplication::sharedApplication(mtm);
     let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str("Aoidos API 密钥"));
-    alert.setInformativeText(&NSString::from_str(&format!(
-        "输入 {label} 的 API 密钥；取消保留旧值。"
-    )));
-    alert.addButtonWithTitle(&NSString::from_str("保存"));
-    alert.addButtonWithTitle(&NSString::from_str("取消"));
+    alert.setMessageText(&NSString::from_str(&text.title));
+    alert.setInformativeText(&NSString::from_str(
+        &text.message.replace("{provider}", label),
+    ));
+    alert.addButtonWithTitle(&NSString::from_str(&text.save));
+    alert.addButtonWithTitle(&NSString::from_str(&text.cancel));
     let entry = NSSecureTextField::initWithFrame(
         NSSecureTextField::alloc(mtm),
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 26.0)),
@@ -62,8 +67,9 @@ fn wrong_thread() -> StoreError {
 
 #[cfg(feature = "native-smoke")]
 pub fn verify_native_input() -> Result<()> {
-    if prompt("test fixture", Some(true))?.as_deref() != Some("aoidos-native-fixture")
-        || prompt("test fixture", Some(false))?.is_some()
+    let text = NativePromptText::default();
+    if prompt("test fixture", &text, Some(true))?.as_deref() != Some("aoidos-native-fixture")
+        || prompt("test fixture", &text, Some(false))?.is_some()
     {
         return Err(StoreError::Corrupt(
             "native input verification failed".into(),
