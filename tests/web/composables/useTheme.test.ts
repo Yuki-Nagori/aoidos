@@ -359,8 +359,11 @@ it("allows disabling and restoring the cached skin without re-enabling on theme 
   scope.stop();
 });
 
-it("rejects values outside the fixed token set and falls back when CSSOM is unavailable", async () => {
-  const invalid = { ...emptySkin(), tokens: { "--color-accent": "#fff" } };
+it("rejects unsafe CSS names and values, and falls back when CSSOM is unavailable", async () => {
+  const invalid = {
+    ...emptySkin(),
+    tokens: { "--accent};body{color:red": "#fff;display:none" },
+  };
   const first = setup("mistbell", invalid);
   await flush();
   expect(first.theme.skinError.value).toContain("不支持");

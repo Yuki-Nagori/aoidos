@@ -1,5 +1,51 @@
 use super::*;
 
+const APP_CSS: &str = include_str!("../../../../src-web/app.css");
+const GENERATED_THEME_CSS: &str =
+    include_str!("../../../../src-web/styles/generated/theme-defaults.css");
+
+fn css_block<'a>(source: &'a str, selector: &str) -> &'a str {
+    let start = source
+        .find(selector)
+        .unwrap_or_else(|| panic!("missing CSS selector: {selector}"));
+    let open = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .expect("CSS block opening brace");
+    let close = source[open + 1..]
+        .find('}')
+        .map(|offset| open + 1 + offset)
+        .expect("CSS block closing brace");
+    &source[open + 1..close]
+}
+
+fn declarations(block: &str) -> BTreeMap<String, String> {
+    let mut declarations = BTreeMap::new();
+    for declaration in block
+        .split(';')
+        .map(str::trim)
+        .filter(|declaration| !declaration.is_empty())
+    {
+        let (name, value) = declaration
+            .split_once(':')
+            .unwrap_or_else(|| panic!("malformed CSS declaration: {declaration}"));
+        assert!(
+            declarations
+                .insert(name.trim().to_owned(), value.trim().to_owned())
+                .is_none(),
+            "duplicate CSS declaration: {name}"
+        );
+    }
+    declarations
+}
+
+fn normalized(values: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    values
+        .into_iter()
+        .map(|(name, value)| (name, value.split_whitespace().collect::<Vec<_>>().join(" ")))
+        .collect()
+}
+
 #[test]
 fn catalog_has_unique_ids_names_and_aliases() {
     for (index, token) in TOKENS.iter().enumerate() {
@@ -20,6 +66,40 @@ fn skin_write_permission_is_explicit() {
     assert!(find("--ink").unwrap().skin_writable);
     assert!(!find("--warning").unwrap().skin_writable);
     assert_eq!(find("--app-bg").unwrap().alias, None);
+}
+
+#[test]
+fn rust_catalog_matches_generated_theme_values_and_tailwind_aliases() {
+    let inline = css_block(APP_CSS, "@theme inline {");
+    let aliases = declarations(inline);
+    let expected_aliases = TOKENS
+        .iter()
+        .filter_map(|token| {
+            token
+                .alias
+                .map(|alias| (alias.to_owned(), format!("var({})", token.name)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        aliases, expected_aliases,
+        "@theme inline must exactly match TOKENS"
+    );
+
+    let themes = theme_files();
+    for (id, source) in themes {
+        let (scheme, source_values) = theme_values(source).expect("registered theme is valid");
+        let selector = format!(":root[data-theme=\"{id}\"]");
+        let mut generated = declarations(css_block(GENERATED_THEME_CSS, &selector));
+        assert_eq!(
+            generated.remove("color-scheme").as_deref(),
+            Some(scheme.as_str())
+        );
+        assert_eq!(
+            normalized(generated),
+            normalized(source_values),
+            "generated values drifted for {id}"
+        );
+    }
 }
 
 #[test]

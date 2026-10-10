@@ -1,6 +1,6 @@
 # 主题与剧本皮肤
 
-更新 / 官方资料核验日期：2026-10-10。[009](../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/aoidos/issues/12)；实现由 [026](../task/026-theming-impl.md) 承接，目前进行中。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](ipc-contract.md)，存储与路径规则归[存储基建](storage.md)。
+更新 / 官方资料核验日期：2026-10-10。[009](../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/aoidos/issues/12)；实现由 [026](../task/026-theming-impl.md) 承接，本机验收已过，等待三平台 CI。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](ipc-contract.md)，存储与路径规则归[存储基建](storage.md)。
 
 ## 分层与真源
 
@@ -80,15 +80,15 @@ HTML：根节点 → head 首个受信任 bootstrap 设置 data-theme → 默认
 UI：沿用 bootstrap 主题 → 获取剧本登记主题 → 订阅 / 查询业务状态 → 应用对应皮肤
 ```
 
-当前 main 由配置自动创建，026 落地时改为受控创建，保留标签、窗口配置、事件目标与 capability。窗口 / Webview backgroundColor 为 ui.md 深色星云底色，不以透明或白色兜底；该原生底色不属于可覆盖皮肤。防闪验收针对首帧应用内容，原生窗口装载间隙的深底是明确的启动表面。
+产品 main 由 Rust 在 store 初始化、偏好读取和 bootstrap 冻结后受控创建，窗口标签为 `main`，保留 024 的尺寸、背景、命令 capability 与事件目标。窗口 / Webview backgroundColor 为 ui.md 深色星云底色，不以透明或白色兜底；该原生底色不属于可覆盖皮肤。防闪验收针对首帧应用内容，原生窗口装载间隙的深底是明确的启动表面。原生验收夹具加载生产构建的 CSS 与 favicon，不以手写替代样式证明首帧。
 
 Tauri 的 initialization_script 在 HTML 解析前运行，documentElement 可能不存在。脚本只注入经目录校验的 ThemeId、对应的 `colorScheme` 和可选 fallbackReason 枚举（storageUnavailable / invalidPreference / themeUnavailable）；HTML head 的首个受信任脚本在根节点创建后、任何应用 CSS / module 前设置 data-theme 与 color-scheme。不能对 null 根直接赋值后就宣称防闪，也不能等 Vue mounted / 异步 invoke 才修色。[Tauri Builder 文档](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html#method.initialization_script)
 
 034 在同一初始化脚本内追加独立 LocaleBootstrap，语言 / 主题各自版本，不二次创建 main；细节见[国际化架构](i18n.md)。026 保留主题主责，不自行实现翻译。
 
-bootstrap 只接受 Rust 主题目录中登记的 ID，来源 / 主 frame 按实际应用协议与精确 dev origin 核验，不把主题文件、路径或未登记字符串拼入 JS。Windows 的子 frame 行为也需防护；生产不加载第三方 frame。普通浏览器开发没有 Rust bootstrap 时确定性用 dark，不读旧网页偏好；未知 ID 回退到 dark 并报告诊断。
+bootstrap 的主题值由 Rust 从已登记目录读取并 JSON 序列化后注入；head 脚本再次检查版本、值形状和 ID 格式，不拼接主题文件、路径或用户输入。生产不加载第三方 frame。普通浏览器开发没有 Rust bootstrap 时确定性用 dark，不读旧网页偏好；未知 ID 回退到 dark 并报告诊断。
 
-首窗防闪不自动覆盖任意文档导航：生产外部导航拒绝，允许的显式重载须先由 Rust 重新读偏好再重建 main；不能在新文档继续用创建时的旧枚举。开发 HMR 保留文档，开发 full reload 的差异单独记录，不伪装为生产防闪已通过。
+目前产品没有任意文档导航或 WebView 显式重载入口，也没有独立导航回调 / 重建协议；首帧保证覆盖 Rust 创建 main 时冻结的偏好。未来若加入重载或重建，必须先重新读取偏好并生成新的 bootstrap，不能复用旧枚举。开发 CSS HMR 保留文档；原生验收使用生产 `devCsp` 实际策略验证样式更新和文档身份不变。
 
 读取偏好失败不抹除已存值：启动可用 dark 降级，bootstrap 的 fallbackReason 明确通知 UI 这是降级，不能当作确认偏好；界面显示简短诊断并主动 get 核验，既有迁移快照另按其契约消费，不捏造迁移状态；非法格式 / 损坏持久值为 store.corrupt，不回写默认覆盖。语法合法但当前未登记或不可用的 ID 以 themeUnavailable 降级，保留已确认偏好。迁移冻结保持 app.not-ready / 既有诊断规则；恢复后的主题只能在当前视图代次中应用。
 
@@ -213,9 +213,9 @@ warnings 只有固定 code、token?、line?，token 仅目录名或最多 64 字
 
 第三方与内置皮肤走同一校验；可信来源不绕白名单。威胁包含选择器 / 布局劫持、外部资源探测、字体或图像请求、变量循环 / 解析耗尽和陈旧响应串用。禁止包内及外部图引用、字体加载、任意规则 / JS；颜色 / 字体可读性与内容真实性是不同问题。
 
-CSP 是兜底，不替代 Rust 校验。生产配置只允许受信任应用脚本 / 样式、`img-src 'self'`、应用内字体和 Tauri IPC；不开放 localhost、网络、data / blob 图像、unsafe-eval 或 asset 协议。`devCsp` 单独允许精确 Vite origin 与 HMR WebSocket，发布配置不得带入开发放宽项。原生 IPC 夹具使用相同的受限生产策略，并由测试锁定生产 / 开发策略边界。v1 本地字体依系统栈，不下载网络字体。[Tauri CSP 官方说明](https://v2.tauri.app/security/csp/)
+CSP 是兜底，不替代 Rust 校验。生产配置只允许受信任应用脚本 / 样式、`img-src 'self'`、应用内字体和 Tauri IPC；不开放 localhost、网络、data / blob 图像、unsafe-eval 或 asset 协议。`devCsp` 仅开放精确 Vite origin、HMR WebSocket，并允许 Vite CSS HMR 注入的 inline style；这项放宽只存在于开发配置，发布策略不含 localhost 或 `unsafe-inline`。原生生产夹具验证网络请求被 CSP 阻断；开发夹具加载产品 `devCsp` 并验证真实 CSS 热更新不重载文档。v1 本地字体依系统栈，不下载网络字体。[Tauri CSP 官方说明](https://v2.tauri.app/security/csp/)
 
-026 验证构造样式表与实际 CSP 共存、favicon / IPC / 开发热更新正常，记录三平台证据。未来受控剧情资产需独立任务冻结路径 / MIME / CSP 权限，不借换肤开放任意读取。
+026 在 macOS 原生 WebView 验证构造样式表与生产 CSP 共存、head bootstrap 后且 Vue 挂载前的主题 / 产品 CSS、favicon、IPC 和开发 CSS 热更新；这证明首个应用模块执行时的计算样式，不等同于录制物理屏幕帧。三平台证据见任务记录。未来受控剧情资产需独立任务冻结路径 / MIME / CSP 权限，不借换肤开放任意读取。
 
 对比度告警在导入 / 开发时可选，首版不阻止加载；受保护状态色不能保证任意背景上都可读。透明色与玻璃 / 渐变组合须在实际合成背景上测试并给出文字 / 图标，不能仅检查两个色值就宣称可访问性通过。未知皮肤仍可通过不合适色值降低可读性，用户可暂时关闭当前皮肤回应用默认，离开该剧本前保持关闭，主题切换不重新启用；不新增持久偏好字段，无须改主题偏好或删除剧本。
 
@@ -225,4 +225,4 @@ CSP 是兜底，不替代 Rust 校验。生产配置只允许受信任应用脚�
 
 026 必须覆盖每个内置主题与模板登记主题、缺套回退、坏结构整份失败 / 单条丢弃、非法重复、变量循环与依赖、转义 url、恶意 selector / at 规则、输入 / 返回预算、有界 IO / 符号链接前提、旧响应和样式表清退、偏好保存失败及重载 bootstrap。目录 / 默认 CSS / Tailwind 映射 / Rust 白名单共同检查，首帧无错误主题与三平台 CSP / CSSOM 单独留证。最终 `bun run verify` 十三项通过。
 
-009 的设计走查与参考例已完成；Rust CSS 解析器、浏览器渲染、首帧 / 三平台 CSP 的实施证据由进行中的 026 持续记录，不以候选依赖文档代替这些验收。
+009 的设计走查与参考例已完成；Rust 目录 / 生成 CSS / Tailwind aliases 交叉校验、macOS Vue 挂载前主题 / 产品 CSS、favicon / CSP / HMR 已通过，Windows 与 Linux 证据及完整 verify 由 026 的 PR CI 补齐，不以候选依赖文档代替运行时验收。

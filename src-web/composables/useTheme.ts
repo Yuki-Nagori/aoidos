@@ -9,21 +9,8 @@ import {
   type ThemeInfo,
 } from "../api/theme";
 
-const TOKEN_NAMES = new Set([
-  "--ink",
-  "--muted",
-  "--accent",
-  "--accent-violet",
-  "--accent-warm",
-  "--panel",
-  "--bubble-user",
-  "--bubble-persona",
-  "--hairline",
-  "--app-bg",
-  "--record-left",
-  "--ease-signature",
-  "--dur-micro",
-]);
+// Rust owns the semantic allowlist; the UI only prevents a returned name escaping CSS syntax.
+const SAFE_TOKEN_NAME = /^--[a-z][a-z0-9-]*$/;
 
 /** 主题只在 Rust 持久化确认后切换；剧本样式表由本 composable 独占并负责清退。 */
 export function useTheme(scriptId: Ref<string>) {
@@ -108,7 +95,7 @@ export function useTheme(scriptId: Ref<string>) {
     clearSheet();
     const entries = Object.entries(skin.tokens);
     if (!entries.length || skin.status !== "valid") return;
-    if (entries.some(([name, value]) => !TOKEN_NAMES.has(name) || /[;{}\0]/.test(value))) {
+    if (entries.some(([name, value]) => !SAFE_TOKEN_NAME.test(name) || /[;{}\0]/.test(value))) {
       skinError.value = "剧本皮肤返回了不支持的值";
       return;
     }

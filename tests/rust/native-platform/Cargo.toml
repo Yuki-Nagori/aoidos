@@ -42,3 +42,9 @@ name = "product-platform"
 path = "product-platform.rs"
 harness = false
 required-features = ["desktop-session"]
+
+[[test]]
+name = "hmr-platform"
+path = "hmr-platform.rs"
+harness = false
+required-features = ["desktop-session"]

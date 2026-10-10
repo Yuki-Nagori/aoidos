@@ -31,6 +31,12 @@ import {
   type PhaseState,
 } from "../../../../src-web/api/engine";
 
+// The fixture module runs after the trusted head bootstrap and product CSS,
+// but before Vue mounts. Capture that first application frame synchronously.
+const firstModuleTheme = document.documentElement.dataset.theme;
+const firstModuleInk = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
+const firstModuleBackground = getComputedStyle(document.body).backgroundImage;
+
 function check(value: boolean, code: string): void {
   if (!value) throw { code };
 }
@@ -141,10 +147,51 @@ async function smoke(): Promise<void> {
   let passed = false;
   let diagnostic = "";
   try {
+    check(firstModuleTheme === "dark", "theme-bootstrap-not-applied-before-app");
     check(
-      document.documentElement.dataset.theme === "dark",
-      "theme-bootstrap-not-applied-before-app",
+      firstModuleInk.length > 0 && firstModuleBackground.includes("gradient"),
+      "product-css-not-applied-before-vue-mount",
     );
+    const themeInks = new Set<string>();
+    for (const theme of ["dark", "light", "light-purple"]) {
+      document.documentElement.dataset.theme = theme;
+      const ink = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
+      const background = getComputedStyle(document.body).backgroundImage;
+      check(
+        ink.length > 0 && background.includes("gradient"),
+        `product-theme-css-missing:${theme}`,
+      );
+      themeInks.add(ink);
+    }
+    check(themeInks.size === 3, "product-theme-css-values-collapsed");
+    document.documentElement.dataset.theme = firstModuleTheme;
+    const favicon = new Image();
+    const faviconLoaded = new Promise<void>((resolve, reject) => {
+      favicon.onload = () => resolve();
+      favicon.onerror = () => reject(new Error("product-favicon-not-loaded"));
+    });
+    favicon.src = "/icon.png";
+    await faviconLoaded;
+    check(favicon.naturalWidth > 0 && favicon.naturalHeight > 0, "product-favicon-invalid");
+    const blockedConnect = new Promise<boolean>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        document.removeEventListener("securitypolicyviolation", cspViolation);
+        reject(new Error("production-csp-violation-event-timeout"));
+      }, 2_000);
+      const cspViolation = (event: SecurityPolicyViolationEvent) => {
+        if (
+          event.effectiveDirective === "connect-src" &&
+          event.blockedURI.startsWith("https://example.invalid")
+        ) {
+          window.clearTimeout(timeout);
+          document.removeEventListener("securitypolicyviolation", cspViolation);
+          resolve(true);
+        }
+      };
+      document.addEventListener("securitypolicyviolation", cspViolation);
+    });
+    await fetch("https://example.invalid/csp-probe").catch(() => undefined);
+    check(await blockedConnect, "production-csp-did-not-block-network");
     const initialTheme = await getThemePreference();
     check(
       initialTheme.version === 1 && initialTheme.theme === "dark",
