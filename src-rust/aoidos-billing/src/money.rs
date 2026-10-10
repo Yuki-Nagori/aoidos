@@ -194,6 +194,43 @@ impl UnitPrice {
     const fn nanos(&self) -> i128 {
         self.0
     }
+
+    #[must_use]
+    pub fn to_decimal_string(&self) -> String {
+        let whole = self.0 / i128::from(NANOS_PER_UNIT);
+        let fraction = self.0 % i128::from(NANOS_PER_UNIT);
+        if fraction == 0 {
+            return whole.to_string();
+        }
+        format!("{whole}.{fraction:09}")
+            .trim_end_matches('0')
+            .to_owned()
+    }
+}
+
+impl fmt::Display for UnitPrice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_decimal_string())
+    }
+}
+
+impl Serialize for UnitPrice {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_decimal_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for UnitPrice {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(de::Error::custom)
+    }
 }
 
 /// 未舍入的精确请求费用：纳币分子除以 `unit_tokens`。
@@ -366,6 +403,20 @@ mod tests {
         assert!(UnitPrice::parse("1_000").is_err());
         assert!(UnitPrice::parse("1e3").is_err());
         assert!(UnitPrice::parse("0.0000000001").is_err());
+    }
+
+    #[test]
+    fn unit_prices_serialize_as_canonical_decimal_strings() {
+        let price = UnitPrice::parse("12.340000000").unwrap();
+        assert_eq!(price.to_string(), "12.34");
+        assert_eq!(serde_json::to_string(&price).unwrap(), r#""12.34""#);
+        assert_eq!(
+            serde_json::from_str::<UnitPrice>(r#""12.34""#).unwrap(),
+            price
+        );
+        assert!(serde_json::from_str::<UnitPrice>("12.34").is_err());
+        assert!(serde_json::from_str::<UnitPrice>(r#""-1""#).is_err());
+        assert_eq!(UnitPrice::parse("12").unwrap().to_string(), "12");
     }
 
     #[test]
