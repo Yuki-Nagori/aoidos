@@ -1,6 +1,6 @@
 # 界面结构与交互
 
-更新 / 官方资料核验日期：2026-10-06。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；尚未实现。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
+更新 / 官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
 
 ## 舞台与覆盖层
 
@@ -10,14 +10,16 @@
 
 ```text
 客户端
-├── 顶栏：场景位置、阶段 / 恢复状态、设置入口
-├── 舞台区：居中 16:9 舞台；边缘保留星云
+├── 设置入口：空态展示完整配置；对局中折叠为紧凑摘要
+├── 舞台区：居中 16:9 舞台，顶部显示阶段状态；边缘保留星云
 └── 覆盖面板：标题与操作 / 有界记录窗口 / composer
 ```
 
 面板宽度 `min(calc(100vw - 16px), clamp(360px, 32vw, 520px))`，右边距 8px，顶部接顶栏、底部距客户端 8px；v1 不拖拽。高度不足时标题与 composer 保持可操作，记录区独立滚动；禁止整窗横向滚动。常规窗口最小 640 × 480 CSS 像素，恢复到更小显示器 / 高倍缩放时仍按当前客户端裁定宽高，不依赖最小尺寸兜底。
 
-舞台内容使用 aspect-ratio 与容器尺寸计算；不支持容器查询时用 ResizeObserver 更新可用矩形。不把浏览器页面缩放值当设备像素比。当前窗口配置仍为 960 × 640，逻辑分辨率与最小尺寸在界面落地时接入，不在本设计修改配置。
+舞台内容使用 aspect-ratio 与容器尺寸计算；不支持容器查询时用 ResizeObserver 更新可用矩形。不把浏览器页面缩放值当设备像素比。默认窗口为 960 × 640，最小客户区为 640 × 480 CSS 像素；桌面舞台锁定 16:9，高度不足时优先等比缩小，不用最小高度撑破比例。窄屏改为占满可用纵向空间。
+
+当前组件边界由 `App.vue` 编排产品状态，`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览分别位于 utils，定时器与偏好写入由 composables 管理。设置摘要在有活动对局时收起，仍可手动展开。
 
 ## 面板四态
 
@@ -56,7 +58,7 @@
 
 打开 450ms，收起 280ms，曲线 `cubic-bezier(0.2,0.85,0.2,1)`。收起位置 `translateX(calc(100% + 16px))` / opacity=0，打开 translateX(0) / opacity=1；只改变 transform 与 opacity，不动画宽度、舞台或 backdrop-filter。快速反向从当前计算值继续，不等 animationend 才改状态。
 
-prefers-reduced-motion 时取消位移动画，使用 120ms 淡入淡出；LED 脉冲、文字 shimmer 和流式光标闪烁改为静态状态。控件的可用 / inert 切换按状态即时生效，不由动画结束回调决定；旧回调必须按状态代次忽略。
+prefers-reduced-motion 时取消位移动画，使用 120ms 淡入淡出；LED 脉冲、文字 shimmer 和流式光标闪烁改为静态状态，记录区滚动与“跳转到最新”也不使用平滑滚动。控件的可用 / inert 切换按状态即时生效，不由动画结束回调决定；旧回调必须按状态代次忽略。
 
 面板是非模态 aside，有可读标题；按钮提供 aria-expanded / aria-controls，钉住按钮提供 aria-pressed。Tab 在可见界面自然行进，不为面板锁焦点；需要确认破坏性回退时才使用模态并恢复原焦点。新记录不自动抢焦点；状态提示用简短 polite live region，正文流不逐 token 朗读。错误和三档结果同时有文字 / 图标，不只靠颜色区分。
 
@@ -143,7 +145,7 @@ v1 普通历史项用 content-visibility: auto + contain-intrinsic-size 降低�
 
 若有界页在最低目标设备上仍出现连续滚动 P95 帧间隔 > 33ms，再评估 TanStack Virtual；引入前验证动态段落高度、选区、贴底和辅助技术，不在设计提交增加依赖。v1 纯文本渲染，HTML / 图片 / 自动外链不执行；轻 Markdown 属于后续可选项，若接入 markdown-it 必须 html:false、禁原始 HTML / 自动外部资源并定义链接打开策略。
 
-未读按“当前有效路径正式块”计数，不按 delta / 段落累计；取消 / failed 封口只计一次。collapsed 收到新块亮微光 LED，显示有界数字 99+，不自动展开。恢复、分页旧块和 fork 重放不重复增加未读；未知丢失区间只显示“有更新”，不能猜出精确数。切回前台 / 主动恢复取 phase 与 record view，最后所有事件丢失的限制如实保留，不加入持续轮询。
+未读按“当前有效路径正式块”计数，不按 delta / 段落累计；取消 / failed 封口只计一次。当前实现以“有新内容”标记提示并跳转最新，不显示无法准确维护的数字，也不自动展开。恢复、分页旧块和 fork 重放不重复增加未读；未知丢失区间只显示“有更新”，不能猜出精确数。切换会话或有效记录视图后重置跟随状态与未读提示；切回前台 / 主动恢复取 phase 与 record view，最后所有事件丢失的限制如实保留，不加入持续轮询。
 
 ## 空态与错误
 

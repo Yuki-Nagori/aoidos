@@ -55,7 +55,8 @@ fn catalog_has_unique_ids_names_and_aliases() {
                 && (token.alias.is_none() || other.alias.is_none() || token.alias != other.alias)
         }));
     }
-    assert_eq!(TOKENS.len(), 18);
+    assert_eq!(TOKENS.len(), 19);
+    assert_eq!(find("--on-accent").unwrap().id, "C19");
     assert_eq!(find("--accent").unwrap().id, "C03");
     assert!(find("--color-accent").is_none());
     assert!(find("--Accent").is_none());

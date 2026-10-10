@@ -16,6 +16,7 @@ rand_core = "0.9"
 getrandom = "0.4"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-window-state = "2.5.0"
 tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.33", features = ["bundled", "backup"] }
 fs4 = "1"

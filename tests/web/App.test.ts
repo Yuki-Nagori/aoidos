@@ -27,6 +27,8 @@ describe("App", () => {
           },
         ];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
+      if (command === "store_get_ui_preferences")
+        return { version: 1, panelPinned: false, diceMode: "manual" };
       if (command === "theme_list")
         return [
           { id: "dark", name: "深色", colorScheme: "dark" },
@@ -95,6 +97,7 @@ describe("App", () => {
       "llm_list_profiles",
       "locale_get_preference",
       "locale_set_preference",
+      "store_get_ui_preferences",
       "theme_get_preference",
       "theme_list",
       "theme_skin_load",
@@ -120,6 +123,8 @@ describe("App", () => {
       if (command === "llm_list_profiles") return { items: [] };
       if (command === "engine_list_scripts") return [];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
+      if (command === "store_get_ui_preferences")
+        return { version: 1, panelPinned: false, diceMode: "manual" };
       if (command === "theme_list") return [];
       if (command === "theme_skin_load")
         return {

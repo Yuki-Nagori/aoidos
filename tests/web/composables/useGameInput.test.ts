@@ -60,13 +60,64 @@ it("keeps failed drafts and sanitizes errors, discarding responses for another s
   pending.reject(new Error("old"));
   await sending;
   expect(input.error.value).toBeUndefined();
+  input.draft.value = "two 的草稿";
   const late = deferred();
   submit.mockReturnValue(late.promise);
   const sent = input.send();
   id.value = undefined;
   late.resolve(accepted);
   await sent;
+  expect(input.draft.value).toBe("");
+  id.value = "one";
   expect(input.draft.value).toBe("保留");
+  input.draft.value = "one 的新草稿";
+  id.value = "two";
+  expect(input.draft.value).toBe("two 的草稿");
+  scope.stop();
+});
+it("keeps only five bounded session drafts and blocks input beyond Rust's UTF-8 limit", async () => {
+  const id = ref("session-0");
+  const submit = vi.fn().mockResolvedValue(accepted);
+  const scope = effectScope();
+  const input = scope.run(() => useGameInput(id, submit))!;
+
+  input.draft.value = "first";
+  for (let index = 1; index < 6; index++) {
+    id.value = `session-${index}`;
+    input.draft.value = `draft-${index}`;
+  }
+  id.value = "session-0";
+  expect(input.draft.value).toBe("");
+  id.value = "session-5";
+  expect(input.draft.value).toBe("draft-5");
+
+  input.draft.value = "😀".repeat(8193);
+  expect(input.tooLarge.value).toBe(true);
+  await input.send();
+  expect(submit).not.toHaveBeenCalled();
+  scope.stop();
+});
+it("clears an accepted command only for the same session generation and unchanged draft", () => {
+  const id = ref("one");
+  const scope = effectScope();
+  const input = scope.run(() => useGameInput(id, vi.fn()))!;
+  input.draft.value = "/stop";
+  const ticket = input.captureDraft();
+
+  id.value = "two";
+  input.draft.value = "/stop";
+  input.clearDraftIfCurrent(ticket);
+  expect(input.draft.value).toBe("/stop");
+
+  id.value = "one";
+  input.draft.value = "/stop";
+  input.clearDraftIfCurrent(ticket);
+  expect(input.draft.value).toBe("/stop");
+
+  const current = input.captureDraft();
+  input.draft.value = "new text";
+  input.clearDraftIfCurrent(current);
+  expect(input.draft.value).toBe("new text");
   scope.stop();
 });
 it.each(["resolve", "reject"] as const)("ignores %s after disposal", async (result) => {
@@ -81,4 +132,21 @@ it.each(["resolve", "reject"] as const)("ignores %s after disposal", async (resu
   await sending;
   expect(input.draft.value).toBe("保留");
   expect(input.error.value).toBeUndefined();
+});
+
+it("clears a matching accepted command ticket and removes its saved session draft", () => {
+  const id = ref("one");
+  const scope = effectScope();
+  const input = scope.run(() => useGameInput(id, vi.fn()))!;
+  input.draft.value = "/stop";
+  input.clearDraftIfCurrent(input.captureDraft());
+  expect(input.draft.value).toBe("");
+  id.value = "two";
+  id.value = "one";
+  expect(input.draft.value).toBe("");
+  input.draft.value = "/resume";
+  const ticket = input.captureDraft();
+  scope.stop();
+  input.clearDraftIfCurrent(ticket);
+  expect(input.draft.value).toBe("/resume");
 });

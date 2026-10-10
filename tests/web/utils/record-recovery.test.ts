@@ -87,6 +87,19 @@ it("reads a near-limit Chinese body through the sixty-fifth UTF-8 segment", asyn
   expect(h.state.body).toBe(text);
   expect(body).toHaveBeenCalledTimes(65);
 });
+it("discards an in-flight expanded body when the reader returns to latest", async () => {
+  const body = deferred<RecordBodyPage>();
+  const h = harness({ body: vi.fn().mockReturnValue(body.promise) });
+  h.recovery.select("a");
+  await h.recovery.connect();
+  const reading = h.recovery.loadBody("opaque");
+  await vi.waitFor(() => expect(h.state.bodyRef).toBe("opaque"));
+  h.recovery.clearBody();
+  body.resolve({ text: "不应重新出现的旧正文" });
+  await reading;
+  expect(h.state.bodyRef).toBeUndefined();
+  expect(h.state.body).toBeUndefined();
+});
 it("buffers subscription events, coalesces hundreds of notifications and stops bounded recovery", async () => {
   const first = deferred<RecordView>(),
     second = deferred<RecordView>();

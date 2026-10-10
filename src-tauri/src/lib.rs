@@ -213,6 +213,15 @@ macro_rules! command_handler {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .on_menu_event(locale_commands::handle_menu_event)
         .setup(|app| {
         let dir = app.path().app_data_dir()?;
@@ -275,6 +284,7 @@ pub fn run() {
             .menu(locale_menu)
             .title(locale_commands::native_message(resolved_locale, "windowTitle"))
             .inner_size(960.0, 640.0)
+            .min_inner_size(640.0, 480.0)
             .background_color(tauri::webview::Color(8, 16, 24, 255))
             .initialization_script(format!("window.__AOIDOS_THEME_BOOTSTRAP__={bootstrap};window.__AOIDOS_LOCALE_BOOTSTRAP__={locale_script};"))
             .build()?;

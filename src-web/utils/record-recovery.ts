@@ -333,5 +333,11 @@ export function createRecordRecovery(
       }
     }
   }
-  return { select, receive, connect, disconnect, recover, loadPage, loadBody };
+  function clearBody(): void {
+    bodyGeneration++;
+    state.bodyRef = undefined;
+    state.body = undefined;
+    emit();
+  }
+  return { select, receive, connect, disconnect, recover, loadPage, loadBody, clearBody };
 }

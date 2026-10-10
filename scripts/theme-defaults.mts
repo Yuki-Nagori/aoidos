@@ -10,6 +10,7 @@ const expectedTokens = new Set([
   "--ink",
   "--muted",
   "--accent",
+  "--on-accent",
   "--accent-violet",
   "--accent-warm",
   "--panel",

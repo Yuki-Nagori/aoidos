@@ -16,8 +16,7 @@
 }
 
 @theme static {
-  /* 只保留 white / black 两个原语：强调底上的恒定文字色等不随主题切换的
-   * 场景（正式 on-accent 语义 token 待目录扩展时登记，004 不私增目录项）。
+  /* 只保留 white / black 两个原语，避免将固定色误用为主题语义。
    * 用 static：@theme 默认按使用量裁剪变量定义，未引用的原语不进产物。 */
   --color-white: #ffffff;
   --color-black: #000000;
@@ -27,6 +26,7 @@
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
   --color-accent-violet: var(--accent-violet);
   --color-accent-warm: var(--accent-warm);
   --color-panel: var(--panel);
@@ -67,6 +67,11 @@
       animation-duration: 0.01ms !important;
       transition-duration: 0.01ms !important;
     }
+
+    .dialogue-panel {
+      transform: none !important;
+      transition-duration: 120ms !important;
+    }
   }
 }
 
@@ -86,12 +91,315 @@
     text-align: center;
   }
 
+  .glass-panel:not([open]) {
+    padding: 1rem 1.25rem;
+  }
+
+  .setup-summary {
+    display: grid;
+    gap: 0.75rem;
+    justify-items: center;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .setup-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .glass-panel:not([open]) .setup-summary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .glass-panel:not([open]) .setup-summary h1 {
+    font-size: 1.125rem;
+  }
+
+  .glass-panel:not([open]) .setup-summary p {
+    display: none;
+  }
+
   .led-dot {
     width: 7px;
     height: 7px;
     border-radius: 9999px;
     background: var(--led-active);
     animation: led-pulse 1.6s ease-in-out infinite;
+  }
+
+  .game-stage {
+    position: relative;
+    width: min(100%, calc((100dvh - 5rem) * 16 / 9));
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    isolation: isolate;
+    border: 1px solid var(--hairline);
+    border-radius: 1.25rem;
+    background:
+      radial-gradient(
+        ellipse at 50% 115%,
+        color-mix(in srgb, var(--accent-violet) 20%, transparent),
+        transparent 55%
+      ),
+      radial-gradient(
+        ellipse at 12% 4%,
+        color-mix(in srgb, var(--accent) 12%, transparent),
+        transparent 34%
+      ),
+      var(--panel);
+    box-shadow: 0 24px 80px rgba(4, 10, 16, 0.34);
+  }
+
+  .stage-header {
+    position: absolute;
+    z-index: 2;
+    inset: 0 0 auto;
+    display: flex;
+    height: 3rem;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 1.25rem;
+    border-bottom: 1px solid var(--hairline);
+    background: color-mix(in srgb, var(--panel) 78%, transparent);
+    backdrop-filter: blur(16px);
+  }
+
+  .stage-live-indicator {
+    width: 0.45rem;
+    height: 0.45rem;
+    flex: none;
+    border-radius: 9999px;
+    background: var(--led-active);
+    box-shadow: 0 0 0.8rem color-mix(in srgb, var(--led-active) 55%, transparent);
+  }
+
+  .stage-scene {
+    position: absolute;
+    inset: 3rem 0 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    padding: 2rem;
+    background-image: radial-gradient(
+      color-mix(in srgb, var(--ink) 8%, transparent) 1px,
+      transparent 1px
+    );
+    background-position: center;
+    background-size: 2rem 2rem;
+  }
+
+  .panel-edge-trigger {
+    position: absolute;
+    z-index: 4;
+    inset: 50% 0 auto auto;
+    display: grid;
+    width: 2.25rem;
+    height: 4rem;
+    place-items: center;
+    transform: translateY(-50%);
+    border: 1px solid var(--hairline);
+    border-right: 0;
+    border-radius: 0.75rem 0 0 0.75rem;
+    background: var(--panel);
+    color: var(--accent-violet);
+    cursor: pointer;
+    transition: opacity 180ms ease;
+  }
+
+  .panel-edge-trigger-open {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .stage-trigger-icon::before {
+    content: "✦";
+  }
+
+  .panel-pin-icon::before {
+    content: "⌖";
+  }
+
+  .panel-unpin-icon::before {
+    content: "⌁";
+  }
+
+  .panel-close-icon::before {
+    content: "×";
+  }
+
+  .scene-star::before {
+    content: "✦";
+  }
+
+  .dialogue-panel {
+    position: absolute;
+    z-index: 3;
+    inset: 3.75rem 0.5rem 0.5rem auto;
+    display: flex;
+    width: min(clamp(22.5rem, 32vw, 32.5rem), calc(100% - 1rem));
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--hairline);
+    border-radius: 1rem;
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(calc(100% + 2rem));
+    transition:
+      transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 180ms ease;
+  }
+
+  .game-stage[data-panel-state="collapsed"] .dialogue-panel {
+    transition-duration: 280ms;
+  }
+
+  .game-stage:not([data-panel-state="collapsed"]) .dialogue-panel {
+    transition-duration: 450ms;
+  }
+
+  .dialogue-panel-open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+  }
+
+  .dialogue-panel-header {
+    display: flex;
+    min-height: 3.25rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.65rem 1rem;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .record-feed {
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 0.75rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .record-feed {
+      scroll-behavior: auto;
+    }
+  }
+
+  .record-list {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .record-entry {
+    max-width: 92%;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.8rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 5rem;
+  }
+
+  .record-entry:focus-within,
+  .record-feed-selection-active .record-entry {
+    content-visibility: visible;
+  }
+
+  .record-player {
+    margin-left: auto;
+    background: var(--bubble-user);
+  }
+
+  .record-story {
+    background: var(--bubble-persona);
+  }
+
+  .record-narrator {
+    max-width: 100%;
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .record-system {
+    margin: 0.25rem auto;
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-align: center;
+  }
+
+  .record-kind {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: var(--muted);
+    font-size: 0.7rem;
+  }
+
+  .record-expanded {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.75rem;
+    background: var(--panel);
+  }
+
+  .jump-latest {
+    align-self: center;
+    margin: 0.5rem;
+    border: 1px solid var(--hairline);
+    border-radius: 9999px;
+    background: var(--panel);
+    padding: 0.35rem 0.75rem;
+    color: var(--accent-violet);
+    font-size: 0.75rem;
+  }
+
+  .confirmation-card {
+    position: fixed;
+    inset: 50% auto auto 50%;
+    width: min(28rem, calc(100vw - 2rem));
+    transform: translate(-50%, -50%);
+    border: 1px solid var(--hairline);
+    border-radius: 1rem;
+    background: var(--panel);
+    padding: 1.25rem;
+    color: var(--ink);
+    box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.42);
+  }
+
+  .confirmation-card::backdrop {
+    background: rgba(3, 8, 14, 0.58);
+    backdrop-filter: blur(3px);
+  }
+
+  @media (max-width: 680px) {
+    .game-stage {
+      width: 100%;
+      min-height: min(42rem, calc(100dvh - 1rem));
+      aspect-ratio: auto;
+    }
+
+    .stage-scene {
+      padding: 1rem;
+    }
+
+    .dialogue-panel {
+      inset: 3.5rem 0 0 auto;
+      width: min(100%, 31rem);
+      max-height: calc(100% - 3.5rem);
+      border-radius: 1rem 0 0 0;
+    }
   }
 }
 

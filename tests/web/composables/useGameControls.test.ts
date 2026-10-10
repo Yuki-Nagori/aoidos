@@ -17,6 +17,9 @@ function transport() {
   return {
     resume: vi.fn().mockResolvedValue({}),
     cancelRound: vi.fn().mockResolvedValue({}),
+    interruptRound: vi.fn().mockResolvedValue({}),
+    regenerate: vi.fn().mockResolvedValue({}),
+    rewind: vi.fn().mockResolvedValue({}),
     submitCheck: vi.fn().mockResolvedValue({}),
   };
 }
@@ -57,6 +60,29 @@ it("accepts readonly consumers and sends only controls with a confirmed round an
   scope.stop();
   await controls.control("resume");
   expect(api.resume).toHaveBeenCalledTimes(1);
+});
+it("routes interrupt, regeneration and rewind through confirmed identities", async () => {
+  const state = ref<PhaseSnapshot | undefined>(waiting);
+  const api = transport();
+  const scope = effectScope();
+  const controls = scope.run(() => useGameControls(state, api))!;
+
+  expect(await controls.control("interrupt", "新的行动")).toBe(true);
+  expect(api.interruptRound).toHaveBeenCalledExactlyOnceWith(
+    waiting.sessionId,
+    "round",
+    "新的行动",
+  );
+  state.value = snapshot({
+    phase: "idle",
+    lastOperation: { operationId: "op", roundId: "round", outcome: "completed" },
+  });
+  expect(await controls.control("regenerate")).toBe(true);
+  expect(api.regenerate).toHaveBeenCalledExactlyOnceWith(waiting.sessionId, "round");
+  expect(await controls.control("rewind", 12)).toBe(true);
+  expect(api.rewind).toHaveBeenCalledExactlyOnceWith(waiting.sessionId, 12);
+  expect(await controls.control("rewind", "12")).toBe(false);
+  scope.stop();
 });
 it("serializes controls and shows sanitized errors for the current revision", async () => {
   const pending = deferred(),
@@ -108,4 +134,14 @@ it("does not mutate busy state when a successful request arrives after disposal"
   pending.resolve({ operationId: "op", roundId: "round" });
   await sending;
   expect(controls.busy.value).toBe(true);
+});
+
+it("rejects regeneration without a current or previous round identity", async () => {
+  const scope = effectScope();
+  const api = transport();
+  const controls = scope.run(() => useGameControls(snapshot(), api))!;
+  expect(await controls.control("regenerate")).toBe(false);
+  expect(api.regenerate).not.toHaveBeenCalled();
+  expect(controls.busy.value).toBe(false);
+  scope.stop();
 });
