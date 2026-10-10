@@ -1,10 +1,10 @@
 # Rust / Tauri 约定
 
-更新日期：2026-10-07。除标注官方依据外均为项目约定。
+更新日期：2026-10-10。除标注官方依据外均为项目约定。
 
 ## 命令层
 
-`#[tauri::command]` 只做解参数、调逻辑、回包，命令按域组织：`src-tauri/src/commands.rs` / `llm_commands.rs` 承接已有入口，回合服务与事件适配位于 `turn_commands/`，存储参数及事件适配位于 `store_commands/`，`lib.rs` 的 `turn_ipc` / `store_ipc` 仅保留宏注册所需的薄 IPC 装配；单个命令超过一屏就把逻辑抽成普通函数或独立 crate。新命令三步：定义 → `generate_handler![]`（`lib.rs`）注册 → 用到插件 / 系统能力时在 `capabilities/default.json` 加权限（当前只有 `core:default`）。
+`#[tauri::command]` 只做解参数、调逻辑、回包，命令按域组织：`src-tauri/src/commands.rs` / `llm_commands.rs` 承接基础入口，回合服务与事件适配位于 `turn_commands/`，存储参数及事件适配位于 `store_commands/`，产品阶段 DTO 与命令适配位于 `game_commands/`；`lib.rs` 中的 `turn_ipc` / `store_ipc` / `game_ipc` 只保留宏注册所需的薄 IPC 装配。单个命令超过一屏就把逻辑抽成普通函数或独立 crate。新命令三步：定义 → `generate_handler![]`（`lib.rs`）注册 → 用到插件 / 系统能力时在 `capabilities/default.json` 加权限（当前只有 `core:default`）。
 
 invoke 的 args 对象按 camelCase 匹配 Rust snake_case 形参（[Tauri 命令文档](https://tauri.app/develop/calling-rust/)，2026-10-04 查阅）：单词形参无感，多词形参（`case_dir` ↔ `caseDir`）留意。参数与返回类型在 Rust 定型后，TS 侧在 `src-web/api/` 立即声明同型并提供薄调用（归属见[前端规范](frontend.md#逻辑归属)）——`invoke` 是无校验透传，两端口径漂移是最常见的静默 bug。
 

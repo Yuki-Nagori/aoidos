@@ -1,6 +1,6 @@
 # 001 — 上下文与对局时长解耦：本地状态库 + 对局文档 + 索引
 
-- 状态：已立 task（[006 对局记录与上下文·设计](../task/006-record-design.md)，done；实现由 022 承接，尚未开始）
+- 状态：已立 task（[006 对局记录与上下文·设计](../task/006-record-design.md)，done；实现由 022 承接，done）
 - 记录日期：2026-10-05
 - 来源：产品思考
 
@@ -27,6 +27,6 @@
 ## 关联
 
 - [002 产品化改名](../task/002-rebrand-aoidos.md)：将本构想落档，不含实现。
-- [006 记录设计](../task/006-record-design.md)（done）与 [022 记录实施](../task/022-record-engine-impl.md)（planned）：投影、持久化与恢复。
+- [006 记录设计](../task/006-record-design.md)（done）与 [022 记录实施](../task/022-record-engine-impl.md)（done）：投影、持久化与恢复。
 - [007 记忆设计](../task/007-memory-design.md)（done）：角色认知与记忆生命周期。
 - [Herta 调查](../research/001-herta.md)：记录、上下文与记忆机制的设计输入。
