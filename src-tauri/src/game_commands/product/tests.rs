@@ -118,6 +118,8 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
     .deserialize::<serde_json::Value>()
     .unwrap();
     assert_eq!(scripts[0]["scriptId"], "mistbell");
+    assert_eq!(scripts[0]["displayNames"]["en"], "Mistbell Cellar");
+    assert_eq!(scripts[0]["displayNames"]["zh-Hans"], "雾钟地窖");
     assert!(!scripts[0]["attributions"].as_str().unwrap().is_empty());
     for body in [
         serde_json::json!({}),

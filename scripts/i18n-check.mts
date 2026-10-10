@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { exit } from "node:process";
 
 type MessageTree = { [key: string]: string | MessageTree };
-const locales = ["zh-Hans", "en"] as const;
+const locales = ["en", "zh-Hans"] as const;
 const resources = new Map<string, MessageTree>();
 
 for (const locale of locales) {
@@ -37,27 +37,30 @@ async function collect(directory: string): Promise<void> {
 await collect("src-web");
 
 const problems: string[] = [];
-const [zh, en] = locales.map((locale) => flatten(resources.get(locale)!));
-if (zh!.size !== en!.size || [...zh!.keys()].some((key) => !en!.has(key))) {
-  problems.push("zh-Hans and en must contain the same message keys");
+const en = flatten(resources.get("en")!);
+const zhHans = flatten(resources.get("zh-Hans")!);
+if (en.size !== zhHans.size || [...en.keys()].some((key) => !zhHans.has(key))) {
+  problems.push("en and zh-Hans must contain the same message keys");
 }
-for (const [key, message] of zh!) {
-  if (JSON.stringify(placeholders(message)) !== JSON.stringify(placeholders(en!.get(key) ?? ""))) {
+for (const [key, message] of en!) {
+  if (
+    JSON.stringify(placeholders(message)) !== JSON.stringify(placeholders(zhHans.get(key) ?? ""))
+  ) {
     problems.push(`${key}: placeholder names differ between locales`);
   }
 }
 
 for (const namespace of ["native.", "budget.", "memory."]) {
-  const unusedByUi = [...zh!.keys()].filter((key) => key.startsWith(namespace));
+  const unusedByUi = [...en.keys()].filter((key) => key.startsWith(namespace));
   for (const key of unusedByUi) {
-    if (!en!.has(key)) problems.push(`${key}: reserved namespace is missing from en`);
+    if (!zhHans.has(key)) problems.push(`${key}: reserved namespace is missing from zh-Hans`);
   }
 }
 
 for (const path of sourceFiles) {
   const source = await readFile(path, "utf8");
   for (const [, key] of source.matchAll(/\bt\(\s*["'`]([\w.]+)["'`]/g)) {
-    if (!zh!.has(key!)) problems.push(`${path}: missing locale key ${key}`);
+    if (!en.has(key!)) problems.push(`${path}: missing locale key ${key}`);
     if (key!.startsWith("budget.") || key!.startsWith("memory.")) {
       problems.push(`${path}: ${key} is reserved for a later implementation task`);
     }
@@ -68,4 +71,4 @@ if (problems.length) {
   console.error(problems.map((problem) => `i18n: ${problem}`).join("\n"));
   exit(1);
 }
-console.log(`i18n: ${zh!.size} messages and placeholders agree across ${locales.join(", ")}`);
+console.log(`i18n: ${en.size} messages and placeholders agree across ${locales.join(", ")}`);
