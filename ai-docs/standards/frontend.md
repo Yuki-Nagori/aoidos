@@ -10,7 +10,7 @@ IPC 薄调用与 Rust 同型的 TS 载荷类型放 `src-web/api/`，不在组件
 
 Composable 遵循 [Vue 官方约定](https://vuejs.org/guide/reusability/composables.html#conventions-and-best-practices)：`use` 前缀、接受 ref / getter、用 watch 跟踪输入、返回包含 refs 的普通对象。必须在 setup 或活动 effectScope 中同步调用；资源通过 [onScopeDispose](https://vuejs.org/api/reactivity-advanced.html#onscopedispose) 清理。桌面事件订阅不读取挂载后的 DOM，不增加 SSR 承诺或无需求的全局 store。
 
-回合消费者通过 `useLlmTurn` 管理已知 turnId 的订阅与重连；消费和恢复规则在 utils，通过注入端口独立测试。`recoveryError` 表示读取失败，不能覆盖 Rust 回合 outcome / error；产品界面由后续任务接入。
+回合消费者通过 `useLlmTurn` 管理已知 turnId 的订阅与重连；消费和恢复规则在 utils，通过注入端口独立测试。当前 `App.vue` 通过 `useGameView` 接入 `useEnginePhase`、`useLlmTurn` 与 `useRecordView`；`recoveryError` 表示读取失败，不能覆盖 Rust 回合 outcome / error。完整舞台与对话面板仍由 task 025 实施。
 
 ## SFC 与类型
 

@@ -12,12 +12,14 @@
 │   ├── utils/                 # 纯消费规则 / 恢复协调及其他纯逻辑，配单测
 │   ├── composables/           # Vue 身份、监听与 scope 清理，消费 utils
 │   ├── styles/                # 全局样式扩展；generated/ 仅放构建生成的 CSS
+│   ├── theme-bootstrap.ts     # 首帧主题引导（构建为 /theme-bootstrap.js）
 │   └── bench/                 # tinybench 正文消费基准
 ├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
 │   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
 │   ├── src/commands.rs        # #[tauri::command] 命令层、类型化载荷与命令单测
 │   ├── src/game_commands/     # 产品阶段 DTO / 命令适配，业务由 engine actor 执行
 │   ├── src/turn_commands/     # 回合服务 / 事件适配，mod.rs 与 tests.rs 并列
+│   ├── src/theme_commands/    # 主题目录、偏好与剧本皮肤命令适配
 │   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；平台原生输入经 aoidos-llm 分发
 │   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
 │   ├── src/events.rs          # 每流序号与事件信封，窗口投递由 turn_commands 适配
@@ -30,6 +32,7 @@
 │   ├── aoidos-script/         # 剧本原文解析 / 格式校验，不执行内容规则
 │   ├── aoidos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
+│   ├── aoidos-theme/          # 主题目录 / 偏好 / 剧本皮肤校验，含 assets/themes/ 与 build.rs
 │   ├── aoidos-memory/         # 029：记忆版本、SQLite manifest、幂等操作、因果核验与恢复
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── aoidos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
