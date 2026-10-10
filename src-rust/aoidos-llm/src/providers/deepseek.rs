@@ -215,6 +215,16 @@ struct StreamUsage {
     prompt_tokens: Option<u64>,
     #[serde(default)]
     completion_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u64>,
+    #[serde(default)]
+    completion_tokens_details: Option<StreamCompletionUsage>,
+}
+
+#[derive(Deserialize)]
+struct StreamCompletionUsage {
+    #[serde(default)]
+    reasoning_tokens: Option<u64>,
 }
 
 /// 传输适配流：字节 → 增量 UTF-8 → 增量 SSE → JSON → 规范化增量。
@@ -256,11 +266,16 @@ where
         if let Some(StreamUsage {
             prompt_tokens: Some(prompt_tokens),
             completion_tokens: Some(completion_tokens),
+            prompt_cache_hit_tokens: Some(cached_prompt_tokens),
+            completion_tokens_details,
         }) = chunk.usage
         {
             self.queue.push_back(ProviderDelta::Usage(Usage {
                 prompt_tokens,
                 completion_tokens,
+                cached_prompt_tokens: Some(cached_prompt_tokens),
+                reasoning_tokens: completion_tokens_details
+                    .and_then(|details| details.reasoning_tokens),
             }));
         }
         // 只抽 index=0（契约：不启用 n>1）；其余下标一律忽略。
@@ -506,7 +521,7 @@ mod tests {
         let body = format!(
             "{}{}{}data: [DONE]\n\n",
             sse_completion_frame("风吹过。"),
-            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"prompt_cache_hit_tokens\":0}}\n\n",
             sse_finish_frame("stop"),
         );
         let server = ScriptedServer::start(sse_ok_script(&body)).await;
@@ -525,7 +540,9 @@ mod tests {
                 Ok(ProviderDelta::Text("风吹过。".into())),
                 Ok(ProviderDelta::Usage(Usage {
                     prompt_tokens: 10,
-                    completion_tokens: 5
+                    completion_tokens: 5,
+                    cached_prompt_tokens: Some(0),
+                    reasoning_tokens: None,
                 })),
                 Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
             ]
@@ -1187,6 +1204,7 @@ mod tests {
             serde_json::json!({"prompt_tokens":0}),
             serde_json::json!({"completion_tokens":0}),
             serde_json::json!({"prompt_tokens":0,"completion_tokens":0}),
+            serde_json::json!({"prompt_tokens":0,"completion_tokens":0,"prompt_cache_hit_tokens":0}),
         ] {
             let frame = serde_json::json!({"choices":[{"index":0,"text":"正文","finish_reason":"stop"}],"usage":usage});
             let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
@@ -1212,6 +1230,7 @@ mod tests {
                 usize::from(
                     usage.get("prompt_tokens").is_some()
                         && usage.get("completion_tokens").is_some()
+                        && usage.get("prompt_cache_hit_tokens").is_some()
                 )
             );
             assert!(

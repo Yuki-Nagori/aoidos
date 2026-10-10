@@ -1,6 +1,6 @@
 # LLM 计价与费用预算
 
-更新日期：2026-10-11；官方资料核验日期：2026-10-10。[027](../task/027-llm-cost-control-design.md) 设计定稿，实施由 [035](../task/035-llm-cost-control-impl.md) 承接，当前无计费运行时。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文是价格、账本与费用周期的精确协议。
+更新日期：2026-10-11；官方资料核验日期：2026-10-10。[027](../task/027-llm-cost-control-design.md) 定义协议，[035](../task/035-llm-cost-control-impl.md) 正在接入运行时。现有实现包括 `aoidos-billing` 精确金额与单价、engine SQLite 账本、LLM 物理尝试预算端口、Tauri 基础命令及双语费用面板。历史补价和供应商余额尚未实现，也未做真实账单对账。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文区分稳定协议与当前实现范围。
 
 ## 控制单位与默认额度
 
@@ -15,6 +15,8 @@
 计价主体由实际请求经过的服务商接入方式、API 部署身份、精确模型 ID 和路由策略共同确定；兼容协议不等于同一计价主体。同一模型直连服务商与经 OpenRouter 调用是不同价格身份，不能互相套价。凭据只保留 019 的引用，不混入价格缓存。配置持久化在 SQLite，内存缓存以 providerId / modelId / configRevision 为键，登记或修改成功后替换缓存，重启从已校验配置恢复；不涉及登录或云同步。
 
 不可变 PriceVersion 保存 versionId、providerId / modelId / routePolicy、priceCurrency、unitTokens、inputUncached / inputCached / output 单价、usageMappingVersion、sourceKind / sourceUrl / checkedAt、effectiveFrom / validUntil、时段 / 日历版本与配置摘要。`priceCurrency` 表示此计价身份实际采用的价格表币种，不由界面语言推导；服务商账户存在多币种或官方同时发布多币种价格时，只有账户实际计费币种可验证，或用户明确登记后才可启用。单价为十进制字符串，非负、最多 9 位小数；unitTokens 为正安全整数。缓存不区分时显式指定同价，缺字段不能填零。每次请求保存冻结版本，不只保存可变配置引用。
+
+checkedAt、effectiveFrom、validUntil 和 dispatchAt 必须是可解析的 RFC 3339 时间戳；有效期按实际 UTC 时刻比较，采用 `[effectiveFrom, validUntil)` 半开区间，不能按原始字符串或界面时区比较。价格查询先按服务商、模型、路由和币种筛选，再由 Rust 精确比较完整时刻，避免 SQLite 日期函数在亚毫秒边界选错版本。每组计价身份最多保留 1,024 个不可变价格版本；新版本超限时拒绝登记，已存在版本的幂等重试仍成功。账本按绝对时间归属月报，月界的小数秒仍属于其实际月份。
 
 价格来源按实际接入路径选择：服务商直连使用该服务商核验过的官方价格；OpenRouter 接入使用 OpenRouter 对应模型 / 路由策略的价格记录。OpenRouter 价格不作为全项目模型基准，也不能替代同模型的直连价格。OpenRouter [按上游价格路由](https://openrouter.ai/blog/insights/model-routing/)，模型目录报价只适用于其所声明的接入身份；允许的上游价格不同且本次实际上游无法确定时，预留必须覆盖允许路由的保守上界，否则固定路由或要求用户登记明确费率，不能用单一低价放行。OpenRouter 的[计费说明](https://openrouter.ai/support)表明其额度以 USD 计、推理价格透传上游。价格与路由身份无法可靠匹配时，阻止收费请求。
 
@@ -34,7 +36,7 @@ PriceVersion 可附 IANA 时区、星期、半开时间窗、时段单价与版�
 
 ## 金额、原币与单局分币种额度
 
-内部 NanoMoney 是 i64 的币种 × 10^-9；单项、同币种聚合、乘法全部检查溢出，拒绝不能表示的配置或预留。不同 currency 的 Money 禁止比较、相加或汇总。Rust 用精确整数分子和 checked i128 中间计算，禁止 f64；IPC 金额为十进制字符串 + 明确 currency，前端不计算额度。费用按有理数合计，不逐 Token 舍入累积误差。预留向上到 nano，结算 HALF_UP 到 nano，记录舍入政策版本。预算、费用和余额界面统一显示到 0.01；显示时以整数分精确舍入，不回写账本或用于预算比较。计价单价可在诊断明细显示更高精度。
+内部 NanoMoney 是 i64 的币种 × 10^-9；单项、同币种聚合、乘法全部检查溢出，拒绝不能表示的配置或预留。不同 currency 的 Money 禁止比较、相加或汇总。Rust 用精确整数分子和 checked i128 中间计算，禁止 f64；IPC 金额为十进制字符串 + 明确 currency，前端不计算额度。费用按有理数合计，不逐 Token 舍入累积误差。预留向上到 nano，结算 HALF_UP 到 nano，记录舍入政策版本。预算与费用界面统一显示到 0.01；显示时以整数分精确舍入，不回写账本或用于预算比较。当前未实现供应商余额界面；计价单价可在诊断明细显示更高精度。
 
 请求原币费用估算 = (inputUncached × inputUncachedPrice + inputCached × inputCachedPrice + outputTotal × outputPrice) / unitTokens。费用金额、币种和 PriceVersion 一经结算永久按服务商原币保存。每局 CNY / USD 上限独立配置与校验；请求只占用其原币对应的额度，没有汇率换算、跨币总额或额度互借。原币额度与原币费用估算都来自服务商计价版本，不代表供应商实际账单的保证。服务商支持多种实际扣款币种时，模型登记选择与账户扣款口径一致的 PriceVersion；DeepSeek 的币种由实际账户选择，OpenRouter 使用 USD。界面语言只控制数字 / 货币格式，不决定模型计价币种或预算额度。
 
@@ -44,14 +46,17 @@ PriceVersion 可附 IANA 时区、星期、半开时间窗、时段单价与版�
 
 SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务 crate 不另持锁：
 
-| 表                                 | 主键 / 约束                             | 职责                                  |
-| ---------------------------------- | --------------------------------------- | ------------------------------------- |
-| price_versions / calendar_versions | 不可变 versionId                        | 历史计价依据                          |
-| run_budgets                        | runBudgetId / runId 唯一                | CNY / USD 独立限额及 revision         |
-| physical_requests                  | requestId 唯一                          | 冻结身份、原始 usage、原币费用 / 币种 |
-| run_budget_allocations             | requestId 唯一                          | 原币对应额度的预留 / 结算             |
-| budget_warnings                    | runBudgetId + currency + threshold 唯一 | 80% 提示事实与已读状态                |
-| budget_audit                       | operationId 唯一                        | 设置、补价和人工未确认处置证据        |
+| 已实现表                        | 主键 / 约束                     | 职责                                           |
+| ------------------------------- | ------------------------------- | ---------------------------------------------- |
+| `billing_price_versions`        | 不可变 `version_id`             | 用户登记的原币价格版本                         |
+| `billing_active_profile_prices` | `profile_id` 唯一               | profile 明确选择的 provider / route / 币种版本 |
+| `billing_run_budgets`           | `run_id` 唯一                   | CNY / USD 独立上限与设置 revision              |
+| `billing_physical_requests`     | `request_id` 唯一               | 冻结请求身份、用量、原币费用与预留状态         |
+| `billing_budget_warnings`       | run + currency + threshold 唯一 | 80% 提醒去重事实                               |
+| `billing_audit`                 | `operation_id` 唯一             | 价格、币种选择及上限修改审计记录               |
+| `billing_meta`                  | 单行主键                        | 账本 revision 与持久化月报时区                 |
+
+当前以 `billing_physical_requests` 的状态及 `reserved_nanos` 表达预算占用，尚无独立分配表、价格日历表或历史补价来源；不能把设计表名误认为已创建的 schema。engine 在共享 SQLite 连接上应用 `aoidos-billing::schema::SCHEMA`，store 不依赖计费领域。
 
 发送前持单在飞租约，在 BEGIN IMMEDIATE 事务中校验 PriceVersion 与当前 runBudget，按请求原币选择 CNY 或 USD 限额，判断该币种 settled + reserved + unconfirmed + 本次预留 <= 单局上限，并原子提交原币请求与对应分配。任一币种未配置上限或额度不足则拒绝且不发 HTTP；不能借用另一币种额度。比较与修改使用整数，不能先查后写。dispatchAt 为持久发送意图时刻，紧接发送；长时间排队在登记前结束；调试请求必须显式关联合法测试周目，不创建绕过单局额度的虚拟预算。网络不可与 SQLite 原子提交，崩溃在登记与发送之间仍可能消耗未知，恢复标 unconfirmed，不以“没看到响应”推断没发送。时段归属按该持久边界，是本地可审计约定，不能声称精确等于供应商收件时刻。
 
@@ -79,7 +84,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 历史导入的未计价请求保留身份 / usage / 原周期；补价命令提供范围、版本与预览摘要，按 audit operationId 幂等提交，仅针对完整 usage 且尚未计价项，已结算项不重算。补价后核对原周期预警；不能以补价创建新消费或编造 usage。未知金额使历史完整性为 incomplete，新请求前不能借历史缺价绕过当前周期门禁：先处理影响本周期余额的未知记录。
 
-设计命令族 `budget_get_settings / budget_set_settings / budget_get_period / budget_list_requests / budget_list_model_usage / budget_register_price / budget_backfill_price / budget_get_balance` 归 035 定型，同 commit 登记 Rust / TS 类型。设置需 expectedRevision；精确查询用稳定周期 ID；补价使用明确 auditId / 预览 revision。当前不注册这些 API 或扩大 llm:turn:* 载荷。
+已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。`budget_backfill_price` 与 `budget_get_balance` 尚未注册；没有来源账单 / 历史请求导入或余额适配器时，不允许界面暗示这两项可用。
 
 错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.price-missing（providerId / modelId / missingFields）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），存储沿用 store.*。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
 
@@ -105,7 +110,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 ## 实施与验证依据
 
-035 交付价格 / 原币账本、单局预算估算、统一调用端口、IPC、费用设置 / 明细与可选余额；接 018–020 / 025 / 034，030 / 033 等待 035。不购买额度、不读取供应商逐请求账单、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
+035 当前已交付价格登记与原币账本、单局预算门禁、统一物理调用端口、基础 IPC、费用设置 / 明细及月报；历史补价和可选供应商余额尚未交付，不能宣称任务完成。接入 018–020 / 025 / 034，030 / 033 等待 035。产品不购买额度、不读取供应商逐请求账单、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
 
 [足精度 Decimal](https://docs.rs/rust_decimal/latest/rust_decimal/)与 [jiff 时区](https://docs.rs/jiff/latest/jiff/)在实现时核验并集中 workspace 版本，不在设计提交中安装。字节输入估计必须包含完整序列化输入、协议固定开销与输出 / reasoning 上限；供应商适配器声明可证明的上界 / 保守系数，不能对任意 tokenizer 宣称 1 byte = 1 Token 永远成立。不能给出可靠上界时按模型输入硬限预留；超出估计完整结算且停新请求。未来 tokenizer 接入另行授权 / 验证，不暗加网络计数调用。
 

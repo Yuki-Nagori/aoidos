@@ -14,6 +14,7 @@ serde_json.workspace = true
 
 [dependencies]
 aoidos-json.workspace = true
+aoidos-billing.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,6 +26,7 @@ aoidos-engine.workspace = true
 aoidos-theme.workspace = true
 aoidos-locale.workspace = true
 secrecy.workspace = true
+time.workspace = true
 
 [dev-dependencies]
 uuid.workspace = true

@@ -824,7 +824,9 @@ mod tests {
                 requests: 1,
                 usage: Usage {
                     prompt_tokens: 10,
-                    completion_tokens: 5
+                    completion_tokens: 5,
+                    cached_prompt_tokens: Some(0),
+                    ..Usage::default()
                 },
             })
         );
@@ -1191,6 +1193,8 @@ mod tests {
                 usage: Usage {
                     prompt_tokens: 17,
                     completion_tokens: 6,
+                    cached_prompt_tokens: Some(0),
+                    ..Usage::default()
                 },
             })
         );
@@ -2081,6 +2085,7 @@ mod tests {
             deltas: vec![Ok(ProviderDelta::Usage(Usage {
                 prompt_tokens: 3,
                 completion_tokens: 0,
+                ..Usage::default()
             }))],
         };
         let (tx, _rx) = mpsc::channel(32);

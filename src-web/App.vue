@@ -9,6 +9,9 @@ import { useGameControls } from "./composables/useGameControls";
 import { useTheme } from "./composables/useTheme";
 import { useLocale } from "./composables/useLocale";
 import { useUiPreferences } from "./composables/useUiPreferences";
+import { useBilling } from "./composables/useBilling";
+import { formatExactCurrency } from "./utils/format";
+import { billingErrorDescriptor } from "./utils/billing-error";
 import { usePanelState } from "./composables/usePanelState";
 import { canSubmitComposer, previewComposerInput } from "./utils/ui-shell";
 import RecordFeed from "./components/RecordFeed.vue";
@@ -19,6 +22,20 @@ const product = useProduct();
 const theme = useTheme(product.scriptId);
 const locale = useLocale();
 const sessionId = computed(() => product.session.value?.sessionId);
+const billingProfile = computed(() =>
+  product.profiles.value.find((profile) => profile.profileId === product.profileId.value),
+);
+const billing = useBilling(
+  sessionId,
+  computed(() => billingProfile.value?.profileId ?? ""),
+  computed(() => billingProfile.value?.providerId ?? "deepseek"),
+  computed(() => billingProfile.value?.model ?? product.model.value),
+);
+function billingAmount(amount: string | null, currency: "CNY" | "USD"): string {
+  return amount === null
+    ? t("billing.unknown")
+    : formatExactCurrency(amount, currency, locale.resolved.value);
+}
 const game = useGameView(sessionId);
 const { phase, turn, records } = game;
 const current = computed(() => phase.state.value.snapshot);
@@ -263,6 +280,12 @@ const preview = computed(() =>
 const selectedScript = computed(() =>
   product.scripts.value.find((script) => script.scriptId === product.scriptId.value),
 );
+const billingErrorMessage = computed(() => {
+  const failure = billing.error.value;
+  if (!failure) return undefined;
+  const descriptor = billingErrorDescriptor(failure);
+  return "values" in descriptor ? t(descriptor.key, descriptor.values) : t(descriptor.key);
+});
 const errorMessage = computed(() => {
   if (!error.value) return undefined;
   switch (error.value.code) {
@@ -519,6 +542,281 @@ void preferences.load();
           {{ t("game.newCycle") }}</button
         ><button @click="game.reconnect">{{ t("common.reconnect") }}</button>
       </div>
+      <details v-if="product.session.value" class="glass-panel">
+        <summary>{{ t("billing.title") }}</summary>
+        <p class="text-sm text-muted">{{ t("billing.explanation") }}</p>
+        <p class="text-sm text-muted">{{ t("billing.referenceHint") }}</p>
+        <form class="grid gap-3" @submit.prevent="billing.saveSettings">
+          <label>
+            {{ t("billing.cnyLimit") }}
+            <input v-model="billing.cnyLimit.value" inputmode="decimal" autocomplete="off" />
+          </label>
+          <label>
+            {{ t("billing.usdLimit") }}
+            <input v-model="billing.usdLimit.value" inputmode="decimal" autocomplete="off" />
+          </label>
+          <button type="submit" :disabled="billing.busy.value">
+            {{ billing.settings.value ? t("billing.saveLimits") : t("billing.setLimits") }}
+          </button>
+        </form>
+        <p v-if="billing.settings.value" class="text-sm text-muted">
+          {{ t("billing.revision", { revision: billing.settings.value.revision }) }}
+        </p>
+        <section class="grid gap-2" :aria-label="t('billing.usage')">
+          <h2 class="font-semibold">{{ t("billing.usage") }}</h2>
+          <p v-if="!billing.period.value?.items.length">{{ t("billing.noUsage") }}</p>
+          <article
+            v-for="item in billing.period.value?.items"
+            :key="`${item.providerId}:${item.currency}:${item.modelId}`"
+            class="rounded border border-line p-3"
+          >
+            <h3>
+              {{
+                t("billing.itemTitle", {
+                  provider: item.providerId,
+                  model: item.modelId,
+                  currency: item.currency,
+                })
+              }}
+            </h3>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.settled"),
+                  value: billingAmount(item.settledAmount, item.currency),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.reserved"),
+                  value: billingAmount(item.reservedAmount, item.currency),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.tokens"),
+                  value: item.knownTokens ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+            <p v-if="item.incompleteRequests">
+              {{ t("billing.incomplete", { count: item.incompleteRequests }) }}
+            </p>
+          </article>
+          <p
+            v-for="warning in billing.period.value?.warnings"
+            :key="warning.currency"
+            role="status"
+          >
+            {{
+              t("billing.warning", {
+                currency: warning.currency,
+                percent: warning.thresholdPercent,
+              })
+            }}
+          </p>
+          <button type="button" :disabled="billing.busy.value" @click="billing.loadPeriod">
+            {{ t("billing.refreshUsage") }}
+          </button>
+          <hr class="my-2 border-line" />
+          <h2 class="font-semibold">{{ t("billing.requests") }}</h2>
+          <article
+            v-for="item in billing.requests.value?.items"
+            :key="item.requestId"
+            class="rounded border border-line p-3"
+          >
+            <h3>
+              {{
+                t("billing.itemTitle", {
+                  provider: item.providerId,
+                  model: item.modelId,
+                  currency: item.currency,
+                })
+              }}
+            </h3>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.requestDate"),
+                  value: item.dispatchAt,
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", { label: t("billing.requestState"), value: item.state })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.requestPrice"),
+                  value: item.priceVersionId,
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.reserved"),
+                  value: billingAmount(item.reservedAmount, item.currency),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.requestCost"),
+                  value: billingAmount(item.actualAmount, item.currency),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.requestInput"),
+                  value: item.inputTotal ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.requestCached"),
+                  value: item.inputCached ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.requestOutput"),
+                  value: item.outputTotal ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.requestReasoning"),
+                  value: item.reasoningIncluded ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.tokens"),
+                  value: item.totalTokens ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+          </article>
+          <div class="flex gap-3">
+            <button type="button" @click="billing.loadRequests(true)">
+              {{ t("billing.restartRequests") }}
+            </button>
+            <button
+              v-if="billing.requests.value?.nextCursor"
+              type="button"
+              @click="billing.loadRequests()"
+            >
+              {{ t("billing.loadMore") }}
+            </button>
+          </div>
+          <hr class="my-2 border-line" />
+          <h2 class="font-semibold">
+            {{ t("billing.monthly", { month: billing.monthly.value?.month ?? "—" }) }}
+          </h2>
+          <p v-if="billing.monthly.value">
+            {{ t("billing.timeZone", { timeZone: billing.monthly.value.timeZone }) }}
+          </p>
+          <p v-if="!billing.monthly.value?.items.length">{{ t("billing.noUsage") }}</p>
+          <article
+            v-for="item in billing.monthly.value?.items"
+            :key="`month:${item.providerId}:${item.currency}:${item.modelId}`"
+            class="rounded border border-line p-3"
+          >
+            <h3>
+              {{
+                t("billing.itemTitle", {
+                  provider: item.providerId,
+                  model: item.modelId,
+                  currency: item.currency,
+                })
+              }}
+            </h3>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.settled"),
+                  value: billingAmount(item.settledAmount, item.currency),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.reserved"),
+                  value: billingAmount(item.reservedAmount, item.currency),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
+                  label: t("billing.tokens"),
+                  value: item.knownTokens ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+            <p v-if="item.incompleteRequests">
+              {{ t("billing.incomplete", { count: item.incompleteRequests }) }}
+            </p>
+          </article>
+          <button type="button" :disabled="billing.busy.value" @click="billing.loadMonthly">
+            {{ t("billing.refreshMonthly") }}
+          </button>
+        </section>
+        <p>{{ billing.priceReady.value ? t("billing.priceReady") : t("billing.priceMissing") }}</p>
+        <form class="grid gap-3" @submit.prevent="billing.savePrice">
+          <label>
+            {{ t("billing.currency") }}
+            <select v-model="billing.priceCurrency.value">
+              <option value="CNY">{{ t("billing.currencyCny") }}</option>
+              <option value="USD">{{ t("billing.currencyUsd") }}</option>
+            </select>
+          </label>
+          <label>
+            {{ t("billing.unitTokens") }}
+            <input v-model="billing.unitTokens.value" inputmode="numeric" autocomplete="off" />
+          </label>
+          <label>
+            {{ t("billing.inputUncached") }}
+            <input v-model="billing.inputUncached.value" inputmode="decimal" autocomplete="off" />
+          </label>
+          <label>
+            {{ t("billing.inputCached") }}
+            <input v-model="billing.inputCached.value" inputmode="decimal" autocomplete="off" />
+          </label>
+          <label>
+            {{ t("billing.output") }}
+            <input v-model="billing.output.value" inputmode="decimal" autocomplete="off" />
+          </label>
+          <label>
+            {{ t("billing.sourceUrl") }}
+            <input v-model="billing.sourceUrl.value" type="url" autocomplete="off" />
+          </label>
+          <button type="submit" :disabled="billing.busy.value">
+            {{ t("billing.savePrice") }}
+          </button>
+        </form>
+        <p v-if="billingErrorMessage" role="alert">{{ billingErrorMessage }}</p>
+      </details>
       <details v-if="selectedScript">
         <summary>{{ t("settings.credits") }}</summary>
         <pre class="whitespace-pre-wrap text-sm">{{ selectedScript.attributions }}</pre>

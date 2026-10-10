@@ -131,13 +131,33 @@ impl ProviderRequest {
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Provider-reported cached input subset; None means the provider omitted it.
+    pub cached_prompt_tokens: Option<u64>,
+    /// Reasoning is a subset of completion output and is never added to billable output.
+    pub reasoning_tokens: Option<u64>,
 }
 
 impl Usage {
     pub fn merge(&mut self, other: Usage) {
-        self.prompt_tokens += other.prompt_tokens;
-        self.completion_tokens += other.completion_tokens;
+        let empty = self.prompt_tokens == 0 && self.completion_tokens == 0;
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
+        self.cached_prompt_tokens =
+            merge_optional_count(self.cached_prompt_tokens, other.cached_prompt_tokens, empty);
+        self.reasoning_tokens =
+            merge_optional_count(self.reasoning_tokens, other.reasoning_tokens, empty);
     }
+}
+
+fn merge_optional_count(current: Option<u64>, next: Option<u64>, empty: bool) -> Option<u64> {
+    if empty {
+        return next;
+    }
+    current
+        .zip(next)
+        .map(|(current, next)| current.saturating_add(next))
 }
 
 /// 服务端 finish 的合法取值；`content_filter` / 未知 finish / 工具调用按 bad-response 失败。
@@ -207,16 +227,19 @@ mod tests {
         let mut usage = Usage {
             prompt_tokens: 10,
             completion_tokens: 20,
+            ..Usage::default()
         };
         usage.merge(Usage {
             prompt_tokens: 1,
             completion_tokens: 2,
+            ..Usage::default()
         });
         assert_eq!(
             usage,
             Usage {
                 prompt_tokens: 11,
-                completion_tokens: 22
+                completion_tokens: 22,
+                ..Usage::default()
             }
         );
     }

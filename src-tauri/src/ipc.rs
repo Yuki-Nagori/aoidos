@@ -11,7 +11,15 @@ pub(crate) fn decode_request<T: serde::de::DeserializeOwned>(
     request: &tauri::ipc::Request<'_>,
     message: &'static str,
 ) -> Result<T, CmdError> {
-    let tauri::ipc::InvokeBody::Json(value) = request.body() else {
+    decode_body(request.body(), message)
+}
+
+/// 从命令参数适配器解码完整 body，沿用统一的参数错误契约。
+pub(crate) fn decode_body<T: serde::de::DeserializeOwned>(
+    body: &tauri::ipc::InvokeBody,
+    message: &'static str,
+) -> Result<T, CmdError> {
+    let tauri::ipc::InvokeBody::Json(value) = body else {
         return Err(CmdError::new("app.bad-request", message, None));
     };
     match aoidos_json::decode_value(value) {
@@ -59,7 +67,7 @@ impl CmdError {
 
 impl From<aoidos_engine::fault::Fault> for CmdError {
     fn from(error: aoidos_engine::fault::Fault) -> Self {
-        Self::new(error.code, error.message, None)
+        Self::new(error.code, error.message, error.detail)
     }
 }
 

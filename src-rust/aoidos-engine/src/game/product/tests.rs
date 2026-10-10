@@ -25,6 +25,46 @@ fn selection_preserves_script_identity_and_rejects_unsafe_metadata() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn durable_factory_requires_run_identity_and_freezes_provider_price_route() {
+    let root =
+        std::env::temp_dir().join(format!("aoidos-durable-profile-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Arc::new(Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(RecordEvents::default()),
+    ));
+    storage.ready().unwrap();
+    let source = Arc::new(Source {
+        calls: AtomicUsize::new(0),
+        error: Mutex::new(None),
+        identity: Mutex::new(None),
+        provider_id: Mutex::new("deepseek".into()),
+        gate: Mutex::new(None),
+    });
+    let factory = ProfileFactory::new(
+        source,
+        storage.clone(),
+        SystemProxySnapshot::default(),
+        Arc::new(Mutex::new(Calibration::default())),
+    );
+    factory.select("default".into());
+    assert_eq!(
+        factory.freeze().err().unwrap().code,
+        "budget.run-limit-missing"
+    );
+    assert!(factory.freeze_for_run("run-1").is_ok());
+    storage.close().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn billing_route_policy_is_explicit_per_provider_family() {
+    assert_eq!(billing_route_policy("openrouter"), "openrouter");
+    assert_eq!(billing_route_policy("deepseek"), "direct");
+}
+
 use crate::{
     game::test_support::{PhaseEventsFixture, PrepareGate},
     migration::{MigrationEvent, MigrationEvents},
@@ -61,6 +101,7 @@ struct Source {
     calls: AtomicUsize,
     error: Mutex<Option<Fault>>,
     identity: Mutex<Option<String>>,
+    provider_id: Mutex<String>,
     gate: Mutex<Option<Arc<PrepareGate>>>,
 }
 impl ProfileSource for Source {
@@ -81,7 +122,7 @@ impl ProfileSource for Source {
                         .unwrap()
                         .clone()
                         .unwrap_or_else(|| id.into()),
-                    provider_id: "deepseek".into(),
+                    provider_id: self.provider_id.lock().unwrap().clone(),
                     model: "deepseek-v4-pro".into(),
                     mode: aoidos_llm::config::ProfileMode::Completion,
                     thinking: false,
@@ -121,13 +162,16 @@ impl Fixture {
             calls: AtomicUsize::new(0),
             error: Mutex::new(None),
             identity: Mutex::new(None),
+            provider_id: Mutex::new("deepseek".into()),
             gate: Mutex::new(None),
         });
-        let factory = ProfileFactory::new(
+        let factory = ProfileFactory::with_builder(
             source.clone(),
             storage.clone(),
             SystemProxySnapshot::default(),
             Arc::new(Mutex::new(Calibration::default())),
+            Arc::new(production_provider),
+            Arc::new(AllowAll),
         );
         let product = Arc::new(Product::new(
             &root,
@@ -309,7 +353,12 @@ async fn invalid_input_and_configuration_leave_selection_and_records_untouched()
     std::fs::remove_file(fixture.root.join("ui-preferences.json")).unwrap();
     fixture.storage.close().unwrap();
     assert_eq!(
-        fixture.factory.for_profile("default").err().unwrap().code,
+        fixture
+            .factory
+            .for_profile("default", None)
+            .err()
+            .unwrap()
+            .code,
         "app.not-ready"
     );
     assert_eq!(fixture.open(false).await.unwrap_err().code, "app.not-ready");
@@ -512,7 +561,7 @@ async fn a_closed_phase_service_refuses_reopen_and_switch_without_erasing_select
 fn factory_validates_identity_and_propagates_provider_build_failures() {
     let fixture = Fixture::new();
     assert_eq!(
-        fixture.factory.for_profile("").err().unwrap().code,
+        fixture.factory.for_profile("", None).err().unwrap().code,
         "app.bad-request"
     );
     let resolved = fixture.source.freeze("default").unwrap();
@@ -537,7 +586,7 @@ fn factory_validates_identity_and_propagates_provider_build_failures() {
         Arc::new(AllowAll),
     );
     assert_eq!(
-        factory.for_profile("default").err().unwrap().code,
+        factory.for_profile("default", None).err().unwrap().code,
         "llm.proxy-error"
     );
     fixture.storage.close().unwrap();

@@ -35,6 +35,7 @@ impl Storage {
                     aoidos_memory::schema::SCHEMA,
                     aoidos_theme::schema::SCHEMA,
                     aoidos_locale::schema::SCHEMA,
+                    aoidos_billing::schema::SCHEMA,
                 ],
                 |connection| {
                     let valid:i64=connection.query_row("SELECT count(*)=2 AND sum(name='id' AND type='TEXT' AND pk=1)=1 AND sum(name='content_hash' AND type='TEXT' AND \"notnull\"=1)=1 FROM pragma_table_info('store_applied')",[],|row|row.get(0)).map_err(aoidos_store::db::sqlite_error)?;
@@ -42,6 +43,8 @@ impl Storage {
                     aoidos_memory::schema::verify(connection)?;
                     aoidos_theme::schema::verify(connection)?;
                     aoidos_locale::schema::verify(connection)?;
+                    aoidos_billing::schema::verify(connection)
+                        .map_err(aoidos_store::db::sqlite_error)?;
                     Ok(())
                 },
             )

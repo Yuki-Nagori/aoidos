@@ -13,7 +13,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 分层职责     | [职责边界](ts-rust-boundary.md)        | TS / Rust 分工及依赖约束                                         |
 | 跨端接口     | [通信契约](ipc-contract.md)            | 命令、事件、错误码及公共预算                                     |
 | LLM 设计     | [LLM 接入与护栏](llm.md)               | Provider、护栏、配置与回合协调；实际能力及后续接线边界           |
-| 计价与额度   | [计价与费用预算](billing.md)           | 金额额度、不可变价格、持久账本与周期恢复；已评审，待实现         |
+| 计价与额度   | [计价与费用预算](billing.md)           | 原币价格、单局预算、持久账本、周期报表；035 实施中               |
 | 记录与上下文 | [记录引擎](record-engine.md)           | 块语法、流式持久化、投影预算、恢复与迁移；022 已实现并验收       |
 | 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；029 存储 / 恢复已交付            |
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定   |
@@ -52,7 +52,7 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022；由 [030 门控批次](../task/030-memory-gates-batches-impl.md) 接入素材与授权流程，[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md) 再接入产品面；[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等其他前置，030 / 033 等待 035 费用实施。
 
-027 已定稿[计价与费用预算](billing.md)，035 接不可变价格、双作用域金额额度、持久预留 / 结算、周期恢复及明细 / 可选余额；参考 Token 只生成固定默认金额，不另设累计 Token 额度。当前尚未实施。
+027 已定稿[计价与费用预算](billing.md)。035 已接入精确金额、不可变价格登记、按 profile 选择计价币种、每局 CNY / USD 独立预算、物理请求预留 / 结算、双币种用量与月报、80% 提醒及分页明细；参考 Token 只生成同币种建议值。历史补价和供应商余额仍未实现，验收状态见 [035](../task/035-llm-cost-control-impl.md)。全应用月报不设总额度。
 
 028 定稿 zh-Hans / en、独立偏好与精确格式化；034 以英文资源为消息 schema 基准，复用 026 的首窗入口和 013 的共享存储，已完成验收。025 / 031 / 035 消费后续界面与金额格式化能力。语言不隐式改写玩家原文或计价币种。
 
@@ -65,7 +65,7 @@ src-web（Vue + TypeScript：展示、交互与 IPC 薄调用）
 src-tauri（Tauri 装配、命令注册与平台事件适配）
   │ 调用业务 API
   ▼
-src-rust/（独立业务 crate：engine 按单向依赖组合 memory / llm / store）
+src-rust/（独立业务 crate：engine 按单向依赖组合 billing / memory / llm / store）
 ```
 
 ### Rust 工作区依赖图
@@ -75,6 +75,7 @@ src-rust/（独立业务 crate：engine 按单向依赖组合 memory / llm / sto
 ```text
 src-tauri
   ├─→ aoidos-engine
+  ├─→ aoidos-billing
   │     ├─→ aoidos-memory（029 存储 / 恢复）
   │     │     ├─→ aoidos-store
   │     │     └─→ aoidos-json
@@ -94,10 +95,11 @@ src-tauri
   └─→ aoidos-json
 
 aoidos-engine
+  ├─→ aoidos-billing
   └─→ aoidos-locale → aoidos-store
 ```
 
-原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。后续记忆产品流程与计费接入时，补齐实际链路并核对无环；端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
+原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。记忆产品流程仍按任务接入；计费运行时由 engine 持有账本并实现 LLM 的预算端口。端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
 
 前端 API 放在 `src-web/api/`，可测纯逻辑放在 `utils/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
 
@@ -209,4 +211,4 @@ Service（同 factory / Coordinator）→ record 持久化 → 窗口事件 / �
   → useEnginePhase / useLlmTurn / useRecordView
 ```
 
-活动选择保存在数据根的 `active-session.json`；正文仍由 records 的 workspace / transcript 路径维护。打开前预检配置但不发 HTTP，重开只恢复磁盘事实；生成须提交行动或显式恢复。035 未交付费用账本，当前生成端口不宣称具备金额额度控制。完整作者稿的多幕玩法与完整界面分别由后续协议和 025 承接。
+活动选择保存在数据根的 `active-session.json`；正文仍由 records 的 workspace / transcript 路径维护。打开前预检配置但不发 HTTP，重开只恢复磁盘事实；生成须提交行动或显式恢复。035 已将费用预算接入正式生成端口；余额查询与历史补价仍属未交付能力。完整作者稿的多幕玩法与完整界面分别由后续协议和 025 承接。

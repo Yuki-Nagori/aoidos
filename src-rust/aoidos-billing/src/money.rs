@@ -79,6 +79,15 @@ pub struct NanoMoney(i64);
 impl NanoMoney {
     pub const ZERO: Self = Self(0);
 
+    /// Reconstructs a persisted non-negative nano amount.
+    pub fn from_nanos(value: i64) -> Result<Self, MoneyError> {
+        if value < 0 {
+            Err(MoneyError::InvalidAmount)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
     /// 从十进制字符串精确解析，最多九位有效小数，不接受负值或指数写法。
     pub fn parse(value: &str) -> Result<Self, MoneyError> {
         if !is_plain_decimal(value) {
@@ -171,7 +180,7 @@ impl<'de> Deserialize<'de> for NanoMoney {
 }
 
 /// 供应商的单价（币种单位 / unit_tokens），以纳币保存。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UnitPrice(i128);
 
 impl UnitPrice {
@@ -490,5 +499,11 @@ mod tests {
         assert_eq!(MoneyError::InvalidAmount.to_string(), "invalid amount");
         assert_eq!(MoneyError::InvalidPrice.to_string(), "invalid price");
         assert_eq!(MoneyError::Overflow.to_string(), "amount overflow");
+    }
+
+    #[test]
+    fn persisted_nano_amounts_reject_negative_values() {
+        assert_eq!(NanoMoney::from_nanos(-1), Err(MoneyError::InvalidAmount));
+        assert_eq!(NanoMoney::from_nanos(0).unwrap(), NanoMoney::ZERO);
     }
 }
