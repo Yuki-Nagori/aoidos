@@ -94,6 +94,36 @@ fn resolved_name_question_rechecks_its_source_backing() {
 }
 
 #[test]
+fn changing_the_mentioned_name_advances_revision_and_rejects_old_answers() {
+    let mut f = Fixture::new();
+    let mut draft = draft(&f, &["keeper"]);
+    draft.mentioned_name = Some("钟声".into());
+    let original = open_draft(&mut f, &draft).unwrap();
+
+    draft.mentioned_name = Some("钟".into());
+    let updated = open_draft(&mut f, &draft).unwrap();
+    assert_eq!(updated.question_id, original.question_id);
+    assert_eq!(updated.revision, original.revision + 1);
+    assert_eq!(updated.draft.mentioned_name.as_deref(), Some("钟"));
+
+    rejected(
+        f.repo.resolve_question(
+            &mut f.conn,
+            &f.port,
+            &f.run.run_id,
+            resolution(&original, QuestionAnswer::None),
+        ),
+        Reason::StaleVersion,
+    );
+    assert_eq!(
+        f.repo
+            .question(&f.conn, &f.run.run_id, &updated.question_id)
+            .unwrap(),
+        updated
+    );
+}
+
+#[test]
 fn resolving_question_rejects_a_persisted_mention_missing_from_source() {
     let mut f = Fixture::new();
     let question = open(&mut f, &["keeper"]).unwrap();
