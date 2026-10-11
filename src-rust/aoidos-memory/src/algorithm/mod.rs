@@ -2,11 +2,125 @@
 
 use crate::{
     error::{Error, Reason, Result},
-    model::{Algorithm, MAX_INTEGER, Policy, reject},
+    model::{Algorithm, MAX_CANDIDATES, MAX_INTEGER, Policy, reject, valid_id, valid_short_id},
 };
 
 const FIXED_SCALE: u64 = 1_000_000;
 pub const MAX_ARCHIVE_CANDIDATES: usize = 10_000;
+const MAX_OPERATION_TARGETS: usize = 16;
+
+/// 候选与它触及的稳定素材 / 现有条目；位置由调用方从原始素材登记顺序取得。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateWork {
+    pub candidate_id: String,
+    pub earliest_source_position: u64,
+    pub material_ids: Vec<String>,
+    pub target_entry_ids: Vec<String>,
+}
+
+/// 把共享素材或目标的候选组合为原子依赖组，并按素材顺序稳定排列。
+///
+/// 独立候选形成单项组；同组最多触及 16 个不同条目，与仓储操作上限一致。
+/// 此函数只分组，不校验候选权限、不构造或提交操作。
+///
+/// # Errors
+/// 非法 / 重复身份、空或超限素材集合、非法位置、候选数超限、目标过多拒绝规划。
+pub fn dependency_groups(candidates: &[CandidateWork]) -> Result<Vec<Vec<String>>> {
+    if candidates.len() > MAX_CANDIDATES {
+        return Err(reject());
+    }
+
+    let mut candidate_ids = std::collections::BTreeSet::new();
+    for candidate in candidates {
+        if !valid_short_id(&candidate.candidate_id)
+            || !candidate_ids.insert(candidate.candidate_id.as_str())
+            || candidate.earliest_source_position > MAX_INTEGER
+            || candidate.material_ids.is_empty()
+            || candidate.material_ids.len() > MAX_CANDIDATES
+            || candidate.target_entry_ids.len() > MAX_OPERATION_TARGETS
+            || !unique_valid_ids(&candidate.material_ids)
+            || !unique_valid_ids(&candidate.target_entry_ids)
+        {
+            return Err(reject());
+        }
+    }
+
+    let mut order = (0..candidates.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        candidates[*left]
+            .earliest_source_position
+            .cmp(&candidates[*right].earliest_source_position)
+            .then_with(|| {
+                candidates[*left]
+                    .candidate_id
+                    .as_bytes()
+                    .cmp(candidates[*right].candidate_id.as_bytes())
+            })
+    });
+
+    let mut visited = vec![false; candidates.len()];
+    let mut groups = Vec::new();
+    for &start in &order {
+        if visited[start] {
+            continue;
+        }
+        let mut pending = vec![start];
+        let mut members = Vec::new();
+        while let Some(current) = pending.pop() {
+            if visited[current] {
+                continue;
+            }
+            visited[current] = true;
+            members.push(current);
+            for &candidate in &order {
+                if !visited[candidate] && dependent(&candidates[current], &candidates[candidate]) {
+                    pending.push(candidate);
+                }
+            }
+        }
+
+        let targets = members
+            .iter()
+            .flat_map(|index| candidates[*index].target_entry_ids.iter())
+            .collect::<std::collections::BTreeSet<_>>();
+        if targets.len() > MAX_OPERATION_TARGETS {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        members.sort_by(|left, right| {
+            candidates[*left]
+                .earliest_source_position
+                .cmp(&candidates[*right].earliest_source_position)
+                .then_with(|| {
+                    candidates[*left]
+                        .candidate_id
+                        .as_bytes()
+                        .cmp(candidates[*right].candidate_id.as_bytes())
+                })
+        });
+        groups.push(
+            members
+                .into_iter()
+                .map(|index| candidates[index].candidate_id.clone())
+                .collect(),
+        );
+    }
+    Ok(groups)
+}
+
+fn dependent(left: &CandidateWork, right: &CandidateWork) -> bool {
+    left.material_ids
+        .iter()
+        .any(|id| right.material_ids.contains(id))
+        || left
+            .target_entry_ids
+            .iter()
+            .any(|id| right.target_entry_ids.contains(id))
+}
+
+fn unique_valid_ids(ids: &[String]) -> bool {
+    let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
+    unique.len() == ids.len() && ids.iter().all(|id| valid_id(id))
+}
 
 /// 已由调用方验证来源与可见权限的活动记忆候选。
 #[derive(Debug, Clone, PartialEq, Eq)]

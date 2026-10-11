@@ -1,6 +1,6 @@
 //! 模型候选的有界协议与纯白名单校验；不查询存储、不提交记忆。
 
-use super::{Attitude, Dimension, MAX_INTEGER, Subject, reject, valid_id};
+use super::{Attitude, Dimension, MAX_INTEGER, Subject, reject, valid_id, valid_short_id};
 use crate::error::{Error, Reason, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -142,7 +142,7 @@ impl Proposal {
 }
 
 fn validate_candidate(candidate: &Candidate, context: &ProposalContext) -> Result<()> {
-    if !short_id(&candidate.candidate_id)
+    if !valid_short_id(&candidate.candidate_id)
         || candidate.reason.trim().is_empty()
         || candidate.reason.len() > 512
         || candidate.reason.contains('\0')
@@ -324,13 +324,6 @@ fn valid_dimension_for_subject(subject: &SubjectRef, dimension: Option<Dimension
 
 fn valid_summary(summary: &str) -> bool {
     !summary.trim().is_empty() && summary.len() <= 4096 && !summary.contains('\0')
-}
-
-fn short_id(id: &str) -> bool {
-    (1..=32).contains(&id.len())
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 fn unique_subset(values: &[String], allowed: &BTreeSet<String>) -> bool {

@@ -818,7 +818,7 @@ fn validate_completion(
         .collect::<BTreeSet<_>>();
     let mut actual = BTreeSet::new();
     for outcome in &completion.outcomes {
-        if !valid_candidate_id(&outcome.candidate_id)
+        if !valid_short_id(&outcome.candidate_id)
             || !actual.insert(outcome.candidate_id.as_str())
             || !expected.contains(outcome.candidate_id.as_str())
             || outcome.reason_code.as_deref().is_some_and(|code| {
@@ -861,8 +861,7 @@ fn validate_proposal_identity(proposal: &crate::model::Proposal) -> Result<()> {
     }
     let mut seen = BTreeSet::new();
     if proposal.candidates.iter().any(|candidate| {
-        !valid_candidate_id(&candidate.candidate_id)
-            || !seen.insert(candidate.candidate_id.as_str())
+        !valid_short_id(&candidate.candidate_id) || !seen.insert(candidate.candidate_id.as_str())
     }) {
         return Err(reject());
     }
@@ -873,12 +872,6 @@ fn validate_received_receipt(receipt: &BatchReceipt) -> Result<()> {
         return Err(Error::Corrupt);
     }
     Ok(())
-}
-fn valid_candidate_id(id: &str) -> bool {
-    (1..=32).contains(&id.len())
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 fn read_receipt(row: &rusqlite::Row<'_>) -> rusqlite::Result<(BoundedBlob, u64)> {
     Ok((read_bounded_blob(row, 0, 1, 32 * 1024)?, row.get(2)?))

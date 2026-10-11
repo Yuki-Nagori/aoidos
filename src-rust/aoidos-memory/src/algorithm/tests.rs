@@ -9,6 +9,15 @@ fn archive_candidate(id: &str, required: bool, strength: u64, position: u64) -> 
     }
 }
 
+fn candidate_work(id: &str, position: u64, materials: &[&str], targets: &[&str]) -> CandidateWork {
+    CandidateWork {
+        candidate_id: id.into(),
+        earliest_source_position: position,
+        material_ids: materials.iter().map(|id| (*id).into()).collect(),
+        target_entry_ids: targets.iter().map(|id| (*id).into()).collect(),
+    }
+}
+
 fn policy(algorithm: Algorithm) -> Policy {
     Policy {
         version: 1,
@@ -113,6 +122,122 @@ fn archive_selection_rejects_capacity_overflow_and_invalid_candidates() {
     ];
     assert!(matches!(
         select_archive(&oversized, 1),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
+fn dependency_groups_join_shared_sources_and_targets_in_stable_order() {
+    let material_a = "00000000-0000-4000-8000-000000000011";
+    let material_b = "00000000-0000-4000-8000-000000000012";
+    let material_c = "00000000-0000-4000-8000-000000000013";
+    let target_a = "00000000-0000-4000-8000-000000000021";
+    let target_b = "00000000-0000-4000-8000-000000000022";
+    let target_c = "00000000-0000-4000-8000-000000000023";
+    let candidates = [
+        candidate_work("bridge", 3, &[material_b], &[target_b]),
+        candidate_work("second", 2, &[material_b], &[target_a]),
+        candidate_work("independent", 0, &[material_c], &[target_c]),
+        candidate_work("first", 1, &[material_a], &[target_a]),
+    ];
+
+    assert_eq!(
+        dependency_groups(&candidates).unwrap(),
+        [
+            vec!["independent".to_owned()],
+            vec!["first".to_owned(), "second".to_owned(), "bridge".to_owned()]
+        ]
+    );
+}
+
+#[test]
+fn dependency_groups_break_equal_source_positions_by_candidate_id_bytes() {
+    let material_a = "00000000-0000-4000-8000-000000000051";
+    let material_z = "00000000-0000-4000-8000-000000000052";
+    let candidates = [
+        candidate_work("zeta", 7, &[material_z], &[]),
+        candidate_work("alpha", 7, &[material_a], &[]),
+    ];
+
+    assert_eq!(
+        dependency_groups(&candidates).unwrap(),
+        [vec!["alpha".to_owned()], vec!["zeta".to_owned()]]
+    );
+}
+
+#[test]
+fn dependency_groups_sort_shared_members_with_equal_positions_by_candidate_id_bytes() {
+    let shared_material = "00000000-0000-4000-8000-000000000053";
+    let candidates = [
+        candidate_work("zeta", 7, &[shared_material], &[]),
+        candidate_work("beta", 7, &[shared_material], &[]),
+        candidate_work("alpha", 7, &[shared_material], &[]),
+    ];
+
+    assert_eq!(
+        dependency_groups(&candidates).unwrap(),
+        [vec![
+            "alpha".to_owned(),
+            "beta".to_owned(),
+            "zeta".to_owned()
+        ]]
+    );
+}
+
+#[test]
+fn dependency_groups_reject_malformed_or_oversized_plans() {
+    let material = "00000000-0000-4000-8000-000000000031";
+    let bad_id = [candidate_work("bad id", 0, &[material], &[])];
+    let bad_position = [candidate_work("c1", MAX_INTEGER + 1, &[material], &[])];
+    let empty_sources = [candidate_work("c1", 0, &[], &[])];
+    let malformed_material = [candidate_work("c1", 0, &["not-a-uuid"], &[])];
+    let duplicate_material = [candidate_work("c1", 0, &[material, material], &[])];
+    let duplicate_targets = [candidate_work(
+        "c1",
+        0,
+        &[material],
+        &[
+            "00000000-0000-4000-8000-000000000041",
+            "00000000-0000-4000-8000-000000000041",
+        ],
+    )];
+    for invalid in [
+        bad_id.as_slice(),
+        bad_position.as_slice(),
+        empty_sources.as_slice(),
+        malformed_material.as_slice(),
+        duplicate_material.as_slice(),
+        duplicate_targets.as_slice(),
+    ] {
+        assert!(matches!(
+            dependency_groups(invalid),
+            Err(Error::Rejected(Reason::InvalidSchema))
+        ));
+    }
+
+    let shared_material = "00000000-0000-4000-8000-000000000032";
+    let targets = (0..=MAX_OPERATION_TARGETS)
+        .map(|index| {
+            let candidate_id = format!("c{index}");
+            let target_id = format!("00000000-0000-4000-8000-{index:012}");
+            candidate_work(
+                &candidate_id,
+                index as u64,
+                &[shared_material],
+                &[&target_id],
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        dependency_groups(&targets),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
+
+    let oversized = (0..=MAX_CANDIDATES)
+        .map(|index| candidate_work(&format!("c{index}"), index as u64, &[material], &[]))
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        dependency_groups(&oversized),
         Err(Error::Rejected(Reason::InvalidSchema))
     ));
 }
