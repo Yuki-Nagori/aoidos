@@ -75,7 +75,7 @@ src-rust/（独立业务 crate：engine 按单向依赖组合 billing / memory /
 ```text
 src-tauri
   ├─→ aoidos-engine
-  ├─→ aoidos-billing
+  │     ├─→ aoidos-billing
   │     ├─→ aoidos-memory（029 存储 / 恢复）
   │     │     ├─→ aoidos-store
   │     │     └─→ aoidos-json
@@ -84,8 +84,13 @@ src-tauri
   │     │     └─→ aoidos-json
   │     ├─→ aoidos-store
   │     │     └─→ aoidos-json
+  │     ├─→ aoidos-theme
+  │     │     └─→ aoidos-store
+  │     ├─→ aoidos-locale
+  │     │     └─→ aoidos-store
   │     ├─→ aoidos-script（纯原文解析，无业务 crate 依赖）
   │     └─→ aoidos-json
+  ├─→ aoidos-billing
   ├─→ aoidos-llm
   ├─→ aoidos-store
   ├─→ aoidos-theme
@@ -94,9 +99,6 @@ src-tauri
   │     └─→ aoidos-store
   └─→ aoidos-json
 
-aoidos-engine
-  ├─→ aoidos-billing
-  └─→ aoidos-locale → aoidos-store
 ```
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。记忆产品流程仍按任务接入；计费运行时由 engine 持有账本并实现 LLM 的预算端口。端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。

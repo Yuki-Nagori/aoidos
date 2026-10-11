@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-11。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）及国际化底座（034，已验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。后续模块继续核验单向依赖及职责归属。工程纪律参考 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-11。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，实施中）按本文分工实现；验收证据见[任务索引](../task-index.md)。后续模块继续核验单向依赖及职责归属。工程纪律参考 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -29,19 +29,21 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 aoidos-llm / aoidos-en
 ```text
 src-tauri（装配、命令、窗口事件适配）
   ├─→ aoidos-engine（lease、回合所有者、快照、输出 / 事件端口）
+  │     ├─→ aoidos-billing（精确金额、价格版本与账本领域规则）
+  │     ├─→ aoidos-memory（派生记忆存储与恢复）
+  │     │     ├─→ aoidos-store
+  │     │     └─→ aoidos-json
+  │     ├─→ aoidos-llm（Provider、护栏、唯一请求调度器与预算端口）
+  │     │     ├─→ aoidos-json
+  │     │     └─→ aoidos-store
+  │     ├─→ aoidos-store（记录追加与 applied 原语）
   │     ├─→ aoidos-theme（主题 schema / 偏好）
   │     │     └─→ aoidos-store
   │     ├─→ aoidos-locale（语言偏好与系统语言解析）
   │     │     └─→ aoidos-store
   │     ├─→ aoidos-script（纯剧本原文解析与格式校验，无业务反向依赖）
   │     ├─→ aoidos-json（共用编解码与静态错误类别）
-  │     ├─→ aoidos-memory（派生记忆存储与恢复）
-  │     │     ├─→ aoidos-store
-  │     │     └─→ aoidos-json
-  │     ├─→ aoidos-store（记录追加与 applied 原语）
-  │     └─→ aoidos-llm（Provider、护栏、唯一请求调度器与预算端口）
-  │           ├─→ aoidos-json（配置 / 凭据及 SSE 编解码）
-  │           └─→ aoidos-store（配置 / 凭据复用的文件基建）
+  ├─→ aoidos-billing（DTO / 命令转换复用的计费类型）
   ├─→ aoidos-llm（配置 / 凭据的薄命令适配）
   ├─→ aoidos-store（实例锁与存储装配）
   ├─→ aoidos-theme（主题命令 / 目录）
@@ -56,7 +58,7 @@ src-tauri（装配、命令、窗口事件适配）
 
 `aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
 
-计费由 engine 依赖纯领域 crate `aoidos-billing`，并实现 llm 定义的 `BudgetPort`；Tauri 只注册薄命令，前端只传递同型 DTO。store 不依赖计费、engine 或 llm，llm 也不依赖 engine / 计费实现。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
+计费由 engine 依赖纯领域 crate `aoidos-billing`，并实现 llm 定义的 `BudgetPort`；Tauri 直接依赖 billing 以复用金额 / 价格等领域类型，负责 IPC DTO 与领域类型的薄转换及命令转发，不承载计费规则。前端只传递同型 DTO。store 不依赖计费、engine 或 llm，llm 也不依赖 engine / 计费实现。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 
 034 的语言偏好 crate 只消费 store 的 SQLite 类型与存储错误；engine 负责共享连接和迁移，Tauri 负责命令及窗口 / 菜单 / 托盘应用，前端只消费同型载荷并呈现。`aoidos-locale` 不依赖 engine 或 Tauri，因此不形成反向依赖。
 
