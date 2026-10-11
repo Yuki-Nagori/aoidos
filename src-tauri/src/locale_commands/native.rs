@@ -4,16 +4,19 @@ use super::{NativeLocale, NativeStatus, native_message};
 use aoidos_locale::preference::Locale;
 use tauri::{
     Manager,
-    menu::{Menu, MenuItem, Submenu},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{TrayIcon, TrayIconBuilder},
 };
 
 pub(super) struct NativeSurfaces {
     app: tauri::AppHandle,
+    edit_submenu: Submenu<tauri::Wry>,
     window_menu: Menu<tauri::Wry>,
     window_submenu: Submenu<tauri::Wry>,
     window_show: MenuItem<tauri::Wry>,
     window_quit: MenuItem<tauri::Wry>,
+    paste: PredefinedMenuItem<tauri::Wry>,
+    select_all: PredefinedMenuItem<tauri::Wry>,
     tray_show: MenuItem<tauri::Wry>,
     tray_quit: MenuItem<tauri::Wry>,
     tray: TrayIcon<tauri::Wry>,
@@ -41,7 +44,16 @@ impl NativeSurfaces {
             true,
             &[&window_show, &window_quit],
         )?;
-        let window_menu = Menu::with_items(app, &[&window_submenu])?;
+        let paste = PredefinedMenuItem::paste(app, Some(&native_message(current, "menuPaste")))?;
+        let select_all =
+            PredefinedMenuItem::select_all(app, Some(&native_message(current, "menuSelectAll")))?;
+        let edit_submenu = Submenu::with_items(
+            app,
+            native_message(current, "menuEdit"),
+            true,
+            &[&paste, &select_all],
+        )?;
+        let window_menu = Menu::with_items(app, &[&edit_submenu, &window_submenu])?;
         app.set_menu(window_menu.clone())?;
 
         let tray_show = MenuItem::with_id(
@@ -72,10 +84,13 @@ impl NativeSurfaces {
 
         Ok(Self {
             app: app.handle().clone(),
+            edit_submenu,
             window_menu,
             window_submenu,
             window_show,
             window_quit,
+            paste,
+            select_all,
             tray_show,
             tray_quit,
             tray,
@@ -102,6 +117,12 @@ impl NativeLocale for NativeSurfaces {
         let show_text = native_message(locale, "menuShow");
         let quit_text = native_message(locale, "menuQuit");
         let title_text = native_message(locale, "windowTitle");
+        let edit_text = native_message(locale, "menuEdit");
+        let paste_text = native_message(locale, "menuPaste");
+        let select_all_text = native_message(locale, "menuSelectAll");
+        let edit_updated = self.edit_submenu.set_text(&edit_text);
+        let paste_updated = self.paste.set_text(&paste_text);
+        let select_all_updated = self.select_all.set_text(&select_all_text);
         let show_updated = self.window_show.set_text(&show_text);
         let quit_updated = self.window_quit.set_text(&quit_text);
         let submenu_updated = self.window_submenu.set_text(&title_text);
@@ -113,6 +134,9 @@ impl NativeLocale for NativeSurfaces {
             .get_webview_window("main")
             .is_some_and(|window| window.set_title(&title).is_ok());
         super::native_status([
+            edit_updated.is_ok(),
+            paste_updated.is_ok(),
+            select_all_updated.is_ok(),
             show_updated.is_ok(),
             quit_updated.is_ok(),
             submenu_updated.is_ok(),

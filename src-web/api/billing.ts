@@ -2,6 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type BillingCurrency = "CNY" | "USD";
 
+interface TokenPriceTier {
+  inputUncached: string;
+  inputCached: string;
+  inputCachedWrite: string | null;
+  output: string;
+}
+
+interface RecurringPriceSchedule {
+  version: string;
+  peak: TokenPriceTier;
+}
+
 export interface BudgetSettings {
   runId: string;
   cnyLimit: string;
@@ -18,7 +30,9 @@ export interface PriceVersion {
   unitTokens: number;
   inputUncached: string;
   inputCached: string;
+  inputCachedWrite: string | null;
   output: string;
+  schedule?: RecurringPriceSchedule | null;
   usageMappingVersion: string;
   sourceKind: string;
   sourceUrl?: string;
@@ -77,6 +91,7 @@ interface BillingRequestItem {
   actualAmount: string | null;
   inputTotal: number | null;
   inputCached: number | null;
+  inputCachedWrite: number | null;
   outputTotal: number | null;
   reasoningIncluded: number | null;
   totalTokens: number | null;

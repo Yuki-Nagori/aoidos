@@ -212,7 +212,8 @@ macro_rules! command_handler {
         billing_commands::budget_get_period, billing_commands::budget_list_requests,
         billing_commands::budget_get_suggested_limits, billing_commands::budget_get_price,
         billing_commands::budget_get_selected_price, billing_commands::budget_select_price,
-        billing_commands::budget_get_monthly, billing_commands::budget_register_price, $($extra),*
+        billing_commands::budget_get_monthly, billing_commands::budget_register_price,
+        $($extra),*
     ] };
 }
 

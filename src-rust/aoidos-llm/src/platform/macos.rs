@@ -28,6 +28,8 @@ fn prompt(
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 26.0)),
     );
     alert.setAccessoryView(Some(&entry));
+    alert.layout();
+    alert.window().setInitialFirstResponder(Some(&entry));
     #[cfg(feature = "native-smoke")]
     let _timer = verification.map(|accept| {
         use objc2_foundation::{NSRunLoop, NSTimer};

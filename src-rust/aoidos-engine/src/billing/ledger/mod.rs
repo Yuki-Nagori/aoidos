@@ -5,7 +5,7 @@ use aoidos_billing::{
 };
 use jiff::{ToSpan, civil::Date};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const MAX_PRICE_VERSIONS_PER_IDENTITY: i64 = 1_024;
@@ -42,6 +42,7 @@ pub struct Reservation {
 pub struct Settlement {
     pub input_total: u64,
     pub input_cached: u64,
+    pub input_cached_write: u64,
     pub output_total: u64,
     pub reasoning_included: Option<u64>,
     pub total_tokens: u64,
@@ -70,6 +71,17 @@ pub struct ModelUsageSummary {
     pub request_count: u64,
 }
 
+#[derive(Default)]
+struct MonthlyAggregate {
+    settled_nanos: i64,
+    settled_count: u64,
+    reserved_nanos: i64,
+    reserved_count: u64,
+    known_tokens: u64,
+    known_count: u64,
+    request_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BudgetWarning {
@@ -94,6 +106,7 @@ pub struct RequestItem {
     pub actual_amount: Option<NanoMoney>,
     pub input_total: Option<u64>,
     pub input_cached: Option<u64>,
+    pub input_cached_write: Option<u64>,
     pub output_total: Option<u64>,
     pub reasoning_included: Option<u64>,
     pub total_tokens: Option<u64>,
@@ -166,7 +179,9 @@ struct StoredPrice {
     unit_tokens: i64,
     input_uncached: String,
     input_cached: String,
+    input_cached_write: Option<String>,
     output: String,
+    schedule_json: Option<String>,
     usage_mapping_version: String,
     source_kind: String,
     source_url: Option<String>,
@@ -189,7 +204,9 @@ type ExistingReservation = (
 );
 type ExistingSettlement = (
     String,
+    String,
     Option<String>,
+    Option<i64>,
     Option<i64>,
     Option<i64>,
     Option<i64>,
@@ -242,7 +259,7 @@ impl BillingLedger {
             (max, 0)
         };
         let mut statement = connection
-            .prepare("SELECT rowid,request_id,profile_id,provider_id,model_id,currency,price_version_id,dispatch_at,state,reserved_nanos,actual_nanos,input_total,input_cached,output_total,reasoning_included,total_tokens FROM billing_physical_requests WHERE run_id=?1 AND rowid>?2 AND rowid<=?3 ORDER BY rowid ASC LIMIT ?4")
+            .prepare("SELECT rowid,request_id,profile_id,provider_id,model_id,currency,price_version_id,dispatch_at,state,reserved_nanos,actual_nanos,input_total,input_cached,input_cached_write,output_total,reasoning_included,total_tokens FROM billing_physical_requests WHERE run_id=?1 AND rowid>?2 AND rowid<=?3 ORDER BY rowid ASC LIMIT ?4")
             .map_err(storage)?;
         let rows = statement
             .query_map(
@@ -265,6 +282,7 @@ impl BillingLedger {
                         row.get::<_, Option<i64>>(13)?,
                         row.get::<_, Option<i64>>(14)?,
                         row.get::<_, Option<i64>>(15)?,
+                        row.get::<_, Option<i64>>(16)?,
                     ))
                 },
             )
@@ -291,6 +309,7 @@ impl BillingLedger {
                 actual,
                 input,
                 cached,
+                cached_write,
                 output,
                 reasoning,
                 total,
@@ -315,6 +334,10 @@ impl BillingLedger {
                     .transpose()
                     .map_err(|_| BillingError::Storage)?,
                 input_cached: cached
+                    .map(u64::try_from)
+                    .transpose()
+                    .map_err(|_| BillingError::Storage)?,
+                input_cached_write: cached_write
                     .map(u64::try_from)
                     .transpose()
                     .map_err(|_| BillingError::Storage)?,
@@ -387,78 +410,113 @@ impl BillingLedger {
         time_zone: &str,
     ) -> Result<Vec<ModelUsageSummary>, BillingError> {
         let (start, end) = month_range(month, time_zone)?;
+        let start = OffsetDateTime::parse(&start, &Rfc3339).map_err(|_| BillingError::Invalid)?;
+        let end = OffsetDateTime::parse(&end, &Rfc3339).map_err(|_| BillingError::Invalid)?;
+        let candidate_start = start.format(&Rfc3339).map_err(|_| BillingError::Invalid)?;
+        let candidate_end = end.format(&Rfc3339).map_err(|_| BillingError::Invalid)?;
         let mut statement = connection
             .prepare(
-                "SELECT provider_id,currency,model_id,SUM(CASE WHEN state='settled' THEN actual_nanos ELSE 0 END),SUM(CASE WHEN state='settled' THEN 1 ELSE 0 END),SUM(CASE WHEN state<>'settled' THEN reserved_nanos ELSE 0 END),SUM(CASE WHEN state<>'settled' THEN 1 ELSE 0 END),SUM(total_tokens),COUNT(total_tokens),COUNT(*) FROM billing_physical_requests WHERE julianday(dispatch_at)>=julianday(?1) AND julianday(dispatch_at)<julianday(?2) GROUP BY provider_id,currency,model_id ORDER BY provider_id,currency,model_id LIMIT 201",
+                "SELECT dispatch_at,provider_id,currency,model_id,state,actual_nanos,reserved_nanos,total_tokens FROM billing_physical_requests WHERE julianday(dispatch_at)>=julianday(?1)-2 AND julianday(dispatch_at)<julianday(?2)+2 ORDER BY provider_id,currency,model_id",
             )
             .map_err(storage)?;
         let rows = statement
-            .query_map(params![start, end], |row| {
+            .query_map(params![candidate_start, candidate_end], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
                     row.get::<_, Option<i64>>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, Option<i64>>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, i64>(9)?,
                 ))
             })
             .map_err(storage)?;
-        let mut result = Vec::new();
+        let mut groups = BTreeMap::<(String, String, String), MonthlyAggregate>::new();
         for row in rows {
-            let (
-                provider_id,
-                currency,
-                model_id,
-                settled,
-                settled_count,
-                reserved,
-                reserved_count,
-                tokens,
-                known_count,
-                request_count,
-            ) = row.map_err(storage)?;
-            if result.len() == 200 {
+            let (dispatch_at, provider_id, currency, model_id, state, settled, reserved, tokens) =
+                row.map_err(storage)?;
+            let dispatch_at =
+                OffsetDateTime::parse(&dispatch_at, &Rfc3339).map_err(|_| BillingError::Storage)?;
+            if dispatch_at < start || dispatch_at >= end {
+                continue;
+            }
+            let key = (provider_id, currency, model_id);
+            if !groups.contains_key(&key) && groups.len() == 200 {
                 return Err(BillingError::Invalid);
             }
-            result.push(ModelUsageSummary {
-                provider_id,
-                currency: currency.parse().map_err(|_| BillingError::Storage)?,
-                model_id,
-                settled_amount: if settled_count == 0 {
-                    None
-                } else {
-                    Some(
-                        NanoMoney::from_nanos(settled.ok_or(BillingError::Storage)?)
-                            .map_err(|_| BillingError::Storage)?,
-                    )
-                },
-                reserved_amount: if reserved_count == 0 {
-                    None
-                } else {
-                    Some(
-                        NanoMoney::from_nanos(reserved.ok_or(BillingError::Storage)?)
-                            .map_err(|_| BillingError::Storage)?,
-                    )
-                },
-                known_tokens: if known_count == 0 {
-                    None
-                } else {
-                    Some(
-                        u64::try_from(tokens.ok_or(BillingError::Storage)?)
-                            .map_err(|_| BillingError::Storage)?,
-                    )
-                },
-                incomplete_requests: u64::try_from(request_count - known_count)
-                    .map_err(|_| BillingError::Storage)?,
-                request_count: u64::try_from(request_count).map_err(|_| BillingError::Storage)?,
-            });
+            let group = groups.entry(key).or_default();
+            group.request_count = group
+                .request_count
+                .checked_add(1)
+                .ok_or(BillingError::Storage)?;
+            if let Some(tokens) = tokens {
+                group.known_tokens = group
+                    .known_tokens
+                    .checked_add(u64::try_from(tokens).map_err(|_| BillingError::Storage)?)
+                    .ok_or(BillingError::Storage)?;
+                group.known_count = group
+                    .known_count
+                    .checked_add(1)
+                    .ok_or(BillingError::Storage)?;
+            }
+            if state == "settled" {
+                group.settled_nanos = group
+                    .settled_nanos
+                    .checked_add(settled.ok_or(BillingError::Storage)?)
+                    .ok_or(BillingError::Storage)?;
+                group.settled_count = group
+                    .settled_count
+                    .checked_add(1)
+                    .ok_or(BillingError::Storage)?;
+            } else {
+                group.reserved_nanos = group
+                    .reserved_nanos
+                    .checked_add(reserved)
+                    .ok_or(BillingError::Storage)?;
+                group.reserved_count = group
+                    .reserved_count
+                    .checked_add(1)
+                    .ok_or(BillingError::Storage)?;
+            }
         }
-        Ok(result)
+        groups
+            .into_iter()
+            .map(|((provider_id, currency, model_id), group)| {
+                Ok(ModelUsageSummary {
+                    provider_id,
+                    currency: currency.parse().map_err(|_| BillingError::Storage)?,
+                    model_id,
+                    settled_amount: if group.settled_count == 0 {
+                        None
+                    } else {
+                        Some(
+                            NanoMoney::from_nanos(group.settled_nanos)
+                                .map_err(|_| BillingError::Storage)?,
+                        )
+                    },
+                    reserved_amount: if group.reserved_count == 0 {
+                        None
+                    } else {
+                        Some(
+                            NanoMoney::from_nanos(group.reserved_nanos)
+                                .map_err(|_| BillingError::Storage)?,
+                        )
+                    },
+                    known_tokens: if group.known_count == 0 {
+                        None
+                    } else {
+                        Some(group.known_tokens)
+                    },
+                    incomplete_requests: group
+                        .request_count
+                        .checked_sub(group.known_count)
+                        .ok_or(BillingError::Storage)?,
+                    request_count: group.request_count,
+                })
+            })
+            .collect()
     }
 
     /// Reads this run's deduplicated per-currency budget warnings.
@@ -599,6 +657,25 @@ impl BillingLedger {
         Self::price_by_id(connection, &version_id)?.ok_or(BillingError::NotFound)
     }
 
+    /// Reads the immutable price and send time pinned to a physical request.
+    pub fn request_price_context(
+        connection: &Connection,
+        request_id: &str,
+    ) -> Result<(PriceVersion, String), BillingError> {
+        validate_text(request_id, 128)?;
+        let (version_id, dispatch_at) = connection
+            .query_row(
+                "SELECT price_version_id,dispatch_at FROM billing_physical_requests WHERE request_id=?1",
+                [request_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage)?
+            .ok_or(BillingError::NotFound)?;
+        let price = Self::price_by_id(connection, &version_id)?.ok_or(BillingError::Storage)?;
+        Ok((price, dispatch_at))
+    }
+
     /// Reads a frozen immutable price by ID for settlement and audit.
     pub fn price_by_id(
         connection: &Connection,
@@ -606,12 +683,12 @@ impl BillingLedger {
     ) -> Result<Option<PriceVersion>, BillingError> {
         let stored = connection
             .query_row(
-                "SELECT provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until FROM billing_price_versions WHERE version_id=?1",
+                "SELECT provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,schedule_json,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until FROM billing_price_versions WHERE version_id=?1",
                 [version_id],
                 |row| Ok((
                     row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?,row.get::<_, String>(3)?,row.get::<_, i64>(4)?,
-                    row.get::<_, String>(5)?,row.get::<_, String>(6)?,row.get::<_, String>(7)?,row.get::<_, String>(8)?,row.get::<_, String>(9)?,
-                    row.get::<_, Option<String>>(10)?,row.get::<_, String>(11)?,row.get::<_, String>(12)?,row.get::<_, Option<String>>(13)?,
+                    row.get::<_, String>(5)?,row.get::<_, String>(6)?,row.get::<_, Option<String>>(7)?,row.get::<_, String>(8)?,row.get::<_, Option<String>>(9)?,row.get::<_, String>(10)?,row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,row.get::<_, String>(13)?,row.get::<_, String>(14)?,row.get::<_, Option<String>>(15)?,
                 )),
             )
             .optional()
@@ -624,7 +701,9 @@ impl BillingLedger {
             unit_tokens,
             input_uncached,
             input_cached,
+            input_cached_write,
             output,
+            schedule_json,
             usage_mapping_version,
             source_kind,
             source_url,
@@ -644,7 +723,15 @@ impl BillingLedger {
             unit_tokens: u64::try_from(unit_tokens).map_err(|_| BillingError::Storage)?,
             input_uncached: UnitPrice::parse(&input_uncached).map_err(|_| BillingError::Storage)?,
             input_cached: UnitPrice::parse(&input_cached).map_err(|_| BillingError::Storage)?,
+            input_cached_write: input_cached_write
+                .map(|value| UnitPrice::parse(&value))
+                .transpose()
+                .map_err(|_| BillingError::Storage)?,
             output: UnitPrice::parse(&output).map_err(|_| BillingError::Storage)?,
+            schedule: schedule_json
+                .map(|value| serde_json::from_str(&value))
+                .transpose()
+                .map_err(|_| BillingError::Storage)?,
             usage_mapping_version,
             source_kind,
             source_url,
@@ -704,7 +791,7 @@ impl BillingLedger {
     ) -> Result<Option<PriceVersion>, BillingError> {
         // SQLite 日期函数会丢失亚毫秒精度，因此在 Rust 中按 RFC 3339 实际时刻比较价格版本。
         let mut statement = connection.prepare(
-            "SELECT version_id,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until FROM billing_price_versions WHERE provider_id=?1 AND model_id=?2 AND route_policy=?3 AND currency=?4 ORDER BY created_at DESC,version_id DESC LIMIT ?5",
+            "SELECT version_id,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,schedule_json,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until FROM billing_price_versions WHERE provider_id=?1 AND model_id=?2 AND route_policy=?3 AND currency=?4 ORDER BY created_at DESC,version_id DESC LIMIT ?5",
         ).map_err(storage)?;
         let mut rows = statement
             .query(params![
@@ -734,14 +821,26 @@ impl BillingLedger {
                     .map_err(|_| BillingError::Storage)?,
                 input_cached: UnitPrice::parse(&row.get::<_, String>(3).map_err(storage)?)
                     .map_err(|_| BillingError::Storage)?,
-                output: UnitPrice::parse(&row.get::<_, String>(4).map_err(storage)?)
+                input_cached_write: row
+                    .get::<_, Option<String>>(4)
+                    .map_err(storage)?
+                    .map(|value| UnitPrice::parse(&value))
+                    .transpose()
                     .map_err(|_| BillingError::Storage)?,
-                usage_mapping_version: row.get(5).map_err(storage)?,
-                source_kind: row.get(6).map_err(storage)?,
-                source_url: row.get(7).map_err(storage)?,
-                checked_at: row.get(8).map_err(storage)?,
-                effective_from: row.get(9).map_err(storage)?,
-                valid_until: row.get(10).map_err(storage)?,
+                output: UnitPrice::parse(&row.get::<_, String>(5).map_err(storage)?)
+                    .map_err(|_| BillingError::Storage)?,
+                schedule: row
+                    .get::<_, Option<String>>(6)
+                    .map_err(storage)?
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()
+                    .map_err(|_| BillingError::Storage)?,
+                usage_mapping_version: row.get(7).map_err(storage)?,
+                source_kind: row.get(8).map_err(storage)?,
+                source_url: row.get(9).map_err(storage)?,
+                checked_at: row.get(10).map_err(storage)?,
+                effective_from: row.get(11).map_err(storage)?,
+                valid_until: row.get(12).map_err(storage)?,
             };
             if !price
                 .is_effective_at(dispatch_at)
@@ -863,14 +962,14 @@ impl BillingLedger {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
         let existing: Option<StoredPrice> = transaction.query_row(
-            "SELECT provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until FROM billing_price_versions WHERE version_id=?1",
+            "SELECT provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,schedule_json,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until FROM billing_price_versions WHERE version_id=?1",
             [&price.version_id],
             |row| Ok(StoredPrice {
                 provider_id: row.get(0)?, model_id: row.get(1)?, route_policy: row.get(2)?,
                 currency: row.get(3)?, unit_tokens: row.get(4)?, input_uncached: row.get(5)?,
-                input_cached: row.get(6)?, output: row.get(7)?, usage_mapping_version: row.get(8)?,
-                source_kind: row.get(9)?, source_url: row.get(10)?, checked_at: row.get(11)?,
-                effective_from: row.get(12)?, valid_until: row.get(13)?,
+                input_cached: row.get(6)?, input_cached_write: row.get(7)?, output: row.get(8)?, schedule_json: row.get(9)?, usage_mapping_version: row.get(10)?,
+                source_kind: row.get(11)?, source_url: row.get(12)?, checked_at: row.get(13)?,
+                effective_from: row.get(14)?, valid_until: row.get(15)?,
             }),
         ).optional().map_err(storage)?;
         let expected = StoredPrice {
@@ -881,7 +980,17 @@ impl BillingLedger {
             unit_tokens: i64::try_from(price.unit_tokens).map_err(|_| BillingError::Invalid)?,
             input_uncached: price.input_uncached.to_decimal_string(),
             input_cached: price.input_cached.to_decimal_string(),
+            input_cached_write: price
+                .input_cached_write
+                .as_ref()
+                .map(UnitPrice::to_decimal_string),
             output: price.output.to_decimal_string(),
+            schedule_json: price
+                .schedule
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| BillingError::Invalid)?,
             usage_mapping_version: price.usage_mapping_version.clone(),
             source_kind: price.source_kind.clone(),
             source_url: price.source_url.clone(),
@@ -907,8 +1016,8 @@ impl BillingLedger {
             return Err(BillingError::PriceHistoryLimit);
         }
         transaction.execute(
-            "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
-            params![price.version_id,price.provider_id,price.model_id,price.route_policy,price.currency.code(),expected.unit_tokens,price.input_uncached.to_decimal_string(),price.input_cached.to_decimal_string(),price.output.to_decimal_string(),price.usage_mapping_version,price.source_kind,price.source_url,price.checked_at,price.effective_from,price.valid_until,created_at],
+            "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,schedule_json,usage_mapping_version,source_kind,source_url,checked_at,effective_from,valid_until,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            params![price.version_id,price.provider_id,price.model_id,price.route_policy,price.currency.code(),expected.unit_tokens,price.input_uncached.to_decimal_string(),price.input_cached.to_decimal_string(),price.input_cached_write.as_ref().map(UnitPrice::to_decimal_string),price.output.to_decimal_string(),expected.schedule_json,price.usage_mapping_version,price.source_kind,price.source_url,price.checked_at,price.effective_from,price.valid_until,created_at],
         ).map_err(storage)?;
         insert_audit(
             &transaction,
@@ -1113,18 +1222,20 @@ impl BillingLedger {
             .map_err(storage)?;
         let current: Option<ExistingSettlement> = transaction
             .query_row(
-                "SELECT state,result_digest,actual_nanos,input_total,input_cached,output_total,reasoning_included,total_tokens,reserved_nanos,price_version_id FROM billing_physical_requests WHERE request_id=?1",
+                "SELECT state,dispatch_at,result_digest,actual_nanos,input_total,input_cached,input_cached_write,output_total,reasoning_included,total_tokens,reserved_nanos,price_version_id FROM billing_physical_requests WHERE request_id=?1",
                 [request_id],
-                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?)),
+                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?)),
             )
             .optional()
             .map_err(storage)?;
         let Some((
             state,
+            dispatch_at,
             digest,
             actual_nanos,
             input_total,
             input_cached,
+            input_cached_write,
             output_total,
             reasoning,
             total_tokens,
@@ -1154,13 +1265,14 @@ impl BillingLedger {
         };
         let price =
             Self::price_by_id(&transaction, &price_version_id)?.ok_or(BillingError::Storage)?;
-        let expected_amount = NormalizedUsage::from_provider(
+        let expected_amount = NormalizedUsage::from_provider_with_cache_write(
             value.input_total,
             Some(value.input_cached),
+            Some(value.input_cached_write),
             value.output_total,
             value.reasoning_included,
         )
-        .and_then(|usage| usage.exact_cost(&price))
+        .and_then(|usage| usage.exact_cost_at(&price, &dispatch_at))
         .and_then(|cost| cost.settle().map_err(Into::into))
         .map_err(|_| BillingError::Invalid)?;
         if expected_amount != value.amount {
@@ -1171,6 +1283,7 @@ impl BillingLedger {
                 && actual_nanos == Some(value.amount.nanos())
                 && input_total == Some(to_i64(value.input_total)?)
                 && input_cached == Some(to_i64(value.input_cached)?)
+                && input_cached_write == Some(to_i64(value.input_cached_write)?)
                 && output_total == Some(to_i64(value.output_total)?)
                 && reasoning == value.reasoning_included.map(to_i64).transpose()?
                 && total_tokens == Some(to_i64(value.total_tokens)?)
@@ -1185,8 +1298,8 @@ impl BillingLedger {
         }
         let changed = transaction
             .execute(
-                "UPDATE billing_physical_requests SET state='settled',input_total=?2,input_cached=?3,output_total=?4,reasoning_included=?5,total_tokens=?6,actual_nanos=?7,result_digest=?8,updated_at=?9 WHERE request_id=?1 AND state IN ('reserved','unconfirmed')",
-                params![request_id, to_i64(value.input_total)?, to_i64(value.input_cached)?, to_i64(value.output_total)?, value.reasoning_included.map(to_i64).transpose()?, to_i64(value.total_tokens)?, value.amount.nanos(), value.result_digest, updated_at],
+                "UPDATE billing_physical_requests SET state='settled',input_total=?2,input_cached=?3,input_cached_write=?4,output_total=?5,reasoning_included=?6,total_tokens=?7,actual_nanos=?8,result_digest=?9,updated_at=?10 WHERE request_id=?1 AND state IN ('reserved','unconfirmed')",
+                params![request_id, to_i64(value.input_total)?, to_i64(value.input_cached)?, to_i64(value.input_cached_write)?, to_i64(value.output_total)?, value.reasoning_included.map(to_i64).transpose()?, to_i64(value.total_tokens)?, value.amount.nanos(), value.result_digest, updated_at],
             )
             .map_err(storage)?;
         if changed != 1 {
@@ -1377,7 +1490,10 @@ fn validate_reservation(request: &Reservation) -> Result<(), BillingError> {
 }
 
 fn validate_settlement(value: &Settlement) -> Result<(), BillingError> {
-    if value.input_cached > value.input_total
+    if value
+        .input_cached
+        .checked_add(value.input_cached_write)
+        .is_none_or(|count| count > value.input_total)
         || value
             .reasoning_included
             .is_some_and(|count| count > value.output_total)
@@ -1390,6 +1506,7 @@ fn validate_settlement(value: &Settlement) -> Result<(), BillingError> {
     for count in [
         value.input_total,
         value.input_cached,
+        value.input_cached_write,
         value.output_total,
         value.total_tokens,
     ] {

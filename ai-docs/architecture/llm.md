@@ -71,7 +71,7 @@ v1 不把 async-openai / rig / genai 作为主路径，原因是本项目需要�
 
 OpenCode 以独立 provider 身份接入 Zen（按请求计费）和 Go（订阅额度、可选余额回退）；两者凭据、价格、预算与报表身份分开。模型选择是本地版本化目录，不将 `/models` 返回的裸 ID 自动开放：目录 ID 必须先核验官方 endpoint 表、协议形态和费用属性。2026-10-11 核验的 Zen 文档列出 86 个叙事文本模型：Responses、Anthropic Messages、OpenAI Chat Completions 及 Gemini `streamGenerateContent`；Go 文档列出 32 个模型，使用 Chat Completions、Responses、Anthropic Messages。结构化问答型 Jev 不符合当前自由文本 Provider 契约，因此不列入可玩模型。目录来源：[Zen endpoints / pricing](https://docs.opencode.ai/docs/zen/)、[Go endpoints / pricing](https://opencode.ai/v2/docs/console/go)、[Zen model IDs](https://opencode.ai/zen/v1/models)、[Go model IDs](https://opencode.ai/zen/go/v1/models)。
 
-OpenCode Go 请求携带 Aoidos 专用 User-Agent，并使用当前对局的稳定 session ID 写入 `x-opencode-session`，让服务端能按会话优化路由和缓存。Go 模型默认选择 DeepSeek V4.1 Flash。DeepSeek、OpenCode Zen / Go 的模型上下文窗口与最大输出集中登记在共享目录 `aoidos-llm/src/providers/models/mod.rs`；OpenCode Zen / Go 按 provider 分别登记，同名模型的限额可能不同。OpenCode 上游元数据仍可能与实际路由后端的运行时限额不同，目录值不视为端到端验证。Anthropic cache-read 与 cache-creation 在 Provider usage 中分开保留；035 完成独立写入计价前，非零 cache-creation 请求不作精确结算。Gemini 把 candidates 与 thoughts token 一并计入输出，thoughts 保留为输出子集。游戏投影另外受 32K 输入硬上限约束，所以 1M 模型窗口不会令单次游戏请求自动扩到 1M。Responses 不声明服务端 stop，Messages / Gemini 只声明各自协议可表达的参数。OpenCode Go 的 DeepSeek V4 系列官方区分 UTC 工作日峰 / 非峰费率；035 尚待按请求发送时刻选择价格并冻结账本版本，当前未接入峰谷结算。Go 月订阅固定成本也待 035 独立实现；token 价格只作为额度使用估值，Zen fallback 可能产生独立 Zen 按量费用。
+OpenCode Go 请求携带 Aoidos 专用 User-Agent，并使用当前对局的稳定 session ID 写入 `x-opencode-session`，让服务端能按会话优化路由和缓存。Go 模型默认选择 DeepSeek V4.1 Flash。DeepSeek、OpenCode Zen / Go 的模型上下文窗口与最大输出集中登记在共享目录 `aoidos-llm/src/providers/models/mod.rs`；OpenCode Zen / Go 按 provider 分别登记，同名模型的限额可能不同。OpenCode 公共 Go models endpoint 和 Console workspace config 可用于查看模型 ID / 可用配置，但不提供协议能力、上下文上限、费率或账单金额；未知模型在协议和能力核验前不会自动开放。上游元数据仍可能与实际路由后端的运行时限额不同，目录值不视为端到端验证。Anthropic cache-read 与 cache-creation 在 Provider usage 中分开保留，并分别计价。Gemini 把 candidates 与 thoughts token 一并计入输出，thoughts 保留为输出子集。游戏投影另外受 32K 输入硬上限约束，所以 1M 模型窗口不会令单次游戏请求自动扩到 1M。Responses 不声明服务端 stop，Messages / Gemini 只声明各自协议可表达的参数。OpenCode Go 的 DeepSeek V4 系列官方区分 UTC 工作日峰 / 非峰费率；请求按发送时刻选择价格并冻结账本版本。Go / Go Plus 订阅费用不进入 Aoidos 账本；Go token 费率只作为模型额度使用估值，Zen fallback 可能产生独立 Zen 按量费用。
 
 官方资料确认了 Beta FIM 与 Chat Prefix 两条路径，FIM 为非 thinking；Chat API 默认启用 thinking，因此叙事 adapter 要显式关闭，而不能依赖服务端默认值。[模型能力](https://api-docs.deepseek.com/quick_start/pricing/)、[FIM](https://api-docs.deepseek.com/guides/fim_completion/)、[Chat Prefix](https://api-docs.deepseek.com/guides/chat_prefix_completion/)、[thinking](https://api-docs.deepseek.com/guides/thinking_mode/)
 
@@ -208,7 +208,7 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 价格配置登记后缓存 / 持久恢复，凭据仍由 019 管理。历史未计价可按明确范围补价，不改原始 usage 或已结算请求。用户同时看费用和 Token，按服务商、模型、币种及单局 / 月报范围查明细；每局 80% 提示按 CNY、USD 两个上限分别去重，未知 / 预留单列。月报只按服务商和原币统计。参考默认值、不可变版本、精确计算、时段、分币种上限、恢复和可选余额的唯一细则见[计价与预算](billing.md)。
 
-[027](../task/027-llm-cost-control-design.md) 已完成设计。035 已接入统一预算端口、价格登记、物理请求预留 / 结算、费用设置 / 明细与月报；030 / 033 仍等待 035 完成。每次成功预留对应唯一 requestId / turnId，正常终结显式结算；Future 异常丢弃按取消且用量未知结算一次。usage 缺失或只报告部分字段保留未知，不能伪造零消耗；明确报告的零值与未知区分。基础接入由本地夹具验证，不等同于真实供应商账单对账。历史补价、供应商余额和三平台人工验收仍未完成，不能据此宣称 035 整体验收通过。
+[027](../task/027-llm-cost-control-design.md) 已完成设计。035 已接入统一预算端口、价格登记、物理请求预留 / 结算、费用设置 / 明细与月报；030 / 033 仍等待 035 完成。每次成功预留对应唯一 requestId / turnId，正常终结显式结算；Future 异常丢弃按取消且用量未知结算一次。仅当取消在 `provider.start` 调用前被观察到，才以 `notDispatched` 释放预留；进入 Provider 调用后，usage 缺失或只报告部分字段均保留未知，不能伪造零消耗，明确报告的零值与未知区分。当前账本适配器尚未向有界诊断面暴露结算失败，修复前不得把 reserved 误认为结算成功。基础接入由本地夹具验证，不等同于真实供应商账单对账。历史补价、供应商余额和三平台人工验收仍未完成，不能据此宣称 035 整体验收通过。
 
 记忆的有界批次策略与待标定项见[记忆设计](memory.md)。
 
@@ -262,9 +262,9 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 代理模式 system / none / manual：system 使用启动时形成的环境代理快照（不隐式读环境）；none 显式禁用；manual 使用显式 HTTP(S) 或 SOCKS5 代理并禁用自动系统代理叠加（由构造方式保证：客户端统一经 `proxy::build_client` 显式组装，全程不让 reqwest 隐式读环境），客户端已启用 reqwest 的 `socks` feature。代理三模式、CONNECT 隧道、禁用重定向与经代理的 TLS 分类已由本地代理夹具验证（019）。生产 endpoint 必须 HTTPS，禁止 URL 内嵌凭据，禁止自动重定向携带请求（redirect none）；仅测试 / 用户明确配置的回环本地服务可 HTTP。代理用户名 / 密码由 Rust 凭据引用取出，不存进 URL、普通配置、日志或 CmdError.detail；关闭原始 HTTP trace。端点和代理错误仅返回脱敏类别，不输出 response body、请求头或完整 prompt。
 
-`llm_set_key` 在 Rust 原生窗口中输入密钥，命令 / 快照只返回状态；取消保留旧值。`platform/` 以同型接口提供 Windows CredUI、macOS AppKit 与 Linux GTK 密码控件，命令经 UI 主线程调度，无桌面会话显式报错。三平台真实确认 / 取消与 OS 凭据读写清已有验证，环境、提交及最终复验结果以 [019](../task/019-llm-profile-credentials-impl.md) 为准。
+`llm_set_key` 在 Rust 原生窗口中输入密钥，命令 / 快照只返回状态；取消保留旧值。`platform/` 以同型接口提供 Windows CredUI、macOS AppKit 与 Linux GTK 密码控件，命令经 UI 主线程调度，无桌面会话显式报错。macOS 安全输入框使用原生 Edit 菜单的 Paste / Select All，并在弹窗打开时取得焦点；Windows CredUI 与 GTK Entry 使用各自平台的密码输入控件。三平台真实确认 / 取消与 OS 凭据读写清已有验证，环境、提交及最终复验结果以 [019](../task/019-llm-profile-credentials-impl.md) 为准。
 
-OS 凭据库由 keyring 的三平台后端承担；降级文件采用 Windows 受保护 DACL / Unix 0600。权威后端指针、删除墓碑、私有发布与 hint 的唯一规则见[通信契约](ipc-contract.md#工程纪律可检查版)；读取不凭 OS 旧值推断文件值过期。`SecretString` 管理密钥生命周期，脱敏 Debug 仍不能代替 OS 权限。若将来允许设置表单处理密钥，须先修订职责边界与通信契约。
+OS 凭据库由 keyring 的三平台后端承担；macOS Keychain 的授权弹窗由系统 ACL 与应用签名身份控制，选择“始终允许”后，同一可信应用身份可在后续请求中读取而不重复确认；“仅允许一次”会在下次读取时再次询问。Windows Credential Manager 与 Linux Secret Service 也可能受系统凭据库锁定状态或策略影响，不能宣称跨平台无条件免授权。不得为隐藏系统授权而把密钥转入明文 UI / 日志或绕过 OS ACL；降级文件采用 Windows 受保护 DACL / Unix 0600。权威后端指针、删除墓碑、私有发布与 hint 的唯一规则见[通信契约](ipc-contract.md#工程纪律可检查版)；读取不凭 OS 旧值推断文件值过期。`SecretString` 管理密钥生命周期，脱敏 Debug 仍不能代替 OS 权限。若将来允许设置表单处理密钥，须先修订职责边界与通信契约。
 
 ## 错误分类与标定
 

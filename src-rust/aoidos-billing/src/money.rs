@@ -184,6 +184,8 @@ impl<'de> Deserialize<'de> for NanoMoney {
 pub struct UnitPrice(i128);
 
 impl UnitPrice {
+    pub const ZERO: Self = Self(0);
+
     pub fn parse(value: &str) -> Result<Self, MoneyError> {
         if !is_plain_decimal(value) {
             return Err(MoneyError::InvalidPrice);
@@ -215,6 +217,14 @@ impl UnitPrice {
             .trim_end_matches('0')
             .to_owned()
     }
+}
+
+/// Token 类别与供应商费率的一一映射，避免调用方按位置传错单价。
+pub struct TokenPrices<'a> {
+    pub input_uncached: &'a UnitPrice,
+    pub input_cached: &'a UnitPrice,
+    pub input_cached_write: &'a UnitPrice,
+    pub output: &'a UnitPrice,
 }
 
 impl fmt::Display for UnitPrice {
@@ -288,20 +298,48 @@ pub fn cost(
     input_cached_price: &UnitPrice,
     output_price: &UnitPrice,
 ) -> Result<ExactCost, MoneyError> {
+    cost_with_cache_write(
+        input_uncached,
+        input_cached,
+        0,
+        output,
+        unit_tokens,
+        &TokenPrices {
+            input_uncached: input_uncached_price,
+            input_cached: input_cached_price,
+            input_cached_write: &UnitPrice::ZERO,
+            output: output_price,
+        },
+    )
+}
+
+/// 按供应商单价计算一次请求的精确费用，缓存写入与读取分别计价。
+pub fn cost_with_cache_write(
+    input_uncached: u64,
+    input_cached: u64,
+    input_cached_write: u64,
+    output: u64,
+    unit_tokens: u64,
+    prices: &TokenPrices<'_>,
+) -> Result<ExactCost, MoneyError> {
     if unit_tokens == 0 {
         return Err(MoneyError::InvalidPrice);
     }
     let input_cost = i128::from(input_uncached)
-        .checked_mul(input_uncached_price.nanos())
+        .checked_mul(prices.input_uncached.nanos())
         .ok_or(MoneyError::Overflow)?;
     let cached_cost = i128::from(input_cached)
-        .checked_mul(input_cached_price.nanos())
+        .checked_mul(prices.input_cached.nanos())
+        .ok_or(MoneyError::Overflow)?;
+    let cache_write_cost = i128::from(input_cached_write)
+        .checked_mul(prices.input_cached_write.nanos())
         .ok_or(MoneyError::Overflow)?;
     let output_cost = i128::from(output)
-        .checked_mul(output_price.nanos())
+        .checked_mul(prices.output.nanos())
         .ok_or(MoneyError::Overflow)?;
     let numerator_nanos = input_cost
         .checked_add(cached_cost)
+        .and_then(|total| total.checked_add(cache_write_cost))
         .and_then(|total| total.checked_add(output_cost))
         .ok_or(MoneyError::Overflow)?;
     Ok(ExactCost {

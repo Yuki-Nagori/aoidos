@@ -40,12 +40,28 @@ fn verify_locale_surfaces() -> Result<(), Box<dyn std::error::Error>> {
             window.set_title("stale fixture title")?;
             let status = apply_native(app.handle(), Locale::ZhHans);
             assert_eq!(status, NativeStatus::Applied);
-            assert_locale_menu(app, "显示 Aoidos", "退出 Aoidos")?;
+            assert_locale_menu(
+                app,
+                "编辑",
+                "粘贴",
+                "全选",
+                "Aoidos",
+                "显示 Aoidos",
+                "退出 Aoidos",
+            )?;
             assert_eq!(window.title()?, "Aoidos");
             window.set_title("stale fixture title")?;
             let status = apply_native(app.handle(), Locale::En);
             assert_eq!(status, NativeStatus::Applied);
-            assert_locale_menu(app, "Show Aoidos", "Quit Aoidos")?;
+            assert_locale_menu(
+                app,
+                "Edit",
+                "Paste",
+                "Select All",
+                "Aoidos",
+                "Show Aoidos",
+                "Quit Aoidos",
+            )?;
             assert_eq!(window.title()?, "Aoidos");
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -61,6 +77,10 @@ fn verify_locale_surfaces() -> Result<(), Box<dyn std::error::Error>> {
 
 fn assert_locale_menu(
     app: &tauri::App<tauri::Wry>,
+    expected_edit: &str,
+    expected_paste: &str,
+    expected_select_all: &str,
+    expected_window: &str,
     expected_show: &str,
     expected_quit: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -70,10 +90,31 @@ fn assert_locale_menu(
         .state::<aoidos_lib::locale_commands::LocaleService>()
         .window_menu();
     let root_items = menu.items()?;
-    assert_eq!(root_items.len(), 1);
-    let submenu = root_items[0]
+    assert_eq!(root_items.len(), 2);
+    let edit_submenu = root_items[0]
+        .as_submenu()
+        .ok_or("edit menu item is not a submenu")?;
+    assert_eq!(edit_submenu.text()?, expected_edit);
+    let edit_items = edit_submenu.items()?;
+    assert_eq!(edit_items.len(), 2);
+    assert_eq!(
+        edit_items[0]
+            .as_predefined_menuitem()
+            .ok_or("paste entry is not predefined")?
+            .text()?,
+        expected_paste
+    );
+    assert_eq!(
+        edit_items[1]
+            .as_predefined_menuitem()
+            .ok_or("select-all entry is not predefined")?
+            .text()?,
+        expected_select_all
+    );
+    let submenu = root_items[1]
         .as_submenu()
         .ok_or("window menu item is not a submenu")?;
+    assert_eq!(submenu.text()?, expected_window);
     let items = submenu.items()?;
     assert_eq!(items.len(), 2);
     assert_eq!(

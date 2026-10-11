@@ -15,7 +15,7 @@ fn price() -> serde_json::Value {
     serde_json::json!({
         "versionId":"price-v1", "providerId":"provider", "modelId":"model",
         "routePolicy":"direct", "currency":"CNY", "unitTokens":1000,
-        "inputUncached":"1", "inputCached":"0.5", "output":"2",
+        "inputUncached":"1", "inputCached":"0.5", "inputCachedWrite":"0.25", "output":"2",
         "usageMappingVersion":"v1", "sourceKind":"user-entered", "sourceUrl":null,
         "checkedAt":"2020-01-01T00:00:00Z", "effectiveFrom":"2020-01-01T00:00:00Z",
         "validUntil":null
@@ -38,7 +38,7 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
             budget_get_settings,
             budget_set_settings,
             budget_get_price,
-            budget_register_price
+            budget_register_price,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();

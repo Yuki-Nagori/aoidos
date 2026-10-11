@@ -310,10 +310,11 @@ fn save_prompt_result(
         Ok(None) => return key_status_with(provider_id, store),
         Err(e) => return Err(CmdError::from(e)),
     };
+    let status = KeyStatus::from_secret(&secret);
     store
         .set_key(provider_id, SecretString::from(secret))
         .map_err(CmdError::from)?;
-    key_status_with(provider_id, store)
+    Ok(status)
 }
 
 /// profile 列表载荷（无分页：硬上限 50 个，超出校验拒绝）。

@@ -64,6 +64,17 @@ pub struct KeyStatus {
     pub hint: Option<String>,
 }
 
+impl KeyStatus {
+    /// 从刚保存的密钥构造脱敏状态，避免写入后立刻再次读取 OS 凭据库。
+    #[must_use]
+    pub fn from_secret(secret: &str) -> Self {
+        Self {
+            set: true,
+            hint: hint_of(secret),
+        }
+    }
+}
+
 /// hint 规则：末 4 个字符；短于 4 返回 `None`（只报告已设置）。
 pub(crate) fn hint_of(secret: &str) -> Option<String> {
     let mut chars: Vec<char> = secret.chars().rev().take(4).collect();
@@ -487,6 +498,14 @@ mod tests {
         assert_eq!(hint_of(""), None);
         // 多字节字符按字符数计，不按字节切。
         assert_eq!(hint_of("密钥一二三四五"), Some("二三四五".into()));
+        assert_eq!(
+            KeyStatus::from_secret("sk-1234567890"),
+            KeyStatus {
+                set: true,
+                hint: Some("7890".into())
+            }
+        );
+        assert_eq!(KeyStatus::from_secret("abc").hint, None);
     }
 
     #[test]

@@ -141,7 +141,7 @@ fn result(service: &LocaleService, preference: LocalePreference) -> LocaleResult
 pub use native::{apply_native, handle_menu_event};
 
 /// 所有表面均成功才确认 applied；单项失败不能短路其他表面的更新。
-fn native_status(updated: [bool; 7]) -> NativeStatus {
+fn native_status(updated: [bool; 10]) -> NativeStatus {
     if updated.into_iter().all(|updated| updated) {
         NativeStatus::Applied
     } else {
