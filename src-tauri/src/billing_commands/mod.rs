@@ -5,8 +5,8 @@ use aoidos_billing::money::Currency;
 use aoidos_billing::{money::NanoMoney, price::PriceVersion};
 use aoidos_engine::{
     billing::{
-        BillingError, BillingLedger, BudgetSettings, BudgetWarning, ModelUsageSummary, RequestPage,
-        SuggestedLimits,
+        BillingError, BillingLedger, BudgetSettings, BudgetWarning, LedgerBudgetPort,
+        ModelUsageSummary, RequestPage, SuggestedLimits,
     },
     fault::Fault,
 };
@@ -63,6 +63,13 @@ pub(crate) struct ListRequestsArgs {
     run_id: String,
     cursor: Option<String>,
     limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RetrySettlementArgs {
+    run_id: String,
+    request_id: String,
 }
 
 #[derive(Deserialize)]
@@ -183,6 +190,28 @@ pub(crate) async fn budget_list_requests(
                 }
             })
         })
+    })
+    .await
+}
+
+/// Retries the persisted numeric usage journal without sending another provider request.
+#[tauri::command]
+pub(crate) async fn budget_retry_settlement(
+    state: tauri::State<'_, StorageService>,
+    BillingArgs(args): BillingArgs<RetrySettlementArgs>,
+) -> Result<(), CmdError> {
+    state.ready()?;
+    let storage = state.storage.clone();
+    storage_job(move || {
+        let owner = storage.with_database(|connection| {
+            BillingLedger::request_run_id(connection, &args.request_id)
+                .map_err(billing_fault)?
+                .ok_or_else(|| Fault::new("app.not-found", "费用记录不存在"))
+        })?;
+        if owner != args.run_id {
+            return Err(Fault::new("app.not-found", "费用记录不存在"));
+        }
+        LedgerBudgetPort::retry_pending_in_storage(storage.as_ref(), &args.request_id, &now())
     })
     .await
 }
@@ -385,6 +414,10 @@ fn billing_fault(error: BillingError) -> Fault {
         BillingError::PriceHistoryLimit => {
             Fault::new("budget.price-history-limit", "该模型价格版本已达到安全上限")
         }
+        BillingError::SettlementBacklog => Fault::new(
+            "budget.settlement-backlog",
+            "待恢复费用达到安全上限，请先重试已有结算",
+        ),
         BillingError::NotFound => Fault::new("app.not-found", "费用信息不存在"),
         BillingError::Conflict => Fault::new("budget.conflict", "费用记录发生冲突"),
         BillingError::Storage => Fault::new("store.database", "费用存储不可用"),

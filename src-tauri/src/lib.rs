@@ -210,6 +210,7 @@ macro_rules! command_handler {
         locale_commands::locale_get_preference, locale_commands::locale_set_preference,
         billing_commands::budget_get_settings, billing_commands::budget_set_settings,
         billing_commands::budget_get_period, billing_commands::budget_list_requests,
+        billing_commands::budget_retry_settlement,
         billing_commands::budget_get_suggested_limits, billing_commands::budget_get_price,
         billing_commands::budget_get_selected_price, billing_commands::budget_select_price,
         billing_commands::budget_get_monthly, billing_commands::budget_register_price,

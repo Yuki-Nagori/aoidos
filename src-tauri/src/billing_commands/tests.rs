@@ -32,6 +32,7 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
             budget_get_monthly,
             budget_get_period,
             budget_list_requests,
+            budget_retry_settlement,
             budget_get_suggested_limits,
             budget_get_selected_price,
             budget_select_price,
@@ -68,6 +69,10 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
         ),
         ("budget_get_period", serde_json::json!({"runId":"run-1"})),
         ("budget_list_requests", serde_json::json!({"runId":"run-1"})),
+        (
+            "budget_retry_settlement",
+            serde_json::json!({"runId":"run-1","requestId":"request-1"}),
+        ),
         (
             "budget_get_suggested_limits",
             serde_json::json!({"providerId":"provider","modelId":"model","routePolicy":"direct"}),
@@ -223,6 +228,102 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
             }),
         },
     );
+    let retry_attempt = aoidos_llm::schedule::AttemptIdentity {
+        request_id: "retry-ipc".into(),
+        ..attempt.clone()
+    };
+    aoidos_llm::schedule::BudgetPort::reserve(&budget, &retry_attempt).unwrap();
+    app.state::<StorageService>()
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER fail_billing_settlement BEFORE UPDATE OF state ON billing_physical_requests WHEN NEW.state='settled' BEGIN SELECT RAISE(ABORT,'injected'); END;",
+                )
+                .map_err(|error| Fault::new("test", error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+    aoidos_llm::schedule::BudgetPort::settle(
+        &budget,
+        &retry_attempt,
+        &aoidos_llm::schedule::AttemptOutcome::Settled {
+            usage: Some(aoidos_llm::provider::Usage {
+                prompt_tokens: 80,
+                completion_tokens: 20,
+                cached_prompt_tokens: Some(0),
+                cache_creation_tokens: Some(0),
+                reasoning_tokens: None,
+            }),
+        },
+    );
+    app.state::<StorageService>()
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch("DROP TRIGGER fail_billing_settlement")
+                .map_err(|error| Fault::new("test", error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+    let pending_page = call(
+        "budget_list_requests",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({"runId":"run-1"})),
+    )
+    .unwrap();
+    let retry_row = pending_page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["requestId"] == "retry-ipc")
+        .unwrap();
+    assert_eq!(retry_row["settlementPending"], true);
+    assert_eq!(retry_row["diagnosticCode"], "store.database");
+    assert_eq!(
+        call(
+            "budget_retry_settlement",
+            tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"runId":"another-run","requestId":"retry-ipc"})
+            )
+        )
+        .unwrap_err()["code"],
+        "app.not-found"
+    );
+    assert!(
+        call(
+            "budget_retry_settlement",
+            tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"runId":"run-1","requestId":"retry-ipc"})
+            )
+        )
+        .unwrap()
+        .is_null()
+    );
+    for request_id in ["missing-request", "retry-ipc"] {
+        assert_eq!(
+            call(
+                "budget_retry_settlement",
+                tauri::ipc::InvokeBody::Json(
+                    serde_json::json!({"runId":"run-1","requestId":request_id})
+                )
+            )
+            .unwrap_err()["code"],
+            "app.not-found"
+        );
+    }
+    let recovered = call(
+        "budget_list_requests",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({"runId":"run-1"})),
+    )
+    .unwrap();
+    let recovered_row = recovered["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["requestId"] == "retry-ipc")
+        .unwrap();
+    assert_eq!(recovered_row["state"], "settled");
+    assert_eq!(recovered_row["settlementPending"], false);
     app.state::<StorageService>()
         .storage
         .with_database(|connection| {
@@ -409,6 +510,7 @@ async fn billing_error_helpers_keep_stable_public_codes_and_storage_job_errors()
             BillingError::PriceHistoryLimit,
             "budget.price-history-limit",
         ),
+        (BillingError::SettlementBacklog, "budget.settlement-backlog"),
         (BillingError::NotFound, "app.not-found"),
         (BillingError::Conflict, "budget.conflict"),
         (BillingError::Storage, "store.database"),

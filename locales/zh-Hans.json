@@ -83,6 +83,10 @@
     "refreshUsage": "刷新用量",
     "requests": "物理请求明细",
     "requestState": "状态",
+    "settlementPending": "供应商用量已保存，但本地费用结算仍待恢复。恢复会重算用量并写入本地账本，不会访问供应商 API。诊断码：",
+    "settlementConflict": "该请求收到冲突用量；首次记录已保留，结算不会覆盖已保存结果。诊断码：",
+    "retrySettlement": "重试费用结算",
+    "settlementRetrying": "正在恢复结算…",
     "requestDate": "发送时间",
     "requestPrice": "冻结价格版本",
     "requestInput": "输入 Token",
@@ -106,7 +110,8 @@
       "operationFailed": "费用操作未能完成。",
       "priceHistoryLimit": "该模型已达到可保存的价格版本上限。",
       "priceMissing": "发送付费请求前，请登记与当前服务商、路由和模型匹配的价格。",
-      "runLimitMissing": "发送付费请求前，请设置服务商计价币种对应的本局上限。"
+      "runLimitMissing": "发送付费请求前，请设置服务商计价币种对应的本局上限。",
+      "settlementBacklog": "待恢复费用已达到安全上限。请先重试现有结算，再发送新请求。"
     }
   },
   "game": {

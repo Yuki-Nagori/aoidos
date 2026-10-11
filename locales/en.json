@@ -83,6 +83,10 @@
     "refreshUsage": "Refresh usage",
     "requests": "Physical request details",
     "requestState": "State",
+    "settlementPending": "Provider usage is saved, but local billing settlement needs recovery. Recovery recalculates usage into the local ledger without contacting the provider API. Diagnostic: ",
+    "settlementConflict": "Conflicting usage was received; the first record was preserved and the saved result will not be overwritten. Diagnostic: ",
+    "retrySettlement": "Retry settlement",
+    "settlementRetrying": "Recovering settlement…",
     "requestDate": "Dispatch time",
     "requestPrice": "Frozen price version",
     "requestInput": "Input tokens",
@@ -106,7 +110,8 @@
       "operationFailed": "The billing operation could not be completed.",
       "priceHistoryLimit": "This model has reached the maximum number of saved price versions.",
       "priceMissing": "Register a price for this provider, route and model before sending a paid request.",
-      "runLimitMissing": "Set a limit for the provider's billing currency before sending a paid request."
+      "runLimitMissing": "Set a limit for the provider's billing currency before sending a paid request.",
+      "settlementBacklog": "Pending settlement recovery reached its safety limit. Retry existing settlements before sending new requests."
     }
   },
   "game": {

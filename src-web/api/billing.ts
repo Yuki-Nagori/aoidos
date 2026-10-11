@@ -87,6 +87,8 @@ interface BillingRequestItem {
   priceVersionId: string;
   dispatchAt: string;
   state: "reserved" | "settled" | "unconfirmed";
+  settlementPending: boolean;
+  diagnosticCode: string | null;
   reservedAmount: string;
   actualAmount: string | null;
   inputTotal: number | null;
@@ -157,6 +159,11 @@ export function listBillingRequests(
   limit = 50,
 ): Promise<BillingRequestPage> {
   return invoke("budget_list_requests", { runId, cursor, limit });
+}
+
+/** Retries saved numeric usage without issuing another provider request. */
+export function retryBillingSettlement(runId: string, requestId: string): Promise<void> {
+  return invoke("budget_retry_settlement", { runId, requestId });
 }
 
 /** 通过乐观修订校验原子保存两种原币上限。 */

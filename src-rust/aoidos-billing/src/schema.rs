@@ -92,18 +92,40 @@ ALTER TABLE billing_price_versions ADD COLUMN schedule_json TEXT;
 ALTER TABLE billing_physical_requests ADD COLUMN input_cached_write INTEGER;
 "#;
 
+/// 在账本结算提交前，将成功的供应商用量保存在有界恢复队列中。
+pub const SETTLEMENT_RECOVERY_MIGRATION: &str = r#"
+CREATE TABLE billing_pending_settlements (
+  request_id TEXT PRIMARY KEY REFERENCES billing_physical_requests(request_id) ON DELETE CASCADE,
+  input_total INTEGER NOT NULL CHECK(input_total >= 0),
+  input_cached INTEGER CHECK(input_cached IS NULL OR input_cached >= 0),
+  input_cached_write INTEGER CHECK(input_cached_write IS NULL OR input_cached_write >= 0),
+  output_total INTEGER NOT NULL CHECK(output_total >= 0),
+  reasoning_included INTEGER CHECK(reasoning_included IS NULL OR reasoning_included >= 0),
+  result_digest TEXT NOT NULL CHECK(length(result_digest) = 71),
+  diagnostic_code TEXT CHECK(diagnostic_code IS NULL OR diagnostic_code IN ('budget.invalid-usage','budget.price-missing','store.database','budget.conflict')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX billing_pending_settlements_updated ON billing_pending_settlements(updated_at,request_id);
+"#;
+
+/// 为已结算请求追加可见的冲突诊断字段。
+pub const SETTLEMENT_DIAGNOSTICS_MIGRATION: &str = r#"
+ALTER TABLE billing_physical_requests ADD COLUMN diagnostic_code TEXT CHECK(diagnostic_code IS NULL OR diagnostic_code IN ('budget.conflict'));
+"#;
+
 /// 启用计费命令前检查必要的数据表与主键结构。
 pub fn verify(connection: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
     let count: i64 = connection.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('billing_price_versions','billing_active_profile_prices','billing_run_budgets','billing_physical_requests','billing_budget_warnings','billing_audit','billing_meta')",
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('billing_price_versions','billing_active_profile_prices','billing_run_budgets','billing_physical_requests','billing_budget_warnings','billing_audit','billing_meta','billing_pending_settlements')",
         [],
         |row| row.get(0),
     )?;
-    if count != 7 {
+    if count != 8 {
         return Err(rusqlite::Error::InvalidQuery);
     }
     let valid: i64 = connection.query_row(
-        "SELECT (SELECT count(*) FROM pragma_table_info('billing_physical_requests') WHERE (name='request_id' AND type='TEXT' AND pk=1) OR (name='input_cached_write' AND type='INTEGER' AND \"notnull\"=0))=2 AND (SELECT count(*) FROM pragma_table_info('billing_price_versions') WHERE (name='input_cached_write_price' AND type='TEXT' AND \"notnull\"=0) OR (name='schedule_json' AND type='TEXT' AND \"notnull\"=0))=2",
+        "SELECT (SELECT count(*) FROM pragma_table_info('billing_physical_requests') WHERE (name='request_id' AND type='TEXT' AND pk=1) OR (name='input_cached_write' AND type='INTEGER' AND \"notnull\"=0) OR (name='diagnostic_code' AND type='TEXT' AND \"notnull\"=0))=3 AND (SELECT count(*) FROM pragma_table_info('billing_price_versions') WHERE (name='input_cached_write_price' AND type='TEXT' AND \"notnull\"=0) OR (name='schedule_json' AND type='TEXT' AND \"notnull\"=0))=2 AND (SELECT count(*) FROM pragma_table_info('billing_pending_settlements') WHERE (name='request_id' AND type='TEXT' AND pk=1) OR (name='diagnostic_code' AND type='TEXT' AND \"notnull\"=0))=2",
         [],
         |row| row.get(0),
     )?;
@@ -126,6 +148,12 @@ mod tests {
             let connection = rusqlite::Connection::open_in_memory().unwrap();
             connection.execute_batch(SCHEMA).unwrap();
             connection.execute_batch(CACHE_WRITE_MIGRATION).unwrap();
+            connection
+                .execute_batch(SETTLEMENT_RECOVERY_MIGRATION)
+                .unwrap();
+            connection
+                .execute_batch(SETTLEMENT_DIAGNOSTICS_MIGRATION)
+                .unwrap();
             connection.authorizer(Some(move |context: AuthContext<'_>| {
                 if matches!(context.action, AuthAction::Read { table_name, .. } if table_name == denied_table) {
                     Authorization::Deny
@@ -146,6 +174,12 @@ mod tests {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch(SCHEMA).unwrap();
         connection.execute_batch(CACHE_WRITE_MIGRATION).unwrap();
+        connection
+            .execute_batch(SETTLEMENT_RECOVERY_MIGRATION)
+            .unwrap();
+        connection
+            .execute_batch(SETTLEMENT_DIAGNOSTICS_MIGRATION)
+            .unwrap();
         assert!(verify(&connection).is_ok());
 
         let missing = rusqlite::Connection::open_in_memory().unwrap();
