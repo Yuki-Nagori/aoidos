@@ -508,6 +508,209 @@ fn optional_answer_blob_requires_matching_type_length_and_limit() {
 }
 
 #[test]
+fn pending_question_pages_are_bounded_and_resume_without_duplicate_rows() {
+    let mut f = Fixture::new();
+    for event_slot in 0..35 {
+        let mut draft = draft(&f, &["keeper"]);
+        draft.identity.event_slot = event_slot;
+        open_draft(&mut f, &draft).unwrap();
+    }
+
+    let mut cursor = None;
+    let mut ids = BTreeSet::new();
+    loop {
+        let page = f
+            .repo
+            .pending_questions(&mut f.conn, &f.port, &f.run.run_id, cursor.as_ref(), 7)
+            .unwrap();
+        assert!(page.questions.len() <= 7);
+        assert_eq!(page.history_revision, 0);
+        ids.extend(
+            page.questions
+                .into_iter()
+                .map(|question| question.question_id),
+        );
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(ids.len(), 35);
+}
+
+#[test]
+fn pending_question_page_rejects_stale_cursor_and_invalidates_old_sources() {
+    let mut f = Fixture::new();
+    let first = open(&mut f, &["keeper"]).unwrap();
+    let mut second_draft = draft(&f, &["keeper"]);
+    second_draft.identity.event_slot += 1;
+    let second = open_draft(&mut f, &second_draft).unwrap();
+    let page = f
+        .repo
+        .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 1)
+        .unwrap();
+    assert_eq!(page.questions.len(), 1);
+    let cursor = page.next_cursor.unwrap();
+
+    f.port.view.history_revision += 1;
+    assert!(matches!(
+        f.repo
+            .pending_questions(&mut f.conn, &f.port, &f.run.run_id, Some(&cursor), 1),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+
+    let invalidated = f
+        .repo
+        .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 8)
+        .unwrap();
+    assert!(invalidated.questions.is_empty());
+    assert!(invalidated.next_cursor.is_none());
+    for question in [first, second] {
+        assert_eq!(
+            f.repo
+                .question(&f.conn, &f.run.run_id, &question.question_id)
+                .unwrap()
+                .status,
+            QuestionStatus::Invalidated
+        );
+    }
+}
+
+#[test]
+fn pending_question_pages_keep_a_fixed_queue_snapshot_when_new_items_arrive() {
+    let mut f = Fixture::new();
+    for event_slot in 0..2 {
+        let mut draft = draft(&f, &["keeper"]);
+        draft.identity.event_slot = event_slot;
+        open_draft(&mut f, &draft).unwrap();
+    }
+    let first = f
+        .repo
+        .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 1)
+        .unwrap();
+    let cursor = first.next_cursor.unwrap();
+
+    let mut later = draft(&f, &["keeper"]);
+    later.identity.event_slot = 3;
+    let later = open_draft(&mut f, &later).unwrap();
+    let second = f
+        .repo
+        .pending_questions(&mut f.conn, &f.port, &f.run.run_id, Some(&cursor), 8)
+        .unwrap();
+    assert_eq!(second.questions.len(), 1);
+    assert!(
+        !second
+            .questions
+            .iter()
+            .any(|question| question.question_id == later.question_id)
+    );
+    assert!(second.next_cursor.is_none());
+
+    let refreshed = f
+        .repo
+        .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 8)
+        .unwrap();
+    assert_eq!(refreshed.questions.len(), 3);
+}
+
+#[test]
+fn pending_question_page_rolls_back_all_invalidations_when_one_update_is_rejected() {
+    let mut f = Fixture::new();
+    let first = open(&mut f, &["keeper"]).unwrap();
+    let mut second_draft = draft(&f, &["keeper"]);
+    second_draft.identity.event_slot += 1;
+    let second = open_draft(&mut f, &second_draft).unwrap();
+    f.conn
+        .execute_batch(
+            "CREATE TEMP TRIGGER reject_last_question_invalidation
+             BEFORE UPDATE OF status ON memory_questions
+             WHEN NEW.status='invalidated' AND OLD.rowid=(SELECT max(rowid) FROM memory_questions)
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+    f.port.view.history_revision += 1;
+
+    rejected(
+        f.repo
+            .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 8),
+        Reason::StaleVersion,
+    );
+    for question in [&first, &second] {
+        assert_eq!(
+            f.repo
+                .question(&f.conn, &f.run.run_id, &question.question_id)
+                .unwrap(),
+            *question
+        );
+    }
+
+    f.conn
+        .execute_batch("DROP TRIGGER reject_last_question_invalidation")
+        .unwrap();
+    let page = f
+        .repo
+        .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 8)
+        .unwrap();
+    assert!(page.questions.is_empty());
+    assert!(page.next_cursor.is_none());
+    for question in [first, second] {
+        assert_eq!(
+            f.repo
+                .question(&f.conn, &f.run.run_id, &question.question_id)
+                .unwrap()
+                .status,
+            QuestionStatus::Invalidated
+        );
+    }
+}
+
+#[test]
+fn pending_question_page_rejects_persisted_sequence_outside_cursor_integer_range() {
+    let mut f = Fixture::new();
+    let question = open(&mut f, &["keeper"]).unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_questions SET rowid=?1 WHERE question_id=?2",
+            params![MAX_INTEGER + 1, question.question_id],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        f.repo
+            .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 8),
+        Err(Error::Corrupt)
+    ));
+    assert_eq!(
+        f.repo
+            .question(&f.conn, &f.run.run_id, &question.question_id)
+            .unwrap(),
+        question
+    );
+}
+
+#[test]
+fn pending_question_pages_reject_invalid_limits_and_cursors() {
+    let mut f = Fixture::new();
+    let invalid = QuestionCursor {
+        history_revision: 0,
+        snapshot_max_sequence: 0,
+        after_sequence: 1,
+    };
+    for limit in [0, MAX_QUESTION_PAGE_SIZE + 1] {
+        rejected(
+            f.repo
+                .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, limit),
+            Reason::InvalidSchema,
+        );
+    }
+    rejected(
+        f.repo
+            .pending_questions(&mut f.conn, &f.port, &f.run.run_id, Some(&invalid), 1),
+        Reason::InvalidSchema,
+    );
+}
+
+#[test]
 fn persisted_draft_revisions_must_match_columns_and_empty_sources_are_corrupt() {
     let mut f = Fixture::new();
     let question = open(&mut f, &["keeper"]).unwrap();

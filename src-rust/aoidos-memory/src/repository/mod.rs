@@ -5,7 +5,7 @@ use crate::{
     model::*,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
@@ -16,6 +16,7 @@ mod reconciliation;
 mod recovery;
 pub use recovery::{RecoveryPage, ScanCursor};
 mod confirmations;
+pub use confirmations::{QuestionCursor, QuestionPage};
 mod materials;
 pub use materials::{
     BatchCompletion, BatchReceipt, BatchSnapshot, BatchState, CandidateOutcome, CandidateResult,

@@ -7,6 +7,31 @@ const MAX_QUESTION_ANSWER_BYTES: usize = 8 * 1024;
 const MAX_QUESTION_SOURCES: usize = 32;
 const MAX_QUESTION_CANDIDATES: usize = 32;
 const MAX_PENDING_QUESTIONS_PER_RUN: u64 = 512;
+const MAX_QUESTION_PAGE_SIZE: usize = 32;
+const MAX_QUESTION_PAGE_SCAN: usize = 256;
+
+/// 有界待确认队列的快照游标；绑定历史修订和队列上界，翻页期间新问题留给刷新读取。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QuestionCursor {
+    /// 读取上一页时观察到的世界历史版本。
+    pub history_revision: u64,
+    /// 快照读取时队列中最大的 SQLite 问题序号。
+    pub snapshot_max_sequence: u64,
+    /// 上一页最后扫描的 SQLite 问题序号。
+    pub after_sequence: u64,
+}
+
+/// 当前有效的待确认问题分页；失效项目在返回前转入持久 `invalidated` 状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionPage {
+    /// 当前仍有效且可供回答的问题。
+    pub questions: Vec<MemoryQuestion>,
+    /// 存在后续扫描项时返回；读取下一页前须原样传回。
+    pub next_cursor: Option<QuestionCursor>,
+    /// 本页复核时的世界历史修订。
+    pub history_revision: u64,
+}
 
 impl Repository {
     /// 登记或更新同一事件的问题；候选变化递增 revision，不基于文案相似度合并。
@@ -188,6 +213,128 @@ impl Repository {
         decode_question(row)
     }
 
+    /// 有界扫描待确认问题，并将来源或因果快照失效的项目持久标为 invalidated。
+    ///
+    /// # Errors
+    /// 非法页大小 / 游标拒绝；游标历史修订过期时返回 staleVersion；来源读取故障原样传播。
+    pub fn pending_questions(
+        &self,
+        conn: &mut Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        cursor: Option<&QuestionCursor>,
+        limit: usize,
+    ) -> Result<QuestionPage> {
+        if !(1..=MAX_QUESTION_PAGE_SIZE).contains(&limit) {
+            return Err(reject());
+        }
+        self.ensure_writable(conn, run_id)?;
+        let (run, boundary) = self.boundary(conn, run_id, port)?;
+        if let Some(cursor) = cursor {
+            if cursor.history_revision > MAX_INTEGER
+                || cursor.snapshot_max_sequence > MAX_INTEGER
+                || cursor.after_sequence > cursor.snapshot_max_sequence
+            {
+                return Err(reject());
+            }
+            if cursor.history_revision != boundary.history_revision {
+                return Err(Error::Rejected(Reason::StaleVersion));
+            }
+        }
+
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        let snapshot_max_sequence = match cursor {
+            Some(cursor) => cursor.snapshot_max_sequence,
+            None => {
+                let sequence = tx
+                    .query_row(
+                    "SELECT coalesce(max(rowid),0) FROM memory_questions WHERE run_id=?1 AND status='pending'",
+                    [run_id],
+                    |row| row.get::<_, u64>(0),
+                )
+                    .map_err(sql)?;
+                if sequence > MAX_INTEGER {
+                    return Err(Error::Corrupt);
+                }
+                sequence
+            }
+        };
+        let after = cursor.map_or(0, |cursor| cursor.after_sequence);
+        let mut statement = tx
+            .prepare(
+                "SELECT rowid,question_id FROM memory_questions WHERE run_id=?1 AND status='pending' AND rowid>?2 AND rowid<=?3 ORDER BY rowid LIMIT ?4",
+            )
+            .map_err(sql)?;
+        let ids = statement
+            .query_map(
+                params![
+                    run_id,
+                    after,
+                    snapshot_max_sequence,
+                    (MAX_QUESTION_PAGE_SCAN + 1) as u64
+                ],
+                read_question_position,
+            )
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        drop(statement);
+        let has_more = ids.len() > MAX_QUESTION_PAGE_SCAN;
+        let mut questions = Vec::with_capacity(limit);
+        let mut last_scanned = None;
+        for (sequence, question_id) in ids.iter().take(MAX_QUESTION_PAGE_SCAN) {
+            last_scanned = Some(*sequence);
+            let question = self.question(&tx, run_id, question_id)?;
+            let snapshot_is_current = question.draft.history_revision == boundary.history_revision
+                && question.draft.entity_revision == boundary.entity_revision
+                && question.draft.evidence_revision == boundary.evidence_revision;
+            if snapshot_is_current
+                && self.valid_sources(&run, &question.draft.identity.sources, port)?
+            {
+                questions.push(question);
+                if questions.len() == limit {
+                    break;
+                }
+            } else {
+                let invalidated = tx
+                    .execute(
+                        "UPDATE memory_questions SET status='invalidated' WHERE question_id=?1 AND run_id=?2 AND status='pending' AND revision=?3 AND history_revision=?4 AND entity_revision=?5 AND evidence_revision=?6",
+                        params![
+                            question.question_id,
+                            run_id,
+                            question.revision,
+                            question.draft.history_revision,
+                            question.draft.entity_revision,
+                            question.draft.evidence_revision
+                        ],
+                    )
+                    .map_err(sql)?;
+                if invalidated != 1 {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+            }
+        }
+        let has_unscanned = last_scanned
+            .is_some_and(|last| ids.iter().any(|(sequence, _)| *sequence > last) || has_more);
+        let next_cursor = if has_unscanned {
+            last_scanned.map(|after_sequence| QuestionCursor {
+                history_revision: boundary.history_revision,
+                snapshot_max_sequence,
+                after_sequence,
+            })
+        } else {
+            None
+        };
+        tx.commit().map_err(sql)?;
+        Ok(QuestionPage {
+            questions,
+            next_cursor,
+            history_revision: boundary.history_revision,
+        })
+    }
+
     fn pending_question(
         &self,
         conn: &Connection,
@@ -316,6 +463,10 @@ type QuestionRow = (
     String,
     Option<Vec<u8>>,
 );
+
+fn read_question_position(row: &rusqlite::Row<'_>) -> rusqlite::Result<(u64, String)> {
+    Ok((row.get(0)?, row.get(1)?))
+}
 
 fn read_question(row: &rusqlite::Row<'_>) -> rusqlite::Result<QuestionRow> {
     Ok((
