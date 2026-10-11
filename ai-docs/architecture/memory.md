@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-10。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复基础已交付，产品记忆流程尚未接入；算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。029 仅交付存储基础；候选处理、实体关联、确认问题和产品入口由后续任务接入，生产参数须经实测审定。
+更新日期：2026-10-11。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复基础已交付，030 门控与批次实现进行中；算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
 
 ## 阅读路径
 
@@ -544,9 +544,9 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### 批次请求与结果持久化
 
-批次状态为 `queued / dispatched / received / completed / rejected / unknown`：queued 已持久冻结映射及 inputDigest；dispatched 在网络发送前登记独立 turnId / 027 物理请求身份与预留；received 代表有界完整响应及 usage 引用已持久保存；completed 代表全部候选已得到应用 / 拒绝 / 待确认 / deferred 的逐项结果，不要求全部成功。输出 malformed / 超限为 rejected；网络尝试是否发送或用量不可核验时为 unknown，不当零退款。全部结果在 completed 状态下仍逐项区分 applied / no-op / rejected / pending / deferred，命令 partial 表示存在待处理项而不是事务半提交。
+批次状态为 `queued / dispatched / received / completed / rejected / unknown`：queued 已持久冻结映射及 inputDigest；dispatched 在网络发送前登记独立 turnId / 027 物理请求身份与预留，只有首次提交身份的调用可获得发送许可；received 代表有界完整响应已持久保存；completed 代表全部候选都有 applied / no-op / rejected / pending / deferred 的逐项结果，不要求全部成功。malformed / 超限输出为 rejected；网络尝试是否发送或用量不可核验时为 unknown，不当零退款。结果重复写入必须字节一致；旧身份、迟到响应和已终态批次不能覆盖当前结果。
 
-已接纳 private 输出后不重发，完整结果先通过受控原子写保存到 `memory/runs/<run-id>/batches/<batch-id>/result.json`，再标 received；文件含调用方封装的 batchId / inputDigest / turnId / responseHash，不由模型提供。写入或提交结果不确定时核验预登记文件 / hash / ledger。崩溃后 received 可继续本地校验和操作准备；dispatched 缺完整结果保持 unknown / deferred，不自动重发，不伪造已完成。重新发起判断须进入新的已授权批次并使用新的物理请求身份，已完成的同源操作仍幂等。
+当前实现将 turnId / 027 requestId、响应原文、响应 hash、逐项完成摘要及错误码存入共享 SQLite 的 `memory_batch_receipts`，并与 `memory_batches.status` 在同一事务提交；响应与摘要分别限制为 64 KiB，读取先检查长度再复制 BLOB。这样避免状态与结果文件的双写窗口。完成摘要使用 version=1、outcomes 数组；candidateId 必须与响应候选集合一一对应且不重复，rejected / pending / deferred 必须带稳定 reasonCode，applied / no-op 不带原因。收到响应后不重发，恢复直接读取已保存内容；dispatched 缺完整响应只能转 unknown，不自动重发。重新发起判断须进入新的已授权批次并使用新的物理请求身份，已完成的同源操作仍幂等。该本地回执尚未接入实际付费发送路径。
 
 原始结果已经持久保存而因待确认容量 / 本地资源暂时不能提交的候选，保留 localDeferred 原因与计划；空间释放后只重新做本地核验，不再调用模型。输入切片不足时同样等新上下文，不对同一不足输入反复收费。网络 / 顶层 schema 失败的素材标 needsExplicitRetry，只有用户主动重试 / 恢复或新的有效输入改变判定前提时才能重新排收费批次，不能用定时重扫暗中修复 JSON。
 
@@ -554,7 +554,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### manifest、操作状态机与恢复
 
-029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。alias / question 表留给 030。实体 canonical 数据只经可信引擎端口访问；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB。
+029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执迁移；alias / question 表仍由 030 后续实现。实体 canonical 数据只经可信引擎端口访问；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB。
 
 已应用操作若与 `store_applied` 回执、计划摘要或目标记录不一致，会在 `memory_run_faults` 持久登记故障，并拒绝该 run 后续所有写入，返回 `recoveryRequired`。当前没有自动解冻路径；必须经未来显式审计修复，不能以重新运行普通恢复覆盖冲突。
 
@@ -598,17 +598,17 @@ prepared → ready → applied 是正常路径。文件落盘成功而 ready 回
 
 内部存储 schema version 由有序迁移登记，业务 payload 另带 version=1；不把 payload 版本当 user_version。UUID 为 TEXT、hash 为 32 字节 BLOB、计数 / revision 为 INTEGER 且限制在安全整数范围、规范化计划 / 策略 / 来源集合为经类型校验的 UTF-8 JSON BLOB；SQLite 不是类型校验替代品。
 
-| 表组                 | 关键字段 / 唯一约束                                                                                                                                                                                                               |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| runs / run_sessions  | runId、scriptId、algorithmVersion、完整 policyJson / policyHash、配置来源版本；sessionId 唯一绑定 run，v1 runId 也唯一绑定 session                                                                                                |
-| materials            | materialId、run / session / recordSeq、稳定 unitOrdinal、原始区间 / hash、资格 / 处理状态；原始记录和 ordinal 唯一，不因重启重新切片                                                                                              |
-| batches / spans      | batchId、turnId、inputDigest、historyRevision、policyHash、请求 / 结果状态；(batchId,sourceId) 唯一，span 引用 materialId                                                                                                         |
-| entries / versions   | entryId、runId、subjectRef、当前 versionId、stateRevision、active / archived / unavailable；versionId 唯一，parent / restoredFrom 属于同 entry，JSON hash / 长度 / 结构化元信息不可改写，引用集合用 sourceSetHash 关联 sources 表 |
-| sources / effects    | versionId 关联 SourceRef / evidenceId；effectId、entryId、来源 / 事件、逻辑位置、gain / revival；同来源对同 entry 的同类效果唯一                                                                                                  |
-| operations / targets | operationId、planHash、inputHistoryRevision、state、planJson；(operationId,entryId) 唯一，保存 expected / next versionId 及 expected / next stateRevision                                                                         |
-| aliases              | aliasId、runId、entityId、类别 / 范围 / aliasKey、状态及有效登记来源；同范围 active aliasKey 只能指向一个实体                                                                                                                     |
-| questions            | questionId、questionKey、runId、revision、historyRevision、候选版本、来源集合、状态；pending questionKey 唯一，回答只能 CAS 当前 revision                                                                                         |
-| configs              | scope、configVersion、algorithmVersion、完整参数或显式覆盖；每作用域只有一个已确认当前版本，旧版本保留供 run 引用                                                                                                                 |
+| 表组                       | 关键字段 / 唯一约束                                                                                                                                                                                                               |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| runs / run_sessions        | runId、scriptId、algorithmVersion、完整 policyJson / policyHash、配置来源版本；sessionId 唯一绑定 run，v1 runId 也唯一绑定 session                                                                                                |
+| materials                  | materialId、run / session / recordSeq、稳定 unitOrdinal、原始区间 / hash、资格 / 处理状态；原始记录和 ordinal 唯一，不因重启重新切片                                                                                              |
+| batches / spans / receipts | batchId、inputDigest、historyRevision、policyHash、请求状态；(batchId,sourceId) 唯一，span 引用 materialId；回执唯一绑定 batchId / turnId / requestId，保存有界响应 / 逐项结果及 hash                                             |
+| entries / versions         | entryId、runId、subjectRef、当前 versionId、stateRevision、active / archived / unavailable；versionId 唯一，parent / restoredFrom 属于同 entry，JSON hash / 长度 / 结构化元信息不可改写，引用集合用 sourceSetHash 关联 sources 表 |
+| sources / effects          | versionId 关联 SourceRef / evidenceId；effectId、entryId、来源 / 事件、逻辑位置、gain / revival；同来源对同 entry 的同类效果唯一                                                                                                  |
+| operations / targets       | operationId、planHash、inputHistoryRevision、state、planJson；(operationId,entryId) 唯一，保存 expected / next versionId 及 expected / next stateRevision                                                                         |
+| aliases                    | aliasId、runId、entityId、类别 / 范围 / aliasKey、状态及有效登记来源；同范围 active aliasKey 只能指向一个实体                                                                                                                     |
+| questions                  | questionId、questionKey、runId、revision、historyRevision、候选版本、来源集合、状态；pending questionKey 唯一，回答只能 CAS 当前 revision                                                                                         |
+| configs                    | scope、configVersion、algorithmVersion、完整参数或显式覆盖；每作用域只有一个已确认当前版本，旧版本保留供 run 引用                                                                                                                 |
 
 公开 DTO 的 mode 沿用 inCharacter / outOfCharacter；非玩家记录不伪造玩家 mode。sourceIds 为 `s1…s128`，candidateId 匹配 `[A-Za-z0-9_-]{1,32}`，subjectRef / 证据 / 旧条目引用须来自本批白名单。原始候选不能携带自由文件名，材料分片表与引用表分开，避免同一原文在新批次换短 ID 就变成“新来源”。
 

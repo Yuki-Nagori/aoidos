@@ -78,7 +78,7 @@ ai-docs/
 | 025  | [实现：舞台与对话面板](task/025-ui-shell-impl.md)                                    | 界面·交互         | 004、008、024、026、034                | implemented |
 | 026  | [实现：主题偏好与剧本皮肤](task/026-theming-impl.md)                                 | 界面·主题         | 004、009、013                          | done        |
 | 029  | [实现：记忆版本存储与恢复](task/029-memory-storage-recovery-impl.md)                 | **底层·记忆**     | 007、013、022                          | done        |
-| 030  | [实现：记忆门控与授权批次](task/030-memory-gates-batches-impl.md)                    | **底层·记忆**     | 007、029、018、020、023、027、035      | planned     |
+| 030  | [实现：记忆门控与授权批次](task/030-memory-gates-batches-impl.md)                    | **底层·记忆**     | 007、029、018、020、023、027、035      | in-progress |
 | 031  | [实现：记忆高级设置与查询](task/031-memory-settings-queries-impl.md)                 | 界面·记忆         | 007、029、030、025、028、034           | planned     |
 | 032  | [实现：轮回刻痕与节点收束接入](task/032-memory-cycle-nodes-impl.md)                  | **底层·记忆**     | 007、029、030、022、023                | planned     |
 | 033  | [实现：记忆算法标定与产品验收](task/033-memory-calibration-integration.md)           | **底层·记忆**     | 007、030、031、032、027、035           | planned     |

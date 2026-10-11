@@ -147,12 +147,50 @@ CREATE INDEX memory_effects_operation ON memory_effects(operation_id);
 CREATE INDEX memory_processed_operation ON memory_processed(operation_id);
 "#;
 
+/// 030 批次回执：物理请求身份、原始响应和本地逐项结果与状态原子持久化。
+pub const BATCH_RECEIPT_MIGRATION: &str = r#"
+CREATE TABLE memory_batch_receipts (
+ batch_id TEXT PRIMARY KEY REFERENCES memory_batches(batch_id),
+ turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id)=36),
+ request_id TEXT NOT NULL UNIQUE CHECK(length(request_id)=36),
+ response_hash BLOB CHECK(response_hash IS NULL OR length(response_hash)=32),
+ response_json BLOB CHECK(response_json IS NULL OR length(response_json)<=65536),
+ completion_json BLOB CHECK(completion_json IS NULL OR length(completion_json)<=65536),
+ completion_hash BLOB CHECK(completion_hash IS NULL OR length(completion_hash)=32),
+ error_code TEXT CHECK(error_code IS NULL OR length(error_code)<=64),
+ CHECK((response_hash IS NULL)=(response_json IS NULL)),
+ CHECK((completion_hash IS NULL)=(completion_json IS NULL)),
+ CHECK(completion_json IS NULL OR response_json IS NOT NULL)
+)
+"#;
+
 /// 核验迁移后的领域表 / 索引定义，不把同名但缺约束的旧库当合法 manifest。
 /// # Errors
 /// 缺少或改变已登记结构为 corrupt，SQL 读取错误保持存储类别。
 pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
     use rusqlite::OptionalExtension;
     for statement in SCHEMA
+        .split(';')
+        .map(str::trim)
+        .filter(|sql| !sql.is_empty())
+    {
+        let name = statement
+            .split_whitespace()
+            .nth(2)
+            .ok_or_else(invalid_schema)?;
+        let actual: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name=?1",
+                [name],
+                read_definition,
+            )
+            .optional()
+            .map_err(aoidos_store::db::sqlite_error)?;
+        if actual.as_deref().map(normalize_sql) != Some(normalize_sql(statement)) {
+            return Err(invalid_schema());
+        }
+    }
+    for statement in BATCH_RECEIPT_MIGRATION
         .split(';')
         .map(str::trim)
         .filter(|sql| !sql.is_empty())
@@ -194,6 +232,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         assert!(verify(&conn).is_err());
         conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
             .unwrap();
@@ -206,12 +245,23 @@ mod tests {
             .execute_batch(&SCHEMA.replace("CHECK(length(run_id)=36)", "CHECK(length(run_id)>0)"))
             .unwrap();
         assert!(verify(&weakened).is_err());
+
+        let missing_receipts = rusqlite::Connection::open_in_memory().unwrap();
+        missing_receipts.execute_batch(SCHEMA).unwrap();
+        missing_receipts
+            .execute_batch(BATCH_RECEIPT_MIGRATION)
+            .unwrap();
+        missing_receipts
+            .execute_batch("DROP TABLE memory_batch_receipts")
+            .unwrap();
+        assert!(verify(&missing_receipts).is_err());
     }
 
     #[test]
     fn definitions_accept_whitespace_only_and_propagate_sql_errors() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(&SCHEMA.replace('\n', "  ")).unwrap();
+        conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=NULL WHERE name='memory_runs'",

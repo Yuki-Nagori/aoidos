@@ -285,6 +285,406 @@ fn identical_text_cannot_replace_frozen_record_identity() {
 }
 
 #[test]
+fn batch_request_identity_and_results_are_durable_and_idempotent() {
+    let mut f = Fixture::new();
+    let material = f
+        .repo
+        .register_material(&f.conn, &f.port, &f.source(), 0)
+        .unwrap();
+    let snapshot = BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id: new_id(),
+        run_id: f.run.run_id.clone(),
+        history_revision: 0,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash: f.run.policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: material,
+            source: f.source(),
+            text: "钟声".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: serde_json::json!({}),
+    };
+    f.repo
+        .freeze_batch(&mut f.conn, &f.port, &snapshot)
+        .unwrap();
+    let turn_id = new_id();
+    let request_id = new_id();
+
+    assert!(
+        f.repo
+            .dispatch_batch(
+                &mut f.conn,
+                &f.port,
+                &snapshot.batch_id,
+                &turn_id,
+                &request_id
+            )
+            .unwrap()
+    );
+    assert!(
+        !f.repo
+            .dispatch_batch(
+                &mut f.conn,
+                &f.port,
+                &snapshot.batch_id,
+                &turn_id,
+                &request_id
+            )
+            .unwrap()
+    );
+    rejected(
+        f.repo.dispatch_batch(
+            &mut f.conn,
+            &f.port,
+            &snapshot.batch_id,
+            &new_id(),
+            &new_id(),
+        ),
+        Reason::StaleVersion,
+    );
+
+    rejected(
+        f.repo.receive_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            &turn_id,
+            &request_id,
+            b"{bad}",
+        ),
+        Reason::InvalidSchema,
+    );
+    let response = br#"{"version":1,"candidates":[]}"#;
+    assert!(
+        f.repo
+            .receive_batch(
+                &mut f.conn,
+                &snapshot.batch_id,
+                &turn_id,
+                &request_id,
+                response
+            )
+            .unwrap()
+    );
+    assert!(
+        !f.repo
+            .receive_batch(
+                &mut f.conn,
+                &snapshot.batch_id,
+                &turn_id,
+                &request_id,
+                response
+            )
+            .unwrap()
+    );
+    rejected(
+        f.repo.receive_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            &turn_id,
+            &request_id,
+            br#"{ "version": 1, "candidates": [] }"#,
+        ),
+        Reason::StaleVersion,
+    );
+    let receipt = f.repo.batch_receipt(&f.conn, &snapshot.batch_id).unwrap();
+    assert_eq!(receipt.turn_id, turn_id);
+    assert_eq!(receipt.request_id, request_id);
+    assert_eq!(receipt.response.as_deref(), Some(response.as_slice()));
+    assert!(receipt.completion.is_none());
+    assert_eq!(
+        f.repo.batch(&f.conn, &snapshot.batch_id).unwrap().1,
+        BatchState::Received
+    );
+
+    let completion = br#"{"version":1,"outcomes":[]}"#;
+    assert!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, completion)
+            .unwrap()
+    );
+    assert!(
+        !f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, completion)
+            .unwrap()
+    );
+    rejected(
+        f.repo.complete_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            br#"{ "version": 1, "outcomes": [] }"#,
+        ),
+        Reason::StaleVersion,
+    );
+    assert_eq!(
+        f.repo.batch(&f.conn, &snapshot.batch_id).unwrap().1,
+        BatchState::Completed
+    );
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .completion
+            .as_deref(),
+        Some(completion.as_slice())
+    );
+}
+
+#[test]
+fn unknown_and_rejected_batches_cannot_be_redispatched_or_overwritten() {
+    let mut f = Fixture::new();
+    let material = f
+        .repo
+        .register_material(&f.conn, &f.port, &f.source(), 0)
+        .unwrap();
+    let source = f.source();
+    let run_id = f.run.run_id.clone();
+    let policy_hash = f.run.policy_hash;
+    let make_snapshot = || BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id: new_id(),
+        run_id: run_id.clone(),
+        history_revision: 0,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: material.clone(),
+            source: source.clone(),
+            text: "钟声".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: serde_json::json!({}),
+    };
+    let unknown = make_snapshot();
+    f.repo.freeze_batch(&mut f.conn, &f.port, &unknown).unwrap();
+    let turn_id = new_id();
+    let request_id = new_id();
+    f.port.view.history_revision += 1;
+    rejected(
+        f.repo.dispatch_batch(
+            &mut f.conn,
+            &f.port,
+            &unknown.batch_id,
+            &turn_id,
+            &request_id,
+        ),
+        Reason::StaleVersion,
+    );
+    f.port.view.history_revision -= 1;
+    assert!(
+        f.repo
+            .dispatch_batch(
+                &mut f.conn,
+                &f.port,
+                &unknown.batch_id,
+                &turn_id,
+                &request_id
+            )
+            .unwrap()
+    );
+    assert!(
+        f.repo
+            .mark_batch_unknown(
+                &mut f.conn,
+                &unknown.batch_id,
+                &turn_id,
+                &request_id,
+                "network.ambiguous",
+            )
+            .unwrap()
+    );
+    assert!(
+        !f.repo
+            .mark_batch_unknown(
+                &mut f.conn,
+                &unknown.batch_id,
+                &turn_id,
+                &request_id,
+                "network.ambiguous",
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        f.repo.batch(&f.conn, &unknown.batch_id).unwrap().1,
+        BatchState::Unknown
+    );
+    assert!(
+        !f.repo
+            .dispatch_batch(
+                &mut f.conn,
+                &f.port,
+                &unknown.batch_id,
+                &turn_id,
+                &request_id
+            )
+            .unwrap()
+    );
+    rejected(
+        f.repo.receive_batch(
+            &mut f.conn,
+            &unknown.batch_id,
+            &turn_id,
+            &request_id,
+            br#"{}"#,
+        ),
+        Reason::StaleVersion,
+    );
+
+    let rejected_batch = make_snapshot();
+    f.repo
+        .freeze_batch(&mut f.conn, &f.port, &rejected_batch)
+        .unwrap();
+    let turn_id = new_id();
+    let request_id = new_id();
+    f.repo
+        .dispatch_batch(
+            &mut f.conn,
+            &f.port,
+            &rejected_batch.batch_id,
+            &turn_id,
+            &request_id,
+        )
+        .unwrap();
+    assert!(
+        f.repo
+            .reject_batch(&mut f.conn, &rejected_batch.batch_id, "response.schema")
+            .unwrap()
+    );
+    assert!(
+        !f.repo
+            .reject_batch(&mut f.conn, &rejected_batch.batch_id, "response.schema")
+            .unwrap()
+    );
+    rejected(
+        f.repo
+            .reject_batch(&mut f.conn, &rejected_batch.batch_id, "other.error"),
+        Reason::StaleVersion,
+    );
+    assert_eq!(
+        f.repo.batch(&f.conn, &rejected_batch.batch_id).unwrap().1,
+        BatchState::Rejected
+    );
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &rejected_batch.batch_id)
+            .unwrap()
+            .error_code
+            .as_deref(),
+        Some("response.schema")
+    );
+}
+
+#[test]
+fn completion_must_resolve_exactly_each_persisted_candidate_once() {
+    let mut f = Fixture::new();
+    let material = f
+        .repo
+        .register_material(&f.conn, &f.port, &f.source(), 0)
+        .unwrap();
+    let snapshot = BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id: new_id(),
+        run_id: f.run.run_id.clone(),
+        history_revision: 0,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash: f.run.policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: material,
+            source: f.source(),
+            text: "钟声".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: serde_json::json!({}),
+    };
+    f.repo
+        .freeze_batch(&mut f.conn, &f.port, &snapshot)
+        .unwrap();
+    let turn_id = new_id();
+    let request_id = new_id();
+    f.repo
+        .dispatch_batch(
+            &mut f.conn,
+            &f.port,
+            &snapshot.batch_id,
+            &turn_id,
+            &request_id,
+        )
+        .unwrap();
+    let proposal = crate::model::Proposal {
+        version: 1,
+        candidates: vec![Candidate {
+            candidate_id: "candidate_1".into(),
+            classification: crate::model::Classification::NotWorthy,
+            source_ids: vec!["s1".into()],
+            subject_ref: crate::model::SubjectRef::PlayerPreference,
+            entity_ids: vec![],
+            evidence_ids: vec![],
+            target_ref: None,
+            dimension: None,
+            summary: None,
+            attitude: None,
+            attitude_evidence_ids: vec![],
+            inferred: None,
+            reason: "没有新的稳定信息".into(),
+        }],
+    };
+    let response = serde_json::to_vec(&proposal).unwrap();
+    f.repo
+        .receive_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            &turn_id,
+            &request_id,
+            &response,
+        )
+        .unwrap();
+
+    rejected(
+        f.repo.complete_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            br#"{"version":1,"outcomes":[]}"#,
+        ),
+        Reason::InvalidSchema,
+    );
+    rejected(
+        f.repo.complete_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"rejected"}]}"#,
+        ),
+        Reason::InvalidSchema,
+    );
+    let completion =
+        br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"noOp"}]}"#;
+    assert!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, completion)
+            .unwrap()
+    );
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .state,
+        BatchState::Completed
+    );
+}
+
+#[test]
 fn material_registration_requires_a_valid_source_and_bounded_ordinal() {
     let f = Fixture::new();
     let source = f.source();

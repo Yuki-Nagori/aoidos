@@ -16,7 +16,10 @@ mod reconciliation;
 mod recovery;
 pub use recovery::{RecoveryPage, ScanCursor};
 mod materials;
-pub use materials::{BatchSnapshot, BatchState, Span};
+pub use materials::{
+    BatchCompletion, BatchReceipt, BatchSnapshot, BatchState, CandidateOutcome, CandidateResult,
+    Span,
+};
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
