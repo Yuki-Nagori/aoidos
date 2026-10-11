@@ -52,7 +52,7 @@ function transport() {
     open: vi.fn().mockResolvedValue(opened),
   };
 }
-it("defaults to Flash and exposes only two supported model choices without a save workflow", async () => {
+it("defaults to Flash and exposes supported providers and model choices", async () => {
   vi.mocked(listProfiles).mockResolvedValue({ items: [profile] });
   vi.mocked(listScripts).mockResolvedValue(scripts);
   vi.mocked(setKey).mockResolvedValue({ set: true, hint: null });
@@ -60,7 +60,12 @@ it("defaults to Flash and exposes only two supported model choices without a sav
   const scope = effectScope(),
     product = scope.run(() => useProduct())!;
   expect(product.model.value).toBe("deepseek-flash");
-  expect(product.models).toEqual([
+  expect(product.providerOptions).toEqual([
+    { id: "deepseek", label: "DeepSeek" },
+    { id: "opencode-zen", label: "OpenCode Zen" },
+    { id: "opencode-go", label: "OpenCode Go" },
+  ]);
+  expect(product.models.value).toEqual([
     { id: "deepseek-flash", label: "DeepSeek V4.1 Flash" },
     { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
   ]);
@@ -151,6 +156,77 @@ it("creates a completion profile automatically for an empty installation and per
   await product.open(false);
   expect(api.save).toHaveBeenCalledExactlyOnceWith(profile);
   expect(api.open).toHaveBeenCalledExactlyOnceWith("default", "mistbell", false);
+  scope.stop();
+});
+it("selects only a saved profile matching the newly selected provider and default model", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  const matching: LlmProfile = {
+    ...profile,
+    profileId: "go-flash",
+    providerId: "opencode-go",
+    model: "deepseek-v4.1-flash",
+    mode: "chat",
+  };
+  api.profiles.mockResolvedValue({
+    items: [
+      { ...matching, profileId: "other-provider", providerId: "other" },
+      { ...matching, profileId: "other-model", model: "gpt-6-luna" },
+      matching,
+    ],
+  });
+  await product.load();
+  expect(product.profileId.value).toBe("");
+
+  product.providerId.value = "opencode-go";
+
+  expect(product.model.value).toBe("deepseek-v4.1-flash");
+  expect(product.profileId.value).toBe("go-flash");
+  scope.stop();
+});
+it("selects OpenCode Go independently with its chat model, credential and profile", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  api.profiles.mockResolvedValue({ items: [] });
+  await product.load();
+  product.providerId.value = "opencode-go";
+  expect(product.models.value).toHaveLength(32);
+  expect(product.models.value[0]).toEqual({
+    id: "deepseek-v4.1-flash",
+    label: "DeepSeek V4.1 Flash",
+  });
+  expect(product.model.value).toBe("deepseek-v4.1-flash");
+  await product.configureKey();
+  expect(api.key).toHaveBeenLastCalledWith("opencode-go", "set");
+  await product.open(false);
+  expect(api.save).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      providerId: "opencode-go",
+      profileId: "default-opencode-go",
+      model: "deepseek-v4.1-flash",
+      mode: "chat",
+      thinking: false,
+    }),
+  );
+  scope.stop();
+});
+it("exposes the documented OpenCode Zen catalog with DeepSeek V4.1 Flash first", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  api.profiles.mockResolvedValue({ items: [] });
+  await product.load();
+  product.providerId.value = "opencode-zen";
+  expect(product.models.value).toHaveLength(86);
+  expect(product.models.value[0]).toEqual({
+    id: "deepseek-v4.1-flash",
+    label: "DeepSeek V4.1 Flash",
+  });
+  expect(product.models.value.some((model) => model.id === "gpt-6.1-sol")).toBe(true);
+  expect(product.models.value.some((model) => model.id === "gemini-3.8-flash")).toBe(true);
+  expect(product.model.value).toBe("deepseek-v4.1-flash");
   scope.stop();
 });
 it("does not inherit the default of another provider or a differently named DeepSeek profile", async () => {

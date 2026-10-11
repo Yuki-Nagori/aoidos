@@ -116,7 +116,14 @@ impl ProfileFactory {
             }
             _ => self.budget.clone(),
         };
-        ProfileGeneration::with_provider(profile, provider, dice, budget, self.diagnostics.clone())
+        ProfileGeneration::with_provider_for_session(
+            profile,
+            provider,
+            dice,
+            budget,
+            self.diagnostics.clone(),
+            run_id.map(str::to_owned),
+        )
     }
     fn select(&self, id: String) {
         *self

@@ -24,7 +24,7 @@ pub enum RequestMode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderCapabilities {
     pub model: String,
-    /// 已核验的上下文窗口；未知时拒绝记录投影，不推测无限容量。
+    /// 当前 Provider / 模型公布的上下文窗口总量；未知时拒绝投影。
     pub context_limit: Option<u32>,
     pub completion: bool,
     pub chat: bool,
@@ -99,6 +99,8 @@ impl ProviderInput {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderRequest {
     pub model: String,
+    /// 供应商用于会话路由或提示缓存的稳定游戏会话标识。
+    pub session_id: Option<String>,
     pub input: ProviderInput,
     pub sampling: Sampling,
     pub stops: Vec<String>,
@@ -116,6 +118,7 @@ impl ProviderRequest {
     pub fn with_temperature(&self, temperature: f64) -> Self {
         Self {
             model: self.model.clone(),
+            session_id: self.session_id.clone(),
             input: self.input.clone(),
             sampling: Sampling {
                 temperature,
@@ -131,9 +134,11 @@ impl ProviderRequest {
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
-    /// Provider-reported cached input subset; None means the provider omitted it.
+    /// 服务商报告的缓存读取输入 Token；缺失时保持 None。
     pub cached_prompt_tokens: Option<u64>,
-    /// Reasoning is a subset of completion output and is never added to billable output.
+    /// 服务商报告的缓存写入输入 Token；在写入费率实现前保持独立。
+    pub cache_creation_tokens: Option<u64>,
+    /// 推理 Token 是输出子集，不会重复计入输出费用。
     pub reasoning_tokens: Option<u64>,
 }
 
@@ -146,6 +151,11 @@ impl Usage {
             .saturating_add(other.completion_tokens);
         self.cached_prompt_tokens =
             merge_optional_count(self.cached_prompt_tokens, other.cached_prompt_tokens, empty);
+        self.cache_creation_tokens = merge_optional_count(
+            self.cache_creation_tokens,
+            other.cache_creation_tokens,
+            empty,
+        );
         self.reasoning_tokens =
             merge_optional_count(self.reasoning_tokens, other.reasoning_tokens, empty);
     }
@@ -208,6 +218,7 @@ mod tests {
     fn with_temperature_only_changes_temperature() {
         let request = ProviderRequest {
             model: "m".into(),
+            session_id: None,
             input: ProviderInput::Completion(CompletionInput { prompt: "p".into() }),
             sampling: Sampling {
                 temperature: 1.0,
@@ -227,18 +238,26 @@ mod tests {
         let mut usage = Usage {
             prompt_tokens: 10,
             completion_tokens: 20,
+            cache_creation_tokens: Some(0),
             ..Usage::default()
         };
         usage.merge(Usage {
             prompt_tokens: 1,
             completion_tokens: 2,
+            cache_creation_tokens: Some(0),
+            ..Usage::default()
+        });
+        usage.merge(Usage {
+            prompt_tokens: 2,
+            cache_creation_tokens: Some(3),
             ..Usage::default()
         });
         assert_eq!(
             usage,
             Usage {
-                prompt_tokens: 11,
+                prompt_tokens: 13,
                 completion_tokens: 22,
+                cache_creation_tokens: Some(3),
                 ..Usage::default()
             }
         );

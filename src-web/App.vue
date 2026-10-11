@@ -28,7 +28,7 @@ const billingProfile = computed(() =>
 const billing = useBilling(
   sessionId,
   computed(() => billingProfile.value?.profileId ?? ""),
-  computed(() => billingProfile.value?.providerId ?? "deepseek"),
+  computed(() => billingProfile.value?.providerId ?? product.providerId.value),
   computed(() => billingProfile.value?.model ?? product.model.value),
 );
 function billingAmount(amount: string | null, currency: "CNY" | "USD"): string {
@@ -506,13 +506,29 @@ void preferences.load();
       </label>
       <p v-if="localeNotice" role="status">{{ localeNotice }}</p>
       <label>
+        {{ t("settings.provider") }}
+        <select
+          v-model="product.providerId.value"
+          :aria-label="t('settings.provider')"
+          :disabled="product.busy.value"
+        >
+          <option
+            v-for="provider in product.providerOptions"
+            :key="provider.id"
+            :value="provider.id"
+          >
+            {{ provider.label }}
+          </option>
+        </select>
+      </label>
+      <label>
         {{ t("settings.model") }}
         <select
           v-model="product.model.value"
           :aria-label="t('settings.model')"
           :disabled="product.busy.value"
         >
-          <option v-for="model in product.models" :key="model.id" :value="model.id">
+          <option v-for="model in product.models.value" :key="model.id" :value="model.id">
             {{ model.label }}
           </option>
         </select></label

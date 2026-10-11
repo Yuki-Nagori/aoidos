@@ -43,6 +43,7 @@
 │   ├── aoidos-locale/         # 034：受限语言偏好、系统语言归一化与独立 SQLite schema
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── aoidos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
+│       ├── src/providers/    # deepseek/、opencode/、models/ 的 mod.rs 与 tests.rs 并列
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
 ├── resources/scripts/        # 已发布剧本原文与署名 / 许可，编译期内嵌
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）

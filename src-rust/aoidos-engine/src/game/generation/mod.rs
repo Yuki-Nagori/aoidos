@@ -26,6 +26,7 @@ pub struct ProfileGeneration {
     projection: Budget,
     budget: Arc<dyn BudgetPort>,
     diagnostics: Arc<Mutex<Calibration>>,
+    session_id: Option<String>,
 }
 impl ProfileGeneration {
     /// 凭据和代理已冻结；构造只校验能力，不启动网络或占用回合门禁。
@@ -53,6 +54,18 @@ impl ProfileGeneration {
         dice_mode: crate::record::facts::DiceMode,
         budget: Arc<dyn BudgetPort>,
         diagnostics: Arc<Mutex<Calibration>>,
+    ) -> Result<FrozenRound, Fault> {
+        Self::with_provider_for_session(profile, provider, dice_mode, budget, diagnostics, None)
+    }
+
+    /// 将供应商请求关联到稳定的对局身份，供支持会话路由的网关复用。
+    pub fn with_provider_for_session(
+        profile: LlmProfile,
+        provider: Arc<dyn Provider>,
+        dice_mode: crate::record::facts::DiceMode,
+        budget: Arc<dyn BudgetPort>,
+        diagnostics: Arc<Mutex<Calibration>>,
+        session_id: Option<String>,
     ) -> Result<FrozenRound, Fault> {
         profile.validate().map_err(invalid_profile)?;
         if profile.thinking {
@@ -90,6 +103,7 @@ impl ProfileGeneration {
                 projection,
                 budget,
                 diagnostics,
+                session_id,
             }),
         })
     }
@@ -118,6 +132,7 @@ impl Generation for ProfileGeneration {
             GenerationRequest {
                 provider_request: ProviderRequest {
                     model: self.profile.model.clone(),
+                    session_id: self.session_id.clone(),
                     input,
                     sampling: self.profile.sampling,
                     stops: vec![],

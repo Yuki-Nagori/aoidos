@@ -41,6 +41,7 @@
     "disableSkin": "Disable scenario skin",
     "skinWarnings": "The scenario skin has {count} compatibility warnings.",
     "model": "Model",
+    "provider": "Provider",
     "setApiKey": "Set API key (system dialog)",
     "keySet": "Key is set",
     "keyMissing": "Key is not set",

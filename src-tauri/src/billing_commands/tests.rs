@@ -218,6 +218,7 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
                 prompt_tokens: 50,
                 completion_tokens: 10,
                 cached_prompt_tokens: Some(10),
+                cache_creation_tokens: Some(0),
                 reasoning_tokens: Some(2),
             }),
         },
