@@ -40,6 +40,7 @@ Aoidos：AI 驱动的剧情跑团桌面应用，技术栈 Bun + Vue 3 + TypeScri
 
 - 一切命令经根 `package.json` 的 bun scripts；`bun run verify` 十三项全过才算完成，husky 只查格式，CI 跑全量。
 - 覆盖率缺口由 subagent 分工修复，主代理整合并复验完整门禁，见[测试规范](ai-docs/standards/testing.md)。
+- 需要独立审查时，使用 `gpt-6.1-sol`、`medium` effort 的 subagent；审查与主线工作相互独立时，主代理继续推进主线，再整合审查发现并复验，不因等待审查而停工。
 - `bun.lock` 与根 `Cargo.lock` 提交并保持同步（工作区唯一一份 `Cargo.lock`）。
 - 命令参数 / 返回类型在 Rust 定型后，TS 侧立即声明同型；`invoke` 无校验透传。
 - 前端纯逻辑进 `utils/` 配单测；Rust 命令层薄，业务长大后拆 crate 进 workspace members。

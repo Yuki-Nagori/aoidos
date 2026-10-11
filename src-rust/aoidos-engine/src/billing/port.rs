@@ -83,11 +83,6 @@ impl LedgerBudgetPort {
         let updated_at = now();
         let settlement = match outcome {
             AttemptOutcome::Settled { usage: Some(usage) } => {
-                // 当前价格结构没有独立缓存写入档位；非零写入用量不得按普通未缓存输入结算。
-                if usage.cache_creation_tokens.is_some_and(|tokens| tokens > 0) {
-                    self.mark_unknown(attempt, &updated_at);
-                    return;
-                }
                 let Some(cached_input) = usage.cached_prompt_tokens else {
                     self.mark_unknown(attempt, &updated_at);
                     return;
@@ -98,29 +93,48 @@ impl LedgerBudgetPort {
                     return;
                 };
                 let reasoning_included = usage.reasoning_tokens;
+                let cached_write = usage.cache_creation_tokens;
                 let request_id = attempt.request_id.clone();
                 let calculated = self.storage.with_database(|connection| {
-                    let price = BillingLedger::request_price(connection, &request_id)
-                        .map_err(billing_fault)?;
-                    let normalized = NormalizedUsage::from_provider(
+                    let (price, dispatch_at) =
+                        BillingLedger::request_price_context(connection, &request_id)
+                            .map_err(billing_fault)?;
+                    if (cached_write.is_none() && price.input_cached_write.is_some())
+                        || (cached_write.is_some_and(|tokens| tokens > 0)
+                            && price.input_cached_write.is_none())
+                    {
+                        return Err(Fault::new(
+                            "budget.usage-unconfirmed",
+                            "缓存创建用量或对应费率缺失",
+                        ));
+                    }
+                    let normalized = NormalizedUsage::from_provider_with_cache_write(
                         usage.prompt_tokens,
                         Some(cached_input),
+                        cached_write,
                         usage.completion_tokens,
                         reasoning_included,
                     )
                     .map_err(|_| Fault::new("budget.invalid-usage", "供应商用量不合法"))?;
                     let amount = normalized
-                        .exact_cost(&price)
+                        .exact_cost_at(&price, &dispatch_at)
                         .and_then(|cost| cost.settle().map_err(Into::into))
                         .map_err(|_| Fault::new("budget.invalid-usage", "供应商用量或费用溢出"))?;
                     Ok(Settlement {
                         input_total: usage.prompt_tokens,
                         input_cached: cached_input,
+                        input_cached_write: cached_write.unwrap_or(0),
                         output_total: usage.completion_tokens,
                         reasoning_included,
                         total_tokens,
                         amount,
-                        result_digest: digest(usage.prompt_tokens, usage.completion_tokens, amount),
+                        result_digest: digest(
+                            usage.prompt_tokens,
+                            cached_input,
+                            cached_write.unwrap_or(0),
+                            usage.completion_tokens,
+                            amount,
+                        ),
                     })
                 });
                 calculated.ok()
@@ -128,6 +142,19 @@ impl LedgerBudgetPort {
             AttemptOutcome::Settled { usage: None }
             | AttemptOutcome::Failed
             | AttemptOutcome::Cancelled => None,
+            AttemptOutcome::NotDispatched => {
+                let amount = NanoMoney::ZERO;
+                Some(Settlement {
+                    input_total: 0,
+                    input_cached: 0,
+                    input_cached_write: 0,
+                    output_total: 0,
+                    reasoning_included: None,
+                    total_tokens: 0,
+                    amount,
+                    result_digest: digest(0, 0, 0, 0, amount),
+                })
+            }
         };
         let request_id = attempt.request_id.clone();
         let _ = self.storage.with_database(|connection| {
@@ -168,9 +195,11 @@ fn format_timestamp(timestamp: OffsetDateTime) -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
 
-fn digest(input: u64, output: u64, amount: NanoMoney) -> String {
+fn digest(input: u64, cached: u64, cached_write: u64, output: u64, amount: NanoMoney) -> String {
     let mut hash = Sha256::new();
     hash.update(input.to_be_bytes());
+    hash.update(cached.to_be_bytes());
+    hash.update(cached_write.to_be_bytes());
     hash.update(output.to_be_bytes());
     hash.update(amount.nanos().to_be_bytes());
     format!("sha256:{:x}", hash.finalize())
@@ -258,7 +287,9 @@ mod tests {
             unit_tokens: 1000,
             input_uncached: UnitPrice::parse("1").unwrap(),
             input_cached: UnitPrice::parse("0.5").unwrap(),
+            input_cached_write: Some(UnitPrice::parse("1.5").unwrap()),
             output: UnitPrice::parse("2").unwrap(),
+            schedule: None,
             usage_mapping_version: "v1".into(),
             source_kind: "user".into(),
             source_url: None,
@@ -395,7 +426,15 @@ mod tests {
             connection.query_row("SELECT state FROM billing_physical_requests WHERE request_id='request-cache-write'", [], |row| row.get::<_, String>(0))
                 .map_err(query_fault)
         }).unwrap();
-        assert_eq!(cache_write_state, "unconfirmed");
+        assert_eq!(cache_write_state, "settled");
+        let persisted_write = storage.with_database(|connection| {
+            connection.query_row(
+                "SELECT input_cached_write,actual_nanos FROM billing_physical_requests WHERE request_id='request-cache-write'",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            ).map_err(query_fault)
+        }).unwrap();
+        assert_eq!(persisted_write, (5, 67_500_000));
         port.reserve(&attempt("model", "request-overflow")).unwrap();
         port.settle(
             &attempt("model", "request-overflow"),
@@ -450,6 +489,142 @@ mod tests {
             })
             .unwrap();
         assert_eq!(state, "unconfirmed");
+
+        port.reserve(&attempt("model", "not-dispatched")).unwrap();
+        port.settle(
+            &attempt("model", "not-dispatched"),
+            &AttemptOutcome::NotDispatched,
+        );
+        let unsent: (String, Option<i64>) = storage
+            .with_database(|connection| {
+                connection
+                    .query_row(
+                        "SELECT state,actual_nanos FROM billing_physical_requests WHERE request_id='not-dispatched'",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(query_fault)
+            })
+            .unwrap();
+        assert_eq!(unsent, ("settled".into(), Some(0)));
+        storage.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn settlement_preserves_unknown_cache_writes_and_supports_legacy_zero_writes() {
+        let (storage, root) = storage();
+        configure(&storage, "10");
+        let port = port(storage.clone());
+        let mut legacy_price = price();
+        legacy_price.version_id = "legacy-price".into();
+        legacy_price.route_policy = "legacy-direct".into();
+        legacy_price.input_cached_write = None;
+        storage
+            .with_database(|connection| {
+                BillingLedger::register_price(connection, &legacy_price, "2020-01-01T00:00:00Z")
+                    .map_err(billing_fault)?;
+                BillingLedger::select_profile_price(
+                    connection,
+                    "legacy-profile",
+                    "provider",
+                    "model",
+                    "legacy-direct",
+                    Currency::Cny,
+                    "2020-01-01T00:00:00Z",
+                )
+                .map_err(billing_fault)?;
+                Ok(())
+            })
+            .unwrap();
+
+        for (request_id, price_version_id, cache_creation_tokens, expected_state, actual) in [
+            ("missing-write-usage", "price-1", None, "unconfirmed", None),
+            (
+                "legacy-no-writes",
+                "legacy-price",
+                None,
+                "settled",
+                Some(65_000_000),
+            ),
+            (
+                "legacy-zero-writes",
+                "legacy-price",
+                Some(0),
+                "settled",
+                Some(65_000_000),
+            ),
+            (
+                "legacy-positive-writes",
+                "legacy-price",
+                Some(5),
+                "unconfirmed",
+                None,
+            ),
+        ] {
+            let profile_id = if price_version_id == "legacy-price" {
+                "legacy-profile"
+            } else {
+                "profile-1"
+            };
+            let route_policy = if price_version_id == "legacy-price" {
+                "legacy-direct"
+            } else {
+                "direct"
+            };
+            // 旧版本已持久化的预留仍须可结算；当前端口不为缺少缓存创建费率的新请求预留。
+            storage
+                .with_database(|connection| {
+                    BillingLedger::reserve(
+                        connection,
+                        &Reservation {
+                            request_id: request_id.into(),
+                            run_id: "run-1".into(),
+                            turn_id: "turn-1".into(),
+                            profile_id: profile_id.into(),
+                            attempt: 1,
+                            provider_id: "provider".into(),
+                            model_id: "model".into(),
+                            route_policy: route_policy.into(),
+                            price_version_id: price_version_id.into(),
+                            currency: Currency::Cny,
+                            dispatch_at: "2020-01-01T00:00:00Z".into(),
+                            amount: NanoMoney::parse("0.5").unwrap(),
+                        },
+                    )
+                    .map_err(billing_fault)
+                })
+                .unwrap();
+            port.settle(
+                &attempt("model", request_id),
+                &AttemptOutcome::Settled {
+                    usage: Some(Usage {
+                        prompt_tokens: 50,
+                        completion_tokens: 10,
+                        cached_prompt_tokens: Some(10),
+                        cache_creation_tokens,
+                        reasoning_tokens: None,
+                    }),
+                },
+            );
+            let persisted = storage.with_database(|connection| {
+                connection.query_row(
+                    "SELECT state,actual_nanos,input_cached_write,reserved_nanos FROM billing_physical_requests WHERE request_id=?1",
+                    [request_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<i64>>(2)?, row.get::<_, i64>(3)?)),
+                ).map_err(query_fault)
+            }).unwrap();
+            assert_eq!(
+                persisted,
+                (
+                    expected_state.into(),
+                    actual,
+                    actual.map(|_| 0),
+                    500_000_000,
+                ),
+                "{request_id}"
+            );
+        }
         storage.close().unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -473,8 +648,8 @@ mod tests {
             assert_eq!(billing_fault(error).code, code);
         }
         assert_eq!(
-            digest(1, 2, NanoMoney::parse("3").unwrap()),
-            digest(1, 2, NanoMoney::parse("3").unwrap())
+            digest(1, 0, 0, 2, NanoMoney::parse("3").unwrap()),
+            digest(1, 0, 0, 2, NanoMoney::parse("3").unwrap())
         );
         assert_ne!(now(), "");
     }

@@ -85,6 +85,13 @@ CREATE TABLE billing_meta (
 INSERT INTO billing_meta(id,revision) VALUES(1,1);
 "#;
 
+/// 为现有账本增加缓存写入、定时费率列；旧记录继续保留未知值。
+pub const CACHE_WRITE_MIGRATION: &str = r#"
+ALTER TABLE billing_price_versions ADD COLUMN input_cached_write_price TEXT;
+ALTER TABLE billing_price_versions ADD COLUMN schedule_json TEXT;
+ALTER TABLE billing_physical_requests ADD COLUMN input_cached_write INTEGER;
+"#;
+
 /// 启用计费命令前检查必要的数据表与主键结构。
 pub fn verify(connection: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
     let count: i64 = connection.query_row(
@@ -96,7 +103,7 @@ pub fn verify(connection: &rusqlite::Connection) -> Result<(), rusqlite::Error> 
         return Err(rusqlite::Error::InvalidQuery);
     }
     let valid: i64 = connection.query_row(
-        "SELECT count(*)=1 FROM pragma_table_info('billing_physical_requests') WHERE name='request_id' AND type='TEXT' AND pk=1",
+        "SELECT (SELECT count(*) FROM pragma_table_info('billing_physical_requests') WHERE (name='request_id' AND type='TEXT' AND pk=1) OR (name='input_cached_write' AND type='INTEGER' AND \"notnull\"=0))=2 AND (SELECT count(*) FROM pragma_table_info('billing_price_versions') WHERE (name='input_cached_write_price' AND type='TEXT' AND \"notnull\"=0) OR (name='schedule_json' AND type='TEXT' AND \"notnull\"=0))=2",
         [],
         |row| row.get(0),
     )?;
@@ -118,6 +125,7 @@ mod tests {
         for denied_table in ["sqlite_master", "pragma_table_info"] {
             let connection = rusqlite::Connection::open_in_memory().unwrap();
             connection.execute_batch(SCHEMA).unwrap();
+            connection.execute_batch(CACHE_WRITE_MIGRATION).unwrap();
             connection.authorizer(Some(move |context: AuthContext<'_>| {
                 if matches!(context.action, AuthAction::Read { table_name, .. } if table_name == denied_table) {
                     Authorization::Deny
@@ -137,6 +145,7 @@ mod tests {
     fn verification_accepts_schema_and_rejects_missing_or_weakened_tables() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch(SCHEMA).unwrap();
+        connection.execute_batch(CACHE_WRITE_MIGRATION).unwrap();
         assert!(verify(&connection).is_ok());
 
         let missing = rusqlite::Connection::open_in_memory().unwrap();

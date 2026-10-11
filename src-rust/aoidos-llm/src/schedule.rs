@@ -117,6 +117,8 @@ pub enum AttemptOutcome {
     Settled {
         usage: Option<Usage>,
     },
+    /// 取消在 `provider.start` 被轮询前发生，可以确认请求尚未发送。
+    NotDispatched,
     /// 失败 / 超时：消耗未确认，不按零退款。
     Failed,
     Cancelled,
@@ -358,6 +360,13 @@ pub async fn run_generation_with_output(
                     usage: total_usage,
                 });
             }
+            AttemptEnd::NotDispatched => {
+                reservation.settle(AttemptOutcome::NotDispatched);
+                return Ok(RunOutcome::Cancelled {
+                    requests,
+                    usage: total_usage,
+                });
+            }
             AttemptEnd::Failed { error, usage } => {
                 total_usage.merge(usage.unwrap_or_default());
                 reservation.settle(AttemptOutcome::Failed);
@@ -489,6 +498,7 @@ enum AttemptEnd {
     Cancelled {
         usage: Option<Usage>,
     },
+    NotDispatched,
     Failed {
         error: ProviderError,
         usage: Option<Usage>,
@@ -538,7 +548,7 @@ async fn attempt(
     let head_deadline = Instant::now() + policy.head_budget;
     let mut stream = tokio::select! {
         biased;
-        () = cancel.cancelled() => return AttemptEnd::Cancelled { usage: None },
+        () = cancel.cancelled() => return AttemptEnd::NotDispatched,
         () = sleep_until(head_deadline) => return AttemptEnd::StalledHead,
         started = provider.start(provider_request, child.clone()) => match started {
             Ok(stream) => stream,
@@ -1600,6 +1610,52 @@ mod tests {
             })
         );
         assert_eq!(server.request_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_reservation_but_before_provider_start_is_not_dispatched() {
+        struct CancelOnReserve {
+            cancel: CancellationToken,
+            outcomes: Mutex<Vec<AttemptOutcome>>,
+        }
+        impl BudgetPort for CancelOnReserve {
+            fn reserve(&self, _: &AttemptIdentity) -> Result<(), BudgetDenial> {
+                self.cancel.cancel();
+                Ok(())
+            }
+            fn settle(&self, _: &AttemptIdentity, outcome: &AttemptOutcome) {
+                self.outcomes.lock().unwrap().push(*outcome);
+            }
+        }
+
+        let cancel = CancellationToken::new();
+        let budget = CancelOnReserve {
+            cancel: cancel.clone(),
+            outcomes: Mutex::new(Vec::new()),
+        };
+        let provider = FakeProvider { deltas: Vec::new() };
+        let (tx, _rx) = mpsc::channel(32);
+        let outcome = run_generation(
+            &provider,
+            generation_request(),
+            cancel,
+            &fast_policy(),
+            &budget,
+            tx,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            Ok(RunOutcome::Cancelled {
+                requests: 1,
+                usage: Usage::default(),
+            })
+        );
+        assert_eq!(
+            *budget.outcomes.lock().unwrap(),
+            vec![AttemptOutcome::NotDispatched]
+        );
     }
 
     #[tokio::test]

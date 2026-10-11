@@ -1,7 +1,7 @@
 use super::*;
 use aoidos_billing::{
     money::{Currency, NanoMoney, UnitPrice},
-    price::PriceVersion,
+    price::{PeakPriceTier, PriceVersion, RecurringPriceSchedule},
     schema::SCHEMA,
 };
 use rusqlite::Connection;
@@ -10,6 +10,9 @@ fn database() -> Connection {
     let connection = Connection::open_in_memory().unwrap();
     connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     connection.execute_batch(SCHEMA).unwrap();
+    connection
+        .execute_batch(aoidos_billing::schema::CACHE_WRITE_MIGRATION)
+        .unwrap();
     connection
 }
 
@@ -46,11 +49,11 @@ fn prepare(connection: &mut Connection) {
     )
     .unwrap();
     connection.execute(
-        "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('price-1','provider','model','direct','CNY',1000,'1','1','1','v1','user','2026-10-10T00:00:00Z','2026-10-10T00:00:00Z','now')",
+        "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('price-1','provider','model','direct','CNY',1000,'1','1','1','1','v1','user','2026-10-10T00:00:00Z','2026-10-10T00:00:00Z','now')",
         [],
     ).unwrap();
     connection.execute(
-        "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('price-2','provider','model','direct','USD',1000,'1','1','1','v1','user','2026-10-10T00:00:00Z','2026-10-10T00:00:00Z','now')",
+        "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('price-2','provider','model','direct','USD',1000,'1','1','1','1','v1','user','2026-10-10T00:00:00Z','2026-10-10T00:00:00Z','now')",
         [],
     ).unwrap();
     BillingLedger::select_profile_price(
@@ -75,7 +78,9 @@ fn price() -> PriceVersion {
         unit_tokens: 1000,
         input_uncached: UnitPrice::parse("1.25").unwrap(),
         input_cached: UnitPrice::parse("0.5").unwrap(),
+        input_cached_write: Some(UnitPrice::parse("1.5").unwrap()),
         output: UnitPrice::parse("4").unwrap(),
+        schedule: None,
         usage_mapping_version: "v1".into(),
         source_kind: "user-entered".into(),
         source_url: None,
@@ -89,6 +94,7 @@ fn summary_settlement() -> Settlement {
     Settlement {
         input_total: 100,
         input_cached: 0,
+        input_cached_write: 0,
         output_total: 0,
         reasoning_included: None,
         total_tokens: 100,
@@ -203,6 +209,7 @@ fn monthly_report_groups_settled_and_unknown_requests_by_original_currency() {
     let value = Settlement {
         input_total: 100,
         input_cached: 0,
+        input_cached_write: 0,
         output_total: 0,
         reasoning_included: None,
         total_tokens: 100,
@@ -265,6 +272,7 @@ fn run_summary_omits_reservation_when_a_group_contains_only_settled_requests() {
     let settlement = Settlement {
         input_total: 100,
         input_cached: 0,
+        input_cached_write: 0,
         output_total: 0,
         reasoning_included: None,
         total_tokens: 100,
@@ -339,6 +347,7 @@ fn low_level_validation_adapters_reject_unrepresentable_inputs() {
     let invalid_settlement = Settlement {
         input_total: 1,
         input_cached: 2,
+        input_cached_write: 0,
         output_total: 0,
         reasoning_included: None,
         total_tokens: 1,
@@ -418,6 +427,7 @@ fn missing_prices_invalid_reservations_and_unknown_settlements_fail_closed() {
     let value = Settlement {
         input_total: 100,
         input_cached: 0,
+        input_cached_write: 0,
         output_total: 0,
         reasoning_included: None,
         total_tokens: 100,
@@ -455,6 +465,65 @@ fn price_versions_are_immutable_and_idempotently_registered() {
 }
 
 #[test]
+fn go_peak_schedule_is_persisted_and_settlement_uses_frozen_dispatch_time() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let mut scheduled = price();
+    scheduled.version_id = "go-deepseek-price".into();
+    scheduled.provider_id = "opencode-go".into();
+    scheduled.model_id = "deepseek-v4.1-flash".into();
+    scheduled.schedule = Some(RecurringPriceSchedule {
+        version: "opencode-go-deepseek-utc-weekday-v1".into(),
+        peak: PeakPriceTier {
+            input_uncached: UnitPrice::parse("10").unwrap(),
+            input_cached: UnitPrice::parse("10").unwrap(),
+            input_cached_write: Some(UnitPrice::parse("10").unwrap()),
+            output: UnitPrice::parse("10").unwrap(),
+        },
+    });
+    BillingLedger::register_price(&mut connection, &scheduled, "created").unwrap();
+    assert_eq!(
+        BillingLedger::price_by_id(&connection, "go-deepseek-price").unwrap(),
+        Some(scheduled.clone())
+    );
+    BillingLedger::select_profile_price(
+        &mut connection,
+        "profile-1",
+        "opencode-go",
+        "deepseek-v4.1-flash",
+        "direct",
+        Currency::Cny,
+        "2026-10-12T01:00:00Z",
+    )
+    .unwrap();
+
+    let mut request = reservation("go-peak", Currency::Cny, "1.2");
+    request.provider_id = "opencode-go".into();
+    request.model_id = "deepseek-v4.1-flash".into();
+    request.price_version_id = scheduled.version_id.clone();
+    request.dispatch_at = "2026-10-12T01:00:00Z".into();
+    BillingLedger::reserve(&mut connection, &request).unwrap();
+    let peak_settlement = Settlement {
+        input_total: 100,
+        input_cached: 0,
+        input_cached_write: 0,
+        output_total: 20,
+        reasoning_included: None,
+        total_tokens: 120,
+        amount: NanoMoney::parse("1.2").unwrap(),
+        result_digest: "sha256:go-peak".into(),
+    };
+    assert_eq!(
+        BillingLedger::settle(&mut connection, "go-peak", Some(&peak_settlement), "later").unwrap(),
+        SettlementResult::Applied
+    );
+    let (persisted_price, dispatch_at) =
+        BillingLedger::request_price_context(&connection, "go-peak").unwrap();
+    assert_eq!(dispatch_at, "2026-10-12T01:00:00Z");
+    assert_eq!(persisted_price.schedule, scheduled.schedule);
+}
+
+#[test]
 fn price_history_is_bounded_per_identity_and_keeps_idempotent_retries() {
     let mut connection = database();
     let mut existing = price();
@@ -463,8 +532,8 @@ fn price_history_is_bounded_per_identity_and_keeps_idempotent_retries() {
     connection
         .execute_batch(
             "WITH RECURSIVE versions(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM versions WHERE n<1023) \
-             INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) \
-             SELECT 'bulk-'||n,'provider','model','direct','CNY',1000,'1','1','1','v1','user-entered','2026-10-11T00:00:00Z','2026-10-11T00:00:00Z','created-'||n FROM versions;",
+             INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) \
+             SELECT 'bulk-'||n,'provider','model','direct','CNY',1000,'1','1','1','1','v1','user-entered','2026-10-11T00:00:00Z','2026-10-11T00:00:00Z','created-'||n FROM versions;",
         )
         .unwrap();
 
@@ -478,7 +547,7 @@ fn price_history_is_bounded_per_identity_and_keeps_idempotent_retries() {
 
     connection
         .execute(
-            "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('raw-over-limit','provider','model','direct','CNY',1000,'1','1','1','v1','user-entered','2026-10-11T00:00:00Z','2026-10-11T00:00:00Z','zzzz')",
+            "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,input_cached_write_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('raw-over-limit','provider','model','direct','CNY',1000,'1','1','1','1','v1','user-entered','2026-10-11T00:00:00Z','2026-10-11T00:00:00Z','zzzz')",
             [],
         )
         .unwrap();
@@ -575,6 +644,7 @@ fn unknown_usage_keeps_hold_and_exact_settlement_is_idempotent() {
     let settlement = Settlement {
         input_total: 100,
         input_cached: 25,
+        input_cached_write: 0,
         output_total: 50,
         reasoning_included: Some(10),
         total_tokens: 150,
@@ -674,6 +744,7 @@ fn eighty_percent_warning_is_deduplicated_and_run_summary_keeps_unknowns_visible
     let known_usage = Settlement {
         input_total: 100,
         input_cached: 0,
+        input_cached_write: 0,
         output_total: 0,
         reasoning_included: None,
         total_tokens: 100,
@@ -931,7 +1002,9 @@ fn monthly_reports_compare_fractional_dispatch_times_by_instant() {
     prepare(&mut connection);
     for (request_id, dispatch_at) in [
         ("october-last-fraction", "2026-10-31T23:59:59.999Z"),
+        ("october-submillisecond", "2026-10-31T23:59:59.999500Z"),
         ("november-boundary", "2026-11-01T00:00:00Z"),
+        ("november-submillisecond", "2026-11-01T00:00:00.000500Z"),
         ("november-fraction", "2026-11-01T00:00:00.123Z"),
     ] {
         let mut request = reservation(request_id, Currency::Cny, "1");
@@ -941,8 +1014,8 @@ fn monthly_reports_compare_fractional_dispatch_times_by_instant() {
 
     let october = BillingLedger::month_summary(&connection, "2026-10", "UTC").unwrap();
     let november = BillingLedger::month_summary(&connection, "2026-11", "UTC").unwrap();
-    assert_eq!(october[0].request_count, 1);
-    assert_eq!(november[0].request_count, 2);
+    assert_eq!(october[0].request_count, 2);
+    assert_eq!(november[0].request_count, 3);
 }
 
 #[test]

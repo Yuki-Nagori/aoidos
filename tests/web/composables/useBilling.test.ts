@@ -57,6 +57,7 @@ function price(overrides: Partial<PriceVersion> = {}): PriceVersion {
     unitTokens: 1_000_000,
     inputUncached: "1",
     inputCached: "0.5",
+    inputCachedWrite: "0.25",
     output: "2",
     usageMappingVersion: "provider-usage-v1",
     sourceKind: "user-entered",
@@ -140,6 +141,7 @@ describe("useBilling initial loading", () => {
     expect(state.unitTokens.value).toBe("1000");
     expect(state.inputUncached.value).toBe("1");
     expect(state.inputCached.value).toBe("0.5");
+    expect(state.inputCachedWrite.value).toBe("0.25");
     expect(state.output.value).toBe("2");
     expect(state.sourceUrl.value).toBe("https://prices.example/model");
     expect(state.priceReady.value).toBe(true);
@@ -198,6 +200,16 @@ describe("useBilling initial loading", () => {
     expect(state.usdLimit.value).toBe("");
     expect(state.sourceUrl.value).toBe("");
     expect(state.priceReady.value).toBe(true);
+    scope.stop();
+  });
+
+  it("loads a legacy saved price without a cache-write rate as an empty field", async () => {
+    vi.mocked(getSelectedPrice).mockResolvedValue(price({ inputCachedWrite: null }));
+    const { state, scope } = createState();
+
+    await waitForLoaded(state);
+
+    expect(state.inputCachedWrite.value).toBe("");
     scope.stop();
   });
 
@@ -294,7 +306,12 @@ describe("useBilling initial loading", () => {
 
 describe("useBilling price selection and registration", () => {
   it("loads and selects a registered price for the chosen currency", async () => {
-    const registered = price({ currency: "USD", unitTokens: 500, sourceUrl: undefined });
+    const registered = price({
+      currency: "USD",
+      unitTokens: 500,
+      inputCachedWrite: null,
+      sourceUrl: undefined,
+    });
     vi.mocked(getPrice).mockResolvedValue(registered);
     const { state, scope } = createState();
     await waitForLoaded(state);
@@ -305,6 +322,7 @@ describe("useBilling price selection and registration", () => {
     expect(getPrice).toHaveBeenCalledWith("provider-1", "model-1", "direct", "USD");
     expect(selectPrice).toHaveBeenCalledWith("profile-1", "provider-1", "model-1", "direct", "USD");
     expect(state.unitTokens.value).toBe("500");
+    expect(state.inputCachedWrite.value).toBe("");
     expect(state.sourceUrl.value).toBe("");
     scope.stop();
   });
@@ -505,6 +523,7 @@ describe("useBilling price selection and registration", () => {
     state.unitTokens.value = "250000";
     state.inputUncached.value = "0.3";
     state.inputCached.value = "0.1";
+    state.inputCachedWrite.value = "0";
     state.output.value = "0.8";
     state.sourceUrl.value = "";
 
@@ -519,6 +538,7 @@ describe("useBilling price selection and registration", () => {
         unitTokens: 250000,
         inputUncached: "0.3",
         inputCached: "0.1",
+        inputCachedWrite: "0",
         output: "0.8",
         sourceKind: "user-entered",
         usageMappingVersion: "provider-usage-v1",
@@ -532,6 +552,56 @@ describe("useBilling price selection and registration", () => {
     await state.savePrice();
     expect(registerPrice).toHaveBeenLastCalledWith(
       expect.objectContaining({ sourceUrl: "https://prices.example/manual" }),
+    );
+    scope.stop();
+  });
+
+  it("requires and registers provider-specific DeepSeek peak prices", async () => {
+    const { state, modelId, scope } = createState("run-1", "opencode-go");
+    modelId.value = "deepseek-v4.1-flash";
+    await waitForLoaded(state);
+    expect(state.requiresScheduledPrice.value).toBe(true);
+    expect(state.scheduledPriceComplete.value).toBe(false);
+    await state.savePrice();
+    expect(registerPrice).not.toHaveBeenCalled();
+
+    state.peakInputUncached.value = "0.3";
+    state.peakInputCached.value = "0.15";
+    state.peakInputCachedWrite.value = "0";
+    state.peakOutput.value = "1.2";
+    expect(state.scheduledPriceComplete.value).toBe(true);
+    await state.savePrice();
+    expect(registerPrice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schedule: {
+          version: "opencode-go-deepseek-utc-weekday-v1",
+          peak: {
+            inputUncached: "0.3",
+            inputCached: "0.15",
+            inputCachedWrite: "0",
+            output: "1.2",
+          },
+        },
+      }),
+    );
+    scope.stop();
+  });
+
+  it("uses the DeepSeek API holiday schedule for direct DeepSeek models", async () => {
+    const { state, modelId, scope } = createState("run-1", "deepseek");
+    modelId.value = "deepseek-flash";
+    await waitForLoaded(state);
+    expect(state.isDeepseekApiSchedule.value).toBe(true);
+    expect(state.requiresScheduledPrice.value).toBe(true);
+    state.peakInputUncached.value = "2";
+    state.peakInputCached.value = "0.04";
+    state.peakInputCachedWrite.value = "0";
+    state.peakOutput.value = "8";
+    await state.savePrice();
+    expect(registerPrice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schedule: expect.objectContaining({ version: "deepseek-api-utc-weekday-holiday-2026-v1" }),
+      }),
     );
     scope.stop();
   });

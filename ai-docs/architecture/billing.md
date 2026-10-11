@@ -1,6 +1,6 @@
 # LLM 计价与费用预算
 
-更新日期：2026-10-11；官方资料核验日期：2026-10-11。[027](../task/027-llm-cost-control-design.md) 定义协议，[035](../task/035-llm-cost-control-impl.md) 正在接入运行时。现有实现包括 `aoidos-billing` 精确金额与单价、engine SQLite 账本、LLM 物理尝试预算端口、Tauri 基础命令及双语费用面板。OpenCode Go 的定时价格、cache-write 计价和独立月订阅成本仍待 035 实现；当前 Anthropic cache-creation usage 已单独保留，非零写入量不按普通输入价格结算。历史补价和供应商余额尚未实现，也未做真实账单对账。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文区分稳定协议与当前实现范围。
+更新日期：2026-10-11；官方资料核验日期：2026-10-11。[027](../task/027-llm-cost-control-design.md) 定义协议，[035](../task/035-llm-cost-control-impl.md) 正在接入运行时。当前实现包括 `aoidos-billing` 精确金额与读写缓存单价、engine SQLite 账本、LLM 物理尝试预算端口、Tauri 命令及双语费用面板。缓存写入 Token 和费率已独立持久化；旧价格的写入费率保留为未知，并阻止新请求直到用户补齐。OpenCode Go 与 DeepSeek API 的峰谷规则已按发送时刻计价，峰时单价随价格版本冻结；界面把官方 UTC 窗口转换到已选报表时区显示。OpenCode Go / Go Plus 订阅费不纳入 Aoidos 费用面板或账本；Go 的每模型 Token 费率只用于估算其订阅额度使用。历史补价与供应商余额仍待 035 实现，也未做真实账单对账。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文区分稳定协议与当前实现范围。
 
 ## 控制单位与默认额度
 
@@ -20,7 +20,9 @@ checkedAt、effectiveFrom、validUntil 和 dispatchAt 必须是可解析的 RFC 
 
 价格来源按实际接入路径选择：服务商直连使用该服务商核验过的官方价格；OpenRouter 接入使用 OpenRouter 对应模型 / 路由策略的价格记录；OpenCode Zen / Go 使用各自官方模型目录中的价目。OpenRouter 与 OpenCode Zen / Go 是不同计价身份，不能互相套价，也不能替代同模型的直连价格。OpenRouter [按上游价格路由](https://openrouter.ai/blog/insights/model-routing/)，模型目录报价只适用于其所声明的接入身份；允许的上游价格不同且本次实际上游无法确定时，预留必须覆盖允许路由的保守上界，否则固定路由或要求用户登记明确费率，不能用单一低价放行。OpenRouter 的[计费说明](https://openrouter.ai/support)表明其额度以 USD 计、推理价格透传上游。价格与路由身份无法可靠匹配时，阻止收费请求。
 
-OpenCode Go / Go Plus 是固定月订阅（官方文档当前分别为 USD 10 / 40）；模型表的 USD/token 价格用于估算每模型的订阅额度使用，不是对用户额外扣除的按量账单。月订阅作为独立固定成本显示，不并入某个模型的 token 费用；如果开启 Go 的 Zen balance fallback，只有服务商提供可验证 usage / 路由证据时才单列为 Zen 费用，不能仅从 Go usage 猜出实际余额扣款。模型档位与可用额度会变化，计划费用 / 模型额度都需有来源及核验日期。[OpenCode Go pricing and fallback](https://opencode.ai/v2/docs/console/go)。
+OpenCode Go / Go Plus 是固定月订阅；官方文档列出套餐及各模型额度规则。Aoidos 不登记或展示固定订阅费用，只按已核验的 Go 每模型 Token 费率估算额度使用；这不是额外按量扣费或供应商的实际账单。若启用 Go 的 Zen balance fallback，只有服务商提供可验证 usage / 路由证据时才单列为 Zen 费用，不能仅从 Go usage 猜出实际余额扣款。模型档位与可用额度会变化，费率须有来源及核验日期。[OpenCode Go pricing and fallback](https://opencode.ai/v2/docs/console/go)。
+
+OpenCode Go 的公开 [`/zen/go/v1/models`](https://opencode.ai/zen/go/v1/models) 返回模型 ID 列表；Console 的 [`GET /api/v2/config`](https://opencode.ai/v2/docs/console/api/) 返回工作区可用 provider / model 配置。两者都不是计费或发票接口：模型列表不提供费率、协议、上下文与实际订阅用量，配置接口也不提供账单金额。Aoidos 可用接口目录辅助核对模型可用性，但新增模型仍须核验协议与能力后方可调用；费率仍需本地版本化保存，才能按请求 Token 和时段执行预算估算。
 
 官方价格有多种币种报价时，价格币种必须和用户实际账户的扣款口径对应。DeepSeek 官方中英文价格页分别以 USD 与 CNY 发布报价，[余额 API](https://api-docs.deepseek.com/api/get-user-balance/)也可能返回 CNY / USD 余额；因此不能用界面语言选择其价格表。若接口无法证明具体账户的计价口径，首次登记时须由用户确认，保存来源和核验日期；确认的是费用估算口径，不保证与实际账单完全相同。OpenRouter 采用 USD 额度，价格透传上游；如果未来读取其 generation 费用记录，应作为 OpenRouter 接入的实际费用证据单独建模，不混同于目录价或服务商直连账单，本期仍按冻结价格版本和 usage 估算，不额外查询账单接口。
 
@@ -34,7 +36,7 @@ OpenCode Go / Go Plus 是固定月订阅（官方文档当前分别为 USD 10 / 
 
 PriceVersion 可附 IANA 时区、星期、半开时间窗、时段单价与版本化节假日表；跨午夜拆窗，重叠、空价和非法时区拒绝。优先级为显式日期覆盖 → 星期 / 时间窗 → 基准价。日历声明覆盖年份及调整工作日策略；未覆盖 / 无法确定采用可适用最高价并标 estimated，不默认为假日优惠。内置日历随版本更新，手动覆盖明确来源；不自动推断节假日。
 
-2026-10-10 核验的 [DeepSeek USD 价格](https://api-docs.deepseek.com/quick_start/pricing/)与[人民币价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)均有峰谷价，周一至周五 UTC 01:00–04:00 / 06:00–10:00（北京时间 09:00–12:00 / 14:00–18:00），中国公众假日除外，谷价为峰价一半。OpenCode Go 也对 DeepSeek V4.1 Flash / V4 Pro / V4 Flash / Vision Exp 列出独立峰谷费率；其官方时段为周一至周五 UTC 01:00–04:00 / 06:00–10:00，周末全天非高峰。两个服务商日历不得共用：Go 文档未说明中国公众假日例外。每笔按 `dispatchAt` 选择单价并冻结版本；预留仍按当前请求可能适用的价格上界，账本最终按发送时段结算。价格时段与 Go 模型费率变动在 035 实现并测试前，不宣称 OpenCode Go 费用估算精确。
+DeepSeek API 的 [USD 价格](https://api-docs.deepseek.com/quick_start/pricing/)与[人民币价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)均有峰谷价：周一至周五 UTC 01:00–04:00 / 06:00–10:00（北京时间 09:00–12:00 / 14:00–18:00），中国公众假日全天非峰时，谷价为峰价一半。2026 年公众假日表依据[国务院办公厅通知](https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm)，价格日历版本为 `deepseek-api-utc-weekday-holiday-2026-v1`；未覆盖年份不推断假日折扣，峰时按较高价格保守预留，官方新日历发布后新增版本。OpenCode Go 对 DeepSeek V4.1 Flash / V4 Pro / V4 Flash / Vision Exp 列出独立峰谷费率；其官方时段相同，但只明确周末全天非峰时，不排除中国公众假日。两种接入分别登记独立费率和日历版本。每笔按 `dispatchAt` 选择单价并冻结版本；预留覆盖可适用最高费率。设置界面以本周为基准，将官方 UTC 窗口转换到已选报表时区；这只改变说明文字，不改变费率判定时区。
 
 ## 金额、原币与单局分币种额度
 
@@ -58,13 +60,13 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 | `billing_audit`                 | `operation_id` 唯一             | 价格、币种选择及上限修改审计记录               |
 | `billing_meta`                  | 单行主键                        | 账本 revision 与持久化月报时区                 |
 
-当前以 `billing_physical_requests` 的状态及 `reserved_nanos` 表达预算占用，尚无独立分配表、价格日历表或历史补价来源；不能把设计表名误认为已创建的 schema。engine 在共享 SQLite 连接上应用 `aoidos-billing::schema::SCHEMA`，store 不依赖计费领域。
+当前以 `billing_physical_requests` 的状态及 `reserved_nanos` 表达预算占用；缓存写入用量和 `billing_price_versions.schedule_json` 由追加迁移保存，旧写入费率 / 时段保持 NULL。尚无独立分配表或历史补价来源；不能把设计表名误认为已创建的 schema。engine 在共享 SQLite 连接上按顺序应用 `aoidos-billing::schema::SCHEMA` 及其追加迁移，store 不依赖计费领域。
 
 发送前持单在飞租约，在 BEGIN IMMEDIATE 事务中校验 PriceVersion 与当前 runBudget，按请求原币选择 CNY 或 USD 限额，判断该币种 settled + reserved + unconfirmed + 本次预留 <= 单局上限，并原子提交原币请求与对应分配。任一币种未配置上限或额度不足则拒绝且不发 HTTP；不能借用另一币种额度。比较与修改使用整数，不能先查后写。dispatchAt 为持久发送意图时刻，紧接发送；长时间排队在登记前结束；调试请求必须显式关联合法测试周目，不创建绕过单局额度的虚拟预算。网络不可与 SQLite 原子提交，崩溃在登记与发送之间仍可能消耗未知，恢复标 unconfirmed，不以“没看到响应”推断没发送。时段归属按该持久边界，是本地可审计约定，不能声称精确等于供应商收件时刻。
 
-状态机为 reserved → settled / unconfirmed；unconfirmed 只有获得可核验完整 usage 或显式人工审计处置才能 → settled。未发送可证实的本地失败可以 settled=0、标 notDispatched；仅超时 / 取消 / 断流 / 无 usage 不能退款。零 usage 只有供应商完整合法报告或上述发送前证据才接受。人工处置必须明确实际费用或保留未知，记录理由与审计，不自动把未知抹成零。
+状态机为 reserved → settled / unconfirmed；unconfirmed 只有获得可核验完整 usage 或显式人工审计处置才能 → settled。预算已预留、但取消明确发生在 `provider.start` 调用前时，以 `notDispatched` 和零 usage 结算并释放预留；进入 provider 调用后，超时 / 取消 / 断流 / 缺 usage 都不能推断为未发送或退款。零 usage 只有供应商完整合法报告或上述发送前证据才接受。人工处置必须明确实际费用或保留未知，记录理由与审计，不自动把未知抹成零。
 
-结算在同一 BEGIN IMMEDIATE 中按 requestId + 旧状态 CAS，保存 usage / 原币费用、对应币种分配及统计，释放剩余预留；重复同摘要是 no-op，冲突摘要保留首次结果并记异常，不覆写。原始响应摘要可核验，不保存 reasoning / 密钥或无限正文。完整 usage 费用仍是按本地版本计算，显示 estimated，与未知 unconfirmed 区分。
+结算在同一 BEGIN IMMEDIATE 中按 requestId + 旧状态 CAS，保存 usage / 原币费用、对应币种分配及统计，释放剩余预留；重复同摘要是 no-op，冲突摘要保留首次结果且返回冲突，不覆写。当前 ledger adapter 尚未把结算计算 / 存储错误提供给有界诊断界面；此路径是 035 的剩余工作，不能把 reserved 状态视作结算成功。原始响应摘要可核验，不保存 reasoning / 密钥或无限正文。完整 usage 费用仍是按本地版本计算，显示 estimated，与未知 unconfirmed 区分。
 
 账本结算状态与正文终态独立：输出完整合法而 usage 缺失 / 非法时，正文仍按 LLM 协议完成，账本保持 unconfirmed，budget.invalid-usage 仅用于费用诊断；不撤回已提交正文、不伪造 finishReason、不以重生成获取 usage。
 
@@ -74,7 +76,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 单局上限绑定稳定 runId；新局创建新预算，恢复 / 回退 / 段切不刷新或退还费用。全应用月报覆盖全部运行与任务，按服务商和原币分组、模型作为下钻明细，不设月额度。月报时区取系统有效 IANA 值并持久化，无法确定回退 UTC 并告知；设备后来变化不覆盖。jiff 负责自然月报表边界、DST 和时区库版本。
 
-月报按请求 dispatchAt 与已保存报表时区归类，不创建月度额度记录、不因跨月刷新或释放预算。月度统计可按需查询，不需要后台计时或持续轮询。DST 的不存在午夜采用当日最早合法瞬间，重复午夜取最早瞬间；墙钟异常按本地时间标注统计边界，但不影响单局冻结预算。
+月报按请求 dispatchAt 与已保存报表时区归类，不创建月度额度记录、不因跨月刷新或释放预算。SQLite 只筛选覆盖月份边界的有界候选区间，最终成员关系由 Rust 按 RFC 3339 瞬间精确判断，避免 `julianday()` 的毫秒舍入改变月界归属。月度统计可按需查询，不需要后台计时或持续轮询。DST 的不存在午夜采用当日最早合法瞬间，重复午夜取最早瞬间；墙钟异常按本地时间标注统计边界，但不影响单局冻结预算。
 
 玩家修改报表时区只影响新查询如何归类请求；已经展示的历史数据按其记录的时区版本可复现。时区变化不重设单局上限，也不改变消费 / 币种。
 
@@ -112,7 +114,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 ## 实施与验证依据
 
-035 当前已交付价格登记与原币账本、单局预算门禁、统一物理调用端口、基础 IPC、费用设置 / 明细及月报；历史补价和可选供应商余额尚未交付，不能宣称任务完成。接入 018–020 / 025 / 034，030 / 033 等待 035。产品不购买额度、不读取供应商逐请求账单、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
+035 当前已交付价格登记与原币账本、单局预算门禁、统一物理调用端口、费用设置 / 明细及月报、缓存创建 Token 和 OpenCode Go / DeepSeek API 峰谷计价；历史补价和可选供应商余额尚未交付，不能宣称任务完成。接入 018–020 / 025 / 034，030 / 033 等待 035。产品不购买额度、不读取供应商逐请求账单、不追踪订阅费用、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
 
 [足精度 Decimal](https://docs.rs/rust_decimal/latest/rust_decimal/)与 [jiff 时区](https://docs.rs/jiff/latest/jiff/)在实现时核验并集中 workspace 版本，不在设计提交中安装。字节输入估计必须包含完整序列化输入、协议固定开销与输出 / reasoning 上限；供应商适配器声明可证明的上界 / 保守系数，不能对任意 tokenizer 宣称 1 byte = 1 Token 永远成立。不能给出可靠上界时按模型输入硬限预留；超出估计完整结算且停新请求。未来 tokenizer 接入另行授权 / 验证，不暗加网络计数调用。
 

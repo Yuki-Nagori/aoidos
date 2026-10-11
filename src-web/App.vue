@@ -12,6 +12,7 @@ import { useUiPreferences } from "./composables/useUiPreferences";
 import { useBilling } from "./composables/useBilling";
 import { formatExactCurrency } from "./utils/format";
 import { billingErrorDescriptor } from "./utils/billing-error";
+import { formatPeakSchedule } from "./utils/price-schedule";
 import { usePanelState } from "./composables/usePanelState";
 import { canSubmitComposer, previewComposerInput } from "./utils/ui-shell";
 import RecordFeed from "./components/RecordFeed.vue";
@@ -710,6 +711,14 @@ void preferences.load();
             <p>
               {{
                 t("billing.labeledValue", {
+                  label: t("billing.requestCacheWrite"),
+                  value: item.inputCachedWrite ?? t("billing.unknown"),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.labeledValue", {
                   label: t("billing.requestOutput"),
                   value: item.outputTotal ?? t("billing.unknown"),
                 })
@@ -820,14 +829,79 @@ void preferences.load();
             <input v-model="billing.inputCached.value" inputmode="decimal" autocomplete="off" />
           </label>
           <label>
+            {{ t("billing.inputCachedWrite") }}
+            <input
+              v-model="billing.inputCachedWrite.value"
+              inputmode="decimal"
+              autocomplete="off"
+            />
+          </label>
+          <label>
             {{ t("billing.output") }}
             <input v-model="billing.output.value" inputmode="decimal" autocomplete="off" />
           </label>
+          <fieldset v-if="billing.requiresScheduledPrice.value" class="grid gap-3">
+            <legend>{{ t("billing.goPeakPrices") }}</legend>
+            <p>
+              {{
+                t("billing.goPeakSchedule", {
+                  timeZone: billing.monthly.value?.timeZone ?? "UTC",
+                  windows: formatPeakSchedule(
+                    billing.monthly.value?.timeZone ?? "UTC",
+                    locale.resolved.value,
+                  ),
+                  provider: t(
+                    billing.isDeepseekApiSchedule.value
+                      ? "billing.deepseekApi"
+                      : "billing.openCodeGo",
+                  ),
+                  holidayNote: billing.isDeepseekApiSchedule.value
+                    ? t("billing.deepseekHolidayNote")
+                    : "",
+                })
+              }}
+            </p>
+            <label>
+              {{ t("billing.inputUncached") }}
+              <input
+                v-model="billing.peakInputUncached.value"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              {{ t("billing.inputCached") }}
+              <input
+                v-model="billing.peakInputCached.value"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              {{ t("billing.inputCachedWrite") }}
+              <input
+                v-model="billing.peakInputCachedWrite.value"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              {{ t("billing.output") }}
+              <input v-model="billing.peakOutput.value" inputmode="decimal" autocomplete="off" />
+            </label>
+          </fieldset>
           <label>
             {{ t("billing.sourceUrl") }}
             <input v-model="billing.sourceUrl.value" type="url" autocomplete="off" />
           </label>
-          <button type="submit" :disabled="billing.busy.value">
+          <button
+            type="submit"
+            :disabled="
+              billing.busy.value ||
+              !billing.inputCachedWrite.value.trim() ||
+              !billing.scheduledPriceComplete.value
+            "
+          >
             {{ t("billing.savePrice") }}
           </button>
         </form>

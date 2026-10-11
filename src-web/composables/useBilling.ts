@@ -66,7 +66,35 @@ export function useBilling(
   const unitTokens = ref("1000000");
   const inputUncached = ref("");
   const inputCached = ref("");
+  const inputCachedWrite = ref("");
   const output = ref("");
+  const peakInputUncached = ref("");
+  const peakInputCached = ref("");
+  const peakInputCachedWrite = ref("");
+  const peakOutput = ref("");
+  const isDeepseekApiSchedule = computed(
+    () =>
+      providerId.value === "deepseek" &&
+      ["deepseek-flash", "deepseek-v4-pro"].includes(modelId.value),
+  );
+  const requiresScheduledPrice = computed(
+    () =>
+      isDeepseekApiSchedule.value ||
+      (providerId.value === "opencode-go" &&
+        [
+          "deepseek-v4.1-flash",
+          "deepseek-v4-pro",
+          "deepseek-v4-flash",
+          "deepseek-v4-flash-vision-exp",
+        ].includes(modelId.value)),
+  );
+  const scheduledPriceComplete = computed(
+    () =>
+      !requiresScheduledPrice.value ||
+      [peakInputUncached, peakInputCached, peakInputCachedWrite, peakOutput].every((value) =>
+        value.value.trim(),
+      ),
+  );
   const sourceUrl = ref("");
   const priceReady = ref(false);
   const busy = ref(false);
@@ -95,7 +123,12 @@ export function useBilling(
       unitTokens.value = "1000000";
       inputUncached.value = "";
       inputCached.value = "";
+      inputCachedWrite.value = "";
       output.value = "";
+      peakInputUncached.value = "";
+      peakInputCached.value = "";
+      peakInputCachedWrite.value = "";
+      peakOutput.value = "";
       sourceUrl.value = "";
       error.value = undefined;
       if (!activeRun) return;
@@ -122,7 +155,12 @@ export function useBilling(
           unitTokens.value = String(savedPrice.unitTokens);
           inputUncached.value = savedPrice.inputUncached;
           inputCached.value = savedPrice.inputCached;
+          inputCachedWrite.value = savedPrice.inputCachedWrite ?? "";
           output.value = savedPrice.output;
+          peakInputUncached.value = savedPrice.schedule?.peak.inputUncached ?? "";
+          peakInputCached.value = savedPrice.schedule?.peak.inputCached ?? "";
+          peakInputCachedWrite.value = savedPrice.schedule?.peak.inputCachedWrite ?? "";
+          peakOutput.value = savedPrice.schedule?.peak.output ?? "";
           sourceUrl.value = savedPrice.sourceUrl ?? "";
           priceReady.value = true;
         }
@@ -180,7 +218,12 @@ export function useBilling(
         unitTokens.value = String(price.unitTokens);
         inputUncached.value = price.inputUncached;
         inputCached.value = price.inputCached;
+        inputCachedWrite.value = price.inputCachedWrite ?? "";
         output.value = price.output;
+        peakInputUncached.value = price.schedule?.peak.inputUncached ?? "";
+        peakInputCached.value = price.schedule?.peak.inputCached ?? "";
+        peakInputCachedWrite.value = price.schedule?.peak.inputCachedWrite ?? "";
+        peakOutput.value = price.schedule?.peak.output ?? "";
         sourceUrl.value = price.sourceUrl ?? "";
       } catch (failure) {
         if (isCurrent()) {
@@ -217,7 +260,7 @@ export function useBilling(
   }
 
   async function savePrice(): Promise<void> {
-    if (!runId.value || !profileId.value || busy.value) return;
+    if (!runId.value || !profileId.value || busy.value || !scheduledPriceComplete.value) return;
     const activeRun = runId.value;
     const activeProfile = profileId.value;
     const provider = providerId.value;
@@ -239,6 +282,7 @@ export function useBilling(
     busy.value = true;
     error.value = undefined;
     const checkedAt = new Date().toISOString();
+    const hasGoPeakPrice = requiresScheduledPrice.value;
     try {
       await registerPrice({
         versionId: crypto.randomUUID(),
@@ -249,7 +293,21 @@ export function useBilling(
         unitTokens: Number(unitTokens.value),
         inputUncached: inputUncached.value,
         inputCached: inputCached.value,
+        inputCachedWrite: inputCachedWrite.value || null,
         output: output.value,
+        schedule: hasGoPeakPrice
+          ? {
+              version: isDeepseekApiSchedule.value
+                ? "deepseek-api-utc-weekday-holiday-2026-v1"
+                : "opencode-go-deepseek-utc-weekday-v1",
+              peak: {
+                inputUncached: peakInputUncached.value,
+                inputCached: peakInputCached.value,
+                inputCachedWrite: peakInputCachedWrite.value,
+                output: peakOutput.value,
+              },
+            }
+          : null,
         usageMappingVersion: "provider-usage-v1",
         sourceKind: "user-entered",
         ...(sourceUrl.value ? { sourceUrl: sourceUrl.value } : {}),
@@ -314,7 +372,8 @@ export function useBilling(
 
   async function loadMonthly(): Promise<void> {
     try {
-      monthly.value = await fetchCurrentMonth();
+      const current = await fetchCurrentMonth();
+      monthly.value = current;
     } catch (failure) {
       if (!disposed) error.value = normalizeError(failure);
     }
@@ -344,7 +403,15 @@ export function useBilling(
     unitTokens,
     inputUncached,
     inputCached,
+    inputCachedWrite,
     output,
+    requiresScheduledPrice,
+    isDeepseekApiSchedule,
+    peakInputUncached,
+    peakInputCached,
+    peakInputCachedWrite,
+    peakOutput,
+    scheduledPriceComplete,
     sourceUrl,
     priceReady,
     busy,

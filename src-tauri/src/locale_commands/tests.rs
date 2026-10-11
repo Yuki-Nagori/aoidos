@@ -4,6 +4,8 @@ use super::*;
 fn native_titles_are_loaded_from_the_shared_locale_resources() {
     assert_eq!(native_message(Locale::ZhHans, "windowTitle"), "Aoidos");
     assert_eq!(native_message(Locale::En, "windowTitle"), "Aoidos");
+    assert_eq!(native_message(Locale::ZhHans, "menuPaste"), "粘贴");
+    assert_eq!(native_message(Locale::En, "menuPaste"), "Paste");
     assert_eq!(native_message(Locale::ZhHans, "credentialSave"), "保存");
     assert_eq!(native_message(Locale::En, "credentialSave"), "Save");
 }
@@ -226,9 +228,9 @@ async fn locale_commands_reject_absent_services() {
 
 #[test]
 fn every_native_surface_is_required_for_applied_status() {
-    assert_eq!(native_status([true; 7]), NativeStatus::Applied);
-    for index in 0..7 {
-        let mut updated = [true; 7];
+    assert_eq!(native_status([true; 10]), NativeStatus::Applied);
+    for index in 0..10 {
+        let mut updated = [true; 10];
         updated[index] = false;
         assert_eq!(native_status(updated), NativeStatus::Pending);
     }
