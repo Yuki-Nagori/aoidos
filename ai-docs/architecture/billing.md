@@ -88,7 +88,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。`budget_backfill_price` 与 `budget_get_balance` 尚未注册；没有来源账单 / 历史请求导入或余额适配器时，不允许界面暗示这两项可用。
 
-错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），存储沿用 store.*。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
+错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），计费命令的数据库存储失败映射为 `store.database`（由命令层构造，不是 `StoreError` 的通用映射）。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
 
 ## 可选供应商余额
 

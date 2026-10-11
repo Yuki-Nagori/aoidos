@@ -42,7 +42,7 @@ src-tauri（装配、命令、窗口事件适配）
   │     ├─→ aoidos-locale（语言偏好与系统语言解析）
   │     │     └─→ aoidos-store
   │     ├─→ aoidos-script（纯剧本原文解析与格式校验，无业务反向依赖）
-  │     ├─→ aoidos-json（共用编解码与静态错误类别）
+  │     └─→ aoidos-json（共用编解码与静态错误类别）
   ├─→ aoidos-billing（DTO / 命令转换复用的计费类型）
   ├─→ aoidos-llm（配置 / 凭据的薄命令适配）
   ├─→ aoidos-store（实例锁与存储装配）
