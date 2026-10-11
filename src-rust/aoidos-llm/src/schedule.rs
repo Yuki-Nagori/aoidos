@@ -738,6 +738,7 @@ mod tests {
         GenerationRequest {
             provider_request: ProviderRequest {
                 model: "deepseek-v4-pro".into(),
+                session_id: None,
                 input: crate::provider::ProviderInput::Completion(
                     crate::provider::CompletionInput { prompt: "P".into() },
                 ),

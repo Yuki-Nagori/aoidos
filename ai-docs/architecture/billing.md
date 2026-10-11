@@ -1,6 +1,6 @@
 # LLM 计价与费用预算
 
-更新日期：2026-10-11；官方资料核验日期：2026-10-10。[027](../task/027-llm-cost-control-design.md) 定义协议，[035](../task/035-llm-cost-control-impl.md) 正在接入运行时。现有实现包括 `aoidos-billing` 精确金额与单价、engine SQLite 账本、LLM 物理尝试预算端口、Tauri 基础命令及双语费用面板。历史补价和供应商余额尚未实现，也未做真实账单对账。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文区分稳定协议与当前实现范围。
+更新日期：2026-10-11；官方资料核验日期：2026-10-11。[027](../task/027-llm-cost-control-design.md) 定义协议，[035](../task/035-llm-cost-control-impl.md) 正在接入运行时。现有实现包括 `aoidos-billing` 精确金额与单价、engine SQLite 账本、LLM 物理尝试预算端口、Tauri 基础命令及双语费用面板。OpenCode Go 的定时价格、cache-write 计价和独立月订阅成本仍待 035 实现；当前 Anthropic cache-creation usage 已单独保留，非零写入量不按普通输入价格结算。历史补价和供应商余额尚未实现，也未做真实账单对账。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文区分稳定协议与当前实现范围。
 
 ## 控制单位与默认额度
 
@@ -14,11 +14,13 @@
 
 计价主体由实际请求经过的服务商接入方式、API 部署身份、精确模型 ID 和路由策略共同确定；兼容协议不等于同一计价主体。同一模型直连服务商与经 OpenRouter 调用是不同价格身份，不能互相套价。凭据只保留 019 的引用，不混入价格缓存。配置持久化在 SQLite，内存缓存以 providerId / modelId / configRevision 为键，登记或修改成功后替换缓存，重启从已校验配置恢复；不涉及登录或云同步。
 
-不可变 PriceVersion 保存 versionId、providerId / modelId / routePolicy、priceCurrency、unitTokens、inputUncached / inputCached / output 单价、usageMappingVersion、sourceKind / sourceUrl / checkedAt、effectiveFrom / validUntil、时段 / 日历版本与配置摘要。`priceCurrency` 表示此计价身份实际采用的价格表币种，不由界面语言推导；服务商账户存在多币种或官方同时发布多币种价格时，只有账户实际计费币种可验证，或用户明确登记后才可启用。单价为十进制字符串，非负、最多 9 位小数；unitTokens 为正安全整数。缓存不区分时显式指定同价，缺字段不能填零。每次请求保存冻结版本，不只保存可变配置引用。
+不可变 PriceVersion 保存 versionId、providerId / modelId / routePolicy、priceCurrency、unitTokens、inputUncached / inputCachedRead / inputCachedWrite / output 单价、usageMappingVersion、sourceKind / sourceUrl / checkedAt、effectiveFrom / validUntil、时段 / 日历版本与配置摘要。`priceCurrency` 表示此计价身份实际采用的价格表币种，不由界面语言推导；服务商账户存在多币种或官方同时发布多币种价格时，只有账户实际计费币种可验证，或用户明确登记后才可启用。单价为十进制字符串，非负、最多 9 位小数；unitTokens 为正安全整数。缓存写入 / 读取价格相同须显式指定，缺字段不能填零。每次请求保存冻结版本，不只保存可变配置引用。
 
 checkedAt、effectiveFrom、validUntil 和 dispatchAt 必须是可解析的 RFC 3339 时间戳；有效期按实际 UTC 时刻比较，采用 `[effectiveFrom, validUntil)` 半开区间，不能按原始字符串或界面时区比较。价格查询先按服务商、模型、路由和币种筛选，再由 Rust 精确比较完整时刻，避免 SQLite 日期函数在亚毫秒边界选错版本。每组计价身份最多保留 1,024 个不可变价格版本；新版本超限时拒绝登记，已存在版本的幂等重试仍成功。账本按绝对时间归属月报，月界的小数秒仍属于其实际月份。
 
-价格来源按实际接入路径选择：服务商直连使用该服务商核验过的官方价格；OpenRouter 接入使用 OpenRouter 对应模型 / 路由策略的价格记录。OpenRouter 价格不作为全项目模型基准，也不能替代同模型的直连价格。OpenRouter [按上游价格路由](https://openrouter.ai/blog/insights/model-routing/)，模型目录报价只适用于其所声明的接入身份；允许的上游价格不同且本次实际上游无法确定时，预留必须覆盖允许路由的保守上界，否则固定路由或要求用户登记明确费率，不能用单一低价放行。OpenRouter 的[计费说明](https://openrouter.ai/support)表明其额度以 USD 计、推理价格透传上游。价格与路由身份无法可靠匹配时，阻止收费请求。
+价格来源按实际接入路径选择：服务商直连使用该服务商核验过的官方价格；OpenRouter 接入使用 OpenRouter 对应模型 / 路由策略的价格记录；OpenCode Zen / Go 使用各自官方模型目录中的价目。OpenRouter 与 OpenCode Zen / Go 是不同计价身份，不能互相套价，也不能替代同模型的直连价格。OpenRouter [按上游价格路由](https://openrouter.ai/blog/insights/model-routing/)，模型目录报价只适用于其所声明的接入身份；允许的上游价格不同且本次实际上游无法确定时，预留必须覆盖允许路由的保守上界，否则固定路由或要求用户登记明确费率，不能用单一低价放行。OpenRouter 的[计费说明](https://openrouter.ai/support)表明其额度以 USD 计、推理价格透传上游。价格与路由身份无法可靠匹配时，阻止收费请求。
+
+OpenCode Go / Go Plus 是固定月订阅（官方文档当前分别为 USD 10 / 40）；模型表的 USD/token 价格用于估算每模型的订阅额度使用，不是对用户额外扣除的按量账单。月订阅作为独立固定成本显示，不并入某个模型的 token 费用；如果开启 Go 的 Zen balance fallback，只有服务商提供可验证 usage / 路由证据时才单列为 Zen 费用，不能仅从 Go usage 猜出实际余额扣款。模型档位与可用额度会变化，计划费用 / 模型额度都需有来源及核验日期。[OpenCode Go pricing and fallback](https://opencode.ai/v2/docs/console/go)。
 
 官方价格有多种币种报价时，价格币种必须和用户实际账户的扣款口径对应。DeepSeek 官方中英文价格页分别以 USD 与 CNY 发布报价，[余额 API](https://api-docs.deepseek.com/api/get-user-balance/)也可能返回 CNY / USD 余额；因此不能用界面语言选择其价格表。若接口无法证明具体账户的计价口径，首次登记时须由用户确认，保存来源和核验日期；确认的是费用估算口径，不保证与实际账单完全相同。OpenRouter 采用 USD 额度，价格透传上游；如果未来读取其 generation 费用记录，应作为 OpenRouter 接入的实际费用证据单独建模，不混同于目录价或服务商直连账单，本期仍按冻结价格版本和 usage 估算，不额外查询账单接口。
 
@@ -28,17 +30,17 @@ checkedAt、effectiveFrom、validUntil 和 dispatchAt 必须是可解析的 RFC 
 
 ## 用量归一化与时段
 
-保存原始、受界限约束的 usage 与归一化字段：inputTotal、inputCached、inputUncached、outputTotal、reasoningIncluded、totalTokens；未知项省略。inputUncached = inputTotal - inputCached，缓存明确不支持时 inputCached = 0。reasoning 作为输出子集展示，不再重复计费；供应商若分开返回推理 Token，适配器先按其冻结映射并入 outputTotal。缺失计价必需项或负值 / 不一致 / 溢出不得虚构 usage，进入 unconfirmed。总 Token = inputTotal + outputTotal，不重复加缓存或 reasoning。
+保存原始、受界限约束的 usage 与归一化字段：inputTotal、inputCachedRead、inputCachedWrite、inputUncached、outputTotal、reasoningIncluded、totalTokens；未知项省略。inputUncached = inputTotal - inputCachedRead - inputCachedWrite，缓存明确不支持时两项为 0。reasoning 作为输出子集展示，不再重复计费；供应商若分开返回推理 Token，适配器先按其冻结映射并入 outputTotal。缺失计价必需项或负值 / 不一致 / 溢出不得虚构 usage，进入 unconfirmed。总 Token = inputTotal + outputTotal，不重复加缓存或 reasoning。
 
 PriceVersion 可附 IANA 时区、星期、半开时间窗、时段单价与版本化节假日表；跨午夜拆窗，重叠、空价和非法时区拒绝。优先级为显式日期覆盖 → 星期 / 时间窗 → 基准价。日历声明覆盖年份及调整工作日策略；未覆盖 / 无法确定采用可适用最高价并标 estimated，不默认为假日优惠。内置日历随版本更新，手动覆盖明确来源；不自动推断节假日。
 
-2026-10-10 核验的 [DeepSeek USD 价格](https://api-docs.deepseek.com/quick_start/pricing/)与[人民币价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)均有峰谷价，周一至周五 UTC 01:00–04:00 / 06:00–10:00（北京时间 09:00–12:00 / 14:00–18:00），中国公众假日除外，谷价为峰价一半。该实例只说明价格来源和时段结构，不作为永久价格常量。当前页面未承诺长请求的时段归属；本地按 dispatchAt 选价是估算假设，详情显示该依据。预留按该版本所有可适用时段最高价，不因为预计落在谷时就降低预留。
+2026-10-10 核验的 [DeepSeek USD 价格](https://api-docs.deepseek.com/quick_start/pricing/)与[人民币价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)均有峰谷价，周一至周五 UTC 01:00–04:00 / 06:00–10:00（北京时间 09:00–12:00 / 14:00–18:00），中国公众假日除外，谷价为峰价一半。OpenCode Go 也对 DeepSeek V4.1 Flash / V4 Pro / V4 Flash / Vision Exp 列出独立峰谷费率；其官方时段为周一至周五 UTC 01:00–04:00 / 06:00–10:00，周末全天非高峰。两个服务商日历不得共用：Go 文档未说明中国公众假日例外。每笔按 `dispatchAt` 选择单价并冻结版本；预留仍按当前请求可能适用的价格上界，账本最终按发送时段结算。价格时段与 Go 模型费率变动在 035 实现并测试前，不宣称 OpenCode Go 费用估算精确。
 
 ## 金额、原币与单局分币种额度
 
 内部 NanoMoney 是 i64 的币种 × 10^-9；单项、同币种聚合、乘法全部检查溢出，拒绝不能表示的配置或预留。不同 currency 的 Money 禁止比较、相加或汇总。Rust 用精确整数分子和 checked i128 中间计算，禁止 f64；IPC 金额为十进制字符串 + 明确 currency，前端不计算额度。费用按有理数合计，不逐 Token 舍入累积误差。预留向上到 nano，结算 HALF_UP 到 nano，记录舍入政策版本。预算与费用界面统一显示到 0.01；显示时以整数分精确舍入，不回写账本或用于预算比较。当前未实现供应商余额界面；计价单价可在诊断明细显示更高精度。
 
-请求原币费用估算 = (inputUncached × inputUncachedPrice + inputCached × inputCachedPrice + outputTotal × outputPrice) / unitTokens。费用金额、币种和 PriceVersion 一经结算永久按服务商原币保存。每局 CNY / USD 上限独立配置与校验；请求只占用其原币对应的额度，没有汇率换算、跨币总额或额度互借。原币额度与原币费用估算都来自服务商计价版本，不代表供应商实际账单的保证。服务商支持多种实际扣款币种时，模型登记选择与账户扣款口径一致的 PriceVersion；DeepSeek 的币种由实际账户选择，OpenRouter 使用 USD。界面语言只控制数字 / 货币格式，不决定模型计价币种或预算额度。
+请求原币费用估算 = (inputUncached × inputUncachedPrice + inputCachedRead × inputCachedReadPrice + inputCachedWrite × inputCachedWritePrice + outputTotal × outputPrice) / unitTokens。费用金额、币种和 PriceVersion 一经结算永久按服务商原币保存。每局 CNY / USD 上限独立配置与校验；请求只占用其原币对应的额度，没有汇率换算、跨币总额或额度互借。原币额度与原币费用估算都来自服务商计价版本，不代表供应商实际账单的保证。服务商支持多种实际扣款币种时，模型登记选择与账户扣款口径一致的 PriceVersion；DeepSeek 的币种由实际账户选择，OpenRouter / OpenCode 使用 USD。界面语言只控制数字 / 货币格式，不决定模型计价币种或预算额度。
 
 ## 持久账本与发送门禁
 

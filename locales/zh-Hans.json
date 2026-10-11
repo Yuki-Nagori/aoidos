@@ -41,6 +41,7 @@
     "disableSkin": "关闭剧本皮肤",
     "skinWarnings": "剧本皮肤有 {count} 条兼容性提示。",
     "model": "模型",
+    "provider": "供应商",
     "setApiKey": "设置 API 密钥（系统窗口）",
     "keySet": "密钥已设置",
     "keyMissing": "密钥未设置",

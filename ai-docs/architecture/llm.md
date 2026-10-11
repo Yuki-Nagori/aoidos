@@ -1,6 +1,6 @@
 # LLM 接入与护栏
 
-更新日期：2026-10-11；能力资料核验日期：2026-10-05；模型目录核验日期：2026-10-09。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/aoidos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；023 已交付阶段机和产品提交入口，024 已完成最小正式剧本 / 配置入口，PR #88 已合并且 main CI 三平台通过。035 已接入价格、账本、预算端口、费用 IPC 与基础 UI，仍在完成历史补价、供应商余额及三平台人工验收。真实模型质量与费用标定仍待后续工作；实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
+更新日期：2026-10-11；能力资料核验日期：2026-10-05；模型目录核验日期：2026-10-11。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/aoidos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；023 已交付阶段机和产品提交入口，024 已完成最小正式剧本 / 配置入口，PR #88 已合并且 main CI 三平台通过。035 已接入价格、账本、预算端口、费用 IPC 与基础 UI，仍在完成历史补价、供应商余额及三平台人工验收；042 已完成 OpenCode 模型目录与多协议 Provider 接入。真实模型质量与费用标定仍待后续工作；实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
 
 ## 架构与职责
 
@@ -68,6 +68,10 @@ v1 不把 async-openai / rig / genai 作为主路径，原因是本项目需要�
 ## 供应商能力与初始 profile
 
 首版提供 DeepSeek V4.1 Flash（`deepseek-flash`，默认）与 V4 Pro（`deepseek-v4-pro`）两项选择，不手动填写模型名；2026-10-09 核验 [官方模型列表](https://api-docs.deepseek.com/quick_start/pricing/)。叙事质量仍按黄金剧本的人设稳定性、玩家前缀泄漏、延迟及用量标定。其他 OpenAI 兼容端点只能按已声明能力使用，不自动假定支持 completion / prefix。
+
+OpenCode 以独立 provider 身份接入 Zen（按请求计费）和 Go（订阅额度、可选余额回退）；两者凭据、价格、预算与报表身份分开。模型选择是本地版本化目录，不将 `/models` 返回的裸 ID 自动开放：目录 ID 必须先核验官方 endpoint 表、协议形态和费用属性。2026-10-11 核验的 Zen 文档列出 86 个叙事文本模型：Responses、Anthropic Messages、OpenAI Chat Completions 及 Gemini `streamGenerateContent`；Go 文档列出 32 个模型，使用 Chat Completions、Responses、Anthropic Messages。结构化问答型 Jev 不符合当前自由文本 Provider 契约，因此不列入可玩模型。目录来源：[Zen endpoints / pricing](https://docs.opencode.ai/docs/zen/)、[Go endpoints / pricing](https://opencode.ai/v2/docs/console/go)、[Zen model IDs](https://opencode.ai/zen/v1/models)、[Go model IDs](https://opencode.ai/zen/go/v1/models)。
+
+OpenCode Go 请求携带 Aoidos 专用 User-Agent，并使用当前对局的稳定 session ID 写入 `x-opencode-session`，让服务端能按会话优化路由和缓存。Go 模型默认选择 DeepSeek V4.1 Flash。DeepSeek、OpenCode Zen / Go 的模型上下文窗口与最大输出集中登记在共享目录 `aoidos-llm/src/providers/models/mod.rs`；OpenCode Zen / Go 按 provider 分别登记，同名模型的限额可能不同。OpenCode 上游元数据仍可能与实际路由后端的运行时限额不同，目录值不视为端到端验证。Anthropic cache-read 与 cache-creation 在 Provider usage 中分开保留；035 完成独立写入计价前，非零 cache-creation 请求不作精确结算。Gemini 把 candidates 与 thoughts token 一并计入输出，thoughts 保留为输出子集。游戏投影另外受 32K 输入硬上限约束，所以 1M 模型窗口不会令单次游戏请求自动扩到 1M。Responses 不声明服务端 stop，Messages / Gemini 只声明各自协议可表达的参数。OpenCode Go 的 DeepSeek V4 系列官方区分 UTC 工作日峰 / 非峰费率；035 尚待按请求发送时刻选择价格并冻结账本版本，当前未接入峰谷结算。Go 月订阅固定成本也待 035 独立实现；token 价格只作为额度使用估值，Zen fallback 可能产生独立 Zen 按量费用。
 
 官方资料确认了 Beta FIM 与 Chat Prefix 两条路径，FIM 为非 thinking；Chat API 默认启用 thinking，因此叙事 adapter 要显式关闭，而不能依赖服务端默认值。[模型能力](https://api-docs.deepseek.com/quick_start/pricing/)、[FIM](https://api-docs.deepseek.com/guides/fim_completion/)、[Chat Prefix](https://api-docs.deepseek.com/guides/chat_prefix_completion/)、[thinking](https://api-docs.deepseek.com/guides/thinking_mode/)
 
@@ -290,7 +294,7 @@ TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地
 
 ## 实现承接
 
-实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `aoidos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `aoidos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 已交付阶段机与产品提交入口，024 已接真实 Provider 与内置原文，PR #88 已合并且 main CI 三平台通过。真实模型质量与用量标定仍由后续工作承接。
+实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `aoidos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy` / `platform/`）及对应命令；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `aoidos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 已交付阶段机与产品提交入口，024 已接真实 Provider 与内置原文，PR #88 已合并且 main CI 三平台通过；042 已接入 OpenCode Zen / Go 模型目录与多协议 Provider，动态上游路由能力不作实机保证。真实模型质量与用量标定仍由后续工作承接。
 
 | 任务                                                          | 承接边界                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -307,7 +311,7 @@ TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地
 
 ### 模型窗口与估算诊断
 
-`ProviderCapabilities.context_limit` 是已核验的模型窗口，未知模型返回 None，投影在本地拒绝。当前 DeepSeek 已登记模型按官方 1M context 文档设置保守的 1,000,000 Token；输出上限仍按各形态能力校验。[DeepSeek 官方能力与价格](https://api-docs.deepseek.com/quick_start/pricing/)。切换模型须重新冻结预算，不用前一个模型窗口。
+`ProviderCapabilities.context_limit` 是当前 Provider / 模型公布的上下文窗口总量，未知值返回 None 并拒绝投影；最大输出独立按端点能力限制。DeepSeek 已登记型号、OpenCode Zen 与 Go 模型均逐型号登记上下文和最大输出，不跨供应商推断同名型号相同。OpenCode 的 catalog 取自 [Models.dev provider metadata](https://models.dev/api.json)；Qwen3.7 Max / Plus 补用 [Alibaba Cloud Model Studio 型号页](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen3-7-max)。这些是集成目录公布值，OpenCode 动态路由的实际后端仍可能有更低限额。切换模型须重新冻结预算，不沿用前一个模型窗口。DeepSeek 直连型号按[官方能力与价格](https://api-docs.deepseek.com/quick_start/pricing/)登记。
 
 PreparedGeneration 的估算诊断包装真实 BudgetPort，每次物理请求记录冻结估算与真实 usage，重装包装不会重复统计。缺失 usage 不补零，自动暂停与恢复规则见[记录引擎](record-engine.md)。当前调试 IPC 使用 local-fixture provider 标识；024 正式入口按实际 providerId 统计供应商诊断，费用账本由 035 注入，不把夹具用量当真实费用。
 

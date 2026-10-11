@@ -83,6 +83,11 @@ impl LedgerBudgetPort {
         let updated_at = now();
         let settlement = match outcome {
             AttemptOutcome::Settled { usage: Some(usage) } => {
+                // 当前价格结构没有独立缓存写入档位；非零写入用量不得按普通未缓存输入结算。
+                if usage.cache_creation_tokens.is_some_and(|tokens| tokens > 0) {
+                    self.mark_unknown(attempt, &updated_at);
+                    return;
+                }
                 let Some(cached_input) = usage.cached_prompt_tokens else {
                     self.mark_unknown(attempt, &updated_at);
                     return;
@@ -329,6 +334,7 @@ mod tests {
                     prompt_tokens: 50,
                     completion_tokens: 10,
                     cached_prompt_tokens: None,
+                    cache_creation_tokens: None,
                     reasoning_tokens: None,
                 }),
             },
@@ -354,6 +360,7 @@ mod tests {
                     prompt_tokens: 50,
                     completion_tokens: 10,
                     cached_prompt_tokens: Some(10),
+                    cache_creation_tokens: Some(0),
                     reasoning_tokens: Some(2),
                 }),
             },
@@ -370,6 +377,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(settled, "settled");
+        port.reserve(&attempt("model", "request-cache-write"))
+            .unwrap();
+        port.settle(
+            &attempt("model", "request-cache-write"),
+            &AttemptOutcome::Settled {
+                usage: Some(Usage {
+                    prompt_tokens: 50,
+                    completion_tokens: 10,
+                    cached_prompt_tokens: Some(10),
+                    cache_creation_tokens: Some(5),
+                    reasoning_tokens: Some(2),
+                }),
+            },
+        );
+        let cache_write_state = storage.with_database(|connection| {
+            connection.query_row("SELECT state FROM billing_physical_requests WHERE request_id='request-cache-write'", [], |row| row.get::<_, String>(0))
+                .map_err(query_fault)
+        }).unwrap();
+        assert_eq!(cache_write_state, "unconfirmed");
         port.reserve(&attempt("model", "request-overflow")).unwrap();
         port.settle(
             &attempt("model", "request-overflow"),
@@ -378,6 +404,7 @@ mod tests {
                     prompt_tokens: u64::MAX,
                     completion_tokens: 1,
                     cached_prompt_tokens: Some(0),
+                    cache_creation_tokens: Some(0),
                     reasoning_tokens: None,
                 }),
             },
@@ -510,6 +537,7 @@ mod tests {
                     prompt_tokens: 1,
                     completion_tokens: 1,
                     cached_prompt_tokens: Some(2),
+                    cache_creation_tokens: Some(0),
                     reasoning_tokens: None,
                 },
             ),
@@ -519,6 +547,7 @@ mod tests {
                     prompt_tokens: u64::MAX - 1,
                     completion_tokens: 1,
                     cached_prompt_tokens: Some(0),
+                    cache_creation_tokens: Some(0),
                     reasoning_tokens: None,
                 },
             ),

@@ -92,6 +92,7 @@ impl PreparedGeneration {
             GenerationRequest {
                 provider_request: aoidos_llm::provider::ProviderRequest {
                     model: profile.model,
+                    session_id: None,
                     input,
                     sampling: profile.sampling,
                     stops: Vec::new(),

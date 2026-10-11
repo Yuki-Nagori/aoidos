@@ -118,6 +118,7 @@ pub(crate) fn generation(
     let request = GenerationRequest {
         provider_request: ProviderRequest {
             model: "m".into(),
+            session_id: None,
             input: ProviderInput::Completion(CompletionInput { prompt: "P".into() }),
             sampling: Sampling {
                 temperature: 1.0,

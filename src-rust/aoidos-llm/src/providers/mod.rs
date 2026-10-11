@@ -5,13 +5,21 @@
 //! 本层只提供「按身份选择 adapter」的依据。
 
 mod deepseek;
+mod models;
+mod opencode;
 
-pub use deepseek::DeepSeek;
+pub use deepseek::{
+    BalanceAccount, BalanceSnapshot, BalanceStatus, DeepSeek,
+    query_balance as query_deepseek_balance,
+};
+pub use opencode::{OpenCode, OpenCodeEdition};
 
 /// 供应商身份；与持久 profile 的 providerId 同源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderId {
     DeepSeek,
+    OpenCodeZen,
+    OpenCodeGo,
 }
 
 impl ProviderId {
@@ -19,6 +27,8 @@ impl ProviderId {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::DeepSeek => "deepseek",
+            Self::OpenCodeZen => "opencode-zen",
+            Self::OpenCodeGo => "opencode-go",
         }
     }
 
@@ -27,6 +37,8 @@ impl ProviderId {
     pub fn default_base(&self) -> &'static str {
         match self {
             Self::DeepSeek => "https://api.deepseek.com",
+            Self::OpenCodeZen => "https://opencode.ai/zen/v1",
+            Self::OpenCodeGo => "https://opencode.ai/zen/go/v1",
         }
     }
 
@@ -35,6 +47,8 @@ impl ProviderId {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "deepseek" => Some(Self::DeepSeek),
+            "opencode-zen" => Some(Self::OpenCodeZen),
+            "opencode-go" => Some(Self::OpenCodeGo),
             _ => None,
         }
     }
@@ -74,6 +88,16 @@ pub fn build_provider(
             key,
             client,
         ))),
+        ProviderId::OpenCodeZen => Ok(std::sync::Arc::new(OpenCode::new(
+            OpenCodeEdition::Zen,
+            key,
+            client,
+        ))),
+        ProviderId::OpenCodeGo => Ok(std::sync::Arc::new(OpenCode::new(
+            OpenCodeEdition::Go,
+            key,
+            client,
+        ))),
     }
 }
 fn invalid_profile(_: crate::config::ProfileError) -> ProviderBuildError {
@@ -89,14 +113,29 @@ mod tests {
 
     #[test]
     fn round_trips_identity() {
-        let deepseek = ProviderId::DeepSeek;
-        assert_eq!(ProviderId::parse(deepseek.as_str()), Some(deepseek));
+        for provider in [
+            ProviderId::DeepSeek,
+            ProviderId::OpenCodeZen,
+            ProviderId::OpenCodeGo,
+        ] {
+            assert_eq!(ProviderId::parse(provider.as_str()), Some(provider));
+        }
         assert_eq!(ProviderId::parse("openai"), None);
     }
 
     #[test]
     fn default_bases_are_https() {
         assert!(ProviderId::DeepSeek.default_base().starts_with("https://"));
+        assert!(
+            ProviderId::OpenCodeZen
+                .default_base()
+                .starts_with("https://")
+        );
+        assert!(
+            ProviderId::OpenCodeGo
+                .default_base()
+                .starts_with("https://")
+        );
     }
     #[test]
     fn frozen_factory_preserves_profile_validation_and_sanitizes_transport_failure() {
@@ -144,5 +183,88 @@ mod tests {
             .unwrap(),
             ProviderBuildError::Transport
         );
+    }
+    #[test]
+    fn frozen_factory_builds_all_known_providers_and_rejects_invalid_profiles() {
+        crate::install_ring_provider();
+        for id in [
+            ProviderId::DeepSeek,
+            ProviderId::OpenCodeZen,
+            ProviderId::OpenCodeGo,
+        ] {
+            let profile = crate::config::LlmProfile {
+                profile_id: "fixture".into(),
+                provider_id: id.as_str().into(),
+                model: if id == ProviderId::DeepSeek {
+                    "deepseek-v4-pro"
+                } else {
+                    "gpt-6-luna"
+                }
+                .into(),
+                mode: crate::config::ProfileMode::Chat,
+                thinking: false,
+                sampling: crate::sampling::Sampling {
+                    temperature: 1.0,
+                    max_tokens: 64,
+                },
+                proxy: crate::config::ProxyConfig::None,
+            };
+            let model = profile.model.clone();
+            let snapshot = crate::proxy::SystemProxySnapshot::default();
+            let mut invalid = profile.clone();
+            invalid.thinking = true;
+            assert_eq!(
+                build_provider(
+                    crate::config::FrozenProfile {
+                        profile: invalid,
+                        credential: None
+                    },
+                    &snapshot,
+                    None
+                )
+                .err(),
+                Some(ProviderBuildError::InvalidProfile)
+            );
+            let mut unknown = profile.clone();
+            unknown.provider_id = "unknown".into();
+            assert_eq!(
+                build_provider(
+                    crate::config::FrozenProfile {
+                        profile: unknown,
+                        credential: None
+                    },
+                    &snapshot,
+                    None
+                )
+                .err(),
+                Some(ProviderBuildError::UnknownProvider)
+            );
+            assert_eq!(
+                build_provider(
+                    crate::config::FrozenProfile {
+                        profile: profile.clone(),
+                        credential: None
+                    },
+                    &snapshot,
+                    None
+                )
+                .err(),
+                Some(ProviderBuildError::MissingKey)
+            );
+            let provider = build_provider(
+                crate::config::FrozenProfile {
+                    profile,
+                    credential: Some(secrecy::SecretString::from("fixture".to_owned())),
+                },
+                &crate::proxy::SystemProxySnapshot::default(),
+                None,
+            )
+            .unwrap();
+            assert!(
+                provider
+                    .capabilities(&model, crate::provider::RequestMode::Chat)
+                    .chat
+            );
+        }
     }
 }
