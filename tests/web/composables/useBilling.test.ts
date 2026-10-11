@@ -7,17 +7,22 @@ import {
   getRunPeriod,
   getSelectedPrice,
   getSuggestedLimits,
+  getProviderBalance,
   listBillingRequests,
+  previewBillingBackfill,
+  commitBillingBackfill,
   retryBillingSettlement,
   registerPrice,
   selectPrice,
   setBudgetSettings,
   type BillingRequestPage,
+  type BillingBackfillPreview,
   type BudgetSettings,
   type MonthlyPeriod,
   type PriceVersion,
   type RunPeriod,
   type SuggestedLimits,
+  type ProviderBalanceSnapshot,
 } from "../../../src-web/api/billing";
 import { useBilling } from "../../../src-web/composables/useBilling";
 
@@ -28,7 +33,10 @@ vi.mock("../../../src-web/api/billing", () => ({
   getRunPeriod: vi.fn(),
   getSelectedPrice: vi.fn(),
   getSuggestedLimits: vi.fn(),
+  getProviderBalance: vi.fn(),
   listBillingRequests: vi.fn(),
+  previewBillingBackfill: vi.fn(),
+  commitBillingBackfill: vi.fn(),
   retryBillingSettlement: vi.fn(),
   registerPrice: vi.fn(),
   selectPrice: vi.fn(),
@@ -85,14 +93,27 @@ function suggestions(): SuggestedLimits {
   return { cny: "20", usd: "5", referenceInputTokens: 1000, referenceOutputTokens: 500 };
 }
 
+function balanceSnapshot(): ProviderBalanceSnapshot {
+  return {
+    providerId: "deepseek",
+    queriedAt: "2026-10-11T00:00:00Z",
+    stale: false,
+    status: "available",
+    accounts: [{ currency: "CNY", total: "10", granted: "0", toppedUp: "10" }],
+  };
+}
+
 function createState(initialRun: string | null = "run-1", initialProvider = "provider-1") {
   const runId = ref<string | undefined>(initialRun ?? undefined);
   const profileId = ref("profile-1");
   const providerId = ref(initialProvider);
   const modelId = ref("model-1");
+  const credentialRevision = ref(0);
   const scope = effectScope();
-  const state = scope.run(() => useBilling(runId, profileId, providerId, modelId))!;
-  return { state, runId, profileId, providerId, modelId, scope };
+  const state = scope.run(() =>
+    useBilling(runId, profileId, providerId, modelId, credentialRevision),
+  )!;
+  return { state, runId, profileId, providerId, modelId, credentialRevision, scope };
 }
 
 async function waitForLoaded(state: ReturnType<typeof createState>["state"]) {
@@ -107,7 +128,10 @@ beforeEach(() => {
   vi.mocked(getRunPeriod).mockImplementation(async (id) => runPeriod(id));
   vi.mocked(getSelectedPrice).mockResolvedValue(null);
   vi.mocked(getSuggestedLimits).mockResolvedValue(suggestions());
+  vi.mocked(getProviderBalance).mockResolvedValue(balanceSnapshot());
   vi.mocked(listBillingRequests).mockResolvedValue(requestPage());
+  vi.mocked(previewBillingBackfill).mockResolvedValue(null);
+  vi.mocked(commitBillingBackfill).mockResolvedValue();
   vi.mocked(retryBillingSettlement).mockResolvedValue();
   vi.mocked(registerPrice).mockResolvedValue(price());
   vi.mocked(selectPrice).mockResolvedValue(price());
@@ -121,6 +145,32 @@ afterEach(() => {
 });
 
 describe("useBilling initial loading", () => {
+  it("queries provider balance only for an explicitly selected DeepSeek profile", async () => {
+    const { state, scope, providerId } = createState("run-1", "opencode-zen");
+    await waitForLoaded(state);
+    await state.queryProviderBalance();
+    expect(getProviderBalance).not.toHaveBeenCalled();
+    providerId.value = "deepseek";
+    await nextTick();
+    await waitForLoaded(state);
+    await state.queryProviderBalance();
+    expect(getProviderBalance).toHaveBeenCalledOnce();
+    expect(state.providerBalance.value).toEqual(balanceSnapshot());
+    scope.stop();
+  });
+
+  it("ignores a balance response that arrives after the billing view is disposed", async () => {
+    const pending = deferred<ProviderBalanceSnapshot>();
+    vi.mocked(getProviderBalance).mockReturnValueOnce(pending.promise);
+    const { state, scope } = createState("run-1", "deepseek");
+    await waitForLoaded(state);
+    const querying = state.queryProviderBalance();
+    scope.stop();
+    pending.resolve(balanceSnapshot());
+    await querying;
+    expect(state.providerBalance.value).toBeUndefined();
+  });
+
   it("loads saved settings, selected exact-route price, periods and requests", async () => {
     const selected = price({
       currency: "USD",
@@ -1137,4 +1187,210 @@ describe("useBilling request pagination", () => {
     await loading;
     expect(state.error.value?.message).toBeUndefined();
   });
+});
+
+describe("useBilling historical backfill", () => {
+  const preview: BillingBackfillPreview = {
+    requestId: "legacy-1",
+    runId: "run-1",
+    providerId: "deepseek",
+    modelId: "deepseek-flash",
+    currency: "CNY",
+    priceVersionId: "original-price",
+    estimatedAmount: "0.012345",
+    ledgerRevision: 12,
+  };
+
+  it("commits the preview's frozen price revision and refreshes ledger views", async () => {
+    vi.mocked(previewBillingBackfill).mockResolvedValueOnce(preview);
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    await state.commitBackfill();
+    expect(commitBillingBackfill).not.toHaveBeenCalled();
+    await state.previewBackfill("legacy-1");
+    expect(previewBillingBackfill).toHaveBeenCalledWith("run-1", "legacy-1");
+    expect(state.backfillPreview.value).toEqual(preview);
+    expect(state.backfillingRequestId.value).toBeUndefined();
+    await state.commitBackfill();
+    expect(commitBillingBackfill).toHaveBeenCalledWith("run-1", "legacy-1", expect.any(String), 12);
+    expect(state.backfillPreview.value).toBeNull();
+    expect(state.backfillingRequestId.value).toBeUndefined();
+    expect(listBillingRequests).toHaveBeenCalledTimes(2);
+    expect(getRunPeriod).toHaveBeenCalledTimes(2);
+    scope.stop();
+  });
+
+  it("skips unavailable runs, busy forms and concurrent backfill operations", async () => {
+    const noRun = createState(null);
+    await noRun.state.previewBackfill("legacy-1");
+    noRun.state.backfillPreview.value = preview;
+    await noRun.state.commitBackfill();
+    expect(previewBillingBackfill).not.toHaveBeenCalled();
+    expect(commitBillingBackfill).not.toHaveBeenCalled();
+    noRun.scope.stop();
+    const pending = deferred<BillingBackfillPreview | null>();
+    vi.mocked(previewBillingBackfill).mockReturnValueOnce(pending.promise);
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    state.busy.value = true;
+    await state.previewBackfill("legacy-1");
+    expect(previewBillingBackfill).not.toHaveBeenCalled();
+    state.busy.value = false;
+    const loading = state.previewBackfill("legacy-1");
+    await state.previewBackfill("legacy-2");
+    expect(previewBillingBackfill).toHaveBeenCalledOnce();
+    pending.resolve(preview);
+    await loading;
+    const committing = deferred<void>();
+    vi.mocked(commitBillingBackfill).mockReturnValueOnce(committing.promise);
+    const saving = state.commitBackfill();
+    expect(state.backfillingRequestId.value).toBe("legacy-1");
+    await state.commitBackfill();
+    expect(commitBillingBackfill).toHaveBeenCalledOnce();
+    committing.resolve();
+    await saving;
+    scope.stop();
+  });
+
+  it("reports preview errors and refreshes diagnostics after a rejected stale commit", async () => {
+    vi.mocked(previewBillingBackfill)
+      .mockRejectedValueOnce(new Error("preview failed"))
+      .mockResolvedValueOnce(preview);
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    await state.previewBackfill("legacy-1");
+    expect(state.error.value?.message).toBe("preview failed");
+    expect(state.backfillingRequestId.value).toBeUndefined();
+    await state.previewBackfill("legacy-1");
+    expect(state.error.value).toBeUndefined();
+    vi.mocked(commitBillingBackfill).mockRejectedValueOnce({
+      code: "app.bad-request",
+      message: "ledger revision changed",
+    });
+    await state.commitBackfill();
+    expect(state.error.value).toEqual({
+      code: "app.bad-request",
+      message: "ledger revision changed",
+    });
+    expect(state.backfillPreview.value).toBeNull();
+    expect(state.backfillingRequestId.value).toBeUndefined();
+    expect(listBillingRequests).toHaveBeenCalledTimes(2);
+    expect(getRunPeriod).toHaveBeenCalledOnce();
+    scope.stop();
+  });
+
+  it.each(["switch", "dispose"] as const)(
+    "discards successful and failed preview or commit replies after %s",
+    async (change) => {
+      for (const operation of ["preview", "commit"] as const) {
+        for (const fails of [false, true]) {
+          vi.mocked(previewBillingBackfill).mockResolvedValue(preview);
+          const pendingPreview = deferred<BillingBackfillPreview | null>();
+          const pendingCommit = deferred<void>();
+          const { state, runId, scope } = createState();
+          await waitForLoaded(state);
+          if (operation === "commit") {
+            await state.previewBackfill("legacy-1");
+            vi.mocked(commitBillingBackfill).mockReturnValueOnce(pendingCommit.promise);
+          } else vi.mocked(previewBillingBackfill).mockReturnValueOnce(pendingPreview.promise);
+          const working =
+            operation === "commit" ? state.commitBackfill() : state.previewBackfill("legacy-1");
+          if (change === "dispose") scope.stop();
+          else {
+            runId.value = "run-2";
+            await nextTick();
+            await waitForLoaded(state);
+          }
+          const requestCalls = vi.mocked(listBillingRequests).mock.calls.length;
+          if (operation === "preview") {
+            if (fails) pendingPreview.reject(new Error("obsolete preview"));
+            else pendingPreview.resolve(preview);
+          } else {
+            if (fails) pendingCommit.reject(new Error("obsolete commit"));
+            else pendingCommit.resolve();
+          }
+          await working;
+          expect(state.error.value).toBeUndefined();
+          expect(listBillingRequests).toHaveBeenCalledTimes(requestCalls);
+          if (operation === "preview" || change === "switch")
+            expect(state.backfillPreview.value).toBeNull();
+          if (change === "switch") expect(state.backfillingRequestId.value).toBeUndefined();
+          scope.stop();
+        }
+      }
+    },
+  );
+});
+
+describe("useBilling provider balance recovery", () => {
+  it("requires a profile, prevents concurrent queries and permits retry after an error", async () => {
+    const { state, profileId, scope } = createState("run-1", "deepseek");
+    await waitForLoaded(state);
+    profileId.value = "";
+    await nextTick();
+    await state.queryProviderBalance();
+    expect(getProviderBalance).not.toHaveBeenCalled();
+    profileId.value = "profile-1";
+    await nextTick();
+    await waitForLoaded(state);
+    const pending = deferred<ProviderBalanceSnapshot>();
+    vi.mocked(getProviderBalance).mockReturnValueOnce(pending.promise);
+    const working = state.queryProviderBalance();
+    expect(state.balanceBusy.value).toBe(true);
+    await state.queryProviderBalance();
+    expect(getProviderBalance).toHaveBeenCalledOnce();
+    pending.reject(new Error("balance unavailable"));
+    await working;
+    expect(state.error.value?.message).toBe("balance unavailable");
+    expect(state.balanceBusy.value).toBe(false);
+    expect(state.providerBalance.value).toBeUndefined();
+    await state.queryProviderBalance();
+    expect(state.providerBalance.value).toEqual(balanceSnapshot());
+    expect(state.error.value).toBeUndefined();
+    expect(state.balanceBusy.value).toBe(false);
+    scope.stop();
+  });
+
+  it("clears the previous credential balance and ignores its late reply", async () => {
+    const { state, credentialRevision, scope } = createState("run-1", "deepseek");
+    await waitForLoaded(state);
+    state.providerBalance.value = balanceSnapshot();
+    const pending = deferred<ProviderBalanceSnapshot>();
+    vi.mocked(getProviderBalance).mockReturnValueOnce(pending.promise);
+    const working = state.queryProviderBalance();
+    credentialRevision.value += 1;
+    await nextTick();
+    expect(state.providerBalance.value).toBeUndefined();
+    expect(state.balanceBusy.value).toBe(false);
+    pending.resolve(balanceSnapshot());
+    await working;
+    expect(state.providerBalance.value).toBeUndefined();
+    scope.stop();
+  });
+
+  it.each(["switch", "dispose"] as const)(
+    "discards successful and failed balance replies after %s",
+    async (change) => {
+      for (const fails of [false, true]) {
+        const pending = deferred<ProviderBalanceSnapshot>();
+        vi.mocked(getProviderBalance).mockReturnValueOnce(pending.promise);
+        const { state, profileId, scope } = createState("run-1", "deepseek");
+        await waitForLoaded(state);
+        const working = state.queryProviderBalance();
+        if (change === "dispose") scope.stop();
+        else {
+          profileId.value = "profile-2";
+          await nextTick();
+          await waitForLoaded(state);
+        }
+        if (fails) pending.reject(new Error("obsolete balance"));
+        else pending.resolve(balanceSnapshot());
+        await working;
+        expect(state.providerBalance.value).toBeUndefined();
+        expect(state.error.value).toBeUndefined();
+        if (change === "switch") expect(state.balanceBusy.value).toBe(false);
+        scope.stop();
+      }
+    },
+  );
 });

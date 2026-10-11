@@ -76,6 +76,7 @@ it("defaults to Flash and exposes supported providers and model choices", async 
   expect(openSession).not.toHaveBeenCalled();
   await product.configureKey();
   expect(setKey).toHaveBeenLastCalledWith("deepseek", "set");
+  expect(product.credentialRevision.value).toBe(1);
   await product.open(false);
   expect(saveProfile).not.toHaveBeenCalled();
   expect(openSession).toHaveBeenLastCalledWith("default", "mistbell", false);

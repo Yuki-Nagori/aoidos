@@ -666,6 +666,257 @@ fn unresolved_requests_reserve_bounded_settlement_recovery_capacity() {
 }
 
 #[test]
+fn historical_backfill_requires_complete_frozen_usage_and_is_idempotent() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let request = reservation("legacy-backfill", Currency::Cny, "1");
+    BillingLedger::reserve(&mut connection, &request).unwrap();
+    connection.execute(
+        "UPDATE billing_physical_requests SET state='unconfirmed',input_total=100,input_cached=10,input_cached_write=5,output_total=20,reasoning_included=4,total_tokens=120 WHERE request_id=?1",
+        [&request.request_id],
+    ).unwrap();
+
+    let preview = BillingLedger::preview_backfill(&connection, &request.request_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(preview.price_version_id, "price-1");
+    assert_eq!(preview.estimated_amount, NanoMoney::parse("0.12").unwrap());
+    let revision = preview.ledger_revision;
+    let result = BillingLedger::stage_backfill(
+        &mut connection,
+        &request.request_id,
+        "backfill-op-1",
+        revision,
+        "2026-10-11T00:01:00Z",
+    )
+    .unwrap();
+    assert!(matches!(result, BackfillResult::Pending(_)));
+    assert!(
+        BillingLedger::preview_backfill(&connection, &request.request_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "backfill-op-1",
+            revision,
+            "2026-10-11T00:02:00Z",
+        ),
+        Ok(BackfillResult::Pending(_))
+    ));
+    let pending = BillingLedger::pending_settlement(&connection, &request.request_id)
+        .unwrap()
+        .unwrap();
+    let usage = NormalizedUsage::from_provider_with_cache_write(
+        pending.input_total,
+        pending.input_cached,
+        pending.input_cached_write,
+        pending.output_total,
+        pending.reasoning_included,
+    )
+    .unwrap();
+    let frozen_price = BillingLedger::price_by_id(&connection, "price-1")
+        .unwrap()
+        .unwrap();
+    let amount = usage
+        .exact_cost_at(&frozen_price, &request.dispatch_at)
+        .unwrap()
+        .settle()
+        .unwrap();
+    BillingLedger::settle(
+        &mut connection,
+        &request.request_id,
+        Some(&Settlement {
+            input_total: usage.input_total,
+            input_cached: usage.input_cached,
+            input_cached_write: usage.input_cached_write,
+            output_total: usage.output_total,
+            reasoning_included: usage.reasoning_included,
+            total_tokens: usage.total_tokens,
+            amount,
+            result_digest: "sha256:backfilled".into(),
+        }),
+        "2026-10-11T00:03:00Z",
+    )
+    .unwrap();
+    BillingLedger::clear_pending_settlement(&connection, &request.request_id).unwrap();
+    assert_eq!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "backfill-op-1",
+            revision,
+            "2026-10-11T00:04:00Z",
+        ),
+        Ok(BackfillResult::AlreadySettled)
+    );
+    assert_eq!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "backfill-op-2",
+            revision,
+            "2026-10-11T00:02:00Z",
+        ),
+        Err(BillingError::Conflict)
+    );
+}
+
+#[test]
+fn historical_backfill_skips_incomplete_or_already_journaled_usage() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let request = reservation("legacy-incomplete", Currency::Cny, "1");
+    BillingLedger::reserve(&mut connection, &request).unwrap();
+    connection.execute(
+        "UPDATE billing_physical_requests SET state='unconfirmed',input_total=100,input_cached=0,output_total=20 WHERE request_id=?1",
+        [&request.request_id],
+    ).unwrap();
+    assert!(
+        BillingLedger::preview_backfill(&connection, &request.request_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn historical_backfill_can_move_the_last_existing_request_into_a_full_recovery_queue() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let request = reservation("legacy-backfill-capacity", Currency::Cny, "0");
+    BillingLedger::reserve(&mut connection, &request).unwrap();
+    connection
+        .execute(
+            "UPDATE billing_physical_requests SET state='unconfirmed',input_total=100,input_cached=10,input_cached_write=5,output_total=20,total_tokens=120 WHERE request_id=?1",
+            [&request.request_id],
+        )
+        .unwrap();
+
+    for index in 0..255 {
+        let queued = reservation(&format!("backfill-capacity-{index}"), Currency::Cny, "0");
+        BillingLedger::reserve(&mut connection, &queued).unwrap();
+        BillingLedger::stage_settlement(&mut connection, &pending(&queued.request_id), "now")
+            .unwrap();
+    }
+
+    let before = BillingLedger::list_requests(&connection, "run-1", None, None).unwrap();
+    let pending_before: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM billing_pending_settlements",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let audit_before: i64 = connection
+        .query_row("SELECT count(*) FROM billing_audit", [], |row| row.get(0))
+        .unwrap();
+    let revision = BillingLedger::preview_backfill(&connection, &request.request_id)
+        .unwrap()
+        .unwrap()
+        .ledger_revision;
+
+    assert!(matches!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "backfill-capacity-op",
+            revision,
+            "now",
+        ),
+        Ok(BackfillResult::Pending(_))
+    ));
+    let after = BillingLedger::list_requests(&connection, "run-1", None, None).unwrap();
+    assert_eq!(after.revision.parse::<u64>().unwrap(), revision + 1);
+    let mut expected_items = before.items;
+    expected_items[0].settlement_pending = true;
+    assert_eq!(after.items, expected_items);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM billing_pending_settlements",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+        pending_before + 1
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM billing_audit", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        audit_before + 1
+    );
+}
+
+#[test]
+fn historical_backfill_rejects_an_already_full_recovery_queue_without_partial_writes() {
+    let mut connection = database();
+    prepare(&mut connection);
+    for index in 0..256 {
+        let queued = reservation(&format!("full-backfill-queue-{index}"), Currency::Cny, "0");
+        BillingLedger::reserve(&mut connection, &queued).unwrap();
+        BillingLedger::stage_settlement(&mut connection, &pending(&queued.request_id), "now")
+            .unwrap();
+    }
+    connection.execute(
+        "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,input_total,input_cached,input_cached_write,output_total,reasoning_included,total_tokens,updated_at) VALUES('legacy-full-queue','run-1','turn-1','profile-1',1,'provider','model','direct','price-1','CNY','2026-10-11T00:00:00Z','unconfirmed',0,100,10,5,20,4,120,'now')",
+        [],
+    )
+    .unwrap();
+
+    let before = BillingLedger::list_requests(&connection, "run-1", None, None).unwrap();
+    let pending_before: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM billing_pending_settlements",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let audit_before: i64 = connection
+        .query_row("SELECT count(*) FROM billing_audit", [], |row| row.get(0))
+        .unwrap();
+    let revision = BillingLedger::preview_backfill(&connection, "legacy-full-queue")
+        .unwrap()
+        .unwrap()
+        .ledger_revision;
+
+    assert_eq!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            "legacy-full-queue",
+            "legacy-full-queue-op",
+            revision,
+            "now",
+        ),
+        Err(BillingError::SettlementBacklog)
+    );
+    assert_eq!(
+        BillingLedger::list_requests(&connection, "run-1", None, None).unwrap(),
+        before
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM billing_pending_settlements",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        pending_before
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM billing_audit", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        audit_before
+    );
+}
+
+#[test]
 fn unknown_usage_keeps_hold_and_exact_settlement_is_idempotent() {
     let mut connection = database();
     prepare(&mut connection);
@@ -1596,5 +1847,80 @@ fn settlement_journal_rolls_back_visible_changes_when_revision_write_fails() {
     assert_eq!(
         BillingLedger::pending_settlement(&connection, "journal").unwrap(),
         Some(pending("journal"))
+    );
+}
+
+#[test]
+fn historical_backfill_rejects_stale_conflicting_and_inconsistent_history() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let request = reservation("legacy-conflict", Currency::Cny, "1");
+    BillingLedger::reserve(&mut connection, &request).unwrap();
+    connection.execute(
+        "UPDATE billing_physical_requests SET state='unconfirmed',input_total=100,input_cached=10,input_cached_write=5,output_total=20,total_tokens=120 WHERE request_id=?1",
+        [&request.request_id],
+    ).unwrap();
+    let revision = BillingLedger::preview_backfill(&connection, &request.request_id)
+        .unwrap()
+        .unwrap()
+        .ledger_revision;
+    assert_eq!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "stale",
+            revision + 1,
+            "now"
+        ),
+        Err(BillingError::StaleRevision)
+    );
+    connection.execute("INSERT INTO billing_audit VALUES('existing','profile-price-select','profile-1','{}','now')", []).unwrap();
+    assert_eq!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "existing",
+            revision,
+            "now"
+        ),
+        Err(BillingError::Conflict)
+    );
+    // 孤立审计不能充当有效恢复项，也不能重复扣款。
+    connection.execute("INSERT INTO billing_audit VALUES('orphaned','settlement-backfill','legacy-conflict','{}','now')", []).unwrap();
+    assert_eq!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "orphaned",
+            revision,
+            "now"
+        ),
+        Err(BillingError::Conflict)
+    );
+    connection
+        .execute(
+            "UPDATE billing_physical_requests SET input_cached_write=NULL WHERE request_id=?1",
+            [&request.request_id],
+        )
+        .unwrap();
+    assert_eq!(
+        BillingLedger::stage_backfill(
+            &mut connection,
+            &request.request_id,
+            "orphaned",
+            revision,
+            "now"
+        ),
+        Err(BillingError::Conflict)
+    );
+    connection.execute("UPDATE billing_physical_requests SET input_cached_write=5,total_tokens=121 WHERE request_id=?1", [&request.request_id]).unwrap();
+    assert_eq!(
+        BillingLedger::preview_backfill(&connection, &request.request_id),
+        Err(BillingError::Conflict)
+    );
+    connection.execute("UPDATE billing_physical_requests SET total_tokens=120,route_policy='other' WHERE request_id=?1", [&request.request_id]).unwrap();
+    assert_eq!(
+        BillingLedger::preview_backfill(&connection, &request.request_id),
+        Err(BillingError::Conflict)
     );
 }

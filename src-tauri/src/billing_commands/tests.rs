@@ -4,12 +4,112 @@ use crate::{
     turn_commands::WindowEvents,
 };
 use aoidos_engine::billing::LedgerBudgetPort;
+use secrecy::ExposeSecret;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{
     Manager,
     test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets},
     webview::InvokeRequest,
 };
+
+#[tokio::test]
+async fn balance_cache_is_singleflight_bounded_by_freshness_and_credential_identity() {
+    use aoidos_llm::providers::{BalanceAccount, BalanceSnapshot, BalanceStatus};
+    let service = BalanceService::default();
+    let profile = aoidos_llm::config::LlmProfile {
+        profile_id: "profile-cache".into(),
+        provider_id: "deepseek".into(),
+        model: "deepseek-v4.1-flash".into(),
+        mode: aoidos_llm::config::ProfileMode::Chat,
+        thinking: false,
+        sampling: aoidos_llm::sampling::Sampling {
+            temperature: 0.7,
+            max_tokens: 256,
+        },
+        proxy: aoidos_llm::config::ProxyConfig::System,
+    };
+    let credential = secrecy::SecretString::from("test-key-a".to_owned());
+    let key = balance_cache_key(&profile, credential.expose_secret().as_bytes());
+    let other_key = balance_cache_key(&profile, b"test-key-b");
+    assert_ne!(key, other_key);
+    let now = Instant::now();
+    service.cache.lock().await.insert(
+        key.clone(),
+        CachedBalance {
+            snapshot: BalanceSnapshot {
+                provider_id: "deepseek".into(),
+                queried_at: "2026-10-11T00:00:00Z".into(),
+                stale: false,
+                status: BalanceStatus::Available,
+                accounts: vec![BalanceAccount {
+                    currency: "CNY".into(),
+                    total: "10".into(),
+                    granted: "0".into(),
+                    topped_up: "10".into(),
+                }],
+            },
+            updated_at: now - Duration::from_secs(6 * 60),
+            retry_after: now + Duration::from_secs(30),
+            failure_count: 1,
+        },
+    );
+    let client = aoidos_llm::proxy::build_client(
+        &aoidos_llm::config::ProxyConfig::System,
+        &aoidos_llm::proxy::SystemProxySnapshot::default(),
+        None,
+    )
+    .unwrap();
+    let cached = service
+        .query(key, &client, &credential, "unused".into())
+        .await;
+    assert_eq!(cached.status, BalanceStatus::Available);
+    assert!(cached.stale);
+    assert_eq!(cached.queried_at, "2026-10-11T00:00:00Z");
+}
+
+#[test]
+fn balance_cache_evicts_old_entries_at_its_hard_limit() {
+    use aoidos_llm::providers::{BalanceSnapshot, BalanceStatus};
+    let now = Instant::now();
+    let mut cache = HashMap::new();
+    for index in 0..MAX_BALANCE_CACHE_ENTRIES {
+        cache.insert(
+            format!("old-{index}"),
+            CachedBalance {
+                snapshot: BalanceSnapshot {
+                    provider_id: "deepseek".into(),
+                    queried_at: "checked".into(),
+                    stale: false,
+                    status: BalanceStatus::Unknown,
+                    accounts: Vec::new(),
+                },
+                updated_at: now + Duration::from_secs(index as u64),
+                retry_after: now,
+                failure_count: 1,
+            },
+        );
+    }
+    insert_balance_cache(
+        &mut cache,
+        "new-profile".into(),
+        CachedBalance {
+            snapshot: BalanceSnapshot {
+                provider_id: "deepseek".into(),
+                queried_at: "checked".into(),
+                stale: false,
+                status: BalanceStatus::Unknown,
+                accounts: Vec::new(),
+            },
+            updated_at: now,
+            retry_after: now,
+            failure_count: 1,
+        },
+    );
+    assert_eq!(cache.len(), MAX_BALANCE_CACHE_ENTRIES);
+    assert!(!cache.contains_key("old-0"));
+    assert!(cache.contains_key("new-profile"));
+}
 
 fn price() -> serde_json::Value {
     serde_json::json!({
@@ -28,11 +128,22 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
     let events = StorageEvents::new(Arc::new(WindowEvents::new(|_, _| Ok(()))));
     let app = mock_builder()
         .manage(StorageService::new(&root, events))
+        .manage(BalanceService::default())
+        .manage(
+            crate::turn_commands::TurnService::new(
+                Arc::new(WindowEvents::new(|_, _| Ok(()))),
+                aoidos_llm::proxy::SystemProxySnapshot::default(),
+            )
+            .unwrap(),
+        )
         .invoke_handler(tauri::generate_handler![
             budget_get_monthly,
             budget_get_period,
             budget_list_requests,
             budget_retry_settlement,
+            budget_preview_backfill,
+            budget_commit_backfill,
+            budget_get_provider_balance,
             budget_get_suggested_limits,
             budget_get_selected_price,
             budget_select_price,
@@ -72,6 +183,14 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
         (
             "budget_retry_settlement",
             serde_json::json!({"runId":"run-1","requestId":"request-1"}),
+        ),
+        (
+            "budget_preview_backfill",
+            serde_json::json!({"runId":"run-1","requestId":"request-1"}),
+        ),
+        (
+            "budget_commit_backfill",
+            serde_json::json!({"runId":"run-1","requestId":"request-1","operationId":"op-1","expectedRevision":0}),
         ),
         (
             "budget_get_suggested_limits",
@@ -121,6 +240,19 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
             "{name}"
         );
     }
+    let mut unknown_balance_args = serde_json::json!({"profileId":"profile-1"});
+    unknown_balance_args
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected".into(), serde_json::Value::Null);
+    assert_eq!(
+        call(
+            "budget_get_provider_balance",
+            tauri::ipc::InvokeBody::Json(unknown_balance_args),
+        )
+        .unwrap_err()["code"],
+        "app.bad-request"
+    );
 
     assert_eq!(
         call(
@@ -153,6 +285,16 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
         )
         .unwrap()["items"],
         serde_json::json!([])
+    );
+    assert_eq!(
+        call(
+            "budget_preview_backfill",
+            tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"runId":"run-1","requestId":"unknown"})
+            )
+        )
+        .unwrap(),
+        serde_json::Value::Null
     );
     assert_eq!(
         call(
@@ -228,6 +370,111 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
             }),
         },
     );
+    let legacy_attempt = aoidos_llm::schedule::AttemptIdentity {
+        request_id: "legacy-backfill-ipc".into(),
+        ..attempt.clone()
+    };
+    aoidos_llm::schedule::BudgetPort::reserve(&budget, &legacy_attempt).unwrap();
+    app.state::<StorageService>()
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE billing_physical_requests SET state='unconfirmed',input_total=50,input_cached=5,input_cached_write=0,output_total=10,reasoning_included=2 WHERE request_id='legacy-backfill-ipc'",
+                    [],
+                )
+                .map_err(|error| Fault::new("test", error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+    let preview = call(
+        "budget_preview_backfill",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({
+            "runId":"run-1", "requestId":"legacy-backfill-ipc"
+        })),
+    )
+    .unwrap();
+    assert_eq!(preview["requestId"], "legacy-backfill-ipc");
+    for command in ["budget_preview_backfill", "budget_commit_backfill"] {
+        let mut args =
+            serde_json::json!({"runId":"different-run", "requestId":"legacy-backfill-ipc"});
+        if command == "budget_commit_backfill" {
+            args["operationId"] = serde_json::json!("ipc-backfill-op");
+            args["expectedRevision"] = preview["ledgerRevision"].clone();
+        }
+        assert_eq!(
+            call(command, tauri::ipc::InvokeBody::Json(args)).unwrap_err()["code"],
+            "app.not-found"
+        );
+    }
+    assert_eq!(
+        call(
+            "budget_commit_backfill",
+            tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "runId":"run-1", "requestId":"unknown", "operationId":"absent", "expectedRevision":0
+            }))
+        )
+        .unwrap_err()["code"],
+        "app.not-found"
+    );
+    assert_eq!(
+        call(
+            "budget_commit_backfill",
+            tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "runId":"run-1", "requestId":"legacy-backfill-ipc", "operationId":"stale",
+                "expectedRevision":preview["ledgerRevision"].as_u64().unwrap() + 1
+            }))
+        )
+        .unwrap_err()["detail"]["reason"],
+        "staleRevision"
+    );
+
+    call(
+        "budget_commit_backfill",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({
+            "runId":"run-1", "requestId":"legacy-backfill-ipc",
+            "operationId":"ipc-backfill-op", "expectedRevision":preview["ledgerRevision"]
+        })),
+    )
+    .unwrap();
+
+    // 成功重放可携带最初的revision，既不重复结算也不改变账本。
+    for operation_id in ["ipc-backfill-op", "different-op"] {
+        let result = call(
+            "budget_commit_backfill",
+            tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "runId":"run-1", "requestId":"legacy-backfill-ipc", "operationId":operation_id,
+                "expectedRevision":preview["ledgerRevision"]
+            })),
+        );
+        if operation_id == "ipc-backfill-op" {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.unwrap_err()["code"], "budget.conflict");
+        }
+    }
+    assert_eq!(
+        call(
+            "budget_get_provider_balance",
+            tauri::ipc::InvokeBody::Json(serde_json::json!({"profileId":""}))
+        )
+        .unwrap_err()["code"],
+        "app.bad-request"
+    );
+    let backfilled = call(
+        "budget_list_requests",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({"runId":"run-1"})),
+    )
+    .unwrap();
+    let item = backfilled["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["requestId"] == "legacy-backfill-ipc")
+        .unwrap();
+    assert_eq!(item["state"], "settled");
+    assert_eq!(item["actualAmount"], preview["estimatedAmount"]);
+
     let retry_attempt = aoidos_llm::schedule::AttemptIdentity {
         request_id: "retry-ipc".into(),
         ..attempt.clone()
@@ -531,5 +778,231 @@ async fn billing_error_helpers_keep_stable_public_codes_and_storage_job_errors()
             .unwrap_err()
             .code(),
         "store.database"
+    );
+}
+
+fn balance_snapshot(
+    status: aoidos_llm::providers::BalanceStatus,
+) -> aoidos_llm::providers::BalanceSnapshot {
+    aoidos_llm::providers::BalanceSnapshot {
+        provider_id: "deepseek".into(),
+        queried_at: "2026-10-11T00:00:00Z".into(),
+        stale: false,
+        status,
+        accounts: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn balance_cache_refreshes_preserves_prior_success_and_caps_failure_backoff() {
+    use aoidos_llm::providers::BalanceStatus;
+    let service = BalanceService::default();
+    let key = "fixture".to_owned();
+    let snapshot = service
+        .query_with(
+            key.clone(),
+            Box::pin(async { balance_snapshot(BalanceStatus::Available) }),
+        )
+        .await;
+    assert_eq!(snapshot.status, BalanceStatus::Available);
+    {
+        let mut cache = service.cache.lock().await;
+        let entry = cache.get_mut(&key).unwrap();
+        // 缓存仍新鲜时，即使退避已结束也不会重复请求。
+        entry.retry_after = Instant::now();
+    }
+    let cached = service
+        .query_with(
+            key.clone(),
+            Box::pin(async { panic!("fresh cache must not fetch") }),
+        )
+        .await;
+    assert!(!cached.stale);
+    {
+        let mut cache = service.cache.lock().await;
+        let entry = cache.get_mut(&key).unwrap();
+        entry.updated_at = Instant::now() - BALANCE_FRESH_FOR;
+    }
+    let stale = service
+        .query_with(
+            key.clone(),
+            Box::pin(async { balance_snapshot(BalanceStatus::Unknown) }),
+        )
+        .await;
+    assert!(stale.stale);
+    assert_eq!(stale.status, BalanceStatus::Available);
+    {
+        let mut cache = service.cache.lock().await;
+        let entry = cache.get_mut(&key).unwrap();
+        entry.retry_after = Instant::now();
+        entry.failure_count = u32::MAX;
+    }
+    service
+        .query_with(
+            key.clone(),
+            Box::pin(async { balance_snapshot(BalanceStatus::Unknown) }),
+        )
+        .await;
+    let cache = service.cache.lock().await;
+    let entry = cache.get(&key).unwrap();
+    assert_eq!(entry.failure_count, u32::MAX);
+    assert!(entry.retry_after.duration_since(Instant::now()) <= BALANCE_MAX_BACKOFF);
+    assert!(
+        entry.retry_after.duration_since(Instant::now())
+            > BALANCE_MAX_BACKOFF - Duration::from_secs(1)
+    );
+    drop(cache);
+
+    let unknown = service
+        .query_with(
+            "unknown".into(),
+            Box::pin(async { balance_snapshot(BalanceStatus::Unknown) }),
+        )
+        .await;
+    assert_eq!(unknown.status, BalanceStatus::Unknown);
+    {
+        service
+            .cache
+            .lock()
+            .await
+            .get_mut("unknown")
+            .unwrap()
+            .retry_after = Instant::now();
+    }
+    assert_eq!(
+        service
+            .query_with(
+                "unknown".into(),
+                Box::pin(async { balance_snapshot(BalanceStatus::Unknown) })
+            )
+            .await
+            .status,
+        BalanceStatus::Unknown
+    );
+    // 恢复成功清空连续失败计数。
+    service
+        .cache
+        .lock()
+        .await
+        .get_mut("unknown")
+        .unwrap()
+        .retry_after = Instant::now();
+    assert_eq!(
+        service
+            .query_with(
+                "unknown".into(),
+                Box::pin(async { balance_snapshot(BalanceStatus::Unavailable) })
+            )
+            .await
+            .status,
+        BalanceStatus::Unavailable
+    );
+    assert_eq!(service.cache.lock().await["unknown"].failure_count, 0);
+}
+
+#[tokio::test]
+async fn balance_cache_singleflight_fetches_once_for_concurrent_queries() {
+    use aoidos_llm::providers::BalanceStatus;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let service = BalanceService::default();
+    let calls = AtomicUsize::new(0);
+    let fetch = || async {
+        calls.fetch_add(1, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        balance_snapshot(BalanceStatus::Available)
+    };
+    let (first, second) = tokio::join!(
+        service.query_with("same".into(), Box::pin(fetch())),
+        service.query_with("same".into(), Box::pin(fetch()))
+    );
+    assert_eq!(first.status, second.status);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn balance_profile_validation_and_cached_read_do_not_access_the_vault() {
+    use aoidos_llm::providers::BalanceStatus;
+    let mut frozen = aoidos_llm::config::FrozenProfile {
+        profile: aoidos_llm::config::LlmProfile {
+            profile_id: "fixture".into(),
+            provider_id: "opencode-zen".into(),
+            model: "deepseek-v4.1-flash".into(),
+            mode: aoidos_llm::config::ProfileMode::Chat,
+            thinking: false,
+            sampling: aoidos_llm::sampling::Sampling {
+                temperature: 0.7,
+                max_tokens: 256,
+            },
+            proxy: aoidos_llm::config::ProxyConfig::None,
+        },
+        credential: None,
+    };
+    let service = BalanceService::default();
+    let proxy = aoidos_llm::proxy::SystemProxySnapshot::default();
+    struct FixtureProfiles<'a>(&'a aoidos_llm::config::FrozenProfile);
+    impl aoidos_engine::game::product::ProfileSource for FixtureProfiles<'_> {
+        fn freeze(&self, id: &str) -> Result<aoidos_engine::game::product::ResolvedProfile, Fault> {
+            assert_eq!(id, self.0.profile.profile_id);
+            Ok(aoidos_engine::game::product::ResolvedProfile {
+                frozen: aoidos_llm::config::FrozenProfile {
+                    profile: self.0.profile.clone(),
+                    credential: self.0.credential.clone(),
+                },
+                proxy_auth: None,
+            })
+        }
+    }
+    assert_eq!(
+        query_saved_balance(&service, &proxy, "fixture", &FixtureProfiles(&frozen))
+            .await
+            .unwrap_err()
+            .code(),
+        "app.bad-request"
+    );
+
+    assert_eq!(
+        query_provider_balance(&service, &proxy, &frozen, None)
+            .await
+            .unwrap_err()
+            .code(),
+        "app.bad-request"
+    );
+    frozen.profile.provider_id = "deepseek".into();
+    assert_eq!(
+        query_provider_balance(&service, &proxy, &frozen, None)
+            .await
+            .unwrap_err()
+            .code(),
+        "llm.missing-key"
+    );
+    frozen.credential = Some(secrecy::SecretString::from("fixture-key".to_owned()));
+    let key = balance_cache_key(&frozen.profile, b"fixture-key");
+    let now = Instant::now();
+    service.cache.lock().await.insert(
+        key,
+        CachedBalance {
+            snapshot: balance_snapshot(BalanceStatus::Available),
+            updated_at: now,
+            retry_after: now + BALANCE_FRESH_FOR,
+            failure_count: 0,
+        },
+    );
+    assert_eq!(
+        query_provider_balance(&service, &proxy, &frozen, None)
+            .await
+            .unwrap()
+            .status,
+        BalanceStatus::Available
+    );
+    frozen.profile.proxy = aoidos_llm::config::ProxyConfig::Manual {
+        url: "http://[invalid".into(),
+        auth_ref: None,
+    };
+    assert_eq!(
+        query_provider_balance(&service, &proxy, &frozen, None)
+            .await
+            .unwrap_err()
+            .code(),
+        "app.bad-request"
     );
 }

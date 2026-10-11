@@ -7,6 +7,9 @@ import {
   getRunPeriod,
   getSuggestedLimits,
   listBillingRequests,
+  previewBillingBackfill,
+  commitBillingBackfill,
+  getProviderBalance,
   retryBillingSettlement,
   registerPrice,
   selectPrice,
@@ -16,6 +19,8 @@ import {
   type RunPeriod,
   type MonthlyPeriod,
   type BillingRequestPage,
+  type BillingBackfillPreview,
+  type ProviderBalanceSnapshot,
 } from "../api/billing";
 
 export interface BillingFailure {
@@ -56,12 +61,17 @@ export function useBilling(
   profileId: Ref<string>,
   providerId: Ref<string>,
   modelId: Ref<string>,
+  credentialRevision: Ref<number> = ref(0),
 ) {
   const settings = ref<BudgetSettings | null>(null);
   const period = ref<RunPeriod>();
   const monthly = ref<MonthlyPeriod>();
   const requests = ref<BillingRequestPage>();
   const retryingRequestId = ref<string>();
+  const backfillPreview = ref<BillingBackfillPreview | null>(null);
+  const backfillingRequestId = ref<string>();
+  const providerBalance = ref<ProviderBalanceSnapshot>();
+  const balanceBusy = ref(false);
   const priceCurrency = ref<BillingCurrency>("CNY");
   const cnyLimit = ref("");
   const usdLimit = ref("");
@@ -103,12 +113,20 @@ export function useBilling(
   const error = ref<BillingFailure>();
   const routePolicy = computed(() => (providerId.value === "openrouter" ? "openrouter" : "direct"));
   let generation = 0;
+  let balanceGeneration = 0;
   let priceSelectionGeneration = 0;
   let suppressNextCurrencySelection = false;
   let selectionQueue: Promise<void> = Promise.resolve();
   let disposed = false;
   onScopeDispose(() => {
     disposed = true;
+  });
+
+  watch(credentialRevision, () => {
+    balanceGeneration += 1;
+    providerBalance.value = undefined;
+    balanceBusy.value = false;
+    error.value = undefined;
   });
 
   watch(
@@ -120,6 +138,11 @@ export function useBilling(
       settings.value = null;
       period.value = undefined;
       monthly.value = undefined;
+      requests.value = undefined;
+      backfillPreview.value = null;
+      backfillingRequestId.value = undefined;
+      providerBalance.value = undefined;
+      balanceBusy.value = false;
       priceReady.value = false;
       busy.value = false;
       unitTokens.value = "1000000";
@@ -392,6 +415,89 @@ export function useBilling(
     }
   }
 
+  async function previewBackfill(requestId: string): Promise<void> {
+    const activeRun = runId.value;
+    if (!activeRun || busy.value || backfillingRequestId.value) return;
+    const current = generation;
+    error.value = undefined;
+    backfillPreview.value = null;
+    backfillingRequestId.value = requestId;
+    try {
+      const preview = await previewBillingBackfill(activeRun, requestId);
+      if (disposed || current !== generation || activeRun !== runId.value) return;
+      backfillPreview.value = preview;
+    } catch (failure) {
+      if (!disposed && current === generation && activeRun === runId.value) {
+        error.value = normalizeError(failure);
+      }
+    } finally {
+      if (!disposed && current === generation) backfillingRequestId.value = undefined;
+    }
+  }
+
+  async function commitBackfill(): Promise<void> {
+    const preview = backfillPreview.value;
+    const activeRun = runId.value;
+    if (!preview || !activeRun || backfillingRequestId.value) return;
+    const current = generation;
+    error.value = undefined;
+    backfillingRequestId.value = preview.requestId;
+    try {
+      await commitBillingBackfill(
+        activeRun,
+        preview.requestId,
+        crypto.randomUUID(),
+        preview.ledgerRevision,
+      );
+      if (disposed || current !== generation || activeRun !== runId.value) return;
+      backfillPreview.value = null;
+      await Promise.all([loadRequests(true), loadPeriodFor(activeRun, current)]);
+    } catch (failure) {
+      if (!disposed && current === generation && activeRun === runId.value) {
+        error.value = normalizeError(failure);
+        backfillPreview.value = null;
+        await loadRequests(true);
+      }
+    } finally {
+      if (!disposed && current === generation) backfillingRequestId.value = undefined;
+    }
+  }
+
+  async function queryProviderBalance(): Promise<void> {
+    if (providerId.value !== "deepseek" || !profileId.value || balanceBusy.value) return;
+    const current = generation;
+    const currentBalance = balanceGeneration;
+    const activeCredentialRevision = credentialRevision.value;
+    const activeProfile = profileId.value;
+    balanceBusy.value = true;
+    error.value = undefined;
+    try {
+      const snapshot = await getProviderBalance(activeProfile);
+      if (
+        disposed ||
+        current !== generation ||
+        currentBalance !== balanceGeneration ||
+        activeCredentialRevision !== credentialRevision.value ||
+        activeProfile !== profileId.value
+      )
+        return;
+      providerBalance.value = snapshot;
+    } catch (failure) {
+      if (
+        !disposed &&
+        current === generation &&
+        currentBalance === balanceGeneration &&
+        activeCredentialRevision === credentialRevision.value &&
+        activeProfile === profileId.value
+      ) {
+        error.value = normalizeError(failure);
+      }
+    } finally {
+      if (!disposed && current === generation && currentBalance === balanceGeneration)
+        balanceBusy.value = false;
+    }
+  }
+
   async function loadMonthly(): Promise<void> {
     try {
       const current = await fetchCurrentMonth();
@@ -420,6 +526,10 @@ export function useBilling(
     monthly,
     requests,
     retryingRequestId,
+    backfillPreview,
+    backfillingRequestId,
+    providerBalance,
+    balanceBusy,
     cnyLimit,
     usdLimit,
     priceCurrency,
@@ -445,5 +555,8 @@ export function useBilling(
     loadMonthly,
     loadRequests,
     retrySettlement,
+    previewBackfill,
+    commitBackfill,
+    queryProviderBalance,
   };
 }
