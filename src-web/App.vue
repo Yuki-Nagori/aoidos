@@ -10,7 +10,7 @@ import { useTheme } from "./composables/useTheme";
 import { useLocale } from "./composables/useLocale";
 import { useUiPreferences } from "./composables/useUiPreferences";
 import { useBilling } from "./composables/useBilling";
-import { formatExactCurrency } from "./utils/format";
+import { formatDate, formatExactCurrency } from "./utils/format";
 import { billingErrorDescriptor } from "./utils/billing-error";
 import { formatPeakSchedule } from "./utils/price-schedule";
 import { usePanelState } from "./composables/usePanelState";
@@ -31,11 +31,28 @@ const billing = useBilling(
   computed(() => billingProfile.value?.profileId ?? ""),
   computed(() => billingProfile.value?.providerId ?? product.providerId.value),
   computed(() => billingProfile.value?.model ?? product.model.value),
+  product.credentialRevision,
 );
 function billingAmount(amount: string | null, currency: "CNY" | "USD"): string {
   return amount === null
     ? t("billing.unknown")
     : formatExactCurrency(amount, currency, locale.resolved.value);
+}
+function providerBalanceStatus(status: "available" | "unavailable" | "unknown"): string {
+  const label = {
+    available: t("billing.balanceAvailable"),
+    unavailable: t("billing.balanceUnavailable"),
+    unknown: t("billing.balanceUnknown"),
+  };
+  return label[status];
+}
+function providerBalanceDate(queriedAt: string): string {
+  return formatDate(queriedAt, locale.resolved.value, billing.monthly.value?.timeZone ?? "UTC")
+    .text;
+}
+function providerBalanceAmount(amount: string, currency: string): string {
+  if (currency !== "CNY" && currency !== "USD") return t("billing.unknown");
+  return formatExactCurrency(amount, currency, locale.resolved.value);
 }
 const game = useGameView(sessionId);
 const { phase, turn, records } = game;
@@ -563,6 +580,48 @@ void preferences.load();
         <summary>{{ t("billing.title") }}</summary>
         <p class="text-sm text-muted">{{ t("billing.explanation") }}</p>
         <p class="text-sm text-muted">{{ t("billing.referenceHint") }}</p>
+        <section
+          v-if="product.providerId.value === 'deepseek'"
+          class="grid gap-2 rounded border border-line p-3"
+        >
+          <button
+            type="button"
+            :disabled="billing.balanceBusy.value"
+            @click="billing.queryProviderBalance"
+          >
+            {{ t("billing.queryBalance") }}
+          </button>
+          <p class="text-sm text-muted">{{ t("billing.balanceCacheHint") }}</p>
+          <template v-if="billing.providerBalance.value">
+            <p role="status">
+              {{
+                t("billing.balanceStatus", {
+                  status: providerBalanceStatus(billing.providerBalance.value.status),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("billing.balanceQueriedAt", {
+                  queriedAt: providerBalanceDate(billing.providerBalance.value.queriedAt),
+                })
+              }}
+            </p>
+            <p v-if="billing.providerBalance.value.stale" role="status">
+              {{ t("billing.balanceStale") }}
+            </p>
+            <p v-for="account in billing.providerBalance.value.accounts" :key="account.currency">
+              {{
+                t("billing.balanceAccount", {
+                  currency: account.currency,
+                  total: providerBalanceAmount(account.total, account.currency),
+                  granted: providerBalanceAmount(account.granted, account.currency),
+                  toppedUp: providerBalanceAmount(account.toppedUp, account.currency),
+                })
+              }}
+            </p>
+          </template>
+        </section>
         <form class="grid gap-3" @submit.prevent="billing.saveSettings">
           <label>
             {{ t("billing.cnyLimit") }}
@@ -690,6 +749,48 @@ void preferences.load();
                   : t("billing.retrySettlement")
               }}
             </button>
+            <button
+              v-if="
+                item.state === 'unconfirmed' &&
+                !item.actualAmount &&
+                !item.settlementPending &&
+                item.inputTotal !== null &&
+                item.inputCached !== null &&
+                item.inputCachedWrite !== null &&
+                item.outputTotal !== null
+              "
+              type="button"
+              :disabled="billing.backfillingRequestId.value !== undefined"
+              @click="billing.previewBackfill(item.requestId)"
+            >
+              {{ t("billing.previewBackfill") }}
+            </button>
+            <div
+              v-if="billing.backfillPreview.value?.requestId === item.requestId"
+              class="grid gap-2 rounded border border-line p-3"
+              role="group"
+            >
+              <p>
+                {{
+                  t("billing.backfillPreview", {
+                    priceVersion: billing.backfillPreview.value.priceVersionId,
+                    amount: billingAmount(
+                      billing.backfillPreview.value.estimatedAmount,
+                      billing.backfillPreview.value.currency,
+                    ),
+                    currency: billing.backfillPreview.value.currency,
+                  })
+                }}
+              </p>
+              <p class="text-sm text-muted">{{ t("billing.backfillUnavailable") }}</p>
+              <button
+                type="button"
+                :disabled="billing.backfillingRequestId.value !== undefined"
+                @click="billing.commitBackfill"
+              >
+                {{ t("billing.commitBackfill") }}
+              </button>
+            </div>
             <p>
               {{
                 t("billing.labeledValue", {

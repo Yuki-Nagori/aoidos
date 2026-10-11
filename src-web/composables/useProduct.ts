@@ -187,6 +187,7 @@ export function useProduct(transport: Transport = defaults) {
   );
   const session = shallowRef<OpenedSession>();
   const keyStatus = shallowRef<KeyStatus>();
+  const credentialRevision = ref(0);
   const busy = ref(false);
   const error = shallowRef<{ code: string; message: string }>();
   let disposed = false;
@@ -247,7 +248,10 @@ export function useProduct(transport: Transport = defaults) {
   function configureKey(): Promise<void> {
     return run(async () => {
       const status = await transport.key(providerId.value, "set");
-      if (!disposed) keyStatus.value = status;
+      if (!disposed) {
+        keyStatus.value = status;
+        credentialRevision.value += 1;
+      }
     });
   }
   function open(startNew: boolean): Promise<void> {
@@ -271,6 +275,7 @@ export function useProduct(transport: Transport = defaults) {
     model,
     session,
     keyStatus,
+    credentialRevision,
     busy,
     error,
     load,

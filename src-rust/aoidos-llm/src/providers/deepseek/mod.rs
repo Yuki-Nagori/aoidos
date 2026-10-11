@@ -25,6 +25,7 @@ use std::collections::VecDeque;
 pub struct BalanceSnapshot {
     pub provider_id: String,
     pub queried_at: String,
+    pub stale: bool,
     pub status: BalanceStatus,
     pub accounts: Vec<BalanceAccount>,
 }
@@ -94,6 +95,7 @@ async fn balance_snapshot_at(
         Ok((status, accounts)) => BalanceSnapshot {
             provider_id: "deepseek".into(),
             queried_at,
+            stale: false,
             status,
             accounts,
         },
@@ -105,6 +107,7 @@ fn unknown_balance(queried_at: String) -> BalanceSnapshot {
     BalanceSnapshot {
         provider_id: "deepseek".into(),
         queried_at,
+        stale: false,
         status: BalanceStatus::Unknown,
         accounts: Vec::new(),
     }

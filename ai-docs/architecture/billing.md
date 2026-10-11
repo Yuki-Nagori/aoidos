@@ -1,6 +1,6 @@
 # LLM 计价与费用预算
 
-更新日期：2026-10-11；官方资料核验日期：2026-10-11。[027](../task/027-llm-cost-control-design.md) 定义协议，[035](../task/035-llm-cost-control-impl.md) 正在接入运行时。当前实现包括 `aoidos-billing` 精确金额与读写缓存单价、engine SQLite 账本、LLM 物理尝试预算端口、Tauri 命令及双语费用面板。缓存写入 Token 和费率已独立持久化；旧价格的写入费率保留为未知，并阻止新请求直到用户补齐。OpenCode Go 与 DeepSeek API 的峰谷规则已按发送时刻计价，峰时单价随价格版本冻结；界面把官方 UTC 窗口转换到已选报表时区显示。OpenCode Go / Go Plus 订阅费不纳入 Aoidos 费用面板或账本；Go 的每模型 Token 费率只用于估算其订阅额度使用。历史补价与供应商余额仍待 035 实现，也未做真实账单对账。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文区分稳定协议与当前实现范围。
+更新日期：2026-10-11；官方资料核验日期：2026-10-11。[027](../task/027-llm-cost-control-design.md) 定义协议，[035](../task/035-llm-cost-control-impl.md) 接入运行时。当前实现包括 `aoidos-billing` 精确金额与读写缓存单价、engine SQLite 账本、LLM 物理尝试预算端口、Tauri 命令及双语费用面板。缓存写入 Token 和费率已独立持久化；旧价格的写入费率保留为未知，并阻止新请求直到用户补齐。OpenCode Go 与 DeepSeek API 的峰谷规则已按发送时刻计价，峰时单价随价格版本冻结；界面把官方 UTC 窗口转换到已选报表时区显示。OpenCode Go / Go Plus 订阅费不纳入 Aoidos 费用面板或账本；Go 的每模型 Token 费率只用于估算其订阅额度使用。完整历史用量仅在原请求冻结价格仍可验证时允许预览并恢复；DeepSeek 余额仅在玩家主动查询时调用官方余额 API，其他供应商当前没有余额适配器。以上均不是实际账单对账。调用优先级、单次硬限与回合归 [LLM 架构](llm.md)，精确展示归[国际化](i18n.md)，凭据归 019；本文区分稳定协议与当前实现范围。
 
 ## 控制单位与默认额度
 
@@ -40,7 +40,7 @@ DeepSeek API 的 [USD 价格](https://api-docs.deepseek.com/quick_start/pricing/
 
 ## 金额、原币与单局分币种额度
 
-内部 NanoMoney 是 i64 的币种 × 10^-9；单项、同币种聚合、乘法全部检查溢出，拒绝不能表示的配置或预留。不同 currency 的 Money 禁止比较、相加或汇总。Rust 用精确整数分子和 checked i128 中间计算，禁止 f64；IPC 金额为十进制字符串 + 明确 currency，前端不计算额度。费用按有理数合计，不逐 Token 舍入累积误差。预留向上到 nano，结算 HALF_UP 到 nano，记录舍入政策版本。预算与费用界面统一显示到 0.01；显示时以整数分精确舍入，不回写账本或用于预算比较。当前未实现供应商余额界面；计价单价可在诊断明细显示更高精度。
+内部 NanoMoney 是 i64 的币种 × 10^-9；单项、同币种聚合、乘法全部检查溢出，拒绝不能表示的配置或预留。不同 currency 的 Money 禁止比较、相加或汇总。Rust 用精确整数分子和 checked i128 中间计算，禁止 f64；IPC 金额为十进制字符串 + 明确 currency，前端不计算额度。费用按有理数合计，不逐 Token 舍入累积误差。预留向上到 nano，结算 HALF_UP 到 nano，记录舍入政策版本。预算与费用界面统一显示到 0.01；显示时以整数分精确舍入，不回写账本或用于预算比较。DeepSeek 余额界面同样以精确格式显示原币金额，并按显式报表时区格式化查询时间；计价单价可在诊断明细显示更高精度。
 
 请求原币费用估算 = (inputUncached × inputUncachedPrice + inputCachedRead × inputCachedReadPrice + inputCachedWrite × inputCachedWritePrice + outputTotal × outputPrice) / unitTokens。费用金额、币种和 PriceVersion 一经结算永久按服务商原币保存。每局 CNY / USD 上限独立配置与校验；请求只占用其原币对应的额度，没有汇率换算、跨币总额或额度互借。原币额度与原币费用估算都来自服务商计价版本，不代表供应商实际账单的保证。服务商支持多种实际扣款币种时，模型登记选择与账户扣款口径一致的 PriceVersion；DeepSeek 的币种由实际账户选择，OpenRouter / OpenCode 使用 USD。界面语言只控制数字 / 货币格式，不决定模型计价币种或预算额度。
 
@@ -86,35 +86,34 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 查询按 runId 或自然月，先按 providerId 与 priceCurrency 分组，再支持 modelId 下钻；原币费用按币种展示，不存在跨币估算或合计。input / output / total / cached / reasoning / 请求次数均可见。月报同一服务商、同一币种内合计；未知用量数量、未确认占用、未计价小计显式列出，不展示零。列表复用 IPC 50 默认 / 200 最大分页，游标冻结查询 revision / 截止序号，后续页旧 revision 返回 app.bad-request（detail.reason=staleRevision）；不把账本全集塞进回合事件。
 
-历史导入的未计价请求保留身份 / usage / 原周期；补价命令提供范围、版本与预览摘要，按 audit operationId 幂等提交，仅针对完整 usage 且尚未计价项，已结算项不重算。补价后核对原周期预警；不能以补价创建新消费或编造 usage。未知金额使历史完整性为 incomplete，新请求前不能借历史缺价绕过当前周期门禁：先处理影响本周期余额的未知记录。
+历史恢复只接受 `unconfirmed`、完整保存数值 usage、尚未进入结算队列且仍能读取原 `priceVersionId` 的单条请求。预览使用原冻结费率和原 `dispatchAt`，提交前核对 ledger revision，再以 audit `operationId` 幂等写入本地恢复队列；成功后复用结算恢复路径。不能导入外部账单、选择较新的费率重算已结算记录或补造缺失 usage。缺原价格或任一必要 usage 字段时不提供候选项，历史仍显示未确认。
 
-已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price / budget_retry_settlement`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。`budget_backfill_price` 与 `budget_get_balance` 尚未注册；没有来源账单 / 历史请求导入或余额适配器时，不允许界面暗示这两项可用。
+已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price / budget_retry_settlement / budget_preview_backfill / budget_commit_backfill / budget_get_provider_balance`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。余额命令只允许 DeepSeek profile，不能改变本地预算门禁或账本。
 
 错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.settlement-backlog（恢复队列达到 256 条上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），计费命令的数据库存储失败映射为 `store.database`（由命令层构造，不是 `StoreError` 的通用映射）。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
 
 ## 可选供应商余额
 
-余额是参考信息，不替代本地账本或让预算拒绝放行。Provider 能力表新增可选 balance（由 035 对齐 018），适配器返回 `{ providerId, credentialRevision, queriedAt, status, accounts }`；status 为 available / unavailable / unknown，accounts 项含 account / key 的 scope、currency、decimal amount 与原始可用性。普通密钥无此能力则隐藏查询入口，不能从未知供应商 URL 猜接口或抓网页。
+余额是参考信息，不替代本地账本或让预算拒绝放行。当前只对 DeepSeek profile 开放显式查询，返回 `{ providerId, queriedAt, stale, status, accounts }`；status 为 available / unavailable / unknown，accounts 保留 DeepSeek CNY / USD 总额、赠送与充值十进制字符串。缓存键由 profile 配置和凭据摘要构成，但摘要不会离开进程；profile 或 API key 变化不会复用旧缓存。查询串行单飞，内存缓存最多 50 项。OpenCode Zen / Go 没有本期支持的公开余额适配器；不能从未知供应商 URL 猜接口或抓网页。
 
-核验的接口与限制如下；只是协议依据，不表示凭据实测通过：
+其他供应商的公开接口仅作未来评估，不代表产品已接入：
 
-| 供应商          | 接口与来源                                                                                           | 身份 / 金额边界                                                   |
-| --------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| DeepSeek        | [GET /user/balance](https://api-docs.deepseek.com/api/get-user-balance/)                             | is_available 与 CNY / USD 字符串，分别显示，不把不同币种相加      |
-| Kimi            | [GET /v1/users/me/balance](https://platform.kimi.com/docs/api/balance)                               | 可用余额 CNY，含代金券；业务 status / code 须校验                 |
-| SiliconFlow     | [GET /v1/user/info 官方 OpenAPI](https://github.com/siliconflow/siliconcloud/blob/main/openapi.yaml) | v1 为 base URL 前缀，提取余额 / 状态；不将昵称 / 邮箱送前端       |
-| OpenRouter      | [GET /api/v1/key](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)         | key 的剩余额度；null 上限不代表账户无限余额                       |
-| OpenRouter 账户 | [GET /api/v1/credits](https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits)    | 要管理密钥，total_credits - total_usage；额外凭据自愿登记并走 019 |
+| 供应商                | 接口与来源                                                                                           | 身份 / 金额边界                                                                |
+| --------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| DeepSeek（已接入）    | [GET /user/balance](https://api-docs.deepseek.com/api/get-user-balance/)                             | is_available 与 CNY / USD 字符串分别显示，不把不同币种相加；不需要额外管理密钥 |
+| Kimi（未接入）        | [GET /v1/users/me/balance](https://platform.kimi.com/docs/api/balance)                               | 启用前须确认所支持主机、业务 status / code 与账户币种                          |
+| SiliconFlow（未接入） | [GET /v1/user/info 官方 OpenAPI](https://github.com/siliconflow/siliconcloud/blob/main/openapi.yaml) | 余额币种语义须先核实；不将昵称 / 邮箱送前端                                    |
+| OpenRouter（未接入）  | [GET /api/v1/key](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)         | 需验证密钥权限与余额语义；null 上限不代表账户无限余额                          |
 
-首版不登记 OpenCode Zen / OpenAI / Anthropic 普通推理凭据的余额适配器；不以此宣称供应商永久不存在其他管理接口。供应商数值 JSON 在 Rust 保留数字词法并用 Decimal 解析，不能先经 f64；适配器必须有核验过的币种 / 可用性语义，SiliconFlow 仅凭 totalBalance 名称不能推定单位；证据不全暂不开放该适配器。未知币种、负值语义或解析异常是 unknown，不改账本。
+DeepSeek 以外的供应商余额尚未接入；这不表示供应商永久不存在其他管理接口。供应商数值 JSON 在 Rust 保留数字词法并用 Decimal 解析，不能先经 f64；适配器必须有核验过的币种 / 可用性语义。未知币种、负值语义或解析异常是 unknown，不改账本。
 
-查询仅显式刷新，或用户单独开启有界对账；默认无定期网络请求。启用后最短 5 分钟间隔、每次操作最多一次在飞，失败指数退避至 1 小时，卸载 / 撤销即停；不使用 LLM、不随 token 事件发请求，身份变化丢旧结果。响应体 / 超时沿用有界 HTTP 纪律。新鲜度上限 5 分钟，过期显示查询时间与 stale，不用旧 unavailable 永久阻止请求。
+查询仅由玩家点击发起，没有后台刷新、定期对账或 token 事件请求。DeepSeek 余额响应和 unknown 结果在内存缓存；每个配置最多每 5 分钟查询一次，失败指数退避至 1 小时，最多一次余额 HTTP 请求在飞。过期缓存带 `stale` 标记；profile / key 变化使用不同的缓存身份，卸载 UI 不会取消已发送的单次查询，但迟到结果由前端 generation guard 丢弃。响应体 / 超时沿用有界 HTTP 纪律。
 
-只有最新有效响应明确报告额度不可用时可返回 llm.quota；HTTP 401 / 403 / 网络失败 / 未支持接口保持原错误 / unknown，不当余额不足。并排显示本地与供应商金额。偏差提醒仅比较同币种同账户、相同凭据版本、两次有效快照间已结算消费，要求无未确认且语义可比；阈值默认 max(0.01, 本地期间费用的 10%)，可设置，单窗口去重。充值、赠送 / 过期、外部用 key 和税费可能产生偏差，只提示核查，不补写账本或自动变更预算。
+余额查询不返回 `llm.quota`，也不阻断生成；不可用 / 未知状态只作为供应商余额信息显示。当前没有账本偏差自动对账或充值 / 赠送推断，不补写账本或自动变更预算。
 
 ## 实施与验证依据
 
-035 当前已交付价格登记与原币账本、单局预算门禁、统一物理调用端口、费用设置 / 明细及月报、缓存创建 Token、峰谷计价和有界结算恢复；历史补价和可选供应商余额尚未交付，不能宣称任务完成。接入 018–020 / 025 / 034，030 / 033 等待 035。产品不购买额度、不读取供应商逐请求账单、不追踪订阅费用、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
+035 已交付价格登记与原币账本、单局预算门禁、统一物理调用端口、费用设置 / 明细及月报、缓存创建 Token、峰谷计价、有界结算恢复、受限历史恢复和 DeepSeek 显式余额查询；三平台实机 UI 展示证据仍待补，不代表真实账单对账。接入 018–020 / 025 / 034，030 / 033 可消费已实现的计费端口。产品不购买额度、不读取供应商逐请求账单、不追踪订阅费用、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
 
 [足精度 Decimal](https://docs.rs/rust_decimal/latest/rust_decimal/)与 [jiff 时区](https://docs.rs/jiff/latest/jiff/)在实现时核验并集中 workspace 版本，不在设计提交中安装。字节输入估计必须包含完整序列化输入、协议固定开销与输出 / reasoning 上限；供应商适配器声明可证明的上界 / 保守系数，不能对任意 tokenizer 宣称 1 byte = 1 Token 永远成立。不能给出可靠上界时按模型输入硬限预留；超出估计完整结算且停新请求。未来 tokenizer 接入另行授权 / 验证，不暗加网络计数调用。
 

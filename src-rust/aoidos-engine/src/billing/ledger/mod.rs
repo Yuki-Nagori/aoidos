@@ -148,6 +148,28 @@ pub struct RequestPage {
     pub next_cursor: Option<String>,
 }
 
+/// 可恢复旧版中已保存完整 Token 用量但尚未写入金额的单个历史请求。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackfillPreview {
+    pub request_id: String,
+    pub run_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub currency: Currency,
+    pub price_version_id: String,
+    pub estimated_amount: NanoMoney,
+    pub ledger_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackfillResult {
+    /// 用量已进入本地恢复队列，可继续执行结算恢复。
+    Pending(PendingSettlement),
+    /// 相同操作已完成结算，无需再次写入或恢复。
+    AlreadySettled,
+}
+
 /// 根据所选模型的参考用量分别给出各币种的建议上限。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -245,6 +267,148 @@ type ExistingSettlement = (
 );
 
 impl BillingLedger {
+    /// 预览完整保存了用量且仍能验证原冻结价格的历史未决请求。
+    /// 不会使用当前价格目录替换请求原先绑定的价格。
+    ///
+    /// # Errors
+    ///
+    /// 请求标识无效、冻结价格缺失、历史身份或用量不一致，以及数据库读取失败时返回错误。
+    pub fn preview_backfill(
+        connection: &Connection,
+        request_id: &str,
+    ) -> Result<Option<BackfillPreview>, BillingError> {
+        validate_text(request_id, 128)?;
+        let Some(row) = backfillable_usage(connection, request_id)? else {
+            return Ok(None);
+        };
+        let price = Self::price_by_id(connection, &row.price_version_id)?
+            .ok_or(BillingError::PriceMissing)?;
+        validate_backfill_price(&row, &price)?;
+        let amount = backfill_amount(&row, &price)?;
+        let revision = read_ledger_revision(connection)?;
+        Ok(Some(BackfillPreview {
+            request_id: row.request_id,
+            run_id: row.run_id,
+            provider_id: row.provider_id,
+            model_id: row.model_id,
+            currency: row.currency,
+            price_version_id: row.price_version_id,
+            estimated_amount: amount,
+            ledger_revision: revision,
+        }))
+    }
+
+    /// 使用完整持久化用量和请求原先绑定的不可变价格，暂存带审计且幂等的历史补记。
+    /// 调用方随后可复用本地结算恢复流程。
+    ///
+    /// # Errors
+    ///
+    /// 请求或操作标识无效、价格或历史数据不一致、账本版本过期、恢复队列已满，
+    /// 以及数据库读写失败时返回错误。
+    pub fn stage_backfill(
+        connection: &mut Connection,
+        request_id: &str,
+        operation_id: &str,
+        expected_revision: u64,
+        updated_at: &str,
+    ) -> Result<BackfillResult, BillingError> {
+        validate_text(request_id, 128)?;
+        validate_text(operation_id, 128)?;
+        validate_text(updated_at, 64)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let Some(row) = backfillable_usage(&transaction, request_id)? else {
+            // 同一操作可能已暂存恢复或完成结算，必须先检查幂等结果再判断队列容量。
+            let existing: Option<(String, String)> = transaction
+                .query_row(
+                    "SELECT operation_kind,target_id FROM billing_audit WHERE operation_id=?1",
+                    [operation_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(storage)?;
+            if existing
+                .as_ref()
+                .is_some_and(|(kind, target)| kind == "settlement-backfill" && target == request_id)
+            {
+                let pending = BillingLedger::pending_settlement(&transaction, request_id)?;
+                if let Some(pending) = pending {
+                    transaction.commit().map_err(storage)?;
+                    return Ok(BackfillResult::Pending(pending));
+                }
+                let settled: bool = transaction
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM billing_physical_requests WHERE request_id=?1 AND state='settled' AND actual_nanos IS NOT NULL)",
+                        [request_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(storage)?;
+                if settled {
+                    transaction.commit().map_err(storage)?;
+                    return Ok(BackfillResult::AlreadySettled);
+                }
+                return Err(BillingError::Conflict);
+            }
+            return Err(BillingError::Conflict);
+        };
+        let current_revision = read_ledger_revision(&transaction)?;
+        if current_revision != expected_revision {
+            return Err(BillingError::StaleRevision);
+        }
+        let operation: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT operation_kind,target_id FROM billing_audit WHERE operation_id=?1",
+                [operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage)?;
+        if operation.is_some() {
+            // 已暂存或结算的重放在前面的分支处理；此处已有审计却无恢复项说明状态冲突。
+            return Err(BillingError::Conflict);
+        }
+        let price = Self::price_by_id(&transaction, &row.price_version_id)?
+            .ok_or(BillingError::PriceMissing)?;
+        validate_backfill_price(&row, &price)?;
+        let amount = backfill_amount(&row, &price)?;
+        let usage = row.usage.clone();
+        let pending_count: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM billing_pending_settlements",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        // 历史补记只把已计入总上限的未决请求转入恢复队列，不会增加名额占用。
+        if pending_count >= MAX_PENDING_SETTLEMENTS {
+            return Err(BillingError::SettlementBacklog);
+        }
+        let digest = pending_usage_digest(&usage);
+        let details = aoidos_json::to_string(&serde_json::json!({
+            "currency": row.currency.code(),
+            "priceVersionId": row.price_version_id,
+            "usageDigest": digest,
+            "estimatedAmount": amount.to_string(),
+        }))
+        .map_err(|_| BillingError::Invalid)?;
+        transaction
+            .execute(
+                "INSERT INTO billing_pending_settlements(request_id,input_total,input_cached,input_cached_write,output_total,reasoning_included,result_digest,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",
+                params![request_id,to_i64(usage.input_total)?,usage.input_cached.map(to_i64).transpose()?,usage.input_cached_write.map(to_i64).transpose()?,to_i64(usage.output_total)?,usage.reasoning_included.map(to_i64).transpose()?,digest,updated_at],
+            )
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "INSERT INTO billing_audit(operation_id,operation_kind,target_id,details_json,created_at) VALUES(?1,'settlement-backfill',?2,?3,?4)",
+                params![operation_id,request_id,details,updated_at],
+            )
+            .map_err(storage)?;
+        bump_revision(&transaction)?;
+        transaction.commit().map_err(storage)?;
+        Ok(BackfillResult::Pending(usage))
+    }
+
     /// 查询请求所属的周目，用于 IPC 权限校验，不读取或返回请求正文。
     ///
     /// # Errors
@@ -1719,6 +1883,149 @@ fn pending_usage_digest(pending: &PendingSettlement) -> String {
     hash.update(pending.output_total.to_be_bytes());
     hash_optional_count(&mut hash, pending.reasoning_included);
     format!("sha256:{:x}", hash.finalize())
+}
+
+struct BackfillableUsage {
+    request_id: String,
+    run_id: String,
+    provider_id: String,
+    model_id: String,
+    route_policy: String,
+    currency: Currency,
+    price_version_id: String,
+    dispatch_at: String,
+    total_tokens: Option<u64>,
+    usage: PendingSettlement,
+}
+
+impl BackfillableUsage {
+    fn normalized(&self) -> Result<NormalizedUsage, BillingError> {
+        NormalizedUsage::from_provider_with_cache_write(
+            self.usage.input_total,
+            self.usage.input_cached,
+            self.usage.input_cached_write,
+            self.usage.output_total,
+            self.usage.reasoning_included,
+        )
+        .map_err(|_| BillingError::Invalid)
+    }
+}
+
+fn backfillable_usage(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<Option<BackfillableUsage>, BillingError> {
+    let stored = connection
+        .query_row(
+            "SELECT run_id,provider_id,model_id,route_policy,currency,price_version_id,dispatch_at,input_total,input_cached,input_cached_write,output_total,reasoning_included,total_tokens FROM billing_physical_requests WHERE request_id=?1 AND state='unconfirmed' AND actual_nanos IS NULL AND NOT EXISTS (SELECT 1 FROM billing_pending_settlements WHERE request_id=?1)",
+            [request_id],
+            |row| Ok((
+                row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?, row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<i64>>(8)?, row.get::<_, Option<i64>>(9)?,
+                row.get::<_, Option<i64>>(10)?, row.get::<_, Option<i64>>(11)?,
+                row.get::<_, Option<i64>>(12)?,
+            )),
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some((
+        run_id,
+        provider_id,
+        model_id,
+        route_policy,
+        currency,
+        price_version_id,
+        dispatch_at,
+        input_total,
+        input_cached,
+        input_cached_write,
+        output_total,
+        reasoning_included,
+        total_tokens,
+    )) = stored
+    else {
+        return Ok(None);
+    };
+    let Some((input_total, input_cached, input_cached_write, output_total)) = input_total
+        .zip(input_cached)
+        .zip(input_cached_write)
+        .zip(output_total)
+        .map(|(((input, cached), cache_write), output)| (input, cached, cache_write, output))
+    else {
+        return Ok(None);
+    };
+    let usage = PendingSettlement {
+        request_id: request_id.to_owned(),
+        input_total: u64::try_from(input_total).map_err(|_| BillingError::Storage)?,
+        input_cached: Some(u64::try_from(input_cached).map_err(|_| BillingError::Storage)?),
+        input_cached_write: Some(
+            u64::try_from(input_cached_write).map_err(|_| BillingError::Storage)?,
+        ),
+        output_total: u64::try_from(output_total).map_err(|_| BillingError::Storage)?,
+        reasoning_included: reasoning_included
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| BillingError::Storage)?,
+        diagnostic_code: None,
+    };
+    Ok(Some(BackfillableUsage {
+        request_id: request_id.to_owned(),
+        run_id,
+        provider_id,
+        model_id,
+        route_policy,
+        currency: currency.parse().map_err(|_| BillingError::Storage)?,
+        price_version_id,
+        dispatch_at,
+        total_tokens: total_tokens
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| BillingError::Storage)?,
+        usage,
+    }))
+}
+
+fn validate_backfill_price(
+    row: &BackfillableUsage,
+    price: &PriceVersion,
+) -> Result<(), BillingError> {
+    if row.provider_id != price.provider_id
+        || row.model_id != price.model_id
+        || row.route_policy != price.route_policy
+        || row.currency != price.currency
+    {
+        return Err(BillingError::Conflict);
+    }
+    let normalized = row.normalized()?;
+    if row
+        .total_tokens
+        .is_some_and(|tokens| tokens != normalized.total_tokens)
+    {
+        return Err(BillingError::Conflict);
+    }
+    Ok(())
+}
+
+fn backfill_amount(
+    row: &BackfillableUsage,
+    price: &PriceVersion,
+) -> Result<NanoMoney, BillingError> {
+    row.normalized()?
+        .exact_cost_at(price, &row.dispatch_at)
+        .map_err(|_| BillingError::Invalid)?
+        .settle()
+        .map_err(|_| BillingError::Invalid)
+}
+
+fn read_ledger_revision(connection: &Connection) -> Result<u64, BillingError> {
+    connection
+        .query_row("SELECT revision FROM billing_meta WHERE id=1", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(storage)
+        .and_then(|revision| u64::try_from(revision).map_err(|_| BillingError::Storage))
 }
 
 fn hash_optional_count(hash: &mut Sha256, value: Option<u64>) {

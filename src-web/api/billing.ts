@@ -105,6 +105,30 @@ export interface BillingRequestPage {
   nextCursor?: string;
 }
 
+export interface BillingBackfillPreview {
+  requestId: string;
+  runId: string;
+  providerId: string;
+  modelId: string;
+  currency: BillingCurrency;
+  priceVersionId: string;
+  estimatedAmount: string;
+  ledgerRevision: number;
+}
+
+export interface ProviderBalanceSnapshot {
+  providerId: "deepseek";
+  queriedAt: string;
+  stale: boolean;
+  status: "available" | "unavailable" | "unknown";
+  accounts: Array<{
+    currency: string;
+    total: string;
+    granted: string;
+    toppedUp: string;
+  }>;
+}
+
 /** 读取每局独立设置的 CNY / USD 上限；未设置时返回 null。 */
 export function getBudgetSettings(runId: string): Promise<BudgetSettings | null> {
   return invoke("budget_get_settings", { runId });
@@ -161,9 +185,30 @@ export function listBillingRequests(
   return invoke("budget_list_requests", { runId, cursor, limit });
 }
 
-/** Retries saved numeric usage without issuing another provider request. */
+/** 重试本地暂存的数值用量，不会重新发送供应商请求。 */
 export function retryBillingSettlement(runId: string, requestId: string): Promise<void> {
   return invoke("budget_retry_settlement", { runId, requestId });
+}
+
+export function previewBillingBackfill(
+  runId: string,
+  requestId: string,
+): Promise<BillingBackfillPreview | null> {
+  return invoke("budget_preview_backfill", { runId, requestId });
+}
+
+export function commitBillingBackfill(
+  runId: string,
+  requestId: string,
+  operationId: string,
+  expectedRevision: number,
+): Promise<void> {
+  return invoke("budget_commit_backfill", { runId, requestId, operationId, expectedRevision });
+}
+
+/** 仅在玩家显式请求时查询当前支持的供应商余额。 */
+export function getProviderBalance(profileId: string): Promise<ProviderBalanceSnapshot> {
+  return invoke("budget_get_provider_balance", { profileId });
 }
 
 /** 通过乐观修订校验原子保存两种原币上限。 */
