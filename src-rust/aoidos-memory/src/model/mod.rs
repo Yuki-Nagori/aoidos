@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+mod proposal;
+pub use proposal::*;
+mod question;
+pub use question::*;
+
 pub type Hash = [u8; 32];
 pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;
 pub const MAX_VERSION_BYTES: usize = 32 * 1024;
@@ -18,6 +23,12 @@ pub fn new_id() -> String {
 }
 pub(crate) fn valid_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
+}
+pub(crate) fn valid_short_id(id: &str) -> bool {
+    (1..=32).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()

@@ -147,33 +147,86 @@ CREATE INDEX memory_effects_operation ON memory_effects(operation_id);
 CREATE INDEX memory_processed_operation ON memory_processed(operation_id);
 "#;
 
+/// 030 批次回执：物理请求身份、原始响应和本地逐项结果与状态原子持久化。
+pub const BATCH_RECEIPT_MIGRATION: &str = r#"
+CREATE TABLE memory_batch_receipts (
+ batch_id TEXT PRIMARY KEY REFERENCES memory_batches(batch_id),
+ turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id)=36),
+ request_id TEXT NOT NULL UNIQUE CHECK(length(request_id)=36),
+ response_hash BLOB CHECK(response_hash IS NULL OR length(response_hash)=32),
+ response_json BLOB CHECK(response_json IS NULL OR length(response_json)<=65536),
+ completion_json BLOB CHECK(completion_json IS NULL OR length(completion_json)<=65536),
+ completion_hash BLOB CHECK(completion_hash IS NULL OR length(completion_hash)=32),
+ error_code TEXT CHECK(error_code IS NULL OR length(error_code)<=64),
+ CHECK((response_hash IS NULL)=(response_json IS NULL)),
+ CHECK((completion_hash IS NULL)=(completion_json IS NULL)),
+ CHECK(completion_json IS NULL OR response_json IS NOT NULL)
+)
+"#;
+
+/// 030 持久问题队列：候选变化递增 revision，回答只写入当前 pending 版本。
+pub const QUESTION_MIGRATION: &str = r#"
+CREATE TABLE memory_questions (
+ question_id TEXT PRIMARY KEY CHECK(length(question_id)=36),
+ run_id TEXT NOT NULL REFERENCES memory_runs(run_id),
+ question_key BLOB NOT NULL CHECK(length(question_key)=32),
+ revision INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 9007199254740991),
+ history_revision INTEGER NOT NULL CHECK(history_revision BETWEEN 0 AND 9007199254740991),
+ entity_revision INTEGER NOT NULL CHECK(entity_revision BETWEEN 0 AND 9007199254740991),
+ evidence_revision INTEGER NOT NULL CHECK(evidence_revision BETWEEN 0 AND 9007199254740991),
+ draft_json BLOB NOT NULL CHECK(length(draft_json)<=65536),
+ status TEXT NOT NULL CHECK(status IN ('pending','resolved','invalidated')),
+ answer_json BLOB CHECK(answer_json IS NULL OR length(answer_json)<=8192),
+ CHECK((status='resolved')=(answer_json IS NOT NULL))
+);
+CREATE UNIQUE INDEX memory_questions_pending_key
+ ON memory_questions(run_id,question_key) WHERE status='pending';
+CREATE INDEX memory_questions_page
+ ON memory_questions(run_id,status,question_id);
+"#;
+
 /// 核验迁移后的领域表 / 索引定义，不把同名但缺约束的旧库当合法 manifest。
 /// # Errors
 /// 缺少或改变已登记结构为 corrupt，SQL 读取错误保持存储类别。
 pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
     use rusqlite::OptionalExtension;
-    for statement in SCHEMA
-        .split(';')
-        .map(str::trim)
-        .filter(|sql| !sql.is_empty())
-    {
-        let name = statement
-            .split_whitespace()
-            .nth(2)
-            .ok_or_else(invalid_schema)?;
-        let actual: Option<String> = conn
-            .query_row(
-                "SELECT sql FROM sqlite_schema WHERE name=?1",
-                [name],
-                read_definition,
-            )
-            .optional()
-            .map_err(aoidos_store::db::sqlite_error)?;
-        if actual.as_deref().map(normalize_sql) != Some(normalize_sql(statement)) {
-            return Err(invalid_schema());
+    for migration in [SCHEMA, BATCH_RECEIPT_MIGRATION, QUESTION_MIGRATION] {
+        for statement in migration
+            .split(';')
+            .map(str::trim)
+            .filter(|sql| !sql.is_empty())
+        {
+            let name = schema_object_name(statement).ok_or_else(invalid_schema)?;
+            let actual: Option<String> = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_schema WHERE name=?1",
+                    [name],
+                    read_definition,
+                )
+                .optional()
+                .map_err(aoidos_store::db::sqlite_error)?;
+            if actual.as_deref().map(normalize_sql) != Some(normalize_sql(statement)) {
+                return Err(invalid_schema());
+            }
         }
     }
     Ok(())
+}
+fn schema_object_name(statement: &str) -> Option<&str> {
+    let mut words = statement.split_whitespace();
+    match (words.next()?, words.next()?) {
+        ("CREATE", "UNIQUE") => {
+            if words.next()? != "INDEX" {
+                return None;
+            }
+            words.next()
+        }
+        ("CREATE", _) => {
+            let mut words = statement.split_whitespace();
+            words.nth(2)
+        }
+        _ => None,
+    }
 }
 fn normalize_sql(sql: &str) -> String {
     sql.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -194,6 +247,8 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         assert!(verify(&conn).is_err());
         conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
+        conn.execute_batch(QUESTION_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
             .unwrap();
@@ -206,18 +261,54 @@ mod tests {
             .execute_batch(&SCHEMA.replace("CHECK(length(run_id)=36)", "CHECK(length(run_id)>0)"))
             .unwrap();
         assert!(verify(&weakened).is_err());
+
+        let missing_receipts = rusqlite::Connection::open_in_memory().unwrap();
+        missing_receipts.execute_batch(SCHEMA).unwrap();
+        missing_receipts
+            .execute_batch(BATCH_RECEIPT_MIGRATION)
+            .unwrap();
+        missing_receipts.execute_batch(QUESTION_MIGRATION).unwrap();
+        missing_receipts
+            .execute_batch("DROP TABLE memory_batch_receipts")
+            .unwrap();
+        assert!(verify(&missing_receipts).is_err());
+
+        let missing_questions = rusqlite::Connection::open_in_memory().unwrap();
+        missing_questions.execute_batch(SCHEMA).unwrap();
+        missing_questions
+            .execute_batch(BATCH_RECEIPT_MIGRATION)
+            .unwrap();
+        missing_questions.execute_batch(QUESTION_MIGRATION).unwrap();
+        missing_questions
+            .execute_batch("DROP TABLE memory_questions")
+            .unwrap();
+        assert!(verify(&missing_questions).is_err());
     }
 
     #[test]
     fn definitions_accept_whitespace_only_and_propagate_sql_errors() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(&SCHEMA.replace('\n', "  ")).unwrap();
+        conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
+        conn.execute_batch(QUESTION_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=NULL WHERE name='memory_runs'",
         )
         .unwrap();
         assert!(verify(&conn).is_err());
+    }
+
+    #[test]
+    fn object_name_parser_rejects_non_schema_and_malformed_unique_statements() {
+        assert_eq!(schema_object_name("CREATE UNIQUE TABLE x"), None);
+        assert_eq!(schema_object_name("DROP TABLE x"), None);
+        assert_eq!(schema_object_name("CREATE"), None);
+        assert_eq!(schema_object_name("CREATE UNIQUE INDEX"), None);
+        assert_eq!(
+            schema_object_name("CREATE UNIQUE INDEX x ON y(z)"),
+            Some("x")
+        );
     }
 
     #[test]

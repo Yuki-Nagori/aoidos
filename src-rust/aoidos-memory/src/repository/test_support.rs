@@ -69,6 +69,10 @@ impl Fixture {
         assert_eq!(mode, "wal");
         conn.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE store_applied(id TEXT PRIMARY KEY,content_hash TEXT NOT NULL);").unwrap();
         conn.execute_batch(crate::schema::SCHEMA).unwrap();
+        conn.execute_batch(crate::schema::BATCH_RECEIPT_MIGRATION)
+            .unwrap();
+        conn.execute_batch(crate::schema::QUESTION_MIGRATION)
+            .unwrap();
         let port = Port {
             view: Boundary {
                 script_id: "mistbell".into(),
