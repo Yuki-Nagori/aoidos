@@ -1,5 +1,14 @@
 use super::*;
 
+fn archive_candidate(id: &str, required: bool, strength: u64, position: u64) -> ArchiveCandidate {
+    ArchiveCandidate {
+        entry_id: id.into(),
+        required,
+        strength,
+        last_logical_position: position,
+    }
+}
+
 fn policy(algorithm: Algorithm) -> Policy {
     Policy {
         version: 1,
@@ -19,6 +28,93 @@ fn policy(algorithm: Algorithm) -> Policy {
         rate_table_version: 1,
         decay_rate: 900_000,
     }
+}
+
+#[test]
+fn archive_selection_uses_required_score_recency_and_byte_order() {
+    let candidates = [
+        archive_candidate("00000000-0000-4000-8000-000000000004", false, 900_000, 1),
+        archive_candidate("00000000-0000-4000-8000-000000000005", true, 100_000, 0),
+        archive_candidate("00000000-0000-4000-8000-000000000003", false, 900_000, 2),
+        archive_candidate("00000000-0000-4000-8000-000000000002", false, 900_000, 2),
+    ];
+    assert_eq!(
+        select_archive(&candidates, 2).unwrap(),
+        [
+            "00000000-0000-4000-8000-000000000003",
+            "00000000-0000-4000-8000-000000000004"
+        ]
+    );
+}
+
+#[test]
+fn archive_selection_rejects_capacity_overflow_and_invalid_candidates() {
+    let candidates = [
+        archive_candidate("00000000-0000-4000-8000-000000000001", true, 10, 0),
+        archive_candidate("00000000-0000-4000-8000-000000000002", true, 20, 0),
+    ];
+    assert!(matches!(
+        select_archive(&candidates, 1),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
+    assert!(matches!(
+        select_archive(&candidates, 0),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    let duplicate = [
+        archive_candidate("00000000-0000-4000-8000-000000000003", false, 10, 0),
+        archive_candidate("00000000-0000-4000-8000-000000000003", false, 20, 0),
+    ];
+    assert!(matches!(
+        select_archive(&duplicate, 1),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    let invalid_score = [archive_candidate(
+        "00000000-0000-4000-8000-000000000004",
+        false,
+        1_000_001,
+        0,
+    )];
+    assert!(matches!(
+        select_archive(&invalid_score, 1),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    let invalid_position = [archive_candidate(
+        "00000000-0000-4000-8000-000000000005",
+        false,
+        1,
+        MAX_INTEGER + 1,
+    )];
+    assert!(matches!(
+        select_archive(&invalid_position, 1),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    let invalid_id = [archive_candidate("invalid", false, 1, 0)];
+    assert!(matches!(
+        select_archive(&invalid_id, 1),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    assert!(
+        select_archive(&[], MAX_ARCHIVE_CANDIDATES)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        select_archive(&[], MAX_ARCHIVE_CANDIDATES + 1),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    let oversized = vec![
+        archive_candidate("00000000-0000-4000-8000-000000000006", false, 1, 0);
+        MAX_ARCHIVE_CANDIDATES + 1
+    ];
+    assert!(matches!(
+        select_archive(&oversized, 1),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
 }
 
 #[test]
