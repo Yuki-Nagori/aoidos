@@ -3,7 +3,8 @@
 mod ledger;
 mod port;
 pub use ledger::{
-    BillingError, BillingLedger, BudgetSettings, BudgetWarning, ModelUsageSummary, RequestItem,
-    RequestPage, Reservation, Settlement, SettlementResult, SuggestedLimits,
+    BillingError, BillingLedger, BudgetSettings, BudgetWarning, ModelUsageSummary,
+    PendingSettlement, RequestItem, RequestPage, Reservation, Settlement, SettlementResult,
+    SuggestedLimits,
 };
 pub use port::LedgerBudgetPort;

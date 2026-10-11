@@ -7,6 +7,7 @@ import {
   getRunPeriod,
   getSuggestedLimits,
   listBillingRequests,
+  retryBillingSettlement,
   registerPrice,
   selectPrice,
   setBudgetSettings,
@@ -60,6 +61,7 @@ export function useBilling(
   const period = ref<RunPeriod>();
   const monthly = ref<MonthlyPeriod>();
   const requests = ref<BillingRequestPage>();
+  const retryingRequestId = ref<string>();
   const priceCurrency = ref<BillingCurrency>("CNY");
   const cnyLimit = ref("");
   const usdLimit = ref("");
@@ -370,6 +372,26 @@ export function useBilling(
     }
   }
 
+  async function retrySettlement(requestId: string): Promise<void> {
+    const activeRun = runId.value;
+    if (!activeRun || retryingRequestId.value) return;
+    const current = generation;
+    error.value = undefined;
+    retryingRequestId.value = requestId;
+    try {
+      await retryBillingSettlement(activeRun, requestId);
+      if (disposed || current !== generation || activeRun !== runId.value) return;
+      await Promise.all([loadRequests(true), loadPeriodFor(activeRun, current)]);
+    } catch (failure) {
+      if (!disposed && current === generation && activeRun === runId.value) {
+        error.value = normalizeError(failure);
+        await loadRequests(true);
+      }
+    } finally {
+      retryingRequestId.value = undefined;
+    }
+  }
+
   async function loadMonthly(): Promise<void> {
     try {
       const current = await fetchCurrentMonth();
@@ -397,6 +419,7 @@ export function useBilling(
     period,
     monthly,
     requests,
+    retryingRequestId,
     cnyLimit,
     usdLimit,
     priceCurrency,
@@ -421,5 +444,6 @@ export function useBilling(
     loadPeriod,
     loadMonthly,
     loadRequests,
+    retrySettlement,
   };
 }

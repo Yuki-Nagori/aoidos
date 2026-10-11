@@ -14,6 +14,12 @@ fn database() -> Connection {
         .execute_batch(aoidos_billing::schema::CACHE_WRITE_MIGRATION)
         .unwrap();
     connection
+        .execute_batch(aoidos_billing::schema::SETTLEMENT_RECOVERY_MIGRATION)
+        .unwrap();
+    connection
+        .execute_batch(aoidos_billing::schema::SETTLEMENT_DIAGNOSTICS_MIGRATION)
+        .unwrap();
+    connection
 }
 
 fn reservation(request_id: &str, currency: Currency, amount: &str) -> Reservation {
@@ -116,6 +122,10 @@ fn error_display_settings_and_price_lookup_keep_domain_boundaries() {
         (
             BillingError::PriceHistoryLimit,
             "price history reached its safety limit",
+        ),
+        (
+            BillingError::SettlementBacklog,
+            "pending settlement recovery reached its safety limit",
         ),
         (BillingError::NotFound, "billing request not found"),
         (
@@ -612,6 +622,50 @@ fn reservation_is_idempotent_but_conflicting_identity_is_rejected() {
 }
 
 #[test]
+fn unresolved_requests_reserve_bounded_settlement_recovery_capacity() {
+    let mut connection = database();
+    prepare(&mut connection);
+    for index in 0..255 {
+        let request = reservation(&format!("pending-capacity-{index}"), Currency::Cny, "0");
+        BillingLedger::reserve(&mut connection, &request).unwrap();
+    }
+    BillingLedger::stage_settlement(
+        &mut connection,
+        &PendingSettlement {
+            request_id: "pending-capacity-0".into(),
+            input_total: 1,
+            input_cached: Some(0),
+            input_cached_write: Some(0),
+            output_total: 1,
+            reasoning_included: None,
+            diagnostic_code: None,
+        },
+        "2026-10-11T00:00:00Z",
+    )
+    .unwrap();
+    // 同一请求的恢复队列条目与未决状态共用一个容量名额。
+    BillingLedger::reserve(
+        &mut connection,
+        &reservation("pending-capacity-255", Currency::Cny, "0"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        BillingLedger::reserve(
+            &mut connection,
+            &reservation("pending-capacity-overflow", Currency::Cny, "0")
+        ),
+        Err(BillingError::SettlementBacklog)
+    );
+    // Retrying an already persisted reservation remains idempotent at the cap.
+    BillingLedger::reserve(
+        &mut connection,
+        &reservation("pending-capacity-0", Currency::Cny, "0"),
+    )
+    .unwrap();
+}
+
+#[test]
 fn unknown_usage_keeps_hold_and_exact_settlement_is_idempotent() {
     let mut connection = database();
     prepare(&mut connection);
@@ -936,6 +990,19 @@ fn settlement_rejects_corrupt_states_and_ignored_sql_updates() {
             [],
         )
         .unwrap();
+    let before = BillingLedger::list_requests(&corrupt, "run-1", None, None).unwrap();
+    assert_eq!(
+        BillingLedger::stage_settlement(&mut corrupt, &pending("corrupt-state"), "staged"),
+        Err(BillingError::Conflict)
+    );
+    assert_eq!(
+        BillingLedger::list_requests(&corrupt, "run-1", None, None).unwrap(),
+        before
+    );
+    assert_eq!(
+        BillingLedger::pending_settlement(&corrupt, "corrupt-state").unwrap(),
+        None
+    );
     assert_eq!(
         BillingLedger::settle(
             &mut corrupt,
@@ -1292,5 +1359,242 @@ fn reservation_rejects_expired_price_even_when_profile_selection_is_present() {
     assert_eq!(
         BillingLedger::reserve(&mut connection, &reservation("expired", Currency::Cny, "1")),
         Err(BillingError::Invalid)
+    );
+}
+
+fn pending(request_id: &str) -> PendingSettlement {
+    PendingSettlement {
+        request_id: request_id.into(),
+        input_total: 10,
+        input_cached: Some(2),
+        input_cached_write: Some(1),
+        output_total: 3,
+        reasoning_included: Some(1),
+        diagnostic_code: None,
+    }
+}
+
+#[test]
+fn settled_usage_conflict_records_diagnostic_once_without_changing_original_charge() {
+    let mut connection = database();
+    prepare(&mut connection);
+    BillingLedger::reserve(
+        &mut connection,
+        &reservation("settled-conflict", Currency::Cny, "1"),
+    )
+    .unwrap();
+    BillingLedger::settle(
+        &mut connection,
+        "settled-conflict",
+        Some(&summary_settlement()),
+        "settled",
+    )
+    .unwrap();
+    let before = BillingLedger::list_requests(&connection, "run-1", None, None).unwrap();
+    let conflicting = pending("settled-conflict");
+    assert_eq!(
+        BillingLedger::stage_settlement(&mut connection, &conflicting, "first-conflict"),
+        Err(BillingError::Conflict)
+    );
+    let after = BillingLedger::list_requests(&connection, "run-1", None, None).unwrap();
+    assert_eq!(
+        after.revision.parse::<u64>().unwrap(),
+        before.revision.parse::<u64>().unwrap() + 1
+    );
+    let mut expected = before.items;
+    expected[0].diagnostic_code = Some("budget.conflict".into());
+    assert_eq!(after.items, expected);
+    assert_eq!(
+        BillingLedger::pending_settlement(&connection, "settled-conflict").unwrap(),
+        None
+    );
+    assert_eq!(
+        BillingLedger::stage_settlement(&mut connection, &conflicting, "repeated-conflict"),
+        Err(BillingError::Conflict)
+    );
+    assert_eq!(
+        BillingLedger::list_requests(&connection, "run-1", None, None).unwrap(),
+        after
+    );
+}
+
+#[test]
+fn settlement_journal_is_idempotent_and_preserves_conflicting_original_usage() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let timestamp = "2026-10-11T00:00:00Z";
+    let original = pending("journal");
+    assert_eq!(
+        BillingLedger::stage_settlement(&mut connection, &original, timestamp),
+        Err(BillingError::NotFound)
+    );
+    BillingLedger::reserve(&mut connection, &reservation("journal", Currency::Cny, "0")).unwrap();
+    BillingLedger::stage_settlement(&mut connection, &original, timestamp).unwrap();
+    let revision = BillingLedger::list_requests(&connection, "run-1", None, None)
+        .unwrap()
+        .revision;
+    BillingLedger::stage_settlement(&mut connection, &original, timestamp).unwrap();
+    assert_eq!(
+        BillingLedger::list_requests(&connection, "run-1", None, None)
+            .unwrap()
+            .revision,
+        revision
+    );
+    let mut conflicting = original.clone();
+    conflicting.input_cached = None;
+    assert_eq!(
+        BillingLedger::stage_settlement(&mut connection, &conflicting, timestamp),
+        Err(BillingError::Conflict)
+    );
+    let mut expected = original.clone();
+    expected.diagnostic_code = Some("budget.conflict".into());
+    assert_eq!(
+        BillingLedger::pending_settlement(&connection, "journal").unwrap(),
+        Some(expected)
+    );
+    assert_eq!(
+        BillingLedger::list_requests(&connection, "run-1", None, None)
+            .unwrap()
+            .items[0]
+            .diagnostic_code
+            .as_deref(),
+        Some("budget.conflict")
+    );
+    assert_ne!(
+        BillingLedger::list_requests(&connection, "run-1", None, None)
+            .unwrap()
+            .revision,
+        revision
+    );
+    BillingLedger::diagnose_pending_settlement(&connection, "journal", "store.database", timestamp)
+        .unwrap();
+    let revision = BillingLedger::list_requests(&connection, "run-1", None, None)
+        .unwrap()
+        .revision;
+    BillingLedger::diagnose_pending_settlement(&connection, "journal", "store.database", timestamp)
+        .unwrap();
+    assert_eq!(
+        BillingLedger::list_requests(&connection, "run-1", None, None)
+            .unwrap()
+            .revision,
+        revision
+    );
+    assert_eq!(
+        BillingLedger::diagnose_pending_settlement(
+            &connection,
+            "journal",
+            "sensitive arbitrary detail",
+            timestamp
+        ),
+        Err(BillingError::Invalid)
+    );
+    BillingLedger::clear_pending_settlement(&connection, "journal").unwrap();
+    assert!(
+        BillingLedger::pending_settlement(&connection, "journal")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        BillingLedger::list_requests(&connection, "run-1", None, None)
+            .unwrap()
+            .items[0]
+            .diagnostic_code
+            .as_deref(),
+        Some("budget.conflict")
+    );
+    BillingLedger::clear_pending_settlement(&connection, "journal").unwrap();
+    BillingLedger::settle(
+        &mut connection,
+        "journal",
+        Some(&summary_settlement()),
+        timestamp,
+    )
+    .unwrap();
+    assert_eq!(
+        BillingLedger::stage_settlement(&mut connection, &original, timestamp),
+        Err(BillingError::Conflict)
+    );
+}
+
+#[test]
+fn settlement_journal_rejects_capacity_and_negative_persisted_counters() {
+    let mut connection = database();
+    prepare(&mut connection);
+    BillingLedger::reserve(&mut connection, &reservation("journal", Currency::Cny, "0")).unwrap();
+    let original = pending("journal");
+    BillingLedger::stage_settlement(&mut connection, &original, "now").unwrap();
+    connection
+        .execute_batch("PRAGMA ignore_check_constraints=ON;")
+        .unwrap();
+    for column in [
+        "input_total",
+        "input_cached",
+        "input_cached_write",
+        "output_total",
+        "reasoning_included",
+    ] {
+        connection
+            .execute(
+                &format!(
+                    "UPDATE billing_pending_settlements SET {column}=-1 WHERE request_id='journal'"
+                ),
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            BillingLedger::pending_settlement(&connection, "journal"),
+            Err(BillingError::Storage),
+            "{column}"
+        );
+        connection
+            .execute(
+                &format!(
+                    "UPDATE billing_pending_settlements SET {column}=0 WHERE request_id='journal'"
+                ),
+                [],
+            )
+            .unwrap();
+    }
+    BillingLedger::clear_pending_settlement(&connection, "journal").unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    for index in 0..MAX_PENDING_SETTLEMENTS {
+        connection.execute("INSERT INTO billing_pending_settlements(request_id,input_total,output_total,result_digest,created_at,updated_at) VALUES(?1,0,0,'digest','now','now')", [format!("filler-{index}")]).unwrap();
+    }
+    assert_eq!(
+        BillingLedger::stage_settlement(&mut connection, &original, "now"),
+        Err(BillingError::SettlementBacklog)
+    );
+    assert!(
+        BillingLedger::pending_settlement(&connection, "journal")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn settlement_journal_rolls_back_visible_changes_when_revision_write_fails() {
+    let mut connection = database();
+    prepare(&mut connection);
+    BillingLedger::reserve(&mut connection, &reservation("journal", Currency::Cny, "0")).unwrap();
+    BillingLedger::stage_settlement(&mut connection, &pending("journal"), "now").unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_revision BEFORE UPDATE ON billing_meta BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    assert_eq!(
+        BillingLedger::diagnose_pending_settlement(
+            &connection,
+            "journal",
+            "store.database",
+            "later"
+        ),
+        Err(BillingError::Storage)
+    );
+    assert_eq!(
+        BillingLedger::clear_pending_settlement(&connection, "journal"),
+        Err(BillingError::Storage)
+    );
+    assert_eq!(
+        BillingLedger::pending_settlement(&connection, "journal").unwrap(),
+        Some(pending("journal"))
     );
 }

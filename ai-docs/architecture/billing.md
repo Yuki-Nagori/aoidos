@@ -32,7 +32,7 @@ OpenCode Go 的公开 [`/zen/go/v1/models`](https://opencode.ai/zen/go/v1/models
 
 ## 用量归一化与时段
 
-保存原始、受界限约束的 usage 与归一化字段：inputTotal、inputCachedRead、inputCachedWrite、inputUncached、outputTotal、reasoningIncluded、totalTokens；未知项省略。inputUncached = inputTotal - inputCachedRead - inputCachedWrite，缓存明确不支持时两项为 0。reasoning 作为输出子集展示，不再重复计费；供应商若分开返回推理 Token，适配器先按其冻结映射并入 outputTotal。缺失计价必需项或负值 / 不一致 / 溢出不得虚构 usage，进入 unconfirmed。总 Token = inputTotal + outputTotal，不重复加缓存或 reasoning。
+保存原始、受界限约束的 usage 与归一化字段：inputTotal、inputCachedRead、inputCachedWrite、inputUncached、outputTotal、reasoningIncluded、totalTokens；未知项省略。inputUncached = inputTotal - inputCachedRead - inputCachedWrite，缓存明确不支持时两项为 0。reasoning 作为输出子集展示，不再重复计费；供应商若分开返回推理 Token，适配器先按其冻结映射并入 outputTotal。完整 usage 缺失或计数无法安全转换、持久化时不虚构 usage，保持 unconfirmed；完整数值已进入恢复队列但归一化或计价校验失败时保持 reserved 并显示诊断。总 Token = inputTotal + outputTotal，不重复加缓存或 reasoning。
 
 PriceVersion 可附 IANA 时区、星期、半开时间窗、时段单价与版本化节假日表；跨午夜拆窗，重叠、空价和非法时区拒绝。优先级为显式日期覆盖 → 星期 / 时间窗 → 基准价。日历声明覆盖年份及调整工作日策略；未覆盖 / 无法确定采用可适用最高价并标 estimated，不默认为假日优惠。内置日历随版本更新，手动覆盖明确来源；不自动推断节假日。
 
@@ -60,15 +60,15 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 | `billing_audit`                 | `operation_id` 唯一             | 价格、币种选择及上限修改审计记录               |
 | `billing_meta`                  | 单行主键                        | 账本 revision 与持久化月报时区                 |
 
-当前以 `billing_physical_requests` 的状态及 `reserved_nanos` 表达预算占用；缓存写入用量和 `billing_price_versions.schedule_json` 由追加迁移保存，旧写入费率 / 时段保持 NULL。尚无独立分配表或历史补价来源；不能把设计表名误认为已创建的 schema。engine 在共享 SQLite 连接上按顺序应用 `aoidos-billing::schema::SCHEMA` 及其追加迁移，store 不依赖计费领域。
+当前以 `billing_physical_requests` 的状态及 `reserved_nanos` 表达预算占用；缓存写入用量和 `billing_price_versions.schedule_json` 由追加迁移保存，旧写入费率 / 时段保持 NULL。`billing_pending_settlements` 是有界恢复 outbox，只保存最多 256 条待恢复请求的数值用量、摘要和稳定诊断码，不保存正文、密钥或供应商原始响应。尚无独立预算分配表或历史补价来源；不能把设计表名误认为已创建的 schema。engine 在共享 SQLite 连接上按顺序应用 `aoidos-billing::schema::SCHEMA` 及其追加迁移，store 不依赖计费领域。
 
-发送前持单在飞租约，在 BEGIN IMMEDIATE 事务中校验 PriceVersion 与当前 runBudget，按请求原币选择 CNY 或 USD 限额，判断该币种 settled + reserved + unconfirmed + 本次预留 <= 单局上限，并原子提交原币请求与对应分配。任一币种未配置上限或额度不足则拒绝且不发 HTTP；不能借用另一币种额度。比较与修改使用整数，不能先查后写。dispatchAt 为持久发送意图时刻，紧接发送；长时间排队在登记前结束；调试请求必须显式关联合法测试周目，不创建绕过单局额度的虚拟预算。网络不可与 SQLite 原子提交，崩溃在登记与发送之间仍可能消耗未知，恢复标 unconfirmed，不以“没看到响应”推断没发送。时段归属按该持久边界，是本地可审计约定，不能声称精确等于供应商收件时刻。
+发送前持单在飞租约，在 BEGIN IMMEDIATE 事务中校验 PriceVersion 与当前 runBudget，按请求原币选择 CNY 或 USD 限额，判断该币种 settled + reserved + unconfirmed + 本次预留 <= 单局上限，并原子提交原币请求与对应分配。为保证已发送请求的完整用量有界可恢复，未决物理请求与待结算 outbox 按 requestId 去重后共用 256 个容量名额，达到上限时阻止新请求。任一币种未配置上限或额度不足则拒绝且不发 HTTP；不能借用另一币种额度。比较与修改使用整数，不能先查后写。dispatchAt 为持久发送意图时刻，紧接发送；长时间排队在登记前结束；调试请求必须显式关联合法测试周目，不创建绕过单局额度的虚拟预算。网络不可与 SQLite 原子提交，崩溃在登记与发送之间仍可能消耗未知，恢复标 unconfirmed，不以“没看到响应”推断没发送。时段归属按该持久边界，是本地可审计约定，不能声称精确等于供应商收件时刻。
 
 状态机为 reserved → settled / unconfirmed；unconfirmed 只有获得可核验完整 usage 或显式人工审计处置才能 → settled。预算已预留、但取消明确发生在 `provider.start` 调用前时，以 `notDispatched` 和零 usage 结算并释放预留；进入 provider 调用后，超时 / 取消 / 断流 / 缺 usage 都不能推断为未发送或退款。零 usage 只有供应商完整合法报告或上述发送前证据才接受。人工处置必须明确实际费用或保留未知，记录理由与审计，不自动把未知抹成零。
 
-结算在同一 BEGIN IMMEDIATE 中按 requestId + 旧状态 CAS，保存 usage / 原币费用、对应币种分配及统计，释放剩余预留；重复同摘要是 no-op，冲突摘要保留首次结果且返回冲突，不覆写。当前 ledger adapter 尚未把结算计算 / 存储错误提供给有界诊断界面；此路径是 035 的剩余工作，不能把 reserved 状态视作结算成功。原始响应摘要可核验，不保存 reasoning / 密钥或无限正文。完整 usage 费用仍是按本地版本计算，显示 estimated，与未知 unconfirmed 区分。
+结算在同一 BEGIN IMMEDIATE 中按 requestId + 旧状态 CAS，保存 usage / 原币费用、对应币种分配及统计，释放剩余预留；相同用量重放是 no-op，冲突用量保留首次结果并留下可见诊断，不覆写。完整 usage 先以数值字段写入有界 `billing_pending_settlements`，再从持久化用量与请求冻结的价格版本结算；结算失败时保留预留与 outbox，明细显示稳定诊断码并允许玩家显式重试。重试只访问本地 SQLite，不请求供应商 API、不重新发送生成请求；恢复成功后才清除 outbox。未决请求与 outbox 按 requestId 去重，共用 256 个容量名额。若数据库本身不可写，系统无法保证持久化新收到的用量，账本保留未知占用并拒绝把它显示成已结算。原始响应摘要可核验，不保存 reasoning / 密钥或无限正文。完整 usage 费用仍是按本地版本计算，显示 estimated，与未知 unconfirmed 区分。
 
-账本结算状态与正文终态独立：输出完整合法而 usage 缺失 / 非法时，正文仍按 LLM 协议完成，账本保持 unconfirmed，budget.invalid-usage 仅用于费用诊断；不撤回已提交正文、不伪造 finishReason、不以重生成获取 usage。
+账本结算状态与正文终态独立：输出完整合法但 usage 缺失、无法安全持久化或无法核验时，正文仍按 LLM 协议完成，账本保留未知占用；只有完整数值用量已写入恢复队列时才保持 reserved 并显示结算待恢复，否则标为 unconfirmed。此类账务问题不撤回已提交正文、不伪造 finishReason，也不通过重生成获取 usage。
 
 原币费用按实际用量完整记账；若该币种费用超过对应单局上限，显示该币种超额并拒绝后续该币种请求，不截断、隐式充值或丢掉 usage。额度修改即时生效、与预留同事务顺序；已经发送的请求按冻结价格版本完成，新的限额不能回滚已发生费用。价格修改不改在飞请求。迟到结算更新原币费用及原 runBudget；无法确认事务提交结果先按 requestId 查询，不再次结算或重发。
 
@@ -88,9 +88,9 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 历史导入的未计价请求保留身份 / usage / 原周期；补价命令提供范围、版本与预览摘要，按 audit operationId 幂等提交，仅针对完整 usage 且尚未计价项，已结算项不重算。补价后核对原周期预警；不能以补价创建新消费或编造 usage。未知金额使历史完整性为 incomplete，新请求前不能借历史缺价绕过当前周期门禁：先处理影响本周期余额的未知记录。
 
-已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。`budget_backfill_price` 与 `budget_get_balance` 尚未注册；没有来源账单 / 历史请求导入或余额适配器时，不允许界面暗示这两项可用。
+已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price / budget_retry_settlement`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。`budget_backfill_price` 与 `budget_get_balance` 尚未注册；没有来源账单 / 历史请求导入或余额适配器时，不允许界面暗示这两项可用。
 
-错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），计费命令的数据库存储失败映射为 `store.database`（由命令层构造，不是 `StoreError` 的通用映射）。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
+错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.settlement-backlog（恢复队列达到 256 条上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），计费命令的数据库存储失败映射为 `store.database`（由命令层构造，不是 `StoreError` 的通用映射）。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
 
 ## 可选供应商余额
 
@@ -114,7 +114,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 ## 实施与验证依据
 
-035 当前已交付价格登记与原币账本、单局预算门禁、统一物理调用端口、费用设置 / 明细及月报、缓存创建 Token 和 OpenCode Go / DeepSeek API 峰谷计价；历史补价和可选供应商余额尚未交付，不能宣称任务完成。接入 018–020 / 025 / 034，030 / 033 等待 035。产品不购买额度、不读取供应商逐请求账单、不追踪订阅费用、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
+035 当前已交付价格登记与原币账本、单局预算门禁、统一物理调用端口、费用设置 / 明细及月报、缓存创建 Token、峰谷计价和有界结算恢复；历史补价和可选供应商余额尚未交付，不能宣称任务完成。接入 018–020 / 025 / 034，030 / 033 等待 035。产品不购买额度、不读取供应商逐请求账单、不追踪订阅费用、不使用实时外汇、不设全局月度上限、不隐藏额外收费调用。此前“参考 Token 额度”措辞由费用额度规则取代。
 
 [足精度 Decimal](https://docs.rs/rust_decimal/latest/rust_decimal/)与 [jiff 时区](https://docs.rs/jiff/latest/jiff/)在实现时核验并集中 workspace 版本，不在设计提交中安装。字节输入估计必须包含完整序列化输入、协议固定开销与输出 / reasoning 上限；供应商适配器声明可证明的上界 / 保守系数，不能对任意 tokenizer 宣称 1 byte = 1 Token 永远成立。不能给出可靠上界时按模型输入硬限预留；超出估计完整结算且停新请求。未来 tokenizer 接入另行授权 / 验证，不暗加网络计数调用。
 

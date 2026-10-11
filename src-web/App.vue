@@ -668,6 +668,28 @@ void preferences.load();
                 t("billing.labeledValue", { label: t("billing.requestState"), value: item.state })
               }}
             </p>
+            <p v-if="item.settlementPending || item.diagnosticCode" role="status">
+              {{
+                t(
+                  item.diagnosticCode === "budget.conflict"
+                    ? "billing.settlementConflict"
+                    : "billing.settlementPending",
+                )
+              }}
+              <span v-if="item.diagnosticCode">{{ item.diagnosticCode }}</span>
+            </p>
+            <button
+              v-if="item.settlementPending"
+              type="button"
+              :disabled="billing.retryingRequestId.value !== undefined"
+              @click="billing.retrySettlement(item.requestId)"
+            >
+              {{
+                billing.retryingRequestId.value === item.requestId
+                  ? t("billing.settlementRetrying")
+                  : t("billing.retrySettlement")
+              }}
+            </button>
             <p>
               {{
                 t("billing.labeledValue", {

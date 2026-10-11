@@ -1,4 +1,4 @@
-use super::{BillingError, BillingLedger, Reservation, Settlement};
+use super::{BillingError, BillingLedger, PendingSettlement, Reservation, Settlement};
 use crate::{fault::Fault, storage::Storage};
 use aoidos_billing::{money::NanoMoney, usage::NormalizedUsage};
 use aoidos_llm::schedule::{AttemptIdentity, AttemptOutcome, BudgetDenial, BudgetPort};
@@ -81,70 +81,33 @@ impl LedgerBudgetPort {
 
     fn settle_attempt(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
         let updated_at = now();
-        let settlement = match outcome {
+        match outcome {
             AttemptOutcome::Settled { usage: Some(usage) } => {
-                let Some(cached_input) = usage.cached_prompt_tokens else {
-                    self.mark_unknown(attempt, &updated_at);
-                    return;
+                let pending = PendingSettlement {
+                    request_id: attempt.request_id.clone(),
+                    input_total: usage.prompt_tokens,
+                    input_cached: usage.cached_prompt_tokens,
+                    input_cached_write: usage.cache_creation_tokens,
+                    output_total: usage.completion_tokens,
+                    reasoning_included: usage.reasoning_tokens,
+                    diagnostic_code: None,
                 };
-                let Some(total_tokens) = usage.prompt_tokens.checked_add(usage.completion_tokens)
-                else {
-                    self.mark_unknown(attempt, &updated_at);
-                    return;
-                };
-                let reasoning_included = usage.reasoning_tokens;
-                let cached_write = usage.cache_creation_tokens;
-                let request_id = attempt.request_id.clone();
-                let calculated = self.storage.with_database(|connection| {
-                    let (price, dispatch_at) =
-                        BillingLedger::request_price_context(connection, &request_id)
-                            .map_err(billing_fault)?;
-                    if (cached_write.is_none() && price.input_cached_write.is_some())
-                        || (cached_write.is_some_and(|tokens| tokens > 0)
-                            && price.input_cached_write.is_none())
-                    {
-                        return Err(Fault::new(
-                            "budget.usage-unconfirmed",
-                            "缓存创建用量或对应费率缺失",
-                        ));
-                    }
-                    let normalized = NormalizedUsage::from_provider_with_cache_write(
-                        usage.prompt_tokens,
-                        Some(cached_input),
-                        cached_write,
-                        usage.completion_tokens,
-                        reasoning_included,
-                    )
-                    .map_err(|_| Fault::new("budget.invalid-usage", "供应商用量不合法"))?;
-                    let amount = normalized
-                        .exact_cost_at(&price, &dispatch_at)
-                        .and_then(|cost| cost.settle().map_err(Into::into))
-                        .map_err(|_| Fault::new("budget.invalid-usage", "供应商用量或费用溢出"))?;
-                    Ok(Settlement {
-                        input_total: usage.prompt_tokens,
-                        input_cached: cached_input,
-                        input_cached_write: cached_write.unwrap_or(0),
-                        output_total: usage.completion_tokens,
-                        reasoning_included,
-                        total_tokens,
-                        amount,
-                        result_digest: digest(
-                            usage.prompt_tokens,
-                            cached_input,
-                            cached_write.unwrap_or(0),
-                            usage.completion_tokens,
-                            amount,
-                        ),
-                    })
+                let staged = self.storage.with_database(|connection| {
+                    BillingLedger::stage_settlement(connection, &pending, &updated_at)
+                        .map_err(billing_fault)
                 });
-                calculated.ok()
+                if staged.is_ok() {
+                    let _ = self.retry_pending_settlement(&attempt.request_id, &updated_at);
+                } else {
+                    self.mark_unknown(attempt, &updated_at);
+                }
             }
             AttemptOutcome::Settled { usage: None }
             | AttemptOutcome::Failed
-            | AttemptOutcome::Cancelled => None,
+            | AttemptOutcome::Cancelled => self.mark_unknown(attempt, &updated_at),
             AttemptOutcome::NotDispatched => {
                 let amount = NanoMoney::ZERO;
-                Some(Settlement {
+                let settlement = Settlement {
                     input_total: 0,
                     input_cached: 0,
                     input_cached_write: 0,
@@ -153,15 +116,95 @@ impl LedgerBudgetPort {
                     total_tokens: 0,
                     amount,
                     result_digest: digest(0, 0, 0, 0, amount),
-                })
+                };
+                let request_id = attempt.request_id.clone();
+                let _ = self.storage.with_database(|connection| {
+                    BillingLedger::settle(connection, &request_id, Some(&settlement), &updated_at)
+                        .map(|_| ())
+                        .map_err(billing_fault)
+                });
             }
-        };
-        let request_id = attempt.request_id.clone();
-        let _ = self.storage.with_database(|connection| {
-            BillingLedger::settle(connection, &request_id, settlement.as_ref(), &updated_at)
-                .map(|_| ())
-                .map_err(billing_fault)
+        }
+    }
+
+    /// 只从持久化用量重试本地结算，不会再次调用供应商。
+    ///
+    /// # Errors
+    ///
+    /// 暂存记录不存在、用量 / 冻结价格不可用于计价，或账本读写失败时返回稳定错误码。
+    pub fn retry_pending_settlement(
+        &self,
+        request_id: &str,
+        updated_at: &str,
+    ) -> Result<(), Fault> {
+        Self::retry_pending_in_storage(&self.storage, request_id, updated_at)
+    }
+
+    /// 供费用设置或请求明细命令恢复一条用量记录，不会访问供应商 API。
+    ///
+    /// # Errors
+    ///
+    /// 暂存记录不存在、用量 / 冻结价格不可用于计价，或账本读写失败时返回稳定错误码。
+    pub fn retry_pending_in_storage(
+        storage: &Storage,
+        request_id: &str,
+        updated_at: &str,
+    ) -> Result<(), Fault> {
+        let result = storage.with_database(|connection| {
+            let pending = BillingLedger::pending_settlement(connection, request_id)
+                .map_err(billing_fault)?
+                .ok_or_else(|| Fault::new("app.not-found", "待恢复的费用记录不存在"))?;
+            let (price, dispatch_at) = BillingLedger::request_price_context(connection, request_id)
+                .map_err(billing_fault)?;
+            if (pending.input_cached_write.is_none() && price.input_cached_write.is_some())
+                || (pending.input_cached_write.is_some_and(|tokens| tokens > 0)
+                    && price.input_cached_write.is_none())
+            {
+                return Err(Fault::new(
+                    "budget.invalid-usage",
+                    "缓存创建用量或对应费率缺失，费用仍待确认",
+                ));
+            }
+            let normalized = NormalizedUsage::from_provider_with_cache_write(
+                pending.input_total,
+                pending.input_cached,
+                pending.input_cached_write,
+                pending.output_total,
+                pending.reasoning_included,
+            )
+            .map_err(invalid_settlement_usage)?;
+            let amount = normalized
+                .exact_cost_at(&price, &dispatch_at)
+                .and_then(settle_cost)
+                .map_err(invalid_settlement_cost)?;
+            let settlement = Settlement {
+                input_total: pending.input_total,
+                input_cached: normalized.input_cached,
+                input_cached_write: pending.input_cached_write.unwrap_or(0),
+                output_total: pending.output_total,
+                reasoning_included: pending.reasoning_included,
+                total_tokens: normalized.total_tokens,
+                amount,
+                result_digest: digest(
+                    pending.input_total,
+                    normalized.input_cached,
+                    pending.input_cached_write.unwrap_or(0),
+                    pending.output_total,
+                    amount,
+                ),
+            };
+            BillingLedger::settle(connection, request_id, Some(&settlement), updated_at)
+                .map_err(billing_fault)?;
+            BillingLedger::clear_pending_settlement(connection, request_id).map_err(billing_fault)
         });
+        if let Err(error) = &result {
+            let code = settlement_diagnostic(error);
+            let _ = storage.with_database(|connection| {
+                BillingLedger::diagnose_pending_settlement(connection, request_id, code, updated_at)
+                    .map_err(billing_fault)
+            });
+        }
+        result
     }
 
     fn mark_unknown(&self, attempt: &AttemptIdentity, updated_at: &str) {
@@ -182,6 +225,29 @@ impl BudgetPort for LedgerBudgetPort {
 
     fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
         self.settle_attempt(attempt, outcome);
+    }
+}
+
+fn invalid_settlement_usage(_: aoidos_billing::price::PriceError) -> Fault {
+    Fault::new("budget.invalid-usage", "供应商用量不合法，费用仍待确认")
+}
+
+fn invalid_settlement_cost(_: aoidos_billing::price::PriceError) -> Fault {
+    Fault::new("budget.invalid-usage", "供应商用量或费用溢出，费用仍待确认")
+}
+
+fn settle_cost(
+    cost: aoidos_billing::money::ExactCost,
+) -> Result<NanoMoney, aoidos_billing::price::PriceError> {
+    cost.settle().map_err(Into::into)
+}
+
+fn settlement_diagnostic(error: &Fault) -> &'static str {
+    match error.code.as_str() {
+        "budget.invalid-usage" => "budget.invalid-usage",
+        "budget.price-missing" => "budget.price-missing",
+        "budget.conflict" => "budget.conflict",
+        _ => "store.database",
     }
 }
 
@@ -216,6 +282,10 @@ fn billing_fault(error: BillingError) -> Fault {
         BillingError::PriceHistoryLimit => {
             Fault::new("budget.price-history-limit", "该模型价格版本已达到安全上限")
         }
+        BillingError::SettlementBacklog => Fault::new(
+            "budget.settlement-backlog",
+            "待恢复费用达到安全上限，请先重试已有结算",
+        ),
         BillingError::Conflict => Fault::new("budget.conflict", "请求计费状态发生冲突"),
         BillingError::NotFound => Fault::new("app.not-found", "费用记录不存在"),
         BillingError::Storage => Fault::new("store.database", "费用账本不可用"),
@@ -350,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn reservation_and_settlement_use_the_persisted_price_and_keep_unknown_usage() {
+    fn settlement_with_missing_cache_usage_remains_visible_and_unknown() {
         let (storage, root) = storage();
         let port = port(storage.clone());
         let denial = port.reserve(&attempt("other", "wrong-model")).unwrap_err();
@@ -381,7 +451,13 @@ mod tests {
                     .map_err(query_fault)
             })
             .unwrap();
-        assert_eq!(incomplete, "unconfirmed");
+        assert_eq!(incomplete, "reserved");
+        let page = storage
+            .with_database(|connection| {
+                BillingLedger::list_requests(connection, "run-1", None, None).map_err(billing_fault)
+            })
+            .unwrap();
+        assert!(page.items[0].settlement_pending);
 
         port.reserve(&attempt("model", "request-2")).unwrap();
         port.settle(
@@ -512,6 +588,139 @@ mod tests {
     }
 
     #[test]
+    fn persisted_usage_survives_settlement_failure_and_retries_without_provider_replay() {
+        let (storage, root) = storage();
+        configure(&storage, "10");
+        let port = port(storage.clone());
+        port.reserve(&attempt("model", "recover-settlement"))
+            .unwrap();
+        storage
+            .with_database(|connection| {
+                connection
+                    .execute_batch(
+                        "CREATE TRIGGER fail_billing_settlement BEFORE UPDATE OF state ON billing_physical_requests WHEN NEW.state='settled' BEGIN SELECT RAISE(ABORT,'injected'); END;",
+                    )
+                    .map_err(query_fault)?;
+                Ok(())
+            })
+            .unwrap();
+
+        port.settle(
+            &attempt("model", "recover-settlement"),
+            &AttemptOutcome::Settled {
+                usage: Some(Usage {
+                    prompt_tokens: 50,
+                    completion_tokens: 10,
+                    cached_prompt_tokens: Some(10),
+                    cache_creation_tokens: Some(5),
+                    reasoning_tokens: Some(2),
+                }),
+            },
+        );
+
+        let pending = storage
+            .with_database(|connection| {
+                let page = BillingLedger::list_requests(connection, "run-1", None, None)
+                    .map_err(billing_fault)?;
+                let item = page.items.into_iter().next().unwrap();
+                let usage = BillingLedger::pending_settlement(connection, "recover-settlement")
+                    .map_err(billing_fault)?;
+                Ok((item, usage))
+            })
+            .unwrap();
+        assert_eq!(pending.0.state, "reserved");
+        assert!(pending.0.settlement_pending);
+        assert_eq!(pending.0.diagnostic_code.as_deref(), Some("store.database"));
+        assert_eq!(pending.1.unwrap().input_cached_write, Some(5));
+
+        storage
+            .with_database(|connection| {
+                connection
+                    .execute_batch("DROP TRIGGER fail_billing_settlement")
+                    .map_err(query_fault)?;
+                Ok(())
+            })
+            .unwrap();
+        port.retry_pending_settlement("recover-settlement", "2026-10-11T00:00:00Z")
+            .unwrap();
+        let resolved = storage
+            .with_database(|connection| {
+                let page = BillingLedger::list_requests(connection, "run-1", None, None)
+                    .map_err(billing_fault)?;
+                let item = page.items.into_iter().next().unwrap();
+                let pending = BillingLedger::pending_settlement(connection, "recover-settlement")
+                    .map_err(billing_fault)?;
+                Ok((item, pending))
+            })
+            .unwrap();
+        assert_eq!(resolved.0.state, "settled");
+        assert_eq!(
+            resolved.0.actual_amount,
+            Some(NanoMoney::parse("0.0675").unwrap())
+        );
+        assert!(!resolved.0.settlement_pending);
+        assert!(resolved.1.is_none());
+        assert_eq!(
+            port.retry_pending_settlement("recover-settlement", "2026-10-11T00:00:00Z")
+                .unwrap_err()
+                .code,
+            "app.not-found"
+        );
+
+        storage.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn settled_usage_replay_is_idempotent_and_conflicts_remain_visible() {
+        let (storage, root) = storage();
+        configure(&storage, "10");
+        let port = port(storage.clone());
+        let identity = attempt("model", "settled-replay");
+        port.reserve(&identity).unwrap();
+        let original = AttemptOutcome::Settled {
+            usage: Some(Usage {
+                prompt_tokens: 50,
+                completion_tokens: 10,
+                cached_prompt_tokens: Some(10),
+                cache_creation_tokens: Some(5),
+                reasoning_tokens: Some(2),
+            }),
+        };
+        port.settle(&identity, &original);
+        port.settle(&identity, &original);
+
+        let conflicting = AttemptOutcome::Settled {
+            usage: Some(Usage {
+                prompt_tokens: 60,
+                completion_tokens: 10,
+                cached_prompt_tokens: Some(10),
+                cache_creation_tokens: Some(5),
+                reasoning_tokens: Some(2),
+            }),
+        };
+        port.settle(&identity, &conflicting);
+
+        let item = storage
+            .with_database(|connection| {
+                BillingLedger::list_requests(connection, "run-1", None, None)
+                    .map(|page| page.items.into_iter().next().unwrap())
+                    .map_err(billing_fault)
+            })
+            .unwrap();
+        assert_eq!(item.state, "settled");
+        assert_eq!(item.input_total, Some(50));
+        assert_eq!(
+            item.actual_amount,
+            Some(NanoMoney::parse("0.0675").unwrap())
+        );
+        assert!(!item.settlement_pending);
+        assert_eq!(item.diagnostic_code.as_deref(), Some("budget.conflict"));
+        storage.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn settlement_preserves_unknown_cache_writes_and_supports_legacy_zero_writes() {
         let (storage, root) = storage();
         configure(&storage, "10");
@@ -539,7 +748,7 @@ mod tests {
             .unwrap();
 
         for (request_id, price_version_id, cache_creation_tokens, expected_state, actual) in [
-            ("missing-write-usage", "price-1", None, "unconfirmed", None),
+            ("missing-write-usage", "price-1", None, "reserved", None),
             (
                 "legacy-no-writes",
                 "legacy-price",
@@ -558,7 +767,7 @@ mod tests {
                 "legacy-positive-writes",
                 "legacy-price",
                 Some(5),
-                "unconfirmed",
+                "reserved",
                 None,
             ),
         ] {
@@ -641,6 +850,7 @@ mod tests {
                 BillingError::PriceHistoryLimit,
                 "budget.price-history-limit",
             ),
+            (BillingError::SettlementBacklog, "budget.settlement-backlog"),
             (BillingError::Conflict, "budget.conflict"),
             (BillingError::NotFound, "app.not-found"),
             (BillingError::Storage, "store.database"),
@@ -652,6 +862,42 @@ mod tests {
             digest(1, 0, 0, 2, NanoMoney::parse("3").unwrap())
         );
         assert_ne!(now(), "");
+    }
+
+    #[test]
+    fn settlement_error_mapping_and_cost_overflow_keep_stable_diagnostics() {
+        use aoidos_billing::price::PriceError;
+        assert_eq!(
+            invalid_settlement_usage(PriceError::InvalidUsage).code,
+            "budget.invalid-usage"
+        );
+        assert_eq!(
+            invalid_settlement_cost(PriceError::InvalidUsage).code,
+            "budget.invalid-usage"
+        );
+        for code in [
+            "budget.invalid-usage",
+            "budget.price-missing",
+            "budget.conflict",
+            "store.database",
+            "app.not-found",
+        ] {
+            let expected = if code == "app.not-found" {
+                "store.database"
+            } else {
+                code
+            };
+            assert_eq!(settlement_diagnostic(&Fault::new(code, "detail")), expected);
+        }
+        let mut expensive = price();
+        expensive.input_uncached = UnitPrice::parse("9223372037").unwrap();
+        let usage =
+            NormalizedUsage::from_provider_with_cache_write(1000, Some(0), Some(0), 0, None)
+                .unwrap();
+        let cost = usage
+            .exact_cost_at(&expensive, "2026-10-11T00:00:00Z")
+            .unwrap();
+        assert!(settle_cost(cost).is_err());
     }
 
     #[test]
@@ -701,11 +947,12 @@ mod tests {
     }
 
     #[test]
-    fn invalid_provider_usage_and_cost_overflow_keep_the_reservation_unconfirmed() {
+    fn invalid_provider_usage_keeps_a_recoverable_journal_and_unrepresentable_counts_stay_unknown()
+    {
         let (storage, root) = storage();
         configure(&storage, "10");
         let port = port(storage.clone());
-        for (request_id, usage) in [
+        for (request_id, usage, expected_state, has_journal) in [
             (
                 "invalid-cached",
                 Usage {
@@ -715,6 +962,8 @@ mod tests {
                     cache_creation_tokens: Some(0),
                     reasoning_tokens: None,
                 },
+                "reserved",
+                true,
             ),
             (
                 "cost-overflow",
@@ -725,6 +974,8 @@ mod tests {
                     cache_creation_tokens: Some(0),
                     reasoning_tokens: None,
                 },
+                "unconfirmed",
+                false,
             ),
         ] {
             let attempt = attempt("model", request_id);
@@ -741,7 +992,13 @@ mod tests {
                         .map_err(query_fault)
                 })
                 .unwrap();
-            assert_eq!(state, "unconfirmed");
+            assert_eq!(state, expected_state);
+            let pending = storage
+                .with_database(|connection| {
+                    BillingLedger::pending_settlement(connection, request_id).map_err(billing_fault)
+                })
+                .unwrap();
+            assert_eq!(pending.is_some(), has_journal, "{request_id}");
         }
         let unlimited = LedgerBudgetPort::new(
             storage.clone(),

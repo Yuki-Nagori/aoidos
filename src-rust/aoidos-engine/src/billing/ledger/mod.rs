@@ -5,10 +5,33 @@ use aoidos_billing::{
 };
 use jiff::{ToSpan, civil::Date};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fmt};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const MAX_PRICE_VERSIONS_PER_IDENTITY: i64 = 1_024;
+const MAX_PENDING_SETTLEMENTS: i64 = 256;
+
+struct StoredUsage {
+    state: String,
+    input_total: Option<i64>,
+    input_cached: Option<i64>,
+    input_cached_write: Option<i64>,
+    output_total: Option<i64>,
+    reasoning_included: Option<i64>,
+}
+
+/// 结算前持久化的供应商 Token 用量，不包含提示词、回复正文或凭据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSettlement {
+    pub request_id: String,
+    pub input_total: u64,
+    pub input_cached: Option<u64>,
+    pub input_cached_write: Option<u64>,
+    pub output_total: u64,
+    pub reasoning_included: Option<u64>,
+    pub diagnostic_code: Option<String>,
+}
 
 /// 单个稳定周目的原币独立额度。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -110,6 +133,8 @@ pub struct RequestItem {
     pub output_total: Option<u64>,
     pub reasoning_included: Option<u64>,
     pub total_tokens: Option<u64>,
+    pub settlement_pending: bool,
+    pub diagnostic_code: Option<String>,
     #[serde(skip)]
     row_id: i64,
 }
@@ -140,6 +165,7 @@ pub enum BillingError {
     Exceeded,
     PriceMissing,
     PriceHistoryLimit,
+    SettlementBacklog,
     NotFound,
     Conflict,
     StaleRevision,
@@ -154,6 +180,7 @@ impl fmt::Display for BillingError {
             Self::Exceeded => "run currency budget exceeded",
             Self::PriceMissing => "no price is registered for the active profile route",
             Self::PriceHistoryLimit => "price history reached its safety limit",
+            Self::SettlementBacklog => "pending settlement recovery reached its safety limit",
             Self::NotFound => "billing request not found",
             Self::Conflict => "billing request conflicts with a previous operation",
             Self::StaleRevision => "billing settings revision is stale",
@@ -218,6 +245,243 @@ type ExistingSettlement = (
 );
 
 impl BillingLedger {
+    /// 查询请求所属的周目，用于 IPC 权限校验，不读取或返回请求正文。
+    ///
+    /// # Errors
+    ///
+    /// 请求标识无效或 SQLite 查询失败时返回错误；请求不存在时返回 `None`。
+    pub fn request_run_id(
+        connection: &Connection,
+        request_id: &str,
+    ) -> Result<Option<String>, BillingError> {
+        validate_text(request_id, 128)?;
+        connection
+            .query_row(
+                "SELECT run_id FROM billing_physical_requests WHERE request_id=?1",
+                [request_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage)
+    }
+
+    /// 在计价或修改账本前暂存完整的供应商 Token 数值。
+    ///
+    /// 暂存记录不含正文、凭据或供应商原始响应，且全局最多保留 256 条。
+    ///
+    /// # Errors
+    ///
+    /// 输入无效、请求不存在或状态冲突，以及 SQLite 写入 / 上限检查失败时返回错误。
+    pub fn stage_settlement(
+        connection: &mut Connection,
+        pending: &PendingSettlement,
+        updated_at: &str,
+    ) -> Result<(), BillingError> {
+        validate_text(&pending.request_id, 128)?;
+        let input_total = to_i64(pending.input_total)?;
+        let input_cached = pending.input_cached.map(to_i64).transpose()?;
+        let input_cached_write = pending.input_cached_write.map(to_i64).transpose()?;
+        let output_total = to_i64(pending.output_total)?;
+        let reasoning = pending.reasoning_included.map(to_i64).transpose()?;
+        let digest = pending_usage_digest(pending);
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let current: Option<StoredUsage> = transaction
+            .query_row(
+                "SELECT state,input_total,input_cached,input_cached_write,output_total,reasoning_included FROM billing_physical_requests WHERE request_id=?1",
+                [&pending.request_id],
+                |row| Ok(StoredUsage {
+                    state: row.get(0)?,
+                    input_total: row.get(1)?,
+                    input_cached: row.get(2)?,
+                    input_cached_write: row.get(3)?,
+                    output_total: row.get(4)?,
+                    reasoning_included: row.get(5)?,
+                }),
+            )
+            .optional()
+            .map_err(storage)?;
+        let Some(current) = current else {
+            return Err(BillingError::NotFound);
+        };
+        if current.state == "settled" {
+            let matches = current.input_total == Some(input_total)
+                && current.input_cached == Some(input_cached.unwrap_or(0))
+                && current.input_cached_write == Some(input_cached_write.unwrap_or(0))
+                && current.output_total == Some(output_total)
+                && current.reasoning_included == reasoning;
+            if matches {
+                transaction.commit().map_err(storage)?;
+                return Ok(());
+            }
+            let changed = transaction
+                .execute(
+                    "UPDATE billing_physical_requests SET diagnostic_code='budget.conflict',updated_at=?2 WHERE request_id=?1 AND diagnostic_code IS NOT 'budget.conflict'",
+                    params![pending.request_id, updated_at],
+                )
+                .map_err(storage)?;
+            if changed == 1 {
+                bump_revision(&transaction)?;
+            }
+            transaction.commit().map_err(storage)?;
+            return Err(BillingError::Conflict);
+        }
+        if current.state != "reserved" && current.state != "unconfirmed" {
+            return Err(BillingError::Conflict);
+        }
+        let existing: Option<String> = transaction
+            .query_row(
+                "SELECT result_digest FROM billing_pending_settlements WHERE request_id=?1",
+                [&pending.request_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        if let Some(existing) = existing {
+            if existing == digest {
+                transaction.commit().map_err(storage)?;
+                return Ok(());
+            }
+            transaction
+                .execute(
+                    "UPDATE billing_pending_settlements SET diagnostic_code='budget.conflict',updated_at=?2 WHERE request_id=?1",
+                    params![pending.request_id, updated_at],
+                )
+                .map_err(storage)?;
+            transaction
+                .execute(
+                    "UPDATE billing_physical_requests SET diagnostic_code='budget.conflict',updated_at=?2 WHERE request_id=?1 AND diagnostic_code IS NOT 'budget.conflict'",
+                    params![pending.request_id, updated_at],
+                )
+                .map_err(storage)?;
+            bump_revision(&transaction)?;
+            transaction.commit().map_err(storage)?;
+            return Err(BillingError::Conflict);
+        }
+        let pending_count: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM billing_pending_settlements",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        if pending_count >= MAX_PENDING_SETTLEMENTS {
+            return Err(BillingError::SettlementBacklog);
+        }
+        transaction
+            .execute(
+                "INSERT INTO billing_pending_settlements(request_id,input_total,input_cached,input_cached_write,output_total,reasoning_included,result_digest,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",
+                params![pending.request_id,input_total,input_cached,input_cached_write,output_total,reasoning,digest,updated_at],
+            )
+            .map_err(storage)?;
+        bump_revision(&transaction)?;
+        transaction.commit().map_err(storage)
+    }
+
+    /// 读取一条暂存用量，供显式、幂等的本地恢复使用。
+    ///
+    /// # Errors
+    ///
+    /// 请求标识无效或 SQLite 读取失败时返回错误。
+    pub fn pending_settlement(
+        connection: &Connection,
+        request_id: &str,
+    ) -> Result<Option<PendingSettlement>, BillingError> {
+        validate_text(request_id, 128)?;
+        connection
+            .query_row(
+                "SELECT input_total,input_cached,input_cached_write,output_total,reasoning_included,diagnostic_code FROM billing_pending_settlements WHERE request_id=?1",
+                [request_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(storage)?
+            .map(|(input, cached, cached_write, output, reasoning, diagnostic_code)| {
+                Ok(PendingSettlement {
+                    request_id: request_id.to_owned(),
+                    input_total: u64::try_from(input).map_err(|_| BillingError::Storage)?,
+                    input_cached: cached
+                        .map(u64::try_from)
+                        .transpose()
+                        .map_err(|_| BillingError::Storage)?,
+                    input_cached_write: cached_write
+                        .map(u64::try_from)
+                        .transpose()
+                        .map_err(|_| BillingError::Storage)?,
+                    output_total: u64::try_from(output).map_err(|_| BillingError::Storage)?,
+                    reasoning_included: reasoning
+                        .map(u64::try_from)
+                        .transpose()
+                        .map_err(|_| BillingError::Storage)?,
+                    diagnostic_code,
+                })
+            })
+            .transpose()
+    }
+
+    /// 只保存稳定诊断码，不持久化 SQL、完整用量载荷或供应商错误文本。
+    ///
+    /// # Errors
+    ///
+    /// 请求标识或诊断码无效，或 SQLite 更新失败时返回错误。
+    pub fn diagnose_pending_settlement(
+        connection: &Connection,
+        request_id: &str,
+        code: &str,
+        updated_at: &str,
+    ) -> Result<(), BillingError> {
+        validate_text(request_id, 128)?;
+        if !matches!(
+            code,
+            "budget.invalid-usage" | "budget.price-missing" | "store.database" | "budget.conflict"
+        ) {
+            return Err(BillingError::Invalid);
+        }
+        let transaction = connection.unchecked_transaction().map_err(storage)?;
+        let changed = transaction
+            .execute(
+                "UPDATE billing_pending_settlements SET diagnostic_code=?2,updated_at=?3 WHERE request_id=?1 AND diagnostic_code IS NOT ?2",
+                params![request_id, code, updated_at],
+            )
+            .map_err(storage)?;
+        if changed > 0 {
+            bump_revision(&transaction)?;
+        }
+        transaction.commit().map_err(storage)
+    }
+
+    /// 删除已解决的 outbox 记录；可见状态变化时使请求页游标失效。
+    ///
+    /// # Errors
+    ///
+    /// SQLite 删除或提交失败时返回错误。
+    pub fn clear_pending_settlement(
+        connection: &Connection,
+        request_id: &str,
+    ) -> Result<(), BillingError> {
+        let transaction = connection.unchecked_transaction().map_err(storage)?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM billing_pending_settlements WHERE request_id=?1",
+                [request_id],
+            )
+            .map_err(storage)?;
+        if changed > 0 {
+            bump_revision(&transaction)?;
+        }
+        transaction.commit().map_err(storage)
+    }
+
     /// Lists a frozen, bounded request snapshot; any ledger mutation invalidates its cursor.
     pub fn list_requests(
         connection: &Connection,
@@ -259,7 +523,7 @@ impl BillingLedger {
             (max, 0)
         };
         let mut statement = connection
-            .prepare("SELECT rowid,request_id,profile_id,provider_id,model_id,currency,price_version_id,dispatch_at,state,reserved_nanos,actual_nanos,input_total,input_cached,input_cached_write,output_total,reasoning_included,total_tokens FROM billing_physical_requests WHERE run_id=?1 AND rowid>?2 AND rowid<=?3 ORDER BY rowid ASC LIMIT ?4")
+            .prepare("SELECT r.rowid,r.request_id,r.profile_id,r.provider_id,r.model_id,r.currency,r.price_version_id,r.dispatch_at,r.state,r.reserved_nanos,r.actual_nanos,r.input_total,r.input_cached,r.input_cached_write,r.output_total,r.reasoning_included,r.total_tokens,p.request_id IS NOT NULL,COALESCE(p.diagnostic_code,r.diagnostic_code) FROM billing_physical_requests r LEFT JOIN billing_pending_settlements p ON p.request_id=r.request_id WHERE r.run_id=?1 AND r.rowid>?2 AND r.rowid<=?3 ORDER BY r.rowid ASC LIMIT ?4")
             .map_err(storage)?;
         let rows = statement
             .query_map(
@@ -283,6 +547,8 @@ impl BillingLedger {
                         row.get::<_, Option<i64>>(14)?,
                         row.get::<_, Option<i64>>(15)?,
                         row.get::<_, Option<i64>>(16)?,
+                        row.get::<_, bool>(17)?,
+                        row.get::<_, Option<String>>(18)?,
                     ))
                 },
             )
@@ -313,6 +579,8 @@ impl BillingLedger {
                 output,
                 reasoning,
                 total,
+                settlement_pending,
+                diagnostic_code,
             ) = row;
             items.push(RequestItem {
                 request_id,
@@ -353,6 +621,8 @@ impl BillingLedger {
                     .map(u64::try_from)
                     .transpose()
                     .map_err(|_| BillingError::Storage)?,
+                settlement_pending,
+                diagnostic_code,
                 row_id,
             });
         }
@@ -1187,6 +1457,26 @@ impl BillingLedger {
         if total > cap.nanos() {
             return Err(BillingError::Exceeded);
         }
+        let pending: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM billing_pending_settlements",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        let unresolved: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM billing_physical_requests r WHERE r.state IN ('reserved','unconfirmed') AND NOT EXISTS (SELECT 1 FROM billing_pending_settlements p WHERE p.request_id=r.request_id)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        if pending
+            .checked_add(unresolved)
+            .is_none_or(|count| count >= MAX_PENDING_SETTLEMENTS)
+        {
+            return Err(BillingError::SettlementBacklog);
+        }
         transaction
             .execute(
                 "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'reserved',?12,?11)",
@@ -1418,6 +1708,26 @@ fn bump_revision(transaction: &rusqlite::Transaction<'_>) -> Result<(), BillingE
         Ok(())
     } else {
         Err(BillingError::Storage)
+    }
+}
+
+fn pending_usage_digest(pending: &PendingSettlement) -> String {
+    let mut hash = Sha256::new();
+    hash.update(pending.input_total.to_be_bytes());
+    hash_optional_count(&mut hash, pending.input_cached);
+    hash_optional_count(&mut hash, pending.input_cached_write);
+    hash.update(pending.output_total.to_be_bytes());
+    hash_optional_count(&mut hash, pending.reasoning_included);
+    format!("sha256:{:x}", hash.finalize())
+}
+
+fn hash_optional_count(hash: &mut Sha256, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            hash.update([1]);
+            hash.update(value.to_be_bytes());
+        }
+        None => hash.update([0]),
     }
 }
 

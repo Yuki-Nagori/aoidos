@@ -40,6 +40,7 @@ describe("billing error localization", () => {
       ["budget.price-history-limit", "billing.errors.priceHistoryLimit"],
       ["budget.price-missing", "billing.errors.priceMissing"],
       ["budget.run-limit-missing", "billing.errors.runLimitMissing"],
+      ["budget.settlement-backlog", "billing.errors.settlementBacklog"],
     ] as const;
 
     for (const [code, key] of cases) {

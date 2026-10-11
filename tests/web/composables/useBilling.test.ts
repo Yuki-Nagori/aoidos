@@ -8,6 +8,7 @@ import {
   getSelectedPrice,
   getSuggestedLimits,
   listBillingRequests,
+  retryBillingSettlement,
   registerPrice,
   selectPrice,
   setBudgetSettings,
@@ -28,6 +29,7 @@ vi.mock("../../../src-web/api/billing", () => ({
   getSelectedPrice: vi.fn(),
   getSuggestedLimits: vi.fn(),
   listBillingRequests: vi.fn(),
+  retryBillingSettlement: vi.fn(),
   registerPrice: vi.fn(),
   selectPrice: vi.fn(),
   setBudgetSettings: vi.fn(),
@@ -106,6 +108,7 @@ beforeEach(() => {
   vi.mocked(getSelectedPrice).mockResolvedValue(null);
   vi.mocked(getSuggestedLimits).mockResolvedValue(suggestions());
   vi.mocked(listBillingRequests).mockResolvedValue(requestPage());
+  vi.mocked(retryBillingSettlement).mockResolvedValue();
   vi.mocked(registerPrice).mockResolvedValue(price());
   vi.mocked(selectPrice).mockResolvedValue(price());
   vi.mocked(setBudgetSettings).mockImplementation(async (runId, cnyLimit, usdLimit) =>
@@ -897,6 +900,124 @@ describe("useBilling settings and period refresh", () => {
 });
 
 describe("useBilling request pagination", () => {
+  it("skips settlement recovery without an active run", async () => {
+    const { state, scope } = createState(null);
+    await state.retrySettlement("request-1");
+    expect(retryBillingSettlement).not.toHaveBeenCalled();
+    expect(state.retryingRequestId.value).toBeUndefined();
+    scope.stop();
+  });
+
+  it("allows only one settlement recovery at a time", async () => {
+    const pending = deferred<void>();
+    vi.mocked(retryBillingSettlement).mockReturnValueOnce(pending.promise);
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    const recovering = state.retrySettlement("request-1");
+    expect(state.retryingRequestId.value).toBe("request-1");
+    await state.retrySettlement("request-2");
+    expect(retryBillingSettlement).toHaveBeenCalledTimes(1);
+    expect(state.retryingRequestId.value).toBe("request-1");
+    pending.resolve();
+    await recovering;
+    expect(state.retryingRequestId.value).toBeUndefined();
+    await state.retrySettlement("request-2");
+    expect(retryBillingSettlement).toHaveBeenLastCalledWith("run-1", "request-2");
+    scope.stop();
+  });
+
+  it.each(["disposed", "configuration changed", "run changed"] as const)(
+    "ignores late settlement success when %s",
+    async (boundary) => {
+      const pending = deferred<void>();
+      vi.mocked(retryBillingSettlement).mockReturnValueOnce(pending.promise);
+      const { state, scope, modelId, runId } = createState();
+      await waitForLoaded(state);
+      const recovering = state.retrySettlement("request-1");
+      if (boundary === "disposed") scope.stop();
+      if (boundary === "configuration changed") {
+        modelId.value = "model-2";
+        await nextTick();
+        await waitForLoaded(state);
+      }
+      vi.mocked(listBillingRequests).mockClear();
+      vi.mocked(getRunPeriod).mockClear();
+      pending.resolve();
+      // Resolve before switching so recovery also sees a changed run before its watcher runs.
+      if (boundary === "run changed") runId.value = "run-2";
+      await recovering;
+      expect(vi.mocked(listBillingRequests).mock.calls.filter(([id]) => id === "run-1")).toEqual(
+        [],
+      );
+      expect(vi.mocked(getRunPeriod).mock.calls.filter(([id]) => id === "run-1")).toEqual([]);
+      expect(state.retryingRequestId.value).toBeUndefined();
+      scope.stop();
+    },
+  );
+
+  it.each(["disposed", "configuration changed", "run changed"] as const)(
+    "ignores late settlement failure when %s",
+    async (boundary) => {
+      const pending = deferred<void>();
+      vi.mocked(retryBillingSettlement).mockReturnValueOnce(pending.promise);
+      const { state, scope, modelId, runId } = createState();
+      await waitForLoaded(state);
+      const recovering = state.retrySettlement("request-1");
+      if (boundary === "disposed") scope.stop();
+      if (boundary === "configuration changed") {
+        modelId.value = "model-2";
+        await nextTick();
+        await waitForLoaded(state);
+      }
+      vi.mocked(listBillingRequests).mockClear();
+      pending.reject(new Error("old settlement failure"));
+      if (boundary === "run changed") runId.value = "run-2";
+      await recovering;
+      expect(state.error.value).toBeUndefined();
+      expect(vi.mocked(listBillingRequests).mock.calls.filter(([id]) => id === "run-1")).toEqual(
+        [],
+      );
+      expect(state.retryingRequestId.value).toBeUndefined();
+      scope.stop();
+    },
+  );
+
+  it("recovers a saved settlement without fetching another provider result", async () => {
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    await state.retrySettlement("request-1");
+    expect(retryBillingSettlement).toHaveBeenCalledWith("run-1", "request-1");
+    expect(listBillingRequests).toHaveBeenLastCalledWith("run-1", undefined);
+    expect(getRunPeriod).toHaveBeenLastCalledWith("run-1");
+    expect(state.retryingRequestId.value).toBeUndefined();
+    scope.stop();
+  });
+
+  it("keeps a failed local settlement visible and refreshes its diagnostic", async () => {
+    vi.mocked(retryBillingSettlement).mockRejectedValueOnce(new Error("local recovery failed"));
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    await state.retrySettlement("request-1");
+    expect(state.error.value?.message).toBe("local recovery failed");
+    expect(listBillingRequests).toHaveBeenLastCalledWith("run-1", undefined);
+    expect(state.retryingRequestId.value).toBeUndefined();
+    scope.stop();
+  });
+
+  it("clears a prior settlement error after a successful retry", async () => {
+    vi.mocked(retryBillingSettlement)
+      .mockRejectedValueOnce(new Error("local recovery failed"))
+      .mockResolvedValueOnce();
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    await state.retrySettlement("request-1");
+    expect(state.error.value?.message).toBe("local recovery failed");
+
+    await state.retrySettlement("request-1");
+    expect(state.error.value).toBeUndefined();
+    scope.stop();
+  });
+
   it("loads the first page, appends the next page and resets on request", async () => {
     vi.mocked(listBillingRequests)
       .mockResolvedValueOnce(requestPage("1", "cursor-a"))
