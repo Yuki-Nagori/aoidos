@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-11。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复基础已交付，030 门控与批次实现进行中；算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
+更新日期：2026-10-12。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复基础已交付，030 门控与批次实现进行中；算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
 
 ## 阅读路径
 
