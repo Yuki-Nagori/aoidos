@@ -7,6 +7,8 @@ use std::collections::BTreeSet;
 
 mod proposal;
 pub use proposal::*;
+mod question;
+pub use question::*;
 
 pub type Hash = [u8; 32];
 pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;

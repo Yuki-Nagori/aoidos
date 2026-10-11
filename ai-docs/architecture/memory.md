@@ -225,7 +225,7 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 登记和关联只改变实体指向，不改写玩家原文或逐字引用。输入“李磊”确认指向李雷后，记忆可以关联李雷的 ID，引用仍写“李磊”；别名也不等于 NPC 已获知某件事或旧记忆应被强化。
 
-“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。当前冻结产品边界，尚未新增实体目录字段、别名 API 或运行时实现。
+“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。030 当前尚未接入可信实体目录、明确指向证明或别名存储；运行时仍不自动登记别名。
 
 ### 歧义询问与默认继续（已确认）
 
@@ -239,7 +239,7 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 ### 待确认问题生命周期（已确认）
 
-待确认问题持久保存，进程重启后可在待确认入口继续回答，不反复弹窗。相同歧义合并为同一问题，保留有效来源关联；合并身份规则需避免仅凭措辞相似把不同事件的问题合并。
+问题由可信管线根据类别、稳定素材来源和事件槽位生成 questionKey；不使用问题文案或模型给出的候选 ID 作为身份。SQLite 持久保存类型化候选、来源和 history / entity / evidence revision。同一 questionKey 的候选变化递增 revision，来源无效或任一 revision 过期时拒绝回答。选择只接受当前候选；“新对象”保存为待登记提议，不创建权威实体。每周目 pending 问题最多 512 个，队列满时返回容量拒绝，保留素材由上层标记 localDeferred。当前已实现单问题读取；UI 分页、来源失效协调、目录证明及别名写入仍待后续接入。
 
 已回答、已解决或来源失效的问题退出待办列表，保留必要审计记录。本周目内不因玩家几天未登录就丢弃仍有效的问题；跨周目问题不自动带入新周目。回答前继续重查来源 / 当前状态，问题持久化不赋予过期回答提交权限。
 
@@ -554,7 +554,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### manifest、操作状态机与恢复
 
-029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执迁移；alias / question 表仍由 030 后续实现。实体 canonical 数据只经可信引擎端口访问；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB。
+029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执和待确认问题迁移；alias 表与可信实体目录证明仍未实现。实体 canonical 数据只经可信引擎端口访问；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB。
 
 已应用操作若与 `store_applied` 回执、计划摘要或目标记录不一致，会在 `memory_run_faults` 持久登记故障，并拒绝该 run 后续所有写入，返回 `recoveryRequired`。当前没有自动解冻路径；必须经未来显式审计修复，不能以重新运行普通恢复覆盖冲突。
 

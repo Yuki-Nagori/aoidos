@@ -15,6 +15,7 @@ mod operations;
 mod reconciliation;
 mod recovery;
 pub use recovery::{RecoveryPage, ScanCursor};
+mod confirmations;
 mod materials;
 pub use materials::{
     BatchCompletion, BatchReceipt, BatchSnapshot, BatchState, CandidateOutcome, CandidateResult,

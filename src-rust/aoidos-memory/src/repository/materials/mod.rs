@@ -455,9 +455,7 @@ impl Repository {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
         let receipt = self.batch_receipt(&tx, batch_id)?;
-        if receipt.state != BatchState::Received || receipt.response.is_none() {
-            return Err(Error::Corrupt);
-        }
+        validate_received_receipt(&receipt)?;
         validate_completion(&tx, batch_id, &result)?;
         let changed = tx
             .execute(
@@ -812,17 +810,12 @@ fn validate_completion(
         .ok_or(Error::Corrupt)?
         .into_result()?;
     let proposal = decode_proposal_response(&raw).map_err(|_| Error::Corrupt)?;
-    if proposal.version != 1 {
-        return Err(Error::Corrupt);
-    }
-    let mut expected = BTreeSet::new();
-    for candidate in &proposal.candidates {
-        if !valid_candidate_id(&candidate.candidate_id)
-            || !expected.insert(candidate.candidate_id.as_str())
-        {
-            return Err(Error::Corrupt);
-        }
-    }
+    validate_proposal_identity(&proposal).map_err(stored_source_error)?;
+    let expected = proposal
+        .candidates
+        .iter()
+        .map(|candidate| candidate.candidate_id.as_str())
+        .collect::<BTreeSet<_>>();
     let mut actual = BTreeSet::new();
     for outcome in &completion.outcomes {
         if !valid_candidate_id(&outcome.candidate_id)
@@ -859,6 +852,13 @@ fn decode_proposal_response(bytes: &[u8]) -> Result<crate::model::Proposal> {
     if proposal.candidates.len() > MAX_CANDIDATES {
         return Err(Error::Rejected(Reason::CapacityBlocked));
     }
+    validate_proposal_identity(&proposal)?;
+    Ok(proposal)
+}
+fn validate_proposal_identity(proposal: &crate::model::Proposal) -> Result<()> {
+    if proposal.version != 1 {
+        return Err(Error::Rejected(Reason::PolicyUnavailable));
+    }
     let mut seen = BTreeSet::new();
     if proposal.candidates.iter().any(|candidate| {
         !valid_candidate_id(&candidate.candidate_id)
@@ -866,7 +866,13 @@ fn decode_proposal_response(bytes: &[u8]) -> Result<crate::model::Proposal> {
     }) {
         return Err(reject());
     }
-    Ok(proposal)
+    Ok(())
+}
+fn validate_received_receipt(receipt: &BatchReceipt) -> Result<()> {
+    if receipt.state != BatchState::Received || receipt.response.is_none() {
+        return Err(Error::Corrupt);
+    }
+    Ok(())
 }
 fn valid_candidate_id(id: &str) -> bool {
     (1..=32).contains(&id.len())

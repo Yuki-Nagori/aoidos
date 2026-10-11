@@ -71,6 +71,8 @@ impl Fixture {
         conn.execute_batch(crate::schema::SCHEMA).unwrap();
         conn.execute_batch(crate::schema::BATCH_RECEIPT_MIGRATION)
             .unwrap();
+        conn.execute_batch(crate::schema::QUESTION_MIGRATION)
+            .unwrap();
         let port = Port {
             view: Boundary {
                 script_id: "mistbell".into(),

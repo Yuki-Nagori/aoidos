@@ -219,3 +219,124 @@ fn candidate_ids_and_dimensions_are_bounded_and_subject_scoped() {
         .is_err()
     );
 }
+
+#[test]
+fn bounded_json_roundtrips_and_candidate_capacity_is_exact() {
+    let context = context();
+    let mut value = proposal(preference_candidate());
+    assert_eq!(
+        Proposal::parse(&serde_json::to_vec(&value).unwrap(), &context).unwrap(),
+        value
+    );
+    value.candidates = (0..MAX_CANDIDATES)
+        .map(|i| Candidate {
+            candidate_id: format!("c{i}"),
+            ..preference_candidate()
+        })
+        .collect();
+    assert!(value.validate(&context).is_ok());
+    value.candidates.push(Candidate {
+        candidate_id: "overflow".into(),
+        ..preference_candidate()
+    });
+    assert!(matches!(
+        value.validate(&context),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
+}
+
+#[test]
+fn evidence_must_match_subject_source_and_attitude_subset() {
+    let mut context = context();
+    context.evidence.insert(
+        "e2".into(),
+        EvidenceSnapshot {
+            subject_id: "guard".into(),
+            source_id: "s2".into(),
+        },
+    );
+    let mut candidate = character_candidate();
+    candidate.evidence_ids.clear();
+    assert!(proposal(candidate.clone()).validate(&context).is_err());
+    candidate.evidence_ids = vec!["e2".into()];
+    assert!(proposal(candidate.clone()).validate(&context).is_err());
+    candidate.source_ids.push("s2".into());
+    assert!(proposal(candidate.clone()).validate(&context).is_ok());
+    candidate.attitude_evidence_ids = vec!["e1".into()];
+    assert!(proposal(candidate.clone()).validate(&context).is_err());
+    candidate.attitude_evidence_ids.clear();
+    context.evidence.get_mut("e2").unwrap().subject_id = "harbor".into();
+    assert!(proposal(candidate).validate(&context).is_err());
+    for attitude_only in [false, true] {
+        let mut preference = preference_candidate();
+        if attitude_only {
+            preference.attitude_evidence_ids = vec!["e1".into()];
+        } else {
+            preference.evidence_ids = vec!["e1".into()];
+        }
+        assert!(proposal(preference).validate(&context).is_err());
+    }
+    let mut missing = character_candidate();
+    missing.evidence_ids = vec!["missing".into()];
+    assert!(validate_evidence(&missing, &context).is_err());
+}
+
+#[test]
+fn target_references_require_valid_ids_registered_targets_and_matching_subjects() {
+    let context = context();
+    let mut candidate = character_candidate();
+    candidate.classification = Classification::Correction;
+    assert!(proposal(candidate.clone()).validate(&context).is_err());
+    for reference in [
+        TargetRef {
+            entry_id: "invalid".into(),
+            ..target_ref(&context)
+        },
+        TargetRef {
+            expected_version_id: "invalid".into(),
+            ..target_ref(&context)
+        },
+        TargetRef {
+            expected_state_revision: MAX_INTEGER + 1,
+            ..target_ref(&context)
+        },
+        TargetRef {
+            entry_id: new_id(),
+            ..target_ref(&context)
+        },
+    ] {
+        candidate.target_ref = Some(reference);
+        assert!(proposal(candidate.clone()).validate(&context).is_err());
+    }
+    candidate.target_ref = Some(target_ref(&context));
+    candidate.subject_ref = SubjectRef::PlayerPreference;
+    candidate.evidence_ids.clear();
+    assert!(matches!(
+        proposal(candidate).validate(&context),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+    assert!(
+        !SubjectRef::Character { id: "guard".into() }.matches_subject(&Subject::PlayerPreference)
+    );
+    assert!(SubjectRef::PlayerPreference.matches_subject(&Subject::PlayerPreference));
+}
+
+#[test]
+fn unchanged_attitude_reuses_target_evidence_and_invalid_shapes_are_rejected() {
+    let mut context = context();
+    context.targets.values_mut().next().unwrap().attitude = Attitude::Believed;
+    let mut correction = character_candidate();
+    correction.classification = Classification::Correction;
+    correction.target_ref = Some(target_ref(&context));
+    correction.attitude = Some(Attitude::Believed);
+    assert!(proposal(correction.clone()).validate(&context).is_ok());
+    correction.summary = None;
+    assert!(proposal(correction).validate(&context).is_err());
+    let mut uncertain = preference_candidate();
+    uncertain.classification = Classification::Uncertain;
+    uncertain.dimension = None;
+    uncertain.inferred = None;
+    assert!(proposal(uncertain.clone()).validate(&context).is_ok());
+    uncertain.summary = None;
+    assert!(proposal(uncertain).validate(&context).is_err());
+}
