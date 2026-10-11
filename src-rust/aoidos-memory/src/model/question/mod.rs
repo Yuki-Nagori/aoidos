@@ -53,6 +53,9 @@ pub struct QuestionDraft {
     pub entity_revision: u64,
     /// 创建候选时确认的获知证据版本。
     pub evidence_revision: u64,
+    /// 被询问的原始名称片段；必须可从来源正文逐字复现，不能仅凭模型生成。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mentioned_name: Option<String>,
     /// 展示给玩家的有限选项。
     pub candidates: Vec<QuestionCandidate>,
 }

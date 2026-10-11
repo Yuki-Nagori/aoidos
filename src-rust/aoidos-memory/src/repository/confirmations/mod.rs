@@ -52,6 +52,9 @@ impl Repository {
         if !self.valid_sources(&run, &draft.identity.sources, port)? {
             return Err(Error::Rejected(Reason::InvalidSource));
         }
+        if !mentioned_name_is_source_backed(&draft, port)? {
+            return Err(Error::Rejected(Reason::InvalidSource));
+        }
         let question_key = build_question_key(run_id, &draft.identity)?;
         let draft_json = canonical(&draft)?;
         let tx = conn
@@ -162,6 +165,9 @@ impl Repository {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
         if !self.valid_sources(&run, &question.draft.identity.sources, port)? {
+            return Err(Error::Rejected(Reason::InvalidSource));
+        }
+        if !mentioned_name_is_source_backed(&question.draft, port)? {
             return Err(Error::Rejected(Reason::InvalidSource));
         }
         validate_answer(&resolution.answer, &question.draft)?;
@@ -290,9 +296,10 @@ impl Repository {
             let snapshot_is_current = question.draft.history_revision == boundary.history_revision
                 && question.draft.entity_revision == boundary.entity_revision
                 && question.draft.evidence_revision == boundary.evidence_revision;
-            if snapshot_is_current
-                && self.valid_sources(&run, &question.draft.identity.sources, port)?
-            {
+            let source_is_current =
+                self.valid_sources(&run, &question.draft.identity.sources, port)?
+                    && mentioned_name_is_source_backed(&question.draft, port)?;
+            if snapshot_is_current && source_is_current {
                 questions.push(question);
                 if questions.len() == limit {
                     break;
@@ -366,6 +373,11 @@ fn validate_draft(draft: &QuestionDraft, boundary: &Boundary) -> Result<()> {
         || draft.identity.sources.len() > MAX_QUESTION_SOURCES
         || draft.candidates.is_empty()
         || draft.candidates.len() > MAX_QUESTION_CANDIDATES
+        || draft.mentioned_name.as_ref().is_some_and(|name| {
+            name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control)
+        })
+        || (draft.identity.kind == QuestionKind::MemoryClassification
+            && draft.mentioned_name.is_some())
     {
         return Err(reject());
     }
@@ -413,6 +425,21 @@ fn normalized_draft(draft: &QuestionDraft) -> Result<QuestionDraft> {
     let mut normalized = draft.clone();
     normalized.identity.sources = normalized_sources(&draft.identity.sources)?;
     Ok(normalized)
+}
+
+fn mentioned_name_is_source_backed(draft: &QuestionDraft, port: &dyn CausalPort) -> Result<bool> {
+    let Some(name) = draft.mentioned_name.as_deref() else {
+        return Ok(true);
+    };
+    for source in &draft.identity.sources {
+        if port
+            .source_text(source)?
+            .is_some_and(|text| text.contains(name))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn normalized_sources(sources: &[SourceRef]) -> Result<Vec<SourceRef>> {

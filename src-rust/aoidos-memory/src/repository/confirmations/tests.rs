@@ -12,6 +12,7 @@ fn draft(f: &Fixture, candidates: &[&str]) -> QuestionDraft {
         history_revision: f.port.view.history_revision,
         entity_revision: f.port.view.entity_revision,
         evidence_revision: f.port.view.evidence_revision,
+        mentioned_name: None,
         candidates: candidates
             .iter()
             .map(|candidate| QuestionCandidate::Entity {
@@ -38,6 +39,113 @@ fn resolution(question: &MemoryQuestion, answer: QuestionAnswer) -> QuestionReso
         expected_history_revision: question.draft.history_revision,
         answer,
     }
+}
+
+#[test]
+fn mentioned_name_is_persisted_only_when_it_is_an_exact_source_substring() {
+    let mut f = Fixture::new();
+    let mut draft = draft(&f, &["keeper"]);
+    draft.mentioned_name = Some("钟声".into());
+    let opened = open_draft(&mut f, &draft).unwrap();
+    assert_eq!(opened.draft.mentioned_name.as_deref(), Some("钟声"));
+    assert_eq!(
+        f.repo
+            .question(&f.conn, &f.run.run_id, &opened.question_id)
+            .unwrap()
+            .draft
+            .mentioned_name
+            .as_deref(),
+        Some("钟声")
+    );
+
+    let mut fabricated = draft;
+    fabricated.identity.event_slot += 1;
+    fabricated.mentioned_name = Some("钟声之外".into());
+    assert!(matches!(
+        open_draft(&mut f, &fabricated),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+}
+
+#[test]
+fn resolved_name_question_rechecks_its_source_backing() {
+    let mut f = Fixture::new();
+    let mut draft = draft(&f, &["keeper"]);
+    draft.mentioned_name = Some("钟声".into());
+    let question = open_draft(&mut f, &draft).unwrap();
+    let resolved = f
+        .repo
+        .resolve_question(
+            &mut f.conn,
+            &f.port,
+            &f.run.run_id,
+            resolution(
+                &question,
+                QuestionAnswer::SelectCandidate {
+                    candidate: QuestionCandidate::Entity {
+                        entity_id: "keeper".into(),
+                    },
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(resolved.status, QuestionStatus::Resolved);
+    assert_eq!(resolved.draft.mentioned_name.as_deref(), Some("钟声"));
+}
+
+#[test]
+fn resolving_question_rejects_a_persisted_mention_missing_from_source() {
+    let mut f = Fixture::new();
+    let question = open(&mut f, &["keeper"]).unwrap();
+    let mut altered = question.draft.clone();
+    altered.mentioned_name = Some("并未出现的名字".into());
+    f.conn
+        .execute(
+            "UPDATE memory_questions SET draft_json=?1 WHERE question_id=?2",
+            params![canonical(&altered).unwrap(), question.question_id],
+        )
+        .unwrap();
+    let before = f
+        .repo
+        .question(&f.conn, &f.run.run_id, &question.question_id)
+        .unwrap();
+
+    rejected(
+        f.repo.resolve_question(
+            &mut f.conn,
+            &f.port,
+            &f.run.run_id,
+            resolution(&before, QuestionAnswer::None),
+        ),
+        Reason::InvalidSource,
+    );
+    assert_eq!(
+        f.repo
+            .question(&f.conn, &f.run.run_id, &question.question_id)
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
+fn question_kind_mismatch_rejects_candidates_before_persistence() {
+    let mut f = Fixture::new();
+    let mut association = draft(&f, &["keeper"]);
+    association.candidates = vec![QuestionCandidate::MemoryClassification {
+        classification: Classification::Uncertain,
+    }];
+    let mut classification = draft(&f, &["keeper"]);
+    classification.identity.kind = QuestionKind::MemoryClassification;
+    for invalid in [association, classification] {
+        rejected(open_draft(&mut f, &invalid), Reason::InvalidSchema);
+    }
+    let count: u64 = f
+        .conn
+        .query_row("SELECT count(*) FROM memory_questions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0);
 }
 
 #[test]
@@ -246,11 +354,13 @@ fn classification_questions_only_accept_classification_candidates() {
     let mut f = Fixture::new();
     let mut invalid = draft(&f, &["keeper"]);
     invalid.identity.kind = QuestionKind::MemoryClassification;
+    invalid.mentioned_name = Some("钟声".into());
     assert!(matches!(
         open_draft(&mut f, &invalid),
         Err(Error::Rejected(Reason::InvalidSchema))
     ));
     let mut valid = invalid;
+    valid.mentioned_name = None;
     valid.candidates = vec![QuestionCandidate::MemoryClassification {
         classification: Classification::Uncertain,
     }];
@@ -574,6 +684,34 @@ fn pending_question_page_rejects_stale_cursor_and_invalidates_old_sources() {
             QuestionStatus::Invalidated
         );
     }
+}
+
+#[test]
+fn pending_page_invalidates_a_persisted_mention_not_backed_by_its_sources() {
+    let mut f = Fixture::new();
+    let question = open(&mut f, &["keeper"]).unwrap();
+    let mut corrupted = question.draft.clone();
+    corrupted.mentioned_name = Some("并未出现的名字".into());
+    let raw = canonical(&corrupted).unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_questions SET draft_json=?1 WHERE question_id=?2",
+            params![raw, question.question_id],
+        )
+        .unwrap();
+
+    let page = f
+        .repo
+        .pending_questions(&mut f.conn, &f.port, &f.run.run_id, None, 1)
+        .unwrap();
+    assert!(page.questions.is_empty());
+    assert_eq!(
+        f.repo
+            .question(&f.conn, &f.run.run_id, &question.question_id)
+            .unwrap()
+            .status,
+        QuestionStatus::Invalidated
+    );
 }
 
 #[test]
