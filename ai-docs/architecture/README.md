@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-11。
+更新日期：2026-10-12。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -50,7 +50,7 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 025 依赖 004、008、024、026、034，024 经 021 / 023 覆盖业务依赖；024 保留最小提交链路和故障联调范围，完整界面验收归 025。026 提供受控 main 构建与主题 bootstrap，025 在该入口接窗口几何恢复；面板 / 骰判偏好存储归 022，回合冻结骰判偏好归 023，避免重复接线。
 
-007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022；[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作、支持从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前完成回执保持可读。012 的场景目录现可承载版本绑定的规范实体快照，完整目录校验 actor 与精确名称唯一性；v1 剧本还没有结构化实体清单，角色获知证据、别名提交 / 回退和真实付费发送仍未接入。[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面；[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等其他前置，030 / 033 可用 035 已实现的费用端口开展本地联调；收费批次与真实费用实验仍须等 035 三平台实机验收完成并获明确授权。
+007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022；[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作、支持从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前完成回执保持可读。012 的场景目录可承载版本绑定的规范实体快照；内置 Mistbell 通过严格 `entities.json` 登记并接入最小场景目录，脚本修订同时绑定原文与实体清单。角色获知证据、别名提交 / 回退和真实付费发送仍未接入。[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面；[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等其他前置，030 / 033 可用 035 已实现的费用端口开展本地联调；收费批次与真实费用实验仍须等 035 三平台实机验收完成并获明确授权。
 
 027 已定稿[计价与费用预算](billing.md)。035 已接入精确金额、不可变价格登记、按 profile 选择计价币种、每局 CNY / USD 独立预算、物理请求预留 / 结算、双币种用量与月报、80% 提醒及分页明细；参考 Token 只生成同币种建议值。历史恢复限完整 usage 和原冻结价格，余额查询仅支持 DeepSeek 显式只读请求；三平台实机展示留证仍待补，验收状态见 [035](../task/035-llm-cost-control-impl.md)。全应用月报不设总额度。
 
@@ -137,6 +137,11 @@ Session → RecapCandidate → Compression（同一 Coordinator lease）→ Sess
 
 useRecordView / useMigration / useLlmTurn → listener-group（逐项持有资源）
   → API 薄调用 + 各域 recovery 纯逻辑（有界读取、缓存和代次）
+
+resources/scripts/<scriptId>/（编译期登记的 Markdown + entities.json）
+  → engine::game::assets（有界严格解码、资源 revision）
+  → game::builtin::SceneCatalog（精确规范实体查询）
+  ··· memory SourcePort（未来接入；获知证据与别名提交尚未连接）
 ```
 
 记录事实、估算与压缩属于 engine；存储原语属于 store，供应商 / 传输仍属于 llm。生产依赖保持单向，测试夹具不进入生产链路；023 接领域决策，024 接最小产品联调，025 接完整界面。

@@ -151,7 +151,7 @@ interface OpenedSession {
 }
 ```
 
-scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-found；不接受文件路径、正文、endpoint 或密钥。`displayNames` 从该资源目录的 `i18n.json` 读取，只本地化界面展示名，不改变原文 `title` 或存档身份。原文格式 / 修订 / 本地化元数据不可用为 app.not-ready，配置、凭据与存储错误按公开码返回。startNew=true 创建新周目；false 重开同剧本的已保存活动周目，没有活动选择时首次创建。活动 profile 可显式切换，已生成记录不改写。
+scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-found；不接受文件路径、正文、endpoint 或密钥。`displayNames` 从该资源目录的 `i18n.json` 读取，只本地化界面展示名，不改变原文 `title` 或存档身份。原文、实体目录、格式或本地化元数据不可用为 app.not-ready；实体目录规则见[剧本格式规范](../standards/scenarios.md)。`scriptRevision` 绑定原文与实体清单版本，重新打开时不接受版本漂移。配置、凭据与存储错误按公开码返回。startNew=true 创建新周目；false 重开同剧本的已保存活动周目，没有活动选择时首次创建。活动 profile 可显式切换，已生成记录不改写。
 
 打开只预检配置，不启动 HTTP。回合持有共享 lease 时切换 / 新建返回 app.busy；同配置同剧本的已登记会话允许只读重载，不重新读取凭据或占门禁。重开会话恢复持久检查点，生成只能由显式输入 / resume 接纳。窗口不能覆盖已有计划骰值、规则或世界状态。
 
