@@ -93,3 +93,29 @@ fn registered_facts_keep_typed_values_and_reject_incomplete_identity() {
     );
     assert!(Fact::decode("historyFork",&serde_json::json!({"version":1,"operationId":uuid::Uuid::new_v4().to_string(),"mode":"rewind","parentControlSeq":0,"targetSeq":1,"prefixHash":"bad"})).is_err());
 }
+
+#[test]
+fn round_terminal_requires_an_error_only_for_failed_outcome() {
+    for (outcome, has_error, valid) in [
+        ("failed", true, true),
+        ("failed", false, false),
+        ("completed", false, true),
+        ("completed", true, false),
+        ("cancelled", false, true),
+        ("cancelled", true, false),
+    ] {
+        let mut data = identity();
+        data["outcome"] = serde_json::json!(outcome);
+        data["throughSeq"] = serde_json::json!(1);
+        data["completedSteps"] = serde_json::json!([]);
+        if has_error {
+            data["error"] =
+                serde_json::to_value(crate::fault::Fault::new("llm.aborted", "中断")).unwrap();
+        }
+        assert_eq!(
+            Fact::decode("roundEnded", &data).is_ok(),
+            valid,
+            "{outcome}, error={has_error}"
+        );
+    }
+}

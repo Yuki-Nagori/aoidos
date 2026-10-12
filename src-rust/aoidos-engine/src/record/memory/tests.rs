@@ -401,6 +401,163 @@ fn direct_character_dialogue(
     input_seq
 }
 
+fn completed_recovered_character_dialogue(
+    fixture: &mut Fixture,
+    interrupted_outcome: Option<Outcome>,
+) -> u64 {
+    use crate::record::facts::{DiceMode, GenerationTarget};
+
+    let input_seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "你刚才说了什么？".into(),
+            mode: Some(RecordMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let original_id = aoidos_memory::model::new_id();
+    let original_identity = identity(&original_id);
+    let target = GenerationTarget::CharacterSpeech {
+        speaker_id: "npc".into(),
+    };
+    fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity: original_identity.clone(),
+                input_seq,
+                mode: RecordMode::InCharacter,
+                dice_mode: DiceMode::Auto,
+                profile_id: "profile".into(),
+                profile_revision: "a".repeat(64),
+                target: target.clone(),
+                scene_id: "mistbell".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("原回合接纳")
+            .unwrap(),
+        )
+        .unwrap();
+    let checkpoint_seq = fixture
+        .session
+        .append(
+            Fact::CheckSkipped {
+                identity: original_identity.clone(),
+                reason: crate::record::facts::SkipReason::NoCheck,
+                world_revision: "world-v1".into(),
+            }
+            .body("跳过检定")
+            .unwrap(),
+        )
+        .unwrap();
+    if let Some(outcome) = interrupted_outcome {
+        fixture
+            .session
+            .append(
+                Fact::RoundEnded {
+                    identity: original_identity,
+                    outcome,
+                    through_seq: checkpoint_seq,
+                    completed_steps: vec![],
+                    error: (outcome == Outcome::Failed)
+                        .then(|| crate::fault::Fault::new("llm.aborted", "中断")),
+                }
+                .body("原回合中断")
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    let recovered_id = aoidos_memory::model::new_id();
+    let recovered_identity = identity(&recovered_id);
+    fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity: recovered_identity.clone(),
+                input_seq,
+                mode: RecordMode::InCharacter,
+                dice_mode: DiceMode::Auto,
+                profile_id: "profile".into(),
+                profile_revision: "b".repeat(64),
+                target,
+                scene_id: "mistbell".into(),
+                source_round_id: Some(original_id),
+                checkpoint_seq: Some(checkpoint_seq),
+            }
+            .body("恢复回合接纳")
+            .unwrap(),
+        )
+        .unwrap();
+    let response_seq = fixture
+        .session
+        .append(Body::CharacterSpeech {
+            speaker_id: "npc".into(),
+            text: "我听见了。".into(),
+            turn_id: aoidos_memory::model::new_id(),
+            terminal: Terminal::Completed {
+                finish_reason: FinishReason::Stop,
+            },
+        })
+        .unwrap();
+    let settlement_seq = fixture
+        .session
+        .commit_world(
+            Fact::SettlementPlanned {
+                identity: recovered_identity.clone(),
+                narrative_seq: response_seq,
+                world_revision: "world-v1".into(),
+                mutations: vec![],
+            }
+            .body("计划结算")
+            .unwrap(),
+            &mut NoopWorld,
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundSettled {
+                identity: recovered_identity.clone(),
+                narrative_seq: response_seq,
+                settlement_seq,
+                applied_through_mutation_id: None,
+            }
+            .body("角色对话结算")
+            .unwrap(),
+        )
+        .unwrap();
+    let advance_seq = fixture
+        .session
+        .append(
+            Fact::SceneStayed {
+                identity: recovered_identity.clone(),
+                scene_id: "mistbell".into(),
+                world_revision: "world-v1".into(),
+            }
+            .body("保持场景")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundEnded {
+                identity: recovered_identity,
+                outcome: Outcome::Completed,
+                through_seq: advance_seq,
+                completed_steps: vec![],
+                error: None,
+            }
+            .body("回合结束")
+            .unwrap(),
+        )
+        .unwrap();
+    input_seq
+}
+
 fn character_directory(fixture: &Fixture) -> crate::game::catalog::EntityDirectory {
     crate::game::catalog::EntityDirectory::new(
         fixture.session.header().script_revision.clone(),
@@ -475,6 +632,34 @@ fn told_evidence_requires_complete_directed_dialogue_and_exact_subject_and_infor
             .valid_evidence(&evidence)
             .unwrap()
     );
+}
+
+#[test]
+fn told_evidence_accepts_completed_checkpoint_recovery_with_inherited_target() {
+    let mut fixture = Fixture::new();
+    let input_seq = completed_recovered_character_dialogue(&mut fixture, None);
+    let source = SourcePort::new(&fixture.session)
+        .reference(&aoidos_memory::model::new_id(), input_seq)
+        .unwrap();
+    let directory = character_directory(&fixture);
+    let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+
+    assert!(port.valid_evidence(&told_evidence(source)).unwrap());
+}
+
+#[test]
+fn told_evidence_accepts_successful_recovery_after_failed_or_cancelled_round() {
+    for outcome in [Outcome::Failed, Outcome::Cancelled] {
+        let mut fixture = Fixture::new();
+        let input_seq = completed_recovered_character_dialogue(&mut fixture, Some(outcome));
+        let source = SourcePort::new(&fixture.session)
+            .reference(&aoidos_memory::model::new_id(), input_seq)
+            .unwrap();
+        let directory = character_directory(&fixture);
+        let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+
+        assert!(port.valid_evidence(&told_evidence(source)).unwrap());
+    }
 }
 
 #[test]
@@ -913,7 +1098,7 @@ fn dialogue_is_evidence(fixture: &Fixture) -> Result<bool> {
 }
 
 #[test]
-fn told_evidence_rejects_legacy_input_narrator_and_restored_acceptance() {
+fn told_evidence_rejects_legacy_input_narrator_and_malformed_recovery_acceptance() {
     for case in 0..4 {
         let fixture = dialogue_variant(|_, body| match body {
             Body::PlayerSpeech { mode, .. } if case == 0 => *mode = None,
@@ -921,7 +1106,7 @@ fn told_evidence_rejects_legacy_input_narrator_and_restored_acceptance() {
                 1 => data["target"] = serde_json::json!({"kind": "narration"}),
                 2 => data["mode"] = serde_json::json!("outOfCharacter"),
                 3 => {
-                    data["sourceRoundId"] = data["roundId"].clone();
+                    data["sourceRoundId"] = serde_json::json!(aoidos_memory::model::new_id());
                     data["checkpointSeq"] = serde_json::json!(1);
                 }
                 _ => {}

@@ -171,27 +171,36 @@ impl<'a> SourcePort<'a> {
                     let GenerationTarget::CharacterSpeech { speaker_id } = target else {
                         return Ok(None);
                     };
-                    if accepted.is_some()
-                        || mode != RecordMode::InCharacter
-                        || source_round_id.is_some()
-                        || checkpoint_seq.is_some()
-                    {
+                    if mode != RecordMode::InCharacter {
                         return Ok(None);
                     }
-                    accepted = Some((identity, speaker_id));
+                    match (accepted.as_ref(), source_round_id, checkpoint_seq) {
+                        (None, None, None) => accepted = Some((identity, speaker_id)),
+                        (Some((previous, previous_speaker)), Some(source), Some(_))
+                            if previous.round_id == source
+                                && previous_speaker == &speaker_id
+                                && !same_round(previous, &identity) =>
+                        {
+                            // 023 validates the checkpoint anchor and inherited target below.
+                            accepted = Some((identity, speaker_id));
+                        }
+                        _ => return Ok(None),
+                    }
                 }
                 Fact::RoundEnded {
                     identity,
                     outcome,
                     through_seq,
-                    error,
                     ..
                 } if accepted
                     .as_ref()
                     .is_some_and(|(accepted, _)| same_round(accepted, &identity)) =>
                 {
-                    if outcome != Outcome::Completed || error.is_some() {
-                        return Ok(None);
+                    if matches!(outcome, Outcome::Failed | Outcome::Cancelled) {
+                        // A later RoundAccepted may continue this input from a valid checkpoint.
+                        // Keep the accepted identity so that continuation must link to this round;
+                        // 023's recovery validator decides whether that checkpoint is resumable.
+                        continue;
                     }
                     let recovered = crate::game::recovery::derive_evidence_path(
                         self.session,
