@@ -70,6 +70,15 @@ fn mentioned_name_is_persisted_only_when_it_is_an_exact_source_substring() {
 #[test]
 fn resolved_name_question_rechecks_its_source_backing() {
     let mut f = Fixture::new();
+    f.port.alias_entities.borrow_mut().insert(
+        "keeper".into(),
+        EntityAliasContext {
+            entity_id: "keeper".into(),
+            category: EntityCategory::Character,
+            scope: "mistbell".into(),
+            canonical_name: "守夜人".into(),
+        },
+    );
     let mut draft = draft(&f, &["keeper"]);
     draft.mentioned_name = Some("钟声".into());
     let question = open_draft(&mut f, &draft).unwrap();

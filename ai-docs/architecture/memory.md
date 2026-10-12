@@ -225,9 +225,9 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 登记和关联只改变实体指向，不改写玩家原文或逐字引用。输入“李磊”确认指向李雷后，记忆可以关联李雷的 ID，引用仍写“李磊”；别名也不等于 NPC 已获知某件事或旧记忆应被强化。
 
-“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。012 的 `SceneCatalog` 接入绑定剧本修订的 `EntityDirectory`：完整目录按类别 / 范围检查规范名唯一性、核验场景 actor，并只提供精确规范名查找；不完整快照拒绝解析。内置 Mistbell v1 通过 `resources/scripts/mistbell/entities.json` 显式登记固定初始实体，原文不作实体推断；engine 在资源登记时严格校验元数据，并将原文与清单共同纳入 `scriptRevision`，旧修订存档不会静默接受新目录。043 的 `EntityRegistry` 将固定种子与周目级动态实体合并为有界快照；`Storage::with_memory` 在 session → SQLite 锁顺序下装配当前有效分支的完整 `entityRevision`，再冻结到 `SourcePort`。动态身份只能由可信 catalog rule 生成意图、经 023 世界操作持久提交；分支外身份留在审计表但不对记忆可见。固定清单只作种子数据，记忆不依赖 Mistbell 专属路径。`SourcePort` 目前只校验一种严格的 `told` 证据：当前分支上的场内玩家输入须被记录为无检查点 / 无恢复来源的角色定向回合，目标角色须在完整目录中，之后须有同一回合的该角色完整回复、结算及成功结束；证据 subject / informant、固定 scope 与 rule 也必须吻合。它复用 023 回合恢复状态机，核验跳过 / 检定、完整输出、结算计划与回执、场景推进及成功终态，避免仅凭局部事实拼出不完整因果链。单次扫描最多处理 256 条 / 4 MiB，并在匹配终态闭合后停止。当前生产回合仍固定登记为旁白目标，因此该校验还没有可由正式对局产生的入口；观察和传闻证据仍拒绝，别名提交 / 撤销或回退重建也未接入。目录不会自动授予角色知识。
+“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。012 的 `SceneCatalog` 接入绑定剧本修订的 `EntityDirectory`：完整目录按类别 / 范围检查规范名唯一性、核验场景 actor，并只提供精确规范名查找；不完整快照拒绝解析。内置 Mistbell v1 通过 `resources/scripts/mistbell/entities.json` 显式登记固定初始实体，原文不作实体推断；engine 在资源登记时严格校验元数据，并将原文与清单共同纳入 `scriptRevision`，旧修订存档不会静默接受新目录。043 的 `EntityRegistry` 将固定种子与周目级动态实体合并为有界快照；`Storage::with_memory` 在 session → SQLite 锁顺序下装配当前有效分支的完整 `entityRevision`，再冻结到 `SourcePort`。动态身份只能由可信 catalog rule 生成意图、经 023 世界操作持久提交；分支外身份留在审计表但不对记忆可见。固定清单只作种子数据，记忆不依赖 Mistbell 专属路径。`SourcePort` 目前只校验一种严格的 `told` 证据：当前分支上的场内玩家输入须被记录为无检查点 / 无恢复来源的角色定向回合，目标角色须在完整目录中，之后须有同一回合的该角色完整回复、结算及成功结束；证据 subject / informant、固定 scope 与 rule 也必须吻合。它复用 023 回合恢复状态机，核验跳过 / 检定、完整输出、结算计划与回执、场景推进及成功终态，避免仅凭局部事实拼出不完整因果链。单次扫描最多处理 256 条 / 4 MiB，并在匹配终态闭合后停止。正式回合入口已可将玩家输入定向给当前场景中的登记角色，目标贯穿恢复、重生成和角色发言记录；UI 选择器及动态角色在场关系由后续 045 接入。观察和传闻证据仍拒绝。别名现支持玩家确认后的事务化登记、撤销及按有效来源重建；自动明确指向证据尚未接入。目录不会自动授予角色知识。
 
-`entities.json` 只提供固定剧本初始实体，不限制未来世界出现动态角色。043 已建立统一 Rust 注册表：动态身份由引擎生成 UUID 派生 ID，不以名字推导；持久记录绑定 session、脚本 / catalog 修订、WorldMutation hash 与 recordSeq，登记表、entityRevision 和 `store_applied` 回执在同一 SQLite 事务提交。未提交意图不会进入快照；重放按稳定 mutation ID 幂等恢复，快照验证来源记录与回执并只暴露当前因果路径上的身份。记忆只消费已提交稳定 ID。032 再决定哪些已登记动态 NPC 可由剧本规则授权进入轮回刻痕；不能按同名或近似名自动继承。注册身份本身仍不证明角色知情，也不会自动登记别名。
+`entities.json` 只提供固定剧本初始实体，不限制未来世界出现动态角色。043 已建立统一 Rust 注册表：动态身份由引擎生成 UUID 派生 ID，不以名字推导；持久记录绑定 session、脚本 / catalog 修订、WorldMutation hash 与 recordSeq，登记表、entityRevision 和 `store_applied` 回执在同一 SQLite 事务提交。未提交意图不会进入快照；重放按稳定 mutation ID 幂等恢复，快照验证来源记录与回执并只暴露当前因果路径上的身份。记忆只消费已提交稳定 ID。032 再决定哪些已登记动态 NPC 可由剧本规则授权进入轮回刻痕；不能按同名或近似名自动继承。注册身份本身仍不证明角色知情。当前别名写入仅由玩家明确回答实体关联问题触发，尚未接入可信对话接收对象等自动明确指向证据。
 
 ### 歧义询问与默认继续（已确认）
 
@@ -241,9 +241,9 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 ### 待确认问题生命周期（已确认）
 
-问题由可信管线根据类别、稳定素材来源和事件槽位生成 questionKey；不使用问题文案或模型给出的候选 ID 作为身份。SQLite 持久保存类型化候选、来源和 history / entity / evidence revision。同一 questionKey 的候选变化递增 revision，来源无效或任一 revision 过期时拒绝回答。选择只接受当前候选；“新对象”保存为待登记提议，不创建权威实体。每周目 pending 问题最多 512 个，队列满时返回容量拒绝，保留素材由上层标记 localDeferred。仓储读取支持最多 32 项分页、单次最多扫描 256 项；SQLite 序号游标固定本次分页上界，翻页期间新问题由刷新读取。来源或可信版本失效的项目在扫描时转为 invalidated，历史修订过期的游标拒绝续读。可信目录证明及别名写入仍待后续接入。
+问题由可信管线根据类别、稳定素材来源和事件槽位生成 questionKey；不使用问题文案或模型给出的候选 ID 作为身份。SQLite 持久保存类型化候选、来源和 history / entity / evidence revision。同一 questionKey 的候选变化递增 revision，来源无效或任一 revision 过期时拒绝回答。选择只接受当前候选；“新对象”保存为待登记提议，不创建权威实体。每周目 pending 问题最多 512 个，队列满时返回容量拒绝，保留素材由上层标记 localDeferred。仓储读取支持最多 32 项分页、单次最多扫描 256 项；SQLite 序号游标固定本次分页上界，翻页期间新问题由刷新读取。来源或可信版本失效的项目在扫描时转为 invalidated，历史修订过期的游标拒绝续读。生产目录证明由 engine `SourcePort` 提供；被明确选中的实体具备完整目录上下文、`mentionedName` 有原文支持且来源仍有效时，答案、别名来源和审计事件在同一 SQLite 事务提交，否则答案保持 pending。
 
-实体关联问题可保存 `mentionedName`，但仅当该字符串能在问题来源正文中逐字找到时接受；它是玩家确认的原始名称线索，不是规范名或已登记别名。它不改变 questionKey；同一问题的候选或提及名称变化均递增 revision，使旧回答失效。选中候选只持久化该问题的回答，不创建别名；待可信目录完整性、实体范围和别名唯一性可由引擎核验后，才允许单独提交别名登记。
+实体关联问题可保存 `mentionedName`，但仅当该字符串能在问题来源正文中逐字找到时接受；它是玩家确认的原始名称线索，不是规范名或已登记别名。它不改变 questionKey；同一问题的候选或提及名称变化均递增 revision，使旧回答失效。选中实体候选时，仓储在同一事务中重新核验来源、完整目录中的实体类别 / 范围、规范名冲突及 active 别名唯一性，再提交问题答案、只包含 `mentionedName` 的支持来源与审计事件；任一检查失败则全部回滚，问题保持 pending。精确别名仅在当前周目、类别和 scope 内解析，需至少一个仍处于当前因果路径的名称来源；撤销使用 alias revision 与 entity revision 做 CAS，不删除登记历史。回退使名称来源失效后，解析时排除该依据；其他有效但不包含该名称的上下文来源不能替代它。近似匹配不自动登记或解析别名。
 
 已回答、已解决或来源失效的问题退出待办列表，保留必要审计记录。本周目内不因玩家几天未登录就丢弃仍有效的问题；跨周目问题不自动带入新周目。回答前继续重查来源 / 当前状态，问题持久化不赋予过期回答提交权限。
 
@@ -537,7 +537,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 顺序固定：输入 / 身份 → 来源有效性与资格 → subject / 实体 / target 版本 → 获知 / 态度证据 → 分类字段及摘要 → 幂等 / 同经历限额 → 变更计划。评分不抵消任何拒绝。repeat 只有同主体、旧条目关联及有效重提证据均通过时才计划强化；事件语义仍来自有来源候选，不声称字符计算能够证明同事件。旧条目无可靠关联时询问而非自动合并。
 
-实体解析使用引擎登记目录，不建第二份 canonical 目录。精确名称 / 已确认别名按类别、地区 / 规则范围查索引；文本查找可用 NFC 副本，但原文引用不归一化。近似 / 同音仅召回候选；生成名称冲突检查按[算法候选](memory-algorithms.md#参数约束与初始实验配置)执行，不能改名已有实体。自动别名登记须有可信明确指向：例如引擎登记的对话接收对象或玩家已确认的关联，再核验完整目录内唯一性 / 别名未占用。单次模型猜测或缓存里只找到一个名字不构成证明；目录完整性 / revision 无法核验或候选扫描未完成时只保留 deferred，不自动登记；其余情况生成待确认问题。
+实体解析使用引擎登记目录，不建第二份 canonical 目录。精确名称 / 已确认别名按类别、地区 / 规则范围查索引；文本查找可用 NFC 副本，但原文引用不归一化。近似 / 同音仅召回候选；生成名称冲突检查按[算法候选](memory-algorithms.md#参数约束与初始实验配置)执行，不能改名已有实体。当前仓储只在玩家明确确认实体关联后登记别名，并核验完整目录内唯一性、类别 / scope、来源与别名占用；引擎登记的对话接收对象尚未形成自动别名提交入口。单次模型猜测或缓存里只找到一个名字不构成证明；目录完整性 / revision 无法核验或候选扫描未完成时只保留 deferred，不自动登记；其余情况生成待确认问题。
 
 | 幂等身份    | 组成与用途                                                                          |
 | ----------- | ----------------------------------------------------------------------------------- |
@@ -564,7 +564,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### manifest、操作状态机与恢复
 
-029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射与旧完成回执兼容迁移；alias 表与可信观察证据仍未实现。canonical 数据归 engine 的 `EntityRegistry` 所有，经恢复校验后的有界只读快照交给 memory；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。
+029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射、别名来源 / 审计与旧完成回执兼容迁移；观察类角色获知证据仍未实现。canonical 数据归 engine 的 `EntityRegistry` 所有，经恢复校验后的有界只读快照交给 memory；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。别名每周目最多 4096 个，每项最多 128 个支持来源，每段来源 JSON 最多 32 KiB。
 
 已应用操作若与 `store_applied` 回执、计划摘要或目标记录不一致，会在 `memory_run_faults` 持久登记故障，并拒绝该 run 后续所有写入，返回 `recoveryRequired`。当前没有自动解冻路径；必须经未来显式审计修复，不能以重新运行普通恢复覆盖冲突。
 
@@ -616,7 +616,7 @@ prepared → ready → applied 是正常路径。文件落盘成功而 ready 回
 | entries / versions         | entryId、runId、subjectRef、当前 versionId、stateRevision、active / archived / unavailable；versionId 唯一，parent / restoredFrom 属于同 entry，JSON hash / 长度 / 结构化元信息不可改写，引用集合用 sourceSetHash 关联 sources 表 |
 | sources / effects          | versionId 关联 SourceRef / evidenceId；effectId、entryId、来源 / 事件、逻辑位置、gain / revival；同来源对同 entry 的同类效果唯一                                                                                                  |
 | operations / targets       | operationId、planHash、inputHistoryRevision、state、planJson；(operationId,entryId) 唯一，保存 expected / next versionId 及 expected / next stateRevision                                                                         |
-| aliases                    | aliasId、runId、entityId、类别 / 范围 / aliasKey、状态及有效登记来源；同范围 active aliasKey 只能指向一个实体                                                                                                                     |
+| aliases                    | aliasId、runId、entityId、类别 / scope / 精确 aliasName、状态 / revision、登记 entityRevision 与 questionId / sourceHash；同周目、类别、scope 的 active aliasName 唯一，并按当前有效来源重建                                      |
 | questions                  | questionId、questionKey、runId、revision、historyRevision、候选版本、来源集合、状态；pending questionKey 唯一，回答只能 CAS 当前 revision                                                                                         |
 | configs                    | scope、configVersion、algorithmVersion、完整参数或显式覆盖；每作用域只有一个已确认当前版本，旧版本保留供 run 引用                                                                                                                 |
 

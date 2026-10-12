@@ -190,6 +190,16 @@ impl EntityDirectory {
             .and_then(|id| self.by_id.get(id)))
     }
 
+    /// 完整目录内按稳定 ID 取实体；局部快照不能作为权威上下文。
+    /// # Errors
+    /// 不完整目录拒绝返回实体身份信息。
+    pub fn entity(&self, id: &str) -> Result<Option<&CanonicalEntity>, Fault> {
+        if !self.complete {
+            return Err(super::super::invalid_phase());
+        }
+        Ok(self.by_id.get(id))
+    }
+
     pub(crate) fn contains_character(&self, id: &str) -> bool {
         self.by_id
             .get(id)

@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod aliases;
 mod operations;
 mod reconciliation;
 mod recovery;

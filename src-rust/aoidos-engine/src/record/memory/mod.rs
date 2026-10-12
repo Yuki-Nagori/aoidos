@@ -10,8 +10,8 @@ use crate::ports::{Outcome, Terminal};
 use aoidos_memory::{
     error::{Error, Reason, Result},
     model::{
-        Boundary, CausalPort, InputMode, KnowledgeEvidence, MAX_SCAN, MAX_SCAN_BYTES, SourceRef,
-        hash,
+        Boundary, CausalPort, EntityAliasContext, EntityCategory, InputMode, KnowledgeEvidence,
+        MAX_SCAN, MAX_SCAN_BYTES, SourceRef, hash,
     },
 };
 
@@ -265,6 +265,50 @@ impl CausalPort for SourcePort<'_> {
         Ok(speaker_id == evidence.subject_id
             && evidence.informant_id.as_deref() == Some(player_id.as_str())
             && directory.contains_character(&speaker_id))
+    }
+    fn entity_alias_context(&self, entity_id: &str) -> Result<Option<EntityAliasContext>> {
+        let Some(directory) = self.entity_directory else {
+            return Ok(None);
+        };
+        let Some(entity) = directory
+            .entity(entity_id)
+            .map_err(|_| Error::Rejected(Reason::PolicyUnavailable))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(EntityAliasContext {
+            entity_id: entity.id.clone(),
+            category: match entity.kind {
+                crate::game::catalog::EntityKind::Character => EntityCategory::Character,
+                crate::game::catalog::EntityKind::Place => EntityCategory::Place,
+                crate::game::catalog::EntityKind::Organization => EntityCategory::Organization,
+                crate::game::catalog::EntityKind::Item => EntityCategory::Item,
+                crate::game::catalog::EntityKind::Term => EntityCategory::Term,
+            },
+            scope: entity.scope.clone(),
+            canonical_name: entity.canonical_name.clone(),
+        }))
+    }
+    fn canonical_entity_id(
+        &self,
+        category: EntityCategory,
+        scope: &str,
+        name: &str,
+    ) -> Result<Option<String>> {
+        let Some(directory) = self.entity_directory else {
+            return Ok(None);
+        };
+        let kind = match category {
+            EntityCategory::Character => crate::game::catalog::EntityKind::Character,
+            EntityCategory::Place => crate::game::catalog::EntityKind::Place,
+            EntityCategory::Organization => crate::game::catalog::EntityKind::Organization,
+            EntityCategory::Item => crate::game::catalog::EntityKind::Item,
+            EntityCategory::Term => crate::game::catalog::EntityKind::Term,
+        };
+        directory
+            .resolve_exact(kind, scope, name)
+            .map(|entity| entity.map(|entity| entity.id.clone()))
+            .map_err(|_| Error::Rejected(Reason::PolicyUnavailable))
     }
     fn source_text(&self, source: &SourceRef) -> Result<Option<String>> {
         if source.script_id != self.session.header().script_id

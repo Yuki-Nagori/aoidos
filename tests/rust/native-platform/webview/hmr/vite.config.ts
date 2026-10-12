@@ -25,5 +25,12 @@ const report: Plugin = {
 
 export default defineConfig({
   plugins: [report],
-  server: { headers: { "Content-Security-Policy": config.app.security.devCsp } },
+  server: {
+    headers: {
+      "Content-Security-Policy": config.app.security.devCsp.replaceAll(
+        "localhost:1420",
+        "127.0.0.1:1420",
+      ),
+    },
+  },
 });

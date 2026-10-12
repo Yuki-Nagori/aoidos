@@ -966,3 +966,98 @@ fn told_evidence_requires_a_terminal_within_both_scan_limits() {
         assert!(!dialogue_is_evidence(&fixture).unwrap());
     }
 }
+
+#[test]
+fn alias_context_and_canonical_lookup_use_all_trusted_entity_categories() {
+    use crate::game::catalog::{CanonicalEntity, EntityDirectory, EntityKind};
+    let fixture = Fixture::new();
+    let kinds = [
+        (EntityKind::Character, EntityCategory::Character),
+        (EntityKind::Place, EntityCategory::Place),
+        (EntityKind::Organization, EntityCategory::Organization),
+        (EntityKind::Item, EntityCategory::Item),
+        (EntityKind::Term, EntityCategory::Term),
+    ];
+    let entities: Vec<_> = kinds
+        .iter()
+        .enumerate()
+        .map(|(index, (kind, _))| CanonicalEntity {
+            id: format!("entity-{index}"),
+            kind: *kind,
+            scope: "demo".into(),
+            canonical_name: format!("名称{index}"),
+        })
+        .collect();
+    let directory = EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        7,
+        true,
+        entities.clone(),
+    )
+    .unwrap();
+    let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+    for (entity, (_, category)) in entities.iter().zip(kinds) {
+        assert_eq!(
+            port.entity_alias_context(&entity.id).unwrap(),
+            Some(EntityAliasContext {
+                entity_id: entity.id.clone(),
+                category,
+                scope: entity.scope.clone(),
+                canonical_name: entity.canonical_name.clone(),
+            })
+        );
+        assert_eq!(
+            port.canonical_entity_id(category, "demo", &entity.canonical_name)
+                .unwrap(),
+            Some(entity.id.clone())
+        );
+        assert_eq!(
+            port.canonical_entity_id(category, "other", &entity.canonical_name)
+                .unwrap(),
+            None
+        );
+    }
+    assert_eq!(port.entity_alias_context("missing").unwrap(), None);
+    assert_eq!(
+        SourcePort::new(&fixture.session)
+            .entity_alias_context("missing")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        SourcePort::new(&fixture.session)
+            .canonical_entity_id(EntityCategory::Character, "demo", "名称0")
+            .unwrap(),
+        None
+    );
+    assert!(matches!(
+        port.canonical_entity_id(EntityCategory::Character, "", "名称0"),
+        Err(Error::Rejected(Reason::PolicyUnavailable))
+    ));
+}
+
+#[test]
+fn alias_context_does_not_trust_an_incomplete_directory() {
+    let fixture = Fixture::new();
+    let incomplete = crate::game::catalog::EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        1,
+        false,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "npc".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "角色".into(),
+        }],
+    )
+    .unwrap();
+    // 正式构造器会先拒绝；此处验证底层目录读取仍拒绝局部快照。
+    let port = SourcePort {
+        session: &fixture.session,
+        entity_directory: Some(&incomplete),
+    };
+    assert!(matches!(
+        port.entity_alias_context("missing"),
+        Err(Error::Rejected(Reason::PolicyUnavailable))
+    ));
+}

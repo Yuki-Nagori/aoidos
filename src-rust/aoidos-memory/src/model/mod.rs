@@ -9,6 +9,8 @@ mod proposal;
 pub use proposal::*;
 mod question;
 pub use question::*;
+mod alias;
+pub use alias::*;
 
 pub type Hash = [u8; 32];
 pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;
@@ -333,6 +335,22 @@ pub trait CausalPort {
     /// # Errors
     /// 必须匹配引擎已确认的场内完成事实及 roundId，不由任意来源推进时钟。
     fn completed_round(&self, round_id: &str, source: &SourceRef) -> Result<bool>;
+
+    /// 当前完整可信目录中的实体解析上下文；未登记实体返回 `None`。
+    fn entity_alias_context(&self, _entity_id: &str) -> Result<Option<EntityAliasContext>> {
+        Ok(None)
+    }
+
+    /// 完整可信目录中的精确规范名命中；`None` 仅表示已核验的无命中。
+    /// 默认拒绝，因为无法核验规范名冲突时不能登记别名。
+    fn canonical_entity_id(
+        &self,
+        _category: EntityCategory,
+        _scope: &str,
+        _name: &str,
+    ) -> Result<Option<String>> {
+        Err(Error::Rejected(Reason::PolicyUnavailable))
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

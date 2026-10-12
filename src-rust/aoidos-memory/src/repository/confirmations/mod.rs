@@ -175,7 +175,25 @@ impl Repository {
             return Ok(question);
         }
         let answer_json = canonical(&resolution.answer)?;
-        let changed = conn
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        if let (
+            QuestionKind::EntityAssociation,
+            Some(_),
+            QuestionAnswer::SelectCandidate {
+                candidate: QuestionCandidate::Entity { entity_id },
+            },
+        ) = (
+            question.draft.identity.kind,
+            question.draft.mentioned_name.as_deref(),
+            &resolution.answer,
+        ) {
+            super::aliases::apply_confirmed_alias(
+                &tx, run_id, &run, &question, entity_id, &boundary, port,
+            )?;
+        }
+        let changed = tx
             .execute(
                 "UPDATE memory_questions SET status='resolved',answer_json=?1 WHERE question_id=?2 AND run_id=?3 AND status='pending' AND revision=?4 AND history_revision=?5",
                 params![
@@ -190,6 +208,7 @@ impl Repository {
         if changed != 1 {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
+        tx.commit().map_err(sql)?;
         Ok(MemoryQuestion {
             status: QuestionStatus::Resolved,
             answer: Some(resolution.answer),
