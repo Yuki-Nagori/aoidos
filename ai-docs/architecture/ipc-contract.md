@@ -161,18 +161,20 @@ scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-fo
 
 下列命令已由串行驱动实现，Rust / TS 同型；阶段发布、四事件消费与恢复的验证证据见 [023](../task/023-turn-state-machine-impl.md)。可信场景、世界解释器与配置由 Rust 域登记，实际产品接线由 024 / 025 承接。
 
-| 命令                | 参数                                         | 成功返回 / 接纳                                                                                                  |
-| ------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| engine_submit_input | `{ sessionId, text, recipientCharacterId? }` | `{ operationId, roundId }`；输入与接纳事实提交后返回；目标省略时为旁白，指定时仅接受当前场景完整目录中的 IC 角色 |
-| engine_interrupt    | `{ sessionId, roundId, text }`               | `{ operationId }`；接纳取消并换回合的请求，新 round 提交后从快照获取                                             |
-| engine_cancel_round | `{ sessionId, roundId }`                     | `{ roundId, outcome }`；待已开始提交达到一致边界后返回胜出终态                                                   |
-| engine_resume       | `{ sessionId }`                              | `{ operationId, roundId }`；从暂停检查点显式恢复                                                                 |
-| engine_regenerate   | `{ sessionId, roundId }`                     | `{ operationId, roundId }`；返回新回合身份，始终复用已有骰值；无骰回合继续无骰                                   |
-| engine_rewind       | `{ sessionId, targetSeq }`                   | `{ operationId }`；后续控制提交 / 世界重放走事件                                                                 |
-| engine_submit_check | `{ sessionId, roundId, planId }`             | `{ roundId, planId, accepted: true }`；同一 plan 重复返回，不重复采样                                            |
-| engine_get_phase    | `{ sessionId }`                              | 下方 PhaseSnapshot                                                                                               |
+| 命令                | 参数                                         | 成功返回 / 接纳                                                                                                                                                                               |
+| ------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| engine_submit_input | `{ sessionId, text, recipientCharacterId? }` | `{ operationId, roundId }`；输入与接纳事实提交后返回；目标省略时为旁白，指定时当前仅接受场景 roster 中完整目录登记的 IC 角色；046 计划增加 `expectedPresenceRevision`，改为按可信在场快照校验 |
+| engine_interrupt    | `{ sessionId, roundId, text }`               | `{ operationId }`；接纳取消并换回合的请求，新 round 提交后从快照获取                                                                                                                          |
+| engine_cancel_round | `{ sessionId, roundId }`                     | `{ roundId, outcome }`；待已开始提交达到一致边界后返回胜出终态                                                                                                                                |
+| engine_resume       | `{ sessionId }`                              | `{ operationId, roundId }`；从暂停检查点显式恢复                                                                                                                                              |
+| engine_regenerate   | `{ sessionId, roundId }`                     | `{ operationId, roundId }`；返回新回合身份，始终复用已有骰值；无骰回合继续无骰                                                                                                                |
+| engine_rewind       | `{ sessionId, targetSeq }`                   | `{ operationId }`；后续控制提交 / 世界重放走事件                                                                                                                                              |
+| engine_submit_check | `{ sessionId, roundId, planId }`             | `{ roundId, planId, accepted: true }`；同一 plan 重复返回，不重复采样                                                                                                                         |
+| engine_get_phase    | `{ sessionId }`                              | 下方 PhaseSnapshot                                                                                                                                                                            |
 
 text 为非空白字符串，最多 32 KiB UTF-8，保留原文；角色内 / 场外前缀及内容范围由 012 的 Rust 解析，不增加前端可覆盖身份 / 规则的参数，不接受模型 / 骰式 / 状态覆盖参数。所有身份由 Rust 分配，operationId 不是客户端重试幂等键；收到接纳后不自动重发命令。已在飞时新提交 busy；interrupt / cancel / submit_check 仅控制指定的本 round。其他合法性、错误优先级和 rewind 检查点见阶段机。cancel 的重复返回限于本进程有界缓存，旧 round 驱逐为 not-found；暂停恢复由持久检查点决定，不靠 ring 跨进程恢复。
+
+044 定义场景在场快照契约，045 提供 Rust 权威的内部只读快照，046 规划将其接成 IPC 命令 `engine_get_scene_presence({ sessionId })`，返回 `{ sessionId, sceneId, presenceRevision, characters }`；最多 128 人、规范 JSON 总长最多 64 KiB，超限整体失败且不截断。待恢复 / 缺少可信基线映射 `engine.invalid-phase`，快照超限映射 `app.bad-request` + `detail.reason=presenceSnapshotLimit`。该 IPC 命令尚未实现；角色提交的 `expectedPresenceRevision` 也仍是 046 计划字段。
 
 ```ts
 type EnginePhase = "idle" | "generating" | "awaitingCheck" | "settling" | "advancing";

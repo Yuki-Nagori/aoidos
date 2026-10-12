@@ -180,6 +180,8 @@ WorldMutation 是类型化变更载荷，不是独立 system.code。结算变更
 
 043 将 `entityCreated` 接入 023 的同一意图 / 恢复协议：intent 必须引用可信 `SceneCatalog` 中的创建规则，Rust 在追加前校验整个 mutation 组并生成不依赖名称的动态 ID。应用时，在一笔 SQLite 事务内写实体行、推进 `entityRevision` 并写入 `store_applied`；JSONL 的 `settlementPlanned` 仍为意图事实源。未确认或待恢复会话不能向记忆提供实体快照；恢复按记录中的原 ID / hash 重放。回退保留外分支注册记录供审计，`EntityRegistry` 只把当前有效路径上的身份并入只读快照，见[记忆协议](memory.md)与[043 实施](../task/043-rust-entity-registry-impl.md)。
 
+044 / 045 计划沿用同一版本化 `WorldMutation` / applied 边界，注册 `scenePresenceChanged`、`observed` 与 `rumorDelivered` 类型。presence 基线由绑定 `scriptRevision` 的可信 `SceneCatalog.initialPresenceIds` 重建；scene entry 由 `sceneAdvanced` 的目标 Scene entry rule 确定，后续变更须持久提交并 applied。presence 状态按已 applied 且当前有效路径重建，即使同一回合随后以 failed / cancelled 结束也不回滚。观察和传闻则只有其来源回合完整成功、对应 mutation 已应用且位于当前有效路径，才成为记忆可消费来源。presence snapshot revision 按当前有效因果路径派生并作为 opaque CAS token。观察必须显式限定 scope 和动作时 presence revision；传闻每跳保留当前 informant、交付来源、根主张和前一 evidence ID。记忆模块只读消费获知事件，不能写在场或获知事件。协议与实现状态分别见 [044](../task/044-scene-presence-dialogue-design.md)、[045](../task/045-scene-presence-dialogue-impl.md) 和 [030](../task/030-memory-gates-batches-impl.md)。
+
 ```text
 准备带 mutationId 的事实块和事件载荷
   → JSONL 完整追加 + 强制 fsync（意图成为持久事实）

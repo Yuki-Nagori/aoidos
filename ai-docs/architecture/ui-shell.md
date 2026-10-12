@@ -113,7 +113,7 @@ prefers-reduced-motion 时取消位移动画，使用 120ms 淡入淡出；LED �
 
 slash 菜单 v1 仅提供既有操作快捷入口：/ooc、/stop、/interrupt、/resume、/regenerate、/rewind、/pin、/latest。/stop 等控制命令不成为 playerSpeech；/interrupt 的后续文本作为新输入原文提交；/rewind 打开目标检查点与影响确认，不允许自由输入未经核验的 seq 直接执行。/regenerate 显示骰值复用和可能收费确认。未知 / 禁用候选不触发 invoke；绕过 UI 的非法参数由 Rust 返回 app.bad-request。
 
-composer 当前默认以旁白为接收目标；后端已允许显式提交 `recipientCharacterId`，但 UI 尚无角色选择器，且实体目录身份不代表当前场景在场。044 先冻结固定 / 动态角色的在场与选择协议，045 再接入选择 UI；这项新增产品交互不回扩 025。
+composer 当前默认以旁白为接收目标；后端已允许显式提交 `recipientCharacterId`，但 UI 尚无角色选择器，且目录身份不代表当前场景在场。044 冻结在场 / 获知协议，045 实现可恢复的权威事件源，030 消费其中的记忆证据，046 再以 `expectedPresenceRevision` 接入选择 UI；新增交互不回扩 025。
 
 Enter 发送，Shift+Enter 换行；event.isComposing 或本地 compositionstart 到 compositionend 期间不发送、不关面板、不选择 slash 候选。发送按钮也遵循组字保护；compositionend 后等待用户下一次显式发送，不用 timeout 自动补发。
 
