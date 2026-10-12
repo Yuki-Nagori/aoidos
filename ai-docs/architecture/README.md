@@ -138,10 +138,14 @@ Session → RecapCandidate → Compression（同一 Coordinator lease）→ Sess
 useRecordView / useMigration / useLlmTurn → listener-group（逐项持有资源）
   → API 薄调用 + 各域 recovery 纯逻辑（有界读取、缓存和代次）
 
-resources/scripts/<scriptId>/（编译期登记的 Markdown + entities.json）
-  → engine::game::assets（有界严格解码、资源 revision）
-  → game::builtin::SceneCatalog（精确规范实体查询）
-  ··· memory SourcePort（未来接入；获知证据与别名提交尚未连接）
+resources/scripts/<scriptId>/（编译期登记的 Markdown + 固定实体种子）
+  → engine::game::assets（有界严格解码、静态资源 revision）
+    ├→ game::builtin::SceneCatalog（精确规范实体查询）
+    └→ EntityDirectory seed → Storage::with_memory / SourcePort
+         （当前冻结静态 revision；完整 Rust 注册表 revision 待 043）
+
+Rust EntityRegistry（043 目标：静态种子 + 持久周目动态身份）
+  → Storage::with_memory / SourcePort（恢复后提供合并目录快照）
 ```
 
 记录事实、估算与压缩属于 engine；存储原语属于 store，供应商 / 传输仍属于 llm。生产依赖保持单向，测试夹具不进入生产链路；023 接领域决策，024 接最小产品联调，025 接完整界面。

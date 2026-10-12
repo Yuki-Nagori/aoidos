@@ -45,12 +45,14 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
         Arc::new(Events::default()),
         Arc::new(test_support::Events::default()),
     );
-    let header = test_support::header();
+    let header = crate::game::builtin::header("mistbell").unwrap();
     let session_id = header.session_id.clone();
     storage.records.create(header).unwrap();
     let run = storage
         .with_memory(&session_id, |repository, conn, port| {
             assert_eq!(port.boundary()?.session_id, session_id);
+            assert_eq!(port.boundary()?.entity_revision, 1);
+            assert_eq!(port.boundary()?.evidence_revision, 0);
             repository.create_run(conn, port, policy())
         })
         .unwrap();

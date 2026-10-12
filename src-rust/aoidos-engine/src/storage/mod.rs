@@ -81,7 +81,10 @@ impl Storage {
         let session = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = crate::record::memory::SourcePort::new(&session);
+        let entity_directory = crate::game::assets::entity_directory(&session.header().script_id)
+            .map_err(memory_context_error)?;
+        let port =
+            crate::record::memory::SourcePort::with_entity_directory(&session, &entity_directory)?;
         self.with_database(|conn| Ok(job(&self.memory, conn, &port)))
             .map_err(memory_context_error)?
     }
