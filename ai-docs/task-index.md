@@ -90,7 +90,7 @@ ai-docs/
 | 040  | [实现：独立剧本解析器](task/040-script-parser-impl.md)                               | 底层·剧本         | 039、023                               | done        |
 | 041  | [默认原创奇幻剧本与玩法验证](task/041-default-scenario.md)                           | 剧本·内容         | 012、023、038                          | done        |
 | 042  | [OpenCode Zen / Go 模型目录与多协议 Provider](task/042-opencode-provider-catalog.md) | **底层·LLM 链路** | 018、019、034                          | done        |
-| 043  | [实现：Rust 权威实体注册与动态 NPC 身份](task/043-rust-entity-registry-impl.md)      | **底层·记忆**     | 012、023、029                          | planned     |
+| 043  | [实现：Rust 权威实体注册与动态 NPC 身份](task/043-rust-entity-registry-impl.md)      | **底层·记忆**     | 012、023、029                          | ready       |
 
 实施按表中依赖推进，设计未定稿或前置未完成时保持 planned。035 消费 025 已交付的设置容器，因此接受 025 的 implemented 状态；025 的三平台实机验收仍独立待完成。035 的代码可供 030 / 033 本地联调；收费批次与真实费用实验必须等 035 完成三平台实机验收并获明确授权。018–024 承接 LLM 链路；029–033 与 043 承接记忆工程，043 提供 Rust 权威实体身份，030 与 032 单向消费它，避免实体生命周期反向依赖记忆。031 依赖 034 国际化。025 交付完整界面，不扩大 004 样式底座或 024 联调范围。
 
