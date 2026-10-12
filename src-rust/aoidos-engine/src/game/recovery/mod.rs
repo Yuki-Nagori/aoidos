@@ -5,7 +5,7 @@ use crate::{
     fault::Fault,
     ports::{Outcome, Terminal},
     record::{
-        facts::{CheckPlan, DiceMode, Fact, RoundIdentity, ScenePosition},
+        facts::{CheckPlan, DiceMode, Fact, GenerationTarget, RoundIdentity, ScenePosition},
         format::{Body, InputMode},
         session::{Session, store_fault},
     },
@@ -19,6 +19,7 @@ pub struct RoundFacts {
     pub accepted_seq: u64,
     pub dice_mode: DiceMode,
     pub mode: InputMode,
+    pub target: GenerationTarget,
     pub scene_id: String,
     pub plan: Option<(u64, CheckPlan)>,
     pub skipped: Option<u64>,
@@ -85,6 +86,21 @@ pub struct Recovery {
 pub fn derive(session: &Session, baseline: Option<ScenePosition>) -> Result<Recovery, Fault> {
     derive_prefix(session, baseline, None)
 }
+
+/// 验证记忆证据调用方在有界扫描中收集的单回合有效路径。
+/// # Errors
+/// 路径不以指定终态结束、因果步骤不完整或记录损坏时返回 store.corrupt。
+pub(crate) fn derive_evidence_path(
+    session: &Session,
+    path: Vec<u64>,
+    through: u64,
+) -> Result<Recovery, Fault> {
+    if path.last() != Some(&through) {
+        return Err(corrupt());
+    }
+    derive_path(session, None, path, through, false)
+}
+
 pub(crate) fn derive_prefix(
     session: &Session,
     baseline: Option<ScenePosition>,
@@ -227,6 +243,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
         input_seq,
         dice_mode,
         mode,
+        target,
         source_round_id,
         checkpoint_seq,
         scene_id,
@@ -239,6 +256,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
                 || !previous.anchor(anchor)
                 || previous.input_seq != input_seq
                 || previous.mode != mode
+                || previous.target != target
             {
                 return Err(corrupt());
             }
@@ -258,6 +276,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
                 accepted_seq: seq,
                 dice_mode,
                 mode,
+                target,
                 scene_id: scene_id.clone(),
                 plan: None,
                 skipped: None,

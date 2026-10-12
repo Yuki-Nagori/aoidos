@@ -116,6 +116,47 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
     drop(reopened);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn alias_schema_migration_only_advances_an_existing_database() {
+    let root =
+        std::env::temp_dir().join(format!("aoidos-alias-migration-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("storage.sqlite");
+    let legacy = rusqlite::Connection::open(&path).unwrap();
+    for migration in &STORAGE_MIGRATIONS[..STORAGE_MIGRATIONS.len() - 1] {
+        legacy.execute_batch(migration).unwrap();
+    }
+    legacy
+        .pragma_update(None, "user_version", STORAGE_MIGRATIONS.len() - 1)
+        .unwrap();
+    drop(legacy);
+
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    storage
+        .with_database(|connection| {
+            let version: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version as usize, STORAGE_MIGRATIONS.len());
+            let table_exists: i64 = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='memory_aliases')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(table_exists, 1);
+            Ok(())
+        })
+        .unwrap();
+    storage.close().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
 #[test]
 fn registration_faults_map_to_typed_memory_context_errors() {
     assert!(matches!(

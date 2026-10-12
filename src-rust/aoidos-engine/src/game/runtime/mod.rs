@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 type Reply<T> = oneshot::Sender<Result<T, Fault>>;
 enum Command {
-    Submit(String, Reply<AcceptedRound>),
+    Submit(String, Option<String>, Reply<AcceptedRound>),
     Resume(Reply<AcceptedRound>),
     Interrupt(String, String, Reply<AcceptedOperation>),
     Cancel(String, Reply<CancelledRound>),
@@ -49,7 +49,7 @@ impl Command {
     }
     fn reject(self, fault: Fault) {
         match self {
-            Self::Submit(_, reply) | Self::Resume(reply) | Self::Regenerate(_, reply) => {
+            Self::Submit(_, _, reply) | Self::Resume(reply) | Self::Regenerate(_, reply) => {
                 let _ = reply.send(Err(fault));
             }
             Self::Interrupt(_, _, reply) | Self::Rewind(_, reply) => {
@@ -217,9 +217,26 @@ impl Service {
     /// # Errors
     /// 参数、共享门禁、配置和当前阶段错误不追加输入。
     pub async fn submit_input(&self, id: &str, text: String) -> Result<AcceptedRound, Fault> {
+        self.submit_input_to_character(id, text, None).await
+    }
+    /// 将一轮明确路由给当前场景的已登记角色；不依据玩家文本推断对象。
+    /// # Errors
+    /// 非法角色 ID、输入、场景成员或实体目录拒绝接纳。
+    pub async fn submit_input_to_character(
+        &self,
+        id: &str,
+        text: String,
+        recipient_character_id: Option<String>,
+    ) -> Result<AcceptedRound, Fault> {
         super::input::parse_input(&text)?;
+        if recipient_character_id
+            .as_deref()
+            .is_some_and(|character_id| !format::valid_id(character_id))
+        {
+            return Err(Fault::bad_request());
+        }
         let (tx, rx) = oneshot::channel();
-        self.send(id, Command::Submit(text, tx))?;
+        self.send(id, Command::Submit(text, recipient_character_id, tx))?;
         receive(rx).await
     }
     /// # Errors
@@ -482,12 +499,14 @@ impl Actor {
             return false;
         }
         match command {
-            Command::Submit(text, reply) => {
-                let result = self.start(Some(&text)).await;
+            Command::Submit(text, recipient_character_id, reply) => {
+                let result = self
+                    .start(Some(&text), recipient_character_id.as_deref())
+                    .await;
                 let _ = reply.send(result);
             }
             Command::Resume(reply) => {
-                let result = self.start(None).await;
+                let result = self.start(None, None).await;
                 let _ = reply.send(result);
             }
             Command::Rewind(target, reply) => {
@@ -546,7 +565,11 @@ impl Actor {
         }
         false
     }
-    async fn start(&mut self, input: Option<&str>) -> Result<AcceptedRound, Fault> {
+    async fn start(
+        &mut self,
+        input: Option<&str>,
+        recipient_character_id: Option<&str>,
+    ) -> Result<AcceptedRound, Fault> {
         let phase = self.context.publisher.snapshot().state;
         if phase.needs_recovery || (input.is_none() && !phase.resume_required) {
             return Err(super::invalid_phase());
@@ -560,11 +583,18 @@ impl Actor {
         }
         let lease = self.context.coordinator.acquire()?;
         let run = if let Some(text) = input {
-            Runner::accept(
+            let target = recipient_character_id.map_or(
+                crate::record::facts::GenerationTarget::Narration,
+                |speaker_id| crate::record::facts::GenerationTarget::CharacterSpeech {
+                    speaker_id: speaker_id.to_owned(),
+                },
+            );
+            Runner::accept_targeted(
                 self.context.clone(),
                 lease,
                 frozen,
                 super::input::parse_input(text)?,
+                target,
             )
             .await?
         } else {

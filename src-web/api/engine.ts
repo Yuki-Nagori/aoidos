@@ -71,8 +71,12 @@ export type PhaseEventMap = {
 };
 
 /** 仅透传原始输入；语法、场景、门禁和规则由 Rust 确认。 */
-export function submitInput(sessionId: string, text: string): Promise<AcceptedRound> {
-  return invoke("engine_submit_input", { sessionId, text });
+export function submitInput(
+  sessionId: string,
+  text: string,
+  recipientCharacterId?: string,
+): Promise<AcceptedRound> {
+  return invoke("engine_submit_input", { sessionId, text, recipientCharacterId });
 }
 /** 取消当前子调用后由引擎保留父 lease，接纳插话。 */
 export function interruptRound(

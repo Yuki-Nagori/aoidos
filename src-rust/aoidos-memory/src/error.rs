@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum Reason {
     InvalidSchema,
     InvalidSource,
+    AmbiguousEntity,
     StaleVersion,
     CapacityBlocked,
     PolicyUnavailable,
@@ -76,6 +77,7 @@ mod tests {
         for (reason, expected) in [
             (Reason::InvalidSchema, "app.bad-request"),
             (Reason::InvalidSource, "app.bad-request"),
+            (Reason::AmbiguousEntity, "app.bad-request"),
             (Reason::StaleVersion, "app.bad-request"),
             (Reason::CapacityBlocked, "app.bad-request"),
             (Reason::PolicyUnavailable, "app.not-ready"),

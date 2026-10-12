@@ -2,7 +2,7 @@
 
 use std::{
     io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream},
     process::{Child, Command, Stdio},
     sync::{
         Arc,
@@ -12,6 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+// Windows CI 曾出现 localhost 探测成功但 WebView2 未加载的超时；显式回环地址让两者命中同一接口。
+const HMR_HOST: &str = "127.0.0.1";
+const HMR_PORT: u16 = 1420;
 
 struct ViteServer(Child);
 
@@ -87,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             WebviewWindowBuilder::new(
                 app,
                 "main",
-                WebviewUrl::External("http://localhost:1420".parse()?),
+                WebviewUrl::External(format!("http://{HMR_HOST}:{HMR_PORT}").parse()?),
             )
             .title("Aoidos HMR fixture")
             .visible(false)
@@ -116,15 +120,16 @@ fn start_vite(
     fixture: &std::path::Path,
     vite: &std::path::Path,
 ) -> Result<Child, Box<dyn std::error::Error>> {
+    let port = HMR_PORT.to_string();
     let server = Command::new("bun")
         .arg(vite)
         .args([
             "--config",
             "vite.config.ts",
             "--host",
-            "localhost",
+            HMR_HOST,
             "--port",
-            "1420",
+            &port,
             "--strictPort",
         ])
         .current_dir(fixture)
@@ -136,26 +141,26 @@ fn start_vite(
 }
 
 fn wait_for_server() -> Result<(), Box<dyn std::error::Error>> {
-    let addresses = ("localhost", 1420).to_socket_addrs()?.collect::<Vec<_>>();
+    let address = SocketAddr::from(([127, 0, 0, 1], HMR_PORT));
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
-        for address in &addresses {
-            if let Ok(mut stream) = TcpStream::connect_timeout(address, Duration::from_millis(100))
+        if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            stream.write_all(
+                format!(
+                    "GET / HTTP/1.1\r\nHost: {HMR_HOST}:{HMR_PORT}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            if (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.1 304"))
+                && response.contains("Aoidos HMR fixture")
             {
-                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-                stream.write_all(
-                    b"GET / HTTP/1.1\r\nHost: localhost:1420\r\nConnection: close\r\n\r\n",
-                )?;
-                let mut response = String::new();
-                stream.read_to_string(&mut response)?;
-                if (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.1 304"))
-                    && response.contains("Aoidos HMR fixture")
-                {
-                    return Ok(());
-                }
+                return Ok(());
             }
         }
         thread::sleep(Duration::from_millis(50));
     }
-    Err("Vite HMR server did not become ready".into())
+    Err("Vite HMR server did not become ready on loopback".into())
 }

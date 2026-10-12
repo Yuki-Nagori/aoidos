@@ -18,7 +18,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；029 存储 / 恢复已交付              |
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定     |
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收   |
-| 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；025 实施中                   |
+| 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；025 已实现，平台验收待完成   |
 | 国际化       | [界面国际化](i18n.md)                  | zh-Hans / en、语言偏好、首窗原生文案与精确格式化；034 已验收       |
 | 主题与皮肤   | [主题架构](theming.md)                 | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 已三平台验收        |
 | 存储基建     | [存储基建](storage.md)                 | 数据目录、SQLite、实例锁与原子写                                   |
@@ -26,7 +26,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 ## 工程现状
 
-存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 已交付界面语言、持久偏好与本地化格式；后续补齐英文消息 schema 基准、主题名和剧本目录展示名本地化。[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 三平台 CI 与本机全量 verify 均通过。025 实施中：舞台、四态面板、有界记录呈现、composer、偏好及窗口恢复已接通；本机 `bun run verify` 全项通过。跨平台原生 WebView、DPI、IME 与辅助技术验收仍未完成，任务保持 in-progress。证据见[任务索引](../task-index.md)。
+存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 已交付界面语言、持久偏好与本地化格式；后续补齐英文消息 schema 基准、主题名和剧本目录展示名本地化。[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 三平台 CI 与本机全量 verify 均通过。025 已实现舞台、四态面板、有界记录呈现、composer、偏好及窗口恢复；本机 `bun run verify` 全项通过。跨平台原生 WebView、DPI、IME 与辅助技术验收仍未完成，任务保持 implemented。证据见[任务索引](../task-index.md)。
 
 记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，尚未接入产品记忆流程；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
 
@@ -50,7 +50,7 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 025 依赖 004、008、024、026、034，024 经 021 / 023 覆盖业务依赖；024 保留最小提交链路和故障联调范围，完整界面验收归 025。026 提供受控 main 构建与主题 bootstrap，025 在该入口接窗口几何恢复；面板 / 骰判偏好存储归 022，回合冻结骰判偏好归 023，避免重复接线。
 
-007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022；[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作、支持从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前完成回执保持可读。043 已交付 Rust 权威实体注册表：Mistbell `entities.json` 作为只读种子，动态身份只经 023 世界意图提交到共享 SQLite；恢复校验 applied 与因果记录，快照按当前有效分支过滤并供 `Storage::with_memory` 的 SourcePort 消费。角色获知证据、别名提交 / 回退和真实付费发送仍未接入。[031 高级设置](../task/031-memory-settings-queries-impl.md)、[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面；[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等其他前置，030 / 033 可用 035 已实现的费用端口开展本地联调；收费批次与真实费用实验仍须等 035 三平台实机验收完成并获明确授权。
+007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022；[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作、支持从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前完成回执保持可读。043 已交付 Rust 权威实体注册表：Mistbell `entities.json` 作为只读种子，动态身份只经 023 世界意图提交到共享 SQLite；恢复校验 applied 与因果记录，快照按当前有效分支过滤并供 `Storage::with_memory` 的 SourcePort 消费。030 的 SourcePort 现可验证严格的角色定向 `told` 证据，并复用 023 恢复状态机；正式引擎 / Tauri 入口现支持显式指定当前场景内的固定登记角色，目标贯穿接纳、恢复、角色提示与持久回复。固定角色选择 UI / 动态场景在场由 [044 设计](../task/044-scene-presence-dialogue-design.md)→[045 实施](../task/045-scene-presence-dialogue-impl.md)承接；记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。观察 / 传闻证据、别名提交 / 回退和真实付费发送仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等其他前置，030 / 033 可用 035 已实现的费用端口开展本地联调；收费批次与真实费用实验仍须等 035 三平台实机验收完成并获明确授权。
 
 027 已定稿[计价与费用预算](billing.md)。035 已接入精确金额、不可变价格登记、按 profile 选择计价币种、每局 CNY / USD 独立预算、物理请求预留 / 结算、双币种用量与月报、80% 提醒及分页明细；参考 Token 只生成同币种建议值。历史恢复限完整 usage 和原冻结价格，余额查询仅支持 DeepSeek 显式只读请求；三平台实机展示留证仍待补，验收状态见 [035](../task/035-llm-cost-control-impl.md)。全应用月报不设总额度。
 
@@ -144,6 +144,7 @@ resources/scripts/<scriptId>/（编译期登记的 Markdown + 固定实体种子
     └→ EntityDirectory seed
          ├→ 023 WorldPort → EntityRegistry（共享 SQLite；事务化写入 applied + 动态实体）
          └→ Storage::with_memory → EntityRegistry snapshot → SourcePort（只读、当前分支、有界）
+              └→ game::recovery::derive_evidence_path（复用 023 回合因果状态机）
 ```
 
 记录事实、估算与压缩属于 engine；存储原语属于 store，供应商 / 传输仍属于 llm。生产依赖保持单向，测试夹具不进入生产链路；023 接领域决策，024 接最小产品联调，025 接完整界面。

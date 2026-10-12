@@ -362,6 +362,55 @@ fn cancelled_round_keeps_checkpoint_and_resume_inherits_steps_under_new_identity
     assert!(recovered.checkpoint.is_none());
     assert!(recovered.close.is_none());
 }
+
+#[test]
+fn cancelled_directed_round_retains_its_recipient_for_recovery() {
+    let mut fixture = Fixture::new();
+    let session = &mut fixture.session;
+    let input_seq = session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "问守门人".into(),
+            mode: Some(InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let id = identity();
+    append(
+        session,
+        Fact::RoundAccepted {
+            identity: id.clone(),
+            input_seq,
+            mode: InputMode::InCharacter,
+            dice_mode: DiceMode::Manual,
+            profile_id: "default".into(),
+            profile_revision: "1".into(),
+            target: GenerationTarget::CharacterSpeech {
+                speaker_id: "keeper".into(),
+            },
+            scene_id: "room".into(),
+            source_round_id: None,
+            checkpoint_seq: None,
+        },
+    );
+    let (anchor, _) = plan(session, &id);
+    append(
+        session,
+        Fact::RoundEnded {
+            identity: id,
+            outcome: Outcome::Cancelled,
+            through_seq: anchor,
+            completed_steps: vec![],
+            error: None,
+        },
+    );
+
+    let recovered = derive(session, None).unwrap();
+    assert!(matches!(
+        recovered.round.unwrap().target,
+        GenerationTarget::CharacterSpeech { speaker_id } if speaker_id == "keeper"
+    ));
+}
 #[test]
 fn interrupted_acceptance_closes_once_and_failed_body_is_never_a_settlement_anchor() {
     let mut fixture = Fixture::new();
@@ -639,4 +688,11 @@ fn invalid_control_revision_and_unowned_narration_cannot_become_a_round_anchor()
     )
     .unwrap();
     assert_eq!(recovered.round.unwrap().skipped, Some(skipped));
+}
+
+#[test]
+fn evidence_path_requires_the_exact_terminal_boundary() {
+    let fixture = Fixture::new();
+    assert!(derive_evidence_path(&fixture.session, vec![], 1).is_err());
+    assert!(derive_evidence_path(&fixture.session, vec![1], 2).is_err());
 }

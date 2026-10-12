@@ -3,6 +3,29 @@ use crate::ports::Terminal;
 use crate::record::test_support::Fixture;
 use aoidos_llm::schedule::FinishReason;
 
+struct NoopWorld;
+impl crate::record::world::WorldPort for NoopWorld {
+    fn validate(
+        &self,
+        _: &crate::record::session::Session,
+        _: &[crate::record::facts::WorldMutation],
+    ) -> std::result::Result<(), crate::fault::Fault> {
+        Ok(())
+    }
+    fn applied(&self, _: &str, _: &str) -> std::result::Result<bool, crate::fault::Fault> {
+        Ok(true)
+    }
+    fn apply(
+        &mut self,
+        _: &crate::record::session::Session,
+        _: u64,
+        _: &crate::record::facts::WorldMutation,
+        _: &str,
+    ) -> std::result::Result<(), crate::fault::Fault> {
+        Ok(())
+    }
+}
+
 #[test]
 fn source_references_preserve_original_text_and_validate_utf8_identity_and_mode() {
     let mut fixture = Fixture::new();
@@ -255,6 +278,265 @@ fn ended(fixture: &mut Fixture, round_id: &str, through_seq: u64, outcome: Outco
         )
         .unwrap()
 }
+
+fn direct_character_dialogue(
+    fixture: &mut Fixture,
+    mode: RecordMode,
+    target_speaker: &str,
+    response_speaker: &str,
+    include_check_skip: bool,
+) -> u64 {
+    use crate::record::facts::{DiceMode, GenerationTarget};
+
+    let round_id = aoidos_memory::model::new_id();
+    let identity = identity(&round_id);
+    let input_seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "你刚才说了什么？".into(),
+            mode: Some(mode),
+            content_range: None,
+        })
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity: identity.clone(),
+                input_seq,
+                mode,
+                dice_mode: DiceMode::Auto,
+                profile_id: "profile".into(),
+                profile_revision: "a".repeat(64),
+                target: GenerationTarget::CharacterSpeech {
+                    speaker_id: target_speaker.into(),
+                },
+                scene_id: "mistbell".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("角色对话接纳")
+            .unwrap(),
+        )
+        .unwrap();
+    if include_check_skip {
+        fixture
+            .session
+            .append(
+                Fact::CheckSkipped {
+                    identity: identity.clone(),
+                    reason: crate::record::facts::SkipReason::NoCheck,
+                    world_revision: "world-v1".into(),
+                }
+                .body("跳过检定")
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let response_seq = fixture
+        .session
+        .append(Body::CharacterSpeech {
+            speaker_id: response_speaker.into(),
+            text: "我听见了。".into(),
+            turn_id: aoidos_memory::model::new_id(),
+            terminal: Terminal::Completed {
+                finish_reason: FinishReason::Stop,
+            },
+        })
+        .unwrap();
+    let settlement_seq = fixture
+        .session
+        .commit_world(
+            Fact::SettlementPlanned {
+                identity: identity.clone(),
+                narrative_seq: response_seq,
+                world_revision: "world-v1".into(),
+                mutations: vec![],
+            }
+            .body("计划结算")
+            .unwrap(),
+            &mut NoopWorld,
+        )
+        .unwrap();
+    let _settled_seq = fixture
+        .session
+        .append(
+            Fact::RoundSettled {
+                identity: identity.clone(),
+                narrative_seq: response_seq,
+                settlement_seq,
+                applied_through_mutation_id: None,
+            }
+            .body("角色对话结算")
+            .unwrap(),
+        )
+        .unwrap();
+    let advance_seq = fixture
+        .session
+        .append(
+            Fact::SceneStayed {
+                identity: identity.clone(),
+                scene_id: "mistbell".into(),
+                world_revision: "world-v1".into(),
+            }
+            .body("保持场景")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundEnded {
+                identity,
+                outcome: Outcome::Completed,
+                through_seq: advance_seq,
+                completed_steps: vec![],
+                error: None,
+            }
+            .body("回合结束")
+            .unwrap(),
+        )
+        .unwrap();
+    input_seq
+}
+
+fn character_directory(fixture: &Fixture) -> crate::game::catalog::EntityDirectory {
+    crate::game::catalog::EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        7,
+        true,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "npc".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "NPC".into(),
+        }],
+    )
+    .unwrap()
+}
+
+fn told_evidence(source: SourceRef) -> KnowledgeEvidence {
+    KnowledgeEvidence {
+        evidence_id: aoidos_memory::model::new_id(),
+        subject_id: "npc".into(),
+        source,
+        kind: aoidos_memory::model::KnowledgeKind::Told,
+        informant_id: Some("player".into()),
+        scope: DIRECT_DIALOGUE_SCOPE.into(),
+        rule_id: DIRECT_DIALOGUE_RULE.into(),
+    }
+}
+
+#[test]
+fn told_evidence_requires_complete_directed_dialogue_and_exact_subject_and_informant() {
+    let mut fixture = Fixture::new();
+    let input_seq =
+        direct_character_dialogue(&mut fixture, RecordMode::InCharacter, "npc", "npc", true);
+    let run_id = aoidos_memory::model::new_id();
+    let source = SourcePort::new(&fixture.session)
+        .reference(&run_id, input_seq)
+        .unwrap();
+    let directory = character_directory(&fixture);
+    let evidence = told_evidence(source.clone());
+    {
+        let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+        assert!(port.valid_evidence(&evidence).unwrap());
+    }
+
+    for _ in 0..257 {
+        fixture
+            .session
+            .append(Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "x".repeat(17 * 1024),
+                mode: Some(RecordMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+    assert!(port.valid_evidence(&evidence).unwrap());
+
+    let mut invalid = evidence.clone();
+    invalid.subject_id = "someone-else".into();
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.informant_id = Some("another-player".into());
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.scope = "scene".into();
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.rule_id = "model-claimed".into();
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !SourcePort::new(&fixture.session)
+            .valid_evidence(&evidence)
+            .unwrap()
+    );
+}
+
+#[test]
+fn told_evidence_rejects_offstage_and_mismatched_character_dialogue() {
+    for (mode, target_speaker, response_speaker) in [
+        (RecordMode::OutOfCharacter, "npc", "npc"),
+        (RecordMode::InCharacter, "npc", "other-npc"),
+        (RecordMode::InCharacter, "unregistered", "unregistered"),
+    ] {
+        let mut fixture = Fixture::new();
+        let input_seq =
+            direct_character_dialogue(&mut fixture, mode, target_speaker, response_speaker, true);
+        let source = SourcePort::new(&fixture.session)
+            .reference(&aoidos_memory::model::new_id(), input_seq)
+            .unwrap();
+        let evidence = told_evidence(source);
+        let directory = character_directory(&fixture);
+        let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+        assert!(!port.valid_evidence(&evidence).unwrap());
+    }
+}
+
+#[test]
+fn told_evidence_rejects_incomplete_turn_recovery_and_withdrawn_path() {
+    let mut incomplete = Fixture::new();
+    let input_seq = direct_character_dialogue(
+        &mut incomplete,
+        RecordMode::InCharacter,
+        "npc",
+        "npc",
+        false,
+    );
+    let source = SourcePort::new(&incomplete.session)
+        .reference(&aoidos_memory::model::new_id(), input_seq)
+        .unwrap();
+    let evidence = told_evidence(source);
+    let directory = character_directory(&incomplete);
+    assert!(matches!(
+        SourcePort::with_entity_directory(&incomplete.session, &directory)
+            .unwrap()
+            .valid_evidence(&evidence),
+        Err(Error::Corrupt)
+    ));
+
+    let mut withdrawn = Fixture::new();
+    let input_seq =
+        direct_character_dialogue(&mut withdrawn, RecordMode::InCharacter, "npc", "npc", true);
+    let source = SourcePort::new(&withdrawn.session)
+        .reference(&aoidos_memory::model::new_id(), input_seq)
+        .unwrap();
+    let evidence = told_evidence(source);
+    let directory = character_directory(&withdrawn);
+    withdrawn.session.effective = Some([input_seq].into_iter().collect());
+    withdrawn.session.history_revision = 1;
+    assert!(
+        !SourcePort::with_entity_directory(&withdrawn.session, &directory)
+            .unwrap()
+            .valid_evidence(&evidence)
+            .unwrap()
+    );
+}
+
 #[test]
 fn completed_round_requires_matching_effective_in_character_acceptance() {
     let mut fixture = Fixture::new();
@@ -432,6 +714,10 @@ fn empty_completed_text_is_not_a_source() {
         json_error(aoidos_json::Error::InvalidJson),
         Error::Corrupt
     ));
+    assert!(matches!(
+        memory_recovery_error(crate::fault::Fault::bad_request()),
+        Error::Corrupt
+    ));
 }
 
 #[test]
@@ -580,4 +866,198 @@ fn round_acceptance_lookup_has_a_hard_byte_limit() {
             .completed_round(&round, &source)
             .unwrap()
     );
+}
+
+fn dialogue_variant(change: impl FnMut(u64, &mut Body)) -> Fixture {
+    dialogue_with_padding(change, 0, "")
+}
+
+fn dialogue_with_padding(
+    mut change: impl FnMut(u64, &mut Body),
+    padding_count: usize,
+    padding_text: &str,
+) -> Fixture {
+    let mut original = Fixture::new();
+    direct_character_dialogue(&mut original, RecordMode::InCharacter, "npc", "npc", true);
+    let mut variant = Fixture::new();
+    for &seq in original.session.index.keys() {
+        let mut body = original.session.known(seq).unwrap().body;
+        change(seq, &mut body);
+        if matches!(&body, Body::System { code, .. } if code == "roundEnded") {
+            for _ in 0..padding_count {
+                variant
+                    .session
+                    .append(Body::PlayerSpeech {
+                        player_id: "player".into(),
+                        text: padding_text.into(),
+                        mode: Some(RecordMode::OutOfCharacter),
+                        content_range: None,
+                    })
+                    .unwrap();
+            }
+        }
+        if matches!(&body, Body::System { code, .. } if code == "settlementPlanned") {
+            variant.session.commit_world(body, &mut NoopWorld).unwrap();
+        } else {
+            variant.session.append(body).unwrap();
+        }
+    }
+    variant
+}
+
+fn dialogue_is_evidence(fixture: &Fixture) -> Result<bool> {
+    let source = SourcePort::new(&fixture.session).reference(&aoidos_memory::model::new_id(), 1)?;
+    let directory = character_directory(fixture);
+    SourcePort::with_entity_directory(&fixture.session, &directory)?
+        .valid_evidence(&told_evidence(source))
+}
+
+#[test]
+fn told_evidence_rejects_legacy_input_narrator_and_restored_acceptance() {
+    for case in 0..4 {
+        let fixture = dialogue_variant(|_, body| match body {
+            Body::PlayerSpeech { mode, .. } if case == 0 => *mode = None,
+            Body::System { code, data, .. } if code == "roundAccepted" => match case {
+                1 => data["target"] = serde_json::json!({"kind": "narration"}),
+                2 => data["mode"] = serde_json::json!("outOfCharacter"),
+                3 => {
+                    data["sourceRoundId"] = data["roundId"].clone();
+                    data["checkpointSeq"] = serde_json::json!(1);
+                }
+                _ => {}
+            },
+            _ => {}
+        });
+        assert!(!dialogue_is_evidence(&fixture).unwrap(), "case {case}");
+    }
+}
+
+#[test]
+fn told_evidence_rejects_unsuccessful_or_misdirected_terminal() {
+    for case in 0..3 {
+        let fixture = dialogue_variant(|_, body| {
+            if let Body::System { code, data, .. } = body
+                && code == "roundEnded"
+            {
+                match case {
+                    0 => data["outcome"] = serde_json::json!("cancelled"),
+                    1 => {
+                        data["outcome"] = serde_json::json!("failed");
+                        data["error"] =
+                            serde_json::to_value(crate::fault::Fault::new("llm.aborted", "中断"))
+                                .unwrap();
+                    }
+                    2 => data["throughSeq"] = serde_json::json!(5),
+                    _ => unreachable!(),
+                }
+            }
+        });
+        assert!(!dialogue_is_evidence(&fixture).unwrap(), "case {case}");
+    }
+}
+
+#[test]
+fn told_evidence_requires_a_terminal_within_both_scan_limits() {
+    for (count, text) in [
+        (MAX_SCAN + 1, "旁白".to_owned()),
+        (17, "x".repeat(crate::record::format::MAX_TEXT)),
+    ] {
+        let fixture = dialogue_with_padding(|_, _| {}, count, &text);
+        assert!(!dialogue_is_evidence(&fixture).unwrap());
+    }
+}
+
+#[test]
+fn alias_context_and_canonical_lookup_use_all_trusted_entity_categories() {
+    use crate::game::catalog::{CanonicalEntity, EntityDirectory, EntityKind};
+    let fixture = Fixture::new();
+    let kinds = [
+        (EntityKind::Character, EntityCategory::Character),
+        (EntityKind::Place, EntityCategory::Place),
+        (EntityKind::Organization, EntityCategory::Organization),
+        (EntityKind::Item, EntityCategory::Item),
+        (EntityKind::Term, EntityCategory::Term),
+    ];
+    let entities: Vec<_> = kinds
+        .iter()
+        .enumerate()
+        .map(|(index, (kind, _))| CanonicalEntity {
+            id: format!("entity-{index}"),
+            kind: *kind,
+            scope: "demo".into(),
+            canonical_name: format!("名称{index}"),
+        })
+        .collect();
+    let directory = EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        7,
+        true,
+        entities.clone(),
+    )
+    .unwrap();
+    let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+    for (entity, (_, category)) in entities.iter().zip(kinds) {
+        assert_eq!(
+            port.entity_alias_context(&entity.id).unwrap(),
+            Some(EntityAliasContext {
+                entity_id: entity.id.clone(),
+                category,
+                scope: entity.scope.clone(),
+                canonical_name: entity.canonical_name.clone(),
+            })
+        );
+        assert_eq!(
+            port.canonical_entity_id(category, "demo", &entity.canonical_name)
+                .unwrap(),
+            Some(entity.id.clone())
+        );
+        assert_eq!(
+            port.canonical_entity_id(category, "other", &entity.canonical_name)
+                .unwrap(),
+            None
+        );
+    }
+    assert_eq!(port.entity_alias_context("missing").unwrap(), None);
+    assert_eq!(
+        SourcePort::new(&fixture.session)
+            .entity_alias_context("missing")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        SourcePort::new(&fixture.session)
+            .canonical_entity_id(EntityCategory::Character, "demo", "名称0")
+            .unwrap(),
+        None
+    );
+    assert!(matches!(
+        port.canonical_entity_id(EntityCategory::Character, "", "名称0"),
+        Err(Error::Rejected(Reason::PolicyUnavailable))
+    ));
+}
+
+#[test]
+fn alias_context_does_not_trust_an_incomplete_directory() {
+    let fixture = Fixture::new();
+    let incomplete = crate::game::catalog::EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        1,
+        false,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "npc".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "角色".into(),
+        }],
+    )
+    .unwrap();
+    // 正式构造器会先拒绝；此处验证底层目录读取仍拒绝局部快照。
+    let port = SourcePort {
+        session: &fixture.session,
+        entity_directory: Some(&incomplete),
+    };
+    assert!(matches!(
+        port.entity_alias_context("missing"),
+        Err(Error::Rejected(Reason::PolicyUnavailable))
+    ));
 }

@@ -295,3 +295,31 @@ fn persisted_types_reject_unknown_fields_and_round_trip_canonical_values() {
         }
     }
 }
+
+#[test]
+fn causal_ports_without_directory_support_fail_closed() {
+    struct UndeclaredDirectory;
+    impl CausalPort for UndeclaredDirectory {
+        fn boundary(&self) -> Result<Boundary> {
+            Err(Error::Corrupt)
+        }
+        fn valid_source(&self, _: &SourceRef) -> Result<bool> {
+            Ok(false)
+        }
+        fn valid_evidence(&self, _: &KnowledgeEvidence) -> Result<bool> {
+            Ok(false)
+        }
+        fn source_text(&self, _: &SourceRef) -> Result<Option<String>> {
+            Ok(None)
+        }
+        fn completed_round(&self, _: &str, _: &SourceRef) -> Result<bool> {
+            Ok(false)
+        }
+    }
+    let port = UndeclaredDirectory;
+    assert_eq!(port.entity_alias_context("npc").unwrap(), None);
+    assert!(matches!(
+        port.canonical_entity_id(EntityCategory::Character, "demo", "名字"),
+        Err(Error::Rejected(Reason::PolicyUnavailable))
+    ));
+}

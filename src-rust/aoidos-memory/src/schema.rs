@@ -185,6 +185,43 @@ CREATE INDEX memory_questions_page
  ON memory_questions(run_id,status,question_id);
 "#;
 
+/// 030 经玩家确认的周目别名及其来源支持；有效命中在读取时按当前因果路径重建。
+pub const ALIAS_MIGRATION: &str = r#"
+CREATE TABLE memory_aliases (
+ alias_id TEXT PRIMARY KEY CHECK(length(alias_id)=36),
+ run_id TEXT NOT NULL REFERENCES memory_runs(run_id),
+ entity_id TEXT NOT NULL CHECK(length(entity_id) BETWEEN 1 AND 64),
+ category TEXT NOT NULL CHECK(category IN ('character','place','organization','item','term')),
+ scope TEXT NOT NULL CHECK(length(scope) BETWEEN 1 AND 128),
+ alias_name TEXT NOT NULL CHECK(length(alias_name) BETWEEN 1 AND 256),
+ status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+ revision INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 9007199254740991),
+ registered_entity_revision INTEGER NOT NULL CHECK(registered_entity_revision BETWEEN 0 AND 9007199254740991),
+ UNIQUE(run_id,entity_id,category,scope,alias_name)
+);
+CREATE UNIQUE INDEX memory_aliases_active_name
+ ON memory_aliases(run_id,category,scope,alias_name) WHERE status='active';
+CREATE INDEX memory_aliases_entity ON memory_aliases(run_id,entity_id,status,alias_id);
+CREATE TABLE memory_alias_sources (
+ alias_id TEXT NOT NULL REFERENCES memory_aliases(alias_id),
+ question_id TEXT NOT NULL REFERENCES memory_questions(question_id),
+ source_hash BLOB NOT NULL CHECK(length(source_hash)=32),
+ source_json BLOB NOT NULL CHECK(length(source_json)<=32768),
+ PRIMARY KEY(alias_id,question_id,source_hash)
+);
+CREATE TABLE memory_alias_events (
+ event_id TEXT PRIMARY KEY CHECK(length(event_id)=36),
+ alias_id TEXT NOT NULL REFERENCES memory_aliases(alias_id),
+ revision INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 9007199254740991),
+ event_kind TEXT NOT NULL CHECK(event_kind IN ('registered','supported','reactivated','revoked')),
+ question_id TEXT REFERENCES memory_questions(question_id),
+ entity_revision INTEGER NOT NULL CHECK(entity_revision BETWEEN 0 AND 9007199254740991),
+ UNIQUE(alias_id,revision),
+ CHECK((event_kind='revoked')=(question_id IS NULL))
+);
+CREATE INDEX memory_alias_events_question ON memory_alias_events(question_id,event_kind)
+"#;
+
 /// 030 将模型候选与同组操作绑定；完成结果只能声明已应用的持久操作。
 pub const CANDIDATE_OPERATION_MIGRATION: &str = r#"
 CREATE TABLE memory_batch_candidate_operations (
@@ -222,6 +259,7 @@ pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
         SCHEMA,
         BATCH_RECEIPT_MIGRATION,
         QUESTION_MIGRATION,
+        ALIAS_MIGRATION,
         CANDIDATE_OPERATION_MIGRATION,
         LEGACY_BATCH_COMPLETION_MIGRATION,
     ] {
@@ -276,6 +314,20 @@ fn invalid_schema() -> aoidos_store::error::StoreError {
 mod tests {
     use super::*;
 
+    fn migrated_schema() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
+        conn.execute_batch(QUESTION_MIGRATION).unwrap();
+        conn.execute_batch(ALIAS_MIGRATION).unwrap();
+        conn.execute_batch(CANDIDATE_OPERATION_MIGRATION).unwrap();
+        conn.execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
+            .unwrap();
+        conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
+        conn
+    }
+
     #[test]
     fn verification_rejects_missing_and_weakened_domain_schema() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -283,6 +335,7 @@ mod tests {
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
         conn.execute_batch(QUESTION_MIGRATION).unwrap();
+        conn.execute_batch(ALIAS_MIGRATION).unwrap();
         conn.execute_batch(CANDIDATE_OPERATION_MIGRATION).unwrap();
         conn.execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
             .unwrap();
@@ -307,6 +360,7 @@ mod tests {
             .execute_batch(BATCH_RECEIPT_MIGRATION)
             .unwrap();
         missing_receipts.execute_batch(QUESTION_MIGRATION).unwrap();
+        missing_receipts.execute_batch(ALIAS_MIGRATION).unwrap();
         missing_receipts
             .execute_batch(CANDIDATE_OPERATION_MIGRATION)
             .unwrap();
@@ -327,6 +381,7 @@ mod tests {
             .execute_batch(BATCH_RECEIPT_MIGRATION)
             .unwrap();
         missing_questions.execute_batch(QUESTION_MIGRATION).unwrap();
+        missing_questions.execute_batch(ALIAS_MIGRATION).unwrap();
         missing_questions
             .execute_batch(CANDIDATE_OPERATION_MIGRATION)
             .unwrap();
@@ -350,6 +405,9 @@ mod tests {
             .execute_batch(QUESTION_MIGRATION)
             .unwrap();
         missing_candidate_links
+            .execute_batch(ALIAS_MIGRATION)
+            .unwrap();
+        missing_candidate_links
             .execute_batch(CANDIDATE_OPERATION_MIGRATION)
             .unwrap();
         missing_candidate_links
@@ -365,11 +423,30 @@ mod tests {
     }
 
     #[test]
+    fn verification_rejects_missing_or_weakened_alias_schema() {
+        let complete = migrated_schema();
+        verify(&complete).unwrap();
+
+        let missing = migrated_schema();
+        missing
+            .execute_batch("DROP TABLE memory_alias_sources")
+            .unwrap();
+        assert!(verify(&missing).is_err());
+
+        let weakened = migrated_schema();
+        weakened
+            .execute_batch("DROP INDEX memory_aliases_active_name; CREATE INDEX memory_aliases_active_name ON memory_aliases(run_id)")
+            .unwrap();
+        assert!(verify(&weakened).is_err());
+    }
+
+    #[test]
     fn definitions_accept_whitespace_only_and_propagate_sql_errors() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(&SCHEMA.replace('\n', "  ")).unwrap();
         conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
         conn.execute_batch(QUESTION_MIGRATION).unwrap();
+        conn.execute_batch(ALIAS_MIGRATION).unwrap();
         conn.execute_batch(CANDIDATE_OPERATION_MIGRATION).unwrap();
         conn.execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
             .unwrap();

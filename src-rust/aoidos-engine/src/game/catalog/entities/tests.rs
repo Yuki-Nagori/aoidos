@@ -225,3 +225,13 @@ fn creation_rules_and_dynamic_merge_reject_invalid_boundaries() {
     .unwrap();
     assert!(directory.with_dynamic(1, vec![]).is_err());
 }
+
+#[test]
+fn stable_identity_lookup_requires_complete_directory() {
+    let entity = character("npc", "demo", "角色");
+    let directory = EntityDirectory::new(revision(), 1, true, vec![entity.clone()]).unwrap();
+    assert_eq!(directory.entity("npc").unwrap(), Some(&entity));
+    assert_eq!(directory.entity("missing").unwrap(), None);
+    let incomplete = EntityDirectory::new(revision(), 1, false, vec![entity]).unwrap();
+    assert!(incomplete.entity("npc").is_err());
+}

@@ -1,32 +1,66 @@
 //! 仓储契约在真实 SQLite 与临时文件上验证；因果端口只授予夹具登记的来源。
 
 use super::*;
-use std::cell::Cell;
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet},
+};
 
 pub(super) struct Port {
     pub(super) view: Boundary,
     pub(super) invalid: Cell<bool>,
     pub(super) evidence_invalid: Cell<bool>,
     pub(super) through_record: Cell<u64>,
+    pub(super) invalid_records: RefCell<BTreeSet<u64>>,
+    pub(super) source_text_overrides: RefCell<BTreeMap<u64, String>>,
+    pub(super) alias_entities: RefCell<BTreeMap<String, EntityAliasContext>>,
+    pub(super) canonical_names: RefCell<BTreeMap<(EntityCategory, String, String), String>>,
 }
 impl CausalPort for Port {
     fn boundary(&self) -> Result<Boundary> {
         Ok(self.view.clone())
     }
     fn valid_source(&self, source: &SourceRef) -> Result<bool> {
+        let expected_hash = self
+            .source_text_overrides
+            .borrow()
+            .get(&source.record_seq)
+            .map_or_else(|| hash("钟声".as_bytes()), |text| hash(text.as_bytes()));
         Ok(!self.invalid.get()
+            && !self.invalid_records.borrow().contains(&source.record_seq)
             && source.record_seq <= self.through_record.get()
             && source.session_id == self.view.session_id
-            && source.body_hash == hash("钟声".as_bytes()))
+            && source.body_hash == expected_hash)
     }
     fn valid_evidence(&self, _: &KnowledgeEvidence) -> Result<bool> {
         Ok(!self.evidence_invalid.get() && !self.invalid.get())
     }
     fn source_text(&self, source: &SourceRef) -> Result<Option<String>> {
-        Ok(self.valid_source(source)?.then(|| "钟声".into()))
+        let text = self
+            .source_text_overrides
+            .borrow()
+            .get(&source.record_seq)
+            .cloned()
+            .unwrap_or_else(|| "钟声".into());
+        Ok(self.valid_source(source)?.then_some(text))
     }
     fn completed_round(&self, _: &str, source: &SourceRef) -> Result<bool> {
         self.valid_source(source)
+    }
+    fn entity_alias_context(&self, entity_id: &str) -> Result<Option<EntityAliasContext>> {
+        Ok(self.alias_entities.borrow().get(entity_id).cloned())
+    }
+    fn canonical_entity_id(
+        &self,
+        category: EntityCategory,
+        scope: &str,
+        name: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .canonical_names
+            .borrow()
+            .get(&(category, scope.into(), name.into()))
+            .cloned())
     }
 }
 pub(super) struct Fixture {
@@ -73,6 +107,7 @@ impl Fixture {
             .unwrap();
         conn.execute_batch(crate::schema::QUESTION_MIGRATION)
             .unwrap();
+        conn.execute_batch(crate::schema::ALIAS_MIGRATION).unwrap();
         conn.execute_batch(crate::schema::CANDIDATE_OPERATION_MIGRATION)
             .unwrap();
         conn.execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_MIGRATION)
@@ -90,6 +125,10 @@ impl Fixture {
             invalid: Cell::new(false),
             evidence_invalid: Cell::new(false),
             through_record: Cell::new(MAX_INTEGER),
+            invalid_records: RefCell::new(BTreeSet::new()),
+            source_text_overrides: RefCell::new(BTreeMap::new()),
+            alias_entities: RefCell::new(BTreeMap::new()),
+            canonical_names: RefCell::new(BTreeMap::new()),
         };
         let run = repo.create_run(&mut conn, &port, policy()).unwrap();
         Self {
