@@ -103,7 +103,7 @@
 - 2026-10-12：SourcePort 接入后的 `bun run verify` 13 阶段全部通过：engine 321 项、memory 194 项、前端 349 项且四类覆盖均为 100%；workspace Rust 109 文件仅有既有 2 行预算，构建与 rustdoc 通过。
 - 2026-10-12：为 030 增加严格 `told` 证据核验：只有有效 IC 玩家来源被记录为无恢复 / 检查点的定向角色回合，且目录登记的目标角色完整回应、同回合结算并成功结束，subject / informant 与固定 `directDialogueV1` 规则均匹配时才认可。单次扫描封顶 256 条 / 4 MiB，并在终态闭合后停止；候选记录链交给 023 的 recovery 状态机核验，避免遗漏检定、结算或场景推进步骤。错误映射、缺检定步骤、回退路径、场外输入、角色错配和终态后大量新记录均有回归测试。当时正式输入仍固定为旁白目标；观察 / 传闻和别名仍未接入。
 - 2026-10-12：正式提交入口新增可选 `recipientCharacterId`，只接受 IC 回合中当前场景明确列出的完整目录角色；拒绝玩家自身、未知 / 非角色、场外输入和缺少完整目录的目标，且拒绝发生在输入追加前。目标随 `RoundAccepted` 保持并在恢复 / 重生成时继承；生成使用角色提示投影，完整回复以同一 speaker 写成 `CharacterSpeech`。端到端用例发现并修复 writer 仍按旁白目标封口的问题；现有 `told` 校验器据此消费真实引擎记录。Tauri / TS 参数、IPC 合同与架构文档已同步；无 UI 选择器，动态 NPC 缺少场景在场模型，观察 / 传闻和别名仍未实现。`bun run lint:rust:fix`、独立 review 及十三阶段 `bun run verify` 通过，coverage 无新增豁免。
-- 2026-10-12：别名由玩家确认实体关联时事务化登记，校验当前完整目录、类别 / scope、规范名与别名冲突，并持久化 question / 来源 hash / revision 审计。别名按有效因果来源解析；旧分支支持失效后，新分支可在同一事务审计撤销旧 active 绑定并确认新绑定。撤销使用 alias / entity revision CAS，默认目录适配未实现规范名核验时失败关闭；schema 新增项追加在既有迁移末尾，旧库升级回归通过。自动明确指向、观察 / 传闻证据、记忆 IPC 与动态角色选择仍由后续范围承接；本轮 `bun run verify` 结果待补。
+- 2026-10-12：别名由玩家确认实体关联时事务化登记，校验当前完整目录、类别 / scope、规范名与别名冲突，并持久化 question / 来源 hash / revision 审计。别名按有效因果来源解析；旧分支支持失效后，新分支可在同一事务审计撤销旧 active 绑定并确认新绑定。撤销使用 alias / entity revision CAS，默认目录适配未实现规范名核验时失败关闭；schema 新增项追加在既有迁移末尾，旧库升级回归通过。自动明确指向、观察 / 传闻证据、记忆 IPC 与动态角色选择仍由后续范围承接。覆盖率补齐后，十三阶段 `bun run verify` 全部通过。
 - 2026-10-12：coverage subagent 补齐目录映射、别名 CAS / 幂等 / 容量 / 损坏数据 / 审计失败分支及 SourcePort 失败关闭测试；此前 5 个未达标文件的行覆盖均为 100%，未新增豁免。十三阶段 `bun run verify` 通过，memory 219 项通过。Windows main 的 HMR 超时与成功 PR 命中同一完整 Rust cache key，测试改用数值回环地址统一 Vite / 探测 / WebView2；macOS 原生 HMR 回归通过，Windows CI 复验待 PR。
 
 ## 完成摘要
