@@ -500,6 +500,19 @@ fn read_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, u64, String)
 pub(super) fn read_string(row: &rusqlite::Row<'_>) -> rusqlite::Result<String> {
     row.get(0)
 }
+pub(super) fn read_bounded_text(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    limit: usize,
+) -> Result<String> {
+    let rusqlite::types::ValueRef::Text(bytes) = row.get_ref(index).map_err(sql)? else {
+        return Err(Error::Corrupt);
+    };
+    if bytes.len() > limit {
+        return Err(Error::Corrupt);
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|_| Error::Corrupt)
+}
 #[derive(Debug)]
 pub(super) struct BoundedBlob(Option<Vec<u8>>);
 impl BoundedBlob {

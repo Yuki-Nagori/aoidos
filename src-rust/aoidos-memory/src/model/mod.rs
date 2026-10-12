@@ -383,6 +383,11 @@ pub struct Plan {
     pub entity_revision: u64,
     pub evidence_revision: u64,
     pub policy_hash: Hash,
+    /// 批次候选写入同一个依赖操作时，用稳定身份绑定恢复结果。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_ids: Vec<String>,
     pub targets: Vec<Target>,
     /// 原始素材的稳定身份；不使用 batch 内短引用 id 作为幂等身份。
     pub processed_materials: Vec<String>,

@@ -71,6 +71,82 @@ fn commit_is_idempotent_and_detects_receipt_or_plan_conflicts() {
 }
 
 #[test]
+fn candidate_completion_requires_its_durable_operation_to_be_applied() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let version = f.version();
+    let mut plan = f.plan(version);
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+
+    assert_eq!(
+        f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap(),
+        OperationState::Prepared
+    );
+    let applied =
+        br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"applied"}]}"#;
+    assert!(matches!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, applied),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .state,
+        BatchState::Received
+    );
+
+    f.repo
+        .write_versions(&mut f.conn, &plan.operation_id)
+        .unwrap();
+    assert_eq!(
+        f.repo
+            .apply(&mut f.conn, &f.port, &plan.operation_id)
+            .unwrap(),
+        OperationState::Applied
+    );
+    assert_eq!(
+        f.repo.operation(&f.conn, &plan.operation_id).unwrap(),
+        (plan, OperationState::Applied)
+    );
+    assert!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, applied)
+            .unwrap()
+    );
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .state,
+        BatchState::Completed
+    );
+}
+
+#[test]
+fn candidate_operation_plan_must_bind_existing_unclaimed_candidates() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let version = f.version();
+    let mut plan = f.plan(version);
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_missing".into()];
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Reason::InvalidSchema,
+    );
+    assert!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .completion
+            .is_none()
+    );
+}
+
+#[test]
 fn oversized_persisted_plan_is_rejected_before_blob_copy() {
     let mut f = Fixture::new();
     let plan = f.plan(f.version());
@@ -1377,4 +1453,224 @@ fn processed_membership_swap_freezes_run_even_when_operation_counts_match() {
         )
         .unwrap();
     assert_eq!(recorded, second.operation_id);
+}
+
+#[test]
+fn candidate_operation_binding_rejects_invalid_claims_and_persisted_mismatch() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["bad/id".into()];
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Reason::InvalidSchema,
+    );
+    plan.candidate_ids = vec!["candidate_1".into(), "candidate_1".into()];
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Reason::InvalidSchema,
+    );
+
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+    let mut competing = plan.clone();
+    competing.operation_id = new_id();
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &competing),
+        Reason::StaleVersion,
+    );
+
+    f.conn
+        .execute(
+            "DELETE FROM memory_batch_candidate_operations WHERE batch_id=?1 AND candidate_id=?2",
+            params![snapshot.batch_id, "candidate_1"],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.operation(&f.conn, &plan.operation_id),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn candidate_operation_audit_bounds_persisted_mapping_count_and_text() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    for index in 0..MAX_CANDIDATES {
+        f.conn
+            .execute(
+                "INSERT INTO memory_batch_candidate_operations(batch_id,candidate_id,operation_id) VALUES(?1,?2,?3)",
+                params![new_id(), format!("c{index}"), plan.operation_id],
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        f.repo.operation(&f.conn, &plan.operation_id),
+        Err(Error::Corrupt)
+    ));
+
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_batch_candidate_operations SET batch_id=?1 WHERE operation_id=?2",
+            params!["x".repeat(4096), plan.operation_id],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.operation(&f.conn, &plan.operation_id),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn candidate_batch_validation_bounds_run_and_operation_ids() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_batches SET run_id=?1 WHERE batch_id=?2",
+            params!["x".repeat(4096), snapshot.batch_id],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Err(Error::Corrupt)
+    ));
+
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_batch_candidate_operations SET operation_id=?1 WHERE batch_id=?2 AND candidate_id=?3",
+            params!["x".repeat(4096), snapshot.batch_id, "candidate_1"],
+        )
+        .unwrap();
+    let mut competing = plan.clone();
+    competing.operation_id = new_id();
+    assert!(matches!(
+        f.repo.prepare(&mut f.conn, &f.port, &competing),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn candidate_binding_requires_received_batch_status() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo
+        .complete_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"noOp"}]}"#,
+        )
+        .unwrap();
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Reason::StaleVersion,
+    );
+}
+
+#[test]
+fn candidate_plan_cannot_bind_a_batch_from_another_run() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let version = f.version();
+    f.port.view.session_id = new_id();
+    let other_run = f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap();
+
+    let mut plan = f.plan(version);
+    plan.run_id = other_run.run_id;
+    plan.batch_id = Some(snapshot.batch_id);
+    plan.candidate_ids = vec!["candidate_1".into()];
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Reason::StaleVersion,
+    );
+}
+
+#[test]
+fn candidate_batch_validation_rejects_a_malformed_run_identity() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_batches SET run_id='invalid' WHERE batch_id=?1",
+            [&snapshot.batch_id],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn operation_audit_rejects_non_text_batch_mapping() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_batch_candidate_operations SET batch_id=CAST(?1 AS BLOB) WHERE operation_id=?2",
+            params![snapshot.batch_id, plan.operation_id],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.operation(&f.conn, &plan.operation_id),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn operation_audit_rejects_a_malformed_candidate_id() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_batch_candidate_operations SET candidate_id='bad/id' WHERE operation_id=?1",
+            [&plan.operation_id],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.operation(&f.conn, &plan.operation_id),
+        Err(Error::Corrupt)
+    ));
 }

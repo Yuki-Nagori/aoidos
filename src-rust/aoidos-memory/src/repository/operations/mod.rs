@@ -28,6 +28,8 @@ impl Repository {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql)?;
+        // Candidate 状态可能在预检和写事务之间变化；在取得写锁后再次核验。
+        self.validate_batch_candidates(&tx, plan)?;
         tx.execute("INSERT INTO memory_operations(operation_id,run_id,plan_hash,input_history_revision,state,plan_json) VALUES(?1,?2,?3,?4,'prepared',?5)",params![plan.operation_id,plan.run_id,hash(&bytes).as_slice(),plan.history_revision,bytes]).map_err(sql)?;
         for target in &plan.targets {
             tx.execute("INSERT OR IGNORE INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status,effect_history_revision) VALUES(?1,?2,NULL,0,'unavailable',?3)",params![target.entry_id,plan.run_id,plan.history_revision]).map_err(sql)?;
@@ -47,12 +49,22 @@ impl Repository {
                 self.register_version(&tx, version)?;
             }
         }
+        if let Some(batch_id) = &plan.batch_id {
+            for candidate_id in &plan.candidate_ids {
+                tx.execute(
+                    "INSERT INTO memory_batch_candidate_operations(batch_id,candidate_id,operation_id) VALUES(?1,?2,?3)",
+                    params![batch_id, candidate_id, plan.operation_id],
+                )
+                .map_err(sql)?;
+            }
+        }
         tx.commit().map_err(sql)?;
         Ok(OperationState::Prepared)
     }
     fn preflight_plan(&self, plan: &Plan) -> Result<()> {
         if plan.targets.len() > 16
             || plan.processed_materials.len() > 128
+            || plan.candidate_ids.len() > MAX_CANDIDATES
             || plan.reason.len() > 512
         {
             return Err(reject());
@@ -79,9 +91,20 @@ impl Repository {
             || plan.evidence_revision > MAX_INTEGER
             || plan.targets.len() > 16
             || plan.processed_materials.len() > 128
+            || plan.candidate_ids.len() > MAX_CANDIDATES
             || bytes.len() > MAX_PLAN_BYTES
             || plan.reason.len() > 512
             || (plan.targets.is_empty() && plan.processed_materials.is_empty())
+            || plan.batch_id.as_deref().is_some_and(|id| !valid_id(id))
+            || plan.batch_id.is_some() != !plan.candidate_ids.is_empty()
+        {
+            return Err(reject());
+        }
+        let mut candidates = BTreeSet::new();
+        if plan
+            .candidate_ids
+            .iter()
+            .any(|id| !valid_short_id(id) || !candidates.insert(id.as_str()))
         {
             return Err(reject());
         }
@@ -159,6 +182,7 @@ impl Repository {
         {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
+        self.validate_batch_candidates(conn, plan)?;
         for target in &plan.targets {
             let mut subject = target.next.as_ref().map(|version| version.subject.clone());
             let current=conn.query_row("SELECT run_id,current_version_id,state_revision FROM memory_entries WHERE entry_id=?1",[&target.entry_id],read_expected).optional().map_err(sql)?;
@@ -242,6 +266,57 @@ impl Repository {
                 )
                 .map_err(sql)?;
             if processed {
+                return Err(Error::Rejected(Reason::StaleVersion));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_batch_candidates(&self, conn: &Connection, plan: &Plan) -> Result<()> {
+        let Some(batch_id) = &plan.batch_id else {
+            return Ok(());
+        };
+        let batch_run = {
+            let mut statement = conn
+                .prepare("SELECT run_id FROM memory_batches WHERE batch_id=?1")
+                .map_err(sql)?;
+            let mut rows = statement.query([batch_id]).map_err(sql)?;
+            rows.next()
+                .map_err(sql)?
+                .map(|row| read_bounded_text(row, 0, 36))
+                .transpose()?
+                .ok_or(Error::NotFound)?
+        };
+        if !valid_id(&batch_run) {
+            return Err(Error::Corrupt);
+        }
+        if batch_run != plan.run_id {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        let receipt = self.batch_receipt(conn, batch_id)?;
+        if receipt.state != BatchState::Received {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        let response = receipt.response.as_deref().ok_or(Error::Corrupt)?;
+        let proposal = super::materials::decode_proposal_response(response)?;
+        let available = proposal
+            .candidates
+            .iter()
+            .map(|candidate| candidate.candidate_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if plan
+            .candidate_ids
+            .iter()
+            .any(|candidate| !available.contains(candidate.as_str()))
+        {
+            return Err(Error::Rejected(Reason::InvalidSchema));
+        }
+        for candidate_id in &plan.candidate_ids {
+            let operation_id = super::materials::candidate_operation(conn, batch_id, candidate_id)?;
+            if operation_id
+                .as_deref()
+                .is_some_and(|id| id != plan.operation_id)
+            {
                 return Err(Error::Rejected(Reason::StaleVersion));
             }
         }
@@ -462,6 +537,38 @@ impl Repository {
             )
             .map_err(sql)?;
         if target_count != plan.targets.len() {
+            return Err(Error::Corrupt);
+        }
+        let mut statement = conn
+            .prepare(
+                "SELECT batch_id,candidate_id FROM memory_batch_candidate_operations WHERE operation_id=?1 ORDER BY candidate_id",
+            )
+            .map_err(sql)?;
+        let mut rows = statement.query([id]).map_err(sql)?;
+        let mut actual = Vec::new();
+        while let Some(row) = rows.next().map_err(sql)? {
+            if actual.len() >= MAX_CANDIDATES {
+                return Err(Error::Corrupt);
+            }
+            let batch_id = read_bounded_text(row, 0, 36)?;
+            let candidate_id = read_bounded_text(row, 1, 32)?;
+            if !valid_id(&batch_id) || !valid_short_id(&candidate_id) {
+                return Err(Error::Corrupt);
+            }
+            actual.push((batch_id, candidate_id));
+        }
+        let mut expected = plan
+            .batch_id
+            .as_ref()
+            .map(|batch_id| {
+                plan.candidate_ids
+                    .iter()
+                    .map(|candidate_id| (batch_id.clone(), candidate_id.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        expected.sort();
+        if actual != expected {
             return Err(Error::Corrupt);
         }
         let state = decode_enum(&state)?;
