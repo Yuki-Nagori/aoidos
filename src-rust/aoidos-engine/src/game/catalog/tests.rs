@@ -717,3 +717,20 @@ fn scene_candidates_have_stable_priority_deduplication_and_a_hard_bound() {
         "engine.invalid-phase"
     );
 }
+
+#[test]
+fn creation_rule_registration_rejects_empty_and_duplicate_rules() {
+    assert!(catalog().with_entity_creation_rules(vec![]).is_err());
+    let rule = EntityCreationRule::new(
+        "generated".into(),
+        EntityKind::Character,
+        "global".into(),
+        2,
+    )
+    .unwrap();
+    assert!(
+        catalog()
+            .with_entity_creation_rules(vec![rule.clone(), rule])
+            .is_err()
+    );
+}

@@ -131,3 +131,54 @@ fn registration_faults_map_to_typed_memory_context_errors() {
         Error::Rejected(Reason::RecoveryRequired)
     ));
 }
+
+#[test]
+fn memory_requires_an_open_database_even_for_registered_records() {
+    let root = std::env::temp_dir().join(format!("aoidos-memory-closed-{}", uuid::Uuid::new_v4()));
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    storage.database.lock().unwrap().take();
+    assert!(matches!(
+        storage.with_memory(&session_id, |_, _, _| Ok(())),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+    storage.close().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn memory_rejects_corrupt_registry_snapshots_before_invoking_the_job() {
+    let root = std::env::temp_dir().join(format!("aoidos-memory-corrupt-{}", uuid::Uuid::new_v4()));
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    storage.with_memory(&session_id, |_, _, _| Ok(())).unwrap();
+    storage
+        .with_database(|connection| {
+            connection
+                .execute("UPDATE entity_registry_runs SET script_id='other'", [])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        storage
+            .with_memory::<()>(&session_id, |_, _, _| panic!(
+                "corrupt identity must not reach memory job"
+            ))
+            .is_err()
+    );
+    storage.close().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

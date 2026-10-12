@@ -143,6 +143,15 @@ fn malformed_or_conflicting_snapshots_are_rejected_as_a_whole() {
     );
     assert!(
         EntityDirectory::new(
+            revision(),
+            1_u64 << 53,
+            true,
+            vec![character("one", "global", "李雷")]
+        )
+        .is_err()
+    );
+    assert!(
+        EntityDirectory::new(
             "unknown".into(),
             1,
             true,
@@ -193,4 +202,26 @@ fn encoded_length_stops_at_the_first_over_limit_entity() {
         + 16;
     assert_eq!(directory.encoded_len().unwrap(), expected);
     assert!(expected > MAX_DIRECTORY_BYTES);
+}
+
+#[test]
+fn creation_rules_and_dynamic_merge_reject_invalid_boundaries() {
+    for (id, scope, limit) in [
+        ("bad id", "global", 1),
+        ("rule", "", 1),
+        ("rule", "global", 0),
+        ("rule", "global", MAX_ENTITIES + 1),
+    ] {
+        assert!(
+            EntityCreationRule::new(id.into(), EntityKind::Character, scope.into(), limit).is_err()
+        );
+    }
+    let directory = EntityDirectory::new(
+        revision(),
+        2,
+        true,
+        vec![character("player", "global", "玩家")],
+    )
+    .unwrap();
+    assert!(directory.with_dynamic(1, vec![]).is_err());
 }

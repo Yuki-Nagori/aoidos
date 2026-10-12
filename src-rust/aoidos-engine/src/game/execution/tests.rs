@@ -319,8 +319,22 @@ struct ScenarioDomain {
     external_revision: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl crate::record::world::WorldPort for ScenarioDomain {
-    fn registered(&self, kind: &str, version: u32) -> bool {
-        version == 1 && matches!(kind, "fixtureEffect" | "sceneAdvanced" | "sessionEnded")
+    fn validate(
+        &self,
+        _: &Session,
+        mutations: &[crate::record::facts::WorldMutation],
+    ) -> Result<(), Fault> {
+        if mutations.iter().all(|mutation| {
+            mutation.data.version == 1
+                && matches!(
+                    mutation.data.kind.as_str(),
+                    "fixtureEffect" | "sceneAdvanced" | "sessionEnded"
+                )
+        }) {
+            Ok(())
+        } else {
+            Err(Fault::new("engine.invalid-phase", "夹具操作未登记"))
+        }
     }
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault> {
         match self.applied.get(id) {
@@ -331,6 +345,8 @@ impl crate::record::world::WorldPort for ScenarioDomain {
     }
     fn apply(
         &mut self,
+        _: &Session,
+        _: u64,
         mutation: &crate::record::facts::WorldMutation,
         hash: &str,
     ) -> Result<(), Fault> {

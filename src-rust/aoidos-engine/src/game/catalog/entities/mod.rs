@@ -1,23 +1,65 @@
 //! 完整、版本化的规范实体目录；名称解析只允许精确命中，不推断近似名称。
 
 use crate::{fault::Fault, record::format};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod registry;
 #[cfg(test)]
 mod tests;
+pub use registry::{
+    EntityCreationCommit, EntityCreationIntent, EntityRegistry,
+    MIGRATION as ENTITY_REGISTRY_MIGRATION, verify_schema as verify_entity_registry_schema,
+};
 
 const MAX_ENTITIES: usize = 4096;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_SCOPE_BYTES: usize = 128;
 const MAX_DIRECTORY_BYTES: usize = 1024 * 1024;
+const MAX_DIRECTORY_REVISION: u64 = (1 << 53) - 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum EntityKind {
     Character,
     Place,
     Organization,
     Item,
     Term,
+}
+
+/// 一条由可信场景目录登记的动态身份创建许可；规则变化须提升 catalog revision。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityCreationRule {
+    pub(crate) rule_id: String,
+    pub(crate) kind: EntityKind,
+    pub(crate) scope: String,
+    pub(crate) max_instances: usize,
+}
+
+impl EntityCreationRule {
+    /// # Errors
+    /// 规则身份、范围或每规则数量超出静态硬上限时拒绝。
+    pub fn new(
+        rule_id: String,
+        kind: EntityKind,
+        scope: String,
+        max_instances: usize,
+    ) -> Result<Self, Fault> {
+        if !format::valid_id(&rule_id)
+            || !valid_label(&scope, MAX_SCOPE_BYTES)
+            || max_instances == 0
+            || max_instances > MAX_ENTITIES
+        {
+            return Err(Fault::bad_request());
+        }
+        Ok(Self {
+            rule_id,
+            kind,
+            scope,
+            max_instances,
+        })
+    }
 }
 
 /// 一个由剧本登记的规范实体；名称仅用于展示和精确查找，不承担实体身份。
@@ -30,7 +72,8 @@ pub struct CanonicalEntity {
     pub canonical_name: String,
 }
 
-/// 与剧本修订绑定的不可变规范目录快照。
+/// 与静态剧本版本和单调实体修订绑定的不可变目录快照。
+#[derive(Debug, Clone)]
 pub struct EntityDirectory {
     script_revision: String,
     revision: u64,
@@ -50,6 +93,7 @@ impl EntityDirectory {
     ) -> Result<Self, Fault> {
         if !format::valid_hash(&script_revision)
             || revision == 0
+            || revision > MAX_DIRECTORY_REVISION
             || entries.is_empty()
             || entries.len() > MAX_ENTITIES
         {
@@ -98,6 +142,31 @@ impl EntityDirectory {
 
     pub fn is_complete(&self) -> bool {
         self.complete
+    }
+
+    /// 合并已验证的动态身份，保留静态 completeness 声明并使用调用方的单调修订。
+    /// # Errors
+    /// 动态身份冲突、修订回退或合并后超出硬上限时拒绝。
+    pub(super) fn with_dynamic(
+        &self,
+        revision: u64,
+        dynamic: Vec<CanonicalEntity>,
+    ) -> Result<Self, Fault> {
+        if revision < self.revision {
+            return Err(super::super::invalid_phase());
+        }
+        let mut entries = self.by_id.values().cloned().collect::<Vec<_>>();
+        entries.extend(dynamic);
+        Self::new(
+            self.script_revision.clone(),
+            revision,
+            self.complete,
+            entries,
+        )
+    }
+
+    pub(super) fn entries(&self) -> impl Iterator<Item = &CanonicalEntity> {
+        self.by_id.values()
     }
 
     /// 完整目录内的精确规范名命中；未找到返回 `None`，近似匹配不在此层执行。

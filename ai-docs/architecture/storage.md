@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-10。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，产品接入仍由后续任务负责；导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-12。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -121,6 +121,8 @@ CREATE TABLE point_allocations (
 ## 业务存储所有权
 
 `aoidos-engine::Storage` 统一打开 `storage.sqlite` 并核验共享 applied 表，保存真实迁移状态；后续主题 / 计费 / 记忆模块复用此所有者及迁移编号，不创建第二套业务连接生命周期。`aoidos-store::applied` 提供 operationId + contentHash 幂等提交原语，业务 schema 和解释器由消费模块所有。
+
+043 的 `entity_registry_runs` / `entity_registry_entries` 由 engine 持有 schema 和迁移。周目身份、动态 entityRevision、源 mutation / hash / recordSeq 与 `store_applied` 回执在同一 SQLite 事务写入；JSONL 的 `settlementPlanned` 仍是意图事实源，SQLite 注册行是已应用状态。启动恢复只重放原 mutation；记忆入口在 session → 数据库锁顺序下审计源记录、应用回执及有效分支，再生成有界只读快照。分支回退不会删除身份审计行，但外分支身份不会进入当前快照。
 
 `ui-preferences.json` 在系统应用数据根保存版本 1 的 `panelPinned` / `diceMode`。文件缺失返回默认值，坏格式或未知版本明确拒绝，不静默覆盖；单文件上限 4 KiB，保存经原子写成功才确认。主题和语言偏好仍遵循各自架构，不扩充这两个字段。
 

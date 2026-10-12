@@ -85,13 +85,27 @@ struct SqlWorld {
     fail: bool,
 }
 impl WorldPort for SqlWorld {
-    fn registered(&self, kind: &str, version: u32) -> bool {
-        self.registered && kind == "fixture-increment" && version == 1
+    fn validate(&self, _: &Session, mutations: &[WorldMutation]) -> Result<(), Fault> {
+        if mutations.iter().all(|mutation| {
+            self.registered
+                && mutation.data.kind == "fixture-increment"
+                && mutation.data.version == 1
+        }) {
+            Ok(())
+        } else {
+            Err(Fault::new("engine.invalid-phase", "解释器未登记"))
+        }
     }
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault> {
         aoidos_store::applied::contains(&self.connection, id, hash).map_err(store_fault)
     }
-    fn apply(&mut self, mutation: &WorldMutation, hash: &str) -> Result<(), Fault> {
+    fn apply(
+        &mut self,
+        _: &Session,
+        _: u64,
+        mutation: &WorldMutation,
+        hash: &str,
+    ) -> Result<(), Fault> {
         if self.fail {
             return Err(Fault::new("store.io", "合成 SQL 故障"));
         }

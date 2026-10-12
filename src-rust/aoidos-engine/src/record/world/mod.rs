@@ -9,14 +9,23 @@ use crate::fault::Fault;
 
 /// SQL / 重建解释器边界；产品未登记属性 schema 时不提供实现。
 pub trait WorldPort {
-    fn registered(&self, kind: &str, version: u32) -> bool;
+    /// Validates the complete recorded operation group before its causal intent is appended.
+    /// # Errors
+    /// Unknown operation versions, missing rule authorization, or stale world state are rejected.
+    fn validate(&self, session: &Session, mutations: &[WorldMutation]) -> Result<(), Fault>;
     /// # Errors
     /// applied 身份和 hash 失配必须返回 corrupt。
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault>;
     /// 条件检查、领域更新和 applied 标记必须同一个 SQLite 事务。
     /// # Errors
     /// 未提交 / 提交不确定 / 条件冲突都保留持久意图并冻结会话推进。
-    fn apply(&mut self, mutation: &WorldMutation, hash: &str) -> Result<(), Fault>;
+    fn apply(
+        &mut self,
+        session: &Session,
+        record_seq: u64,
+        mutation: &WorldMutation,
+        hash: &str,
+    ) -> Result<(), Fault>;
 }
 fn mutations(body: &Body) -> Result<Vec<WorldMutation>, Fault> {
     let Body::System { code, data, .. } = body else {
@@ -41,7 +50,7 @@ fn mutations(body: &Body) -> Result<Vec<WorldMutation>, Fault> {
         )),
     }
 }
-fn mutation_hash(mutation: &WorldMutation) -> Result<String, Fault> {
+pub(crate) fn mutation_hash(mutation: &WorldMutation) -> Result<String, Fault> {
     Ok(format::hash(
         format::line(mutation).map_err(store_fault)?.as_bytes(),
     ))
@@ -53,12 +62,7 @@ impl Session {
     pub fn commit_world(&mut self, body: Body, port: &mut dyn WorldPort) -> Result<u64, Fault> {
         self.writable()?;
         let mutations = mutations(&body)?;
-        if mutations
-            .iter()
-            .any(|m| !port.registered(&m.data.kind, m.data.version))
-        {
-            return Err(Fault::new("engine.invalid-phase", "世界操作解释器未登记"));
-        }
+        port.validate(self, &mutations)?;
         // append_intent 只耐久保存意图，事件确认留到 SQL 成功之后。
         let seq = self.append_intent(body)?;
         self.pending_world = true;
@@ -66,7 +70,7 @@ impl Session {
         for mutation in mutations {
             let hash = mutation_hash(&mutation)?;
             if !port.applied(&mutation.mutation_id, &hash)? {
-                port.apply(&mutation, &hash)?;
+                port.apply(self, seq, &mutation, &hash)?;
             }
         }
         self.pending_world = false;
@@ -104,10 +108,8 @@ impl Session {
                 if port.applied(&mutation.mutation_id, &hash)? {
                     continue;
                 }
-                if !port.registered(&mutation.data.kind, mutation.data.version) {
-                    return Err(Fault::new("engine.invalid-phase", "待恢复操作解释器未登记"));
-                }
-                port.apply(&mutation, &hash)?;
+                port.validate(self, std::slice::from_ref(&mutation))?;
+                port.apply(self, seq, &mutation, &hash)?;
             }
         }
         self.pending_world = false;

@@ -392,13 +392,13 @@ fn interrupted_acceptance_closes_once_and_failed_body_is_never_a_settlement_anch
 
 struct World;
 impl WorldPort for World {
-    fn registered(&self, _: &str, _: u32) -> bool {
-        true
+    fn validate(&self, _: &Session, _: &[WorldMutation]) -> Result<(), Fault> {
+        Ok(())
     }
     fn applied(&self, _: &str, _: &str) -> Result<bool, Fault> {
         Ok(true)
     }
-    fn apply(&mut self, _: &WorldMutation, _: &str) -> Result<(), Fault> {
+    fn apply(&mut self, _: &Session, _: u64, _: &WorldMutation, _: &str) -> Result<(), Fault> {
         Ok(())
     }
 }
