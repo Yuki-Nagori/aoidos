@@ -125,21 +125,23 @@ dice 包含 `planId`、`rng`、`modifiers`；check 包含 `planId`，result 包�
 
 006 的 system 使用下表注册的 code 保存可审计、可重放的因果事实。公共 version=1，有回合时 roundId 必有，接纳 / 控制操作有 operationId，roundAccepted 保存 mode（inCharacter / outOfCharacter）及 diceMode（manual / auto），所有引用均须在当前有效路径可解。profileRevision 仅是非敏感配置身份，不保存密钥或原始请求。roundEnded.outcome 与 completedSteps 是结果 / 已完成步骤的审计摘要，不是另存 phase。
 
-| code              | data 必需内容（公共字段之外）                                                                                                                                         |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| roundAccepted     | inputSeq、mode、diceMode、profileId、profileRevision、target `{ kind: narration 或 characterSpeech, speakerId? }`、sceneId；恢复时 sourceRoundId / checkpointSeq 必有 |
-| checkPlanned      | diceMode、完整 CheckPlan，包括 planId、ruleId、ruleVersion、actorId、expression、modifiers、resultPolicy、三档 branchId、worldRevision、planHash                      |
-| checkSkipped      | reason（disabled / noCheck / outOfCharacter）、worldRevision                                                                                                          |
-| settlementPlanned | narrativeSeq、worldRevision、最多 32 个有序 WorldMutation，每项固定 mutationId 和版本化已注册 data                                                                    |
-| roundSettled      | narrativeSeq、settlementSeq、appliedThroughMutationId?；无变更时省略最后一项                                                                                          |
-| sceneAdvanced     | previousSceneId、完整 ScenePosition、worldRevision、mutationId                                                                                                        |
-| sceneStayed       | sceneId、worldRevision                                                                                                                                                |
-| sessionEnded      | previousSceneId、已注册 reasonId、worldRevision、mutationId                                                                                                           |
-| roundEnded        | outcome（completed / cancelled / failed）、throughSeq、completedSteps[]；failed 必有脱敏 error，其他省略                                                              |
-| abandonCheckpoint | sourceRoundId、checkpointSeq；之后不能自动沿用旧骰判                                                                                                                  |
-| historyFork       | 下节冻结的 mode、父控制引用、targetSeq 与 prefixHash；无 round 时省略 roundId                                                                                         |
+| code              | data 必需内容（公共字段之外）                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| roundAccepted     | inputSeq、mode、diceMode、profileId、profileRevision、target `{ kind: narration 或 characterSpeech, speakerId? }`、sceneId；计划定向输入同时保存 `presenceRevision`，旁白省略；恢复时 sourceRoundId / checkpointSeq 必有 |
+| checkPlanned      | diceMode、完整 CheckPlan，包括 planId、ruleId、ruleVersion、actorId、expression、modifiers、resultPolicy、三档 branchId、worldRevision、planHash                                                                         |
+| checkSkipped      | reason（disabled / noCheck / outOfCharacter）、worldRevision                                                                                                                                                             |
+| settlementPlanned | narrativeSeq、worldRevision、最多 32 个有序 WorldMutation，每项固定 mutationId 和版本化已注册 data                                                                                                                       |
+| roundSettled      | narrativeSeq、settlementSeq、appliedThroughMutationId?；无变更时省略最后一项                                                                                                                                             |
+| sceneAdvanced     | previousSceneId、完整 ScenePosition、worldRevision、mutationId                                                                                                                                                           |
+| sceneStayed       | sceneId、worldRevision                                                                                                                                                                                                   |
+| sessionEnded      | previousSceneId、已注册 reasonId、worldRevision、mutationId                                                                                                                                                              |
+| roundEnded        | outcome（completed / cancelled / failed）、throughSeq、completedSteps[]；failed 必有脱敏 error，其他省略                                                                                                                 |
+| abandonCheckpoint | sourceRoundId、checkpointSeq；之后不能自动沿用旧骰判                                                                                                                                                                     |
+| historyFork       | 下节冻结的 mode、父控制引用、targetSeq 与 prefixHash；无 round 时省略 roundId                                                                                                                                            |
 
 sceneAdvanced / sessionEnded 的世界变更只允许对应注册类型，沿用 006 mutationId / applied 协议；上述表不建立世界属性 schema。completedSteps 固定来自 proposal / check / narration / settlement / advance，不接收模型任意字符串；它是派生的审计摘要，读取时与对应记录引用核验，不能单靠它越过缺失事实。恢复 roundAccepted 的 target 沿用检查点，profile 是新操作冻结值。
+
+044 / 045 在 `settlementPlanned.mutations` 中扩展经登记的 presence 与获知事件类型，不新增旁路状态写入。`scenePresenceChanged` 更新可信成员集合；已 applied 且仍在当前有效路径的变更持续决定在场状态，即使该回合后来 failed / cancelled。`observed` / `rumorDelivered` 只有来源回合成功、settlement 已应用且事件仍位于当前有效路径时才可供 030 消费；取消、失败、partial、未应用或已回退分支不能生成有效获知。定向 `roundAccepted` 将 `presenceRevision` 与 target 一起保存，旁白省略；取消恢复 / 重生成原样沿用已接纳目标及 revision，此举只保持对话路由，不重新产生 `told`，也不意味着在恢复时新观察到信息。
 
 `derive_phase(EffectiveHistory, AppliedWorld, LiveOwner?)` 为纯函数。正常打开先由 006 核验 / 封 partial、恢复已知 pending mutation，再对有效因果路径投影：
 
