@@ -294,7 +294,21 @@ impl Repository {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
         let receipt = self.batch_receipt(conn, batch_id)?;
-        if receipt.state != BatchState::Received {
+        let deferred_candidates = if receipt.state == BatchState::Completed {
+            self.deferred_candidates(conn, batch_id)?
+                .into_iter()
+                .map(|candidate| candidate.candidate_id)
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
+        if receipt.state != BatchState::Received
+            && (receipt.state != BatchState::Completed
+                || plan
+                    .candidate_ids
+                    .iter()
+                    .any(|candidate| !deferred_candidates.contains(candidate)))
+        {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
         let response = receipt.response.as_deref().ok_or(Error::Corrupt)?;

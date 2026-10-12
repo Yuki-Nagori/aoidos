@@ -126,6 +126,99 @@ fn candidate_completion_requires_its_durable_operation_to_be_applied() {
 }
 
 #[test]
+fn deferred_candidate_can_resume_from_saved_response_without_reopening_batch() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let deferred = br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"deferred","reasonCode":"policy.capacity_blocked"}]}"#;
+    f.repo
+        .complete_batch(&mut f.conn, &snapshot.batch_id, deferred)
+        .unwrap();
+
+    let pending = f
+        .repo
+        .deferred_candidates(&f.conn, &snapshot.batch_id)
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].candidate_id, "candidate_1");
+    assert_eq!(pending[0].reason_code, "policy.capacity_blocked");
+    assert_eq!(pending[0].operation_id, None);
+
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    assert_eq!(
+        f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap(),
+        OperationState::Prepared
+    );
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .completion
+            .as_deref(),
+        Some(deferred.as_slice())
+    );
+    assert_eq!(
+        f.repo
+            .deferred_candidates(&f.conn, &snapshot.batch_id)
+            .unwrap()[0]
+            .operation_id
+            .as_deref(),
+        Some(plan.operation_id.as_str())
+    );
+
+    f.repo
+        .write_versions(&mut f.conn, &plan.operation_id)
+        .unwrap();
+    assert_eq!(
+        f.repo
+            .apply(&mut f.conn, &f.port, &plan.operation_id)
+            .unwrap(),
+        OperationState::Applied
+    );
+    assert_eq!(
+        f.repo.operation(&f.conn, &plan.operation_id).unwrap().1,
+        OperationState::Applied
+    );
+    assert_eq!(
+        f.repo.batch(&f.conn, &snapshot.batch_id).unwrap().1,
+        BatchState::Completed
+    );
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .completion
+            .as_deref(),
+        Some(deferred.as_slice())
+    );
+}
+
+#[test]
+fn completed_non_deferred_candidate_cannot_be_reopened_for_an_operation() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let no_op = br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"noOp"}]}"#;
+    f.repo
+        .complete_batch(&mut f.conn, &snapshot.batch_id, no_op)
+        .unwrap();
+
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Reason::StaleVersion,
+    );
+    assert!(
+        f.repo
+            .deferred_candidates(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn candidate_operation_plan_must_bind_existing_unclaimed_candidates() {
     let mut f = Fixture::new();
     let snapshot = f.received_batch("candidate_1");

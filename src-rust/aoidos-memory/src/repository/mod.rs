@@ -20,7 +20,7 @@ pub use confirmations::{QuestionCursor, QuestionPage};
 mod materials;
 pub use materials::{
     BatchCompletion, BatchReceipt, BatchSnapshot, BatchState, CandidateOutcome, CandidateResult,
-    Span,
+    DeferredCandidate, Span,
 };
 #[cfg(test)]
 mod test_support;

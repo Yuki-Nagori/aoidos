@@ -96,6 +96,17 @@ fn material_identity_and_frozen_batch_survive_replays() {
 }
 
 #[test]
+fn deferred_candidates_are_unavailable_before_batch_completion() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+
+    rejected(
+        f.repo.deferred_candidates(&f.conn, &snapshot.batch_id),
+        Reason::StaleVersion,
+    );
+}
+
+#[test]
 fn logical_clock_counts_only_confirmed_rounds_once() {
     let mut f = Fixture::new();
     let source = f.source();

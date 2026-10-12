@@ -70,6 +70,15 @@ pub struct CandidateResult {
     pub reason_code: Option<String>,
 }
 
+/// A candidate whose original model result is retained for a local-only retry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredCandidate {
+    pub candidate_id: String,
+    pub reason_code: String,
+    /// Present after a local operation plan has claimed this candidate.
+    pub operation_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchCompletion {
@@ -713,6 +722,42 @@ impl Repository {
             error_code: row.7,
         })
     }
+
+    /// Lists deferred candidate identities from an immutable completed response.
+    ///
+    /// The caller can revalidate the frozen proposal and prepare a local operation without
+    /// dispatching another provider request. Candidate contents remain in `BatchReceipt` so
+    /// this index does not copy or reinterpret model-provided data.
+    ///
+    /// # Errors
+    /// An unfinished batch, malformed completion, or inconsistent operation mapping is rejected.
+    pub fn deferred_candidates(
+        &self,
+        conn: &Connection,
+        batch_id: &str,
+    ) -> Result<Vec<DeferredCandidate>> {
+        let receipt = self.batch_receipt(conn, batch_id)?;
+        if receipt.state != BatchState::Completed {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        let bytes = receipt.completion.as_deref().ok_or(Error::Corrupt)?;
+        let completion: BatchCompletion =
+            aoidos_json::decode_bytes(bytes, MAX_PROPOSAL_BYTES).map_err(|_| Error::Corrupt)?;
+        completion
+            .outcomes
+            .into_iter()
+            .filter(|outcome| outcome.outcome == CandidateOutcome::Deferred)
+            .map(|outcome| {
+                let reason_code = outcome.reason_code.ok_or(Error::Corrupt)?;
+                let operation_id = candidate_operation(conn, batch_id, &outcome.candidate_id)?;
+                Ok(DeferredCandidate {
+                    candidate_id: outcome.candidate_id,
+                    reason_code,
+                    operation_id,
+                })
+            })
+            .collect()
+    }
     /// 只登记已确认的场内完成回执；回退时钟由有效来源重建，不按墙钟增加。
     /// # Errors
     /// 调用方须从可信 completed 场内回合构造来源，重复 round 不重新计时。
@@ -775,6 +820,15 @@ impl Repository {
         completion: &BatchCompletion,
     ) -> Result<()> {
         validate_completion_shape(conn, batch_id, completion)?;
+        let batch_completed: bool = conn
+            .query_row(
+                "SELECT status='completed' FROM memory_batches WHERE batch_id=?1",
+                [batch_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()
+            .map_err(sql)?
+            .ok_or(Error::NotFound)?;
         let legacy: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM memory_batch_legacy_completions WHERE batch_id=?1)",
@@ -793,6 +847,7 @@ impl Repository {
                     match (state, outcome.outcome) {
                         (OperationState::Applied, CandidateOutcome::Applied)
                         | (OperationState::Rejected, CandidateOutcome::Rejected) => {}
+                        (_, CandidateOutcome::Deferred) if batch_completed => {}
                         (OperationState::Prepared | OperationState::Ready, _) => {
                             return Err(Error::Rejected(Reason::RecoveryRequired));
                         }
