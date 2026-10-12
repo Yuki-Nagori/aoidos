@@ -18,6 +18,8 @@ struct SessionArgs {
 struct InputArgs {
     session_id: String,
     text: String,
+    #[serde(default)]
+    recipient_character_id: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -59,7 +61,7 @@ pub async fn submit_input(
 ) -> Result<AcceptedRound, CmdError> {
     let args: InputArgs = decode(&request)?;
     service
-        .submit_input(&args.session_id, args.text)
+        .submit_input_to_character(&args.session_id, args.text, args.recipient_character_id)
         .await
         .map_err(CmdError::from)
 }

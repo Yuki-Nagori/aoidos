@@ -17,7 +17,7 @@ pub struct RoundIdentity {
     pub round_id: String,
     pub operation_id: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",

@@ -5,7 +5,7 @@ use crate::{
     fault::Fault,
     ports::{Outcome, Terminal},
     record::{
-        facts::{CheckPlan, DiceMode, Fact, RoundIdentity, ScenePosition},
+        facts::{CheckPlan, DiceMode, Fact, GenerationTarget, RoundIdentity, ScenePosition},
         format::{Body, InputMode},
         session::{Session, store_fault},
     },
@@ -19,6 +19,7 @@ pub struct RoundFacts {
     pub accepted_seq: u64,
     pub dice_mode: DiceMode,
     pub mode: InputMode,
+    pub target: GenerationTarget,
     pub scene_id: String,
     pub plan: Option<(u64, CheckPlan)>,
     pub skipped: Option<u64>,
@@ -242,6 +243,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
         input_seq,
         dice_mode,
         mode,
+        target,
         source_round_id,
         checkpoint_seq,
         scene_id,
@@ -254,6 +256,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
                 || !previous.anchor(anchor)
                 || previous.input_seq != input_seq
                 || previous.mode != mode
+                || previous.target != target
             {
                 return Err(corrupt());
             }
@@ -273,6 +276,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
                 accepted_seq: seq,
                 dice_mode,
                 mode,
+                target,
                 scene_id: scene_id.clone(),
                 plan: None,
                 skipped: None,

@@ -1240,7 +1240,7 @@ async fn owner_exit_drains_queued_responses_and_waiting_lease_even_if_senders_di
     let (close_tx, close_rx) = oneshot::channel();
     tx.send(Command::Close(close_tx)).await.ok().unwrap();
     let (submit_tx, submit_rx) = oneshot::channel();
-    tx.send(Command::Submit("排队输入".into(), submit_tx))
+    tx.send(Command::Submit("排队输入".into(), None, submit_tx))
         .await
         .ok()
         .unwrap();
@@ -1448,7 +1448,7 @@ async fn lifecycle_closure_rejects_queued_admission_before_factory_lookup() {
     let fixture = Fixture::new(false, "{}");
     let (tx, rx) = mpsc::channel(2);
     let (reply, result) = oneshot::channel();
-    tx.send(Command::Submit("排队输入".into(), reply))
+    tx.send(Command::Submit("排队输入".into(), None, reply))
         .await
         .ok()
         .unwrap();
@@ -1838,7 +1838,7 @@ async fn controls_queued_during_handoff_freeze_keep_identity_and_busy_priority()
         let (submit_tx, submit_rx) = oneshot::channel();
         handle
             .commands
-            .send(Command::Submit("重复行动".into(), submit_tx))
+            .send(Command::Submit("重复行动".into(), None, submit_tx))
             .await
             .ok()
             .unwrap();
@@ -1996,7 +1996,7 @@ async fn shutdown_with_a_full_handoff_queue_cannot_admit_the_replacement() {
             let (reply, _rx) = oneshot::channel();
             handle
                 .commands
-                .try_send(Command::Submit("排队输入".into(), reply))
+                .try_send(Command::Submit("排队输入".into(), None, reply))
                 .ok()
                 .unwrap();
         }
@@ -2083,4 +2083,140 @@ fn bounded_control_caches_evict_oldest_and_keep_checked_rounds_known() {
     assert!(actor.known("round-16", None));
     assert!(!actor.known("unknown", None));
     assert!(actor.known("current", Some("current")));
+}
+
+#[tokio::test]
+async fn directed_submit_rejects_bad_routes_before_writes_and_records_the_selected_speaker() {
+    let fixture = Fixture::with_characters(false, "{\"kind\":\"noCheck\"}");
+    let service = service(&fixture, DiceMode::Auto);
+    let id = fixture.context.publisher.snapshot().state.session_id;
+    let before = lock(&fixture.context.session).path_at(0).unwrap();
+    for recipient in ["../keeper", "player", "outsider"] {
+        assert_eq!(
+            service
+                .submit_input_to_character(&id, "你好".into(), Some(recipient.into()))
+                .await
+                .unwrap_err()
+                .code,
+            "app.bad-request"
+        );
+        assert_eq!(lock(&fixture.context.session).path_at(0).unwrap(), before);
+    }
+    let accepted = service
+        .submit_input_to_character(&id, "你好".into(), Some("keeper".into()))
+        .await
+        .unwrap();
+    let done = wait(&service, &id, |state| {
+        state.last_operation.as_ref().is_some_and(|operation| {
+            operation.operation_id == accepted.operation_id
+                && operation.outcome != OperationOutcome::Accepted
+        })
+    })
+    .await;
+    assert_eq!(
+        done.last_operation.as_ref().unwrap().outcome,
+        OperationOutcome::Completed,
+        "{done:?}"
+    );
+    wait_available(&fixture).await;
+    {
+        let session = lock(&fixture.context.session);
+        let bodies = session
+            .path_at(0)
+            .unwrap()
+            .into_iter()
+            .map(|seq| session.read(seq).unwrap().body.unwrap().body)
+            .collect::<Vec<_>>();
+        assert!(bodies.iter().any(|body| matches!(body,
+            crate::record::format::Body::CharacterSpeech { speaker_id, terminal: crate::ports::Terminal::Completed { .. }, .. } if speaker_id == "keeper")));
+        assert!(
+            !bodies
+                .iter()
+                .any(|body| matches!(body, crate::record::format::Body::Narration { .. }))
+        );
+        let domain = lock(&fixture.context.domain);
+        let port = crate::record::memory::SourcePort::with_entity_directory(
+            &session,
+            domain.catalog().entity_directory().unwrap(),
+        )
+        .unwrap();
+        let evidence = aoidos_memory::model::KnowledgeEvidence {
+            evidence_id: aoidos_memory::model::new_id(),
+            subject_id: "keeper".into(),
+            source: port.reference(&aoidos_memory::model::new_id(), 1).unwrap(),
+            kind: aoidos_memory::model::KnowledgeKind::Told,
+            informant_id: Some("player".into()),
+            scope: "directDialogue".into(),
+            rule_id: "directDialogueV1".into(),
+        };
+        assert!(aoidos_memory::model::CausalPort::valid_evidence(&port, &evidence).unwrap());
+    }
+    service.shutdown().await;
+}
+
+#[tokio::test]
+async fn directed_target_survives_a_closed_checkpoint_and_reopened_resume() {
+    let fixture = Fixture::with_characters(true, "{}");
+    let first_service = service(&fixture, DiceMode::Manual);
+    let id = fixture.context.publisher.snapshot().state.session_id;
+    first_service
+        .submit_input_to_character(&id, "搜索".into(), Some("keeper".into()))
+        .await
+        .unwrap();
+    wait(&first_service, &id, |state| state.check.is_some()).await;
+    first_service.close_session(&id).await.unwrap();
+    let reopened = fixture.reopen().await;
+    let revision = lock(&reopened.session).header().script_revision.clone();
+    *lock(&reopened.domain) = Box::new(crate::game::test_support::character_domain(
+        &revision,
+        true,
+        fixture.consequences.clone(),
+        true,
+    ));
+    let next_service = Service::new(
+        reopened.coordinator.clone(),
+        Arc::new(Factory {
+            generation: fixture.generation.clone(),
+            mode: DiceMode::Manual,
+        }),
+    );
+    next_service.register(reopened.clone()).unwrap();
+    let resumed = next_service.resume(&id).await.unwrap();
+    let state = wait(&next_service, &id, |state| state.check.is_some()).await;
+    next_service
+        .submit_check(&id, &resumed.round_id, &state.check.unwrap().plan_id)
+        .await
+        .unwrap();
+    let done = wait(&next_service, &id, |state| {
+        state.last_operation.as_ref().is_some_and(|operation| {
+            operation.operation_id == resumed.operation_id
+                && operation.outcome != OperationOutcome::Accepted
+        })
+    })
+    .await;
+    assert_eq!(
+        done.last_operation.as_ref().unwrap().outcome,
+        OperationOutcome::Completed,
+        "{done:?}"
+    );
+    {
+        let session = lock(&reopened.session);
+        let bodies = session
+            .path_at(session.history_revision())
+            .unwrap()
+            .into_iter()
+            .map(|seq| session.read(seq).unwrap().body.unwrap().body)
+            .collect::<Vec<_>>();
+        assert!(bodies.iter().any(|body| matches!(body,
+            crate::record::format::Body::CharacterSpeech { speaker_id, .. } if speaker_id == "keeper")));
+        for body in &bodies {
+            if let crate::record::format::Body::System { code, data, .. } = body
+                && code == "roundAccepted"
+            {
+                assert_eq!(data["target"]["speakerId"], "keeper");
+            }
+        }
+    }
+    next_service.shutdown().await;
+    first_service.shutdown().await;
 }

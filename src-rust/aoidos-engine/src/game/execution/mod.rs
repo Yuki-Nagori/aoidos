@@ -114,6 +114,7 @@ pub struct Runner {
     frozen: FrozenRound,
     state: State,
     recovered: Recovery,
+    target: GenerationTarget,
     selected: Option<Fact>,
     public_turn: Option<String>,
     delivery_error: Option<Fault>,
@@ -152,6 +153,19 @@ impl Runner {
         frozen: FrozenRound,
         parsed: super::input::ParsedInput<'_>,
     ) -> Result<Self, Fault> {
+        Self::accept_targeted(context, lease, frozen, parsed, GenerationTarget::Narration).await
+    }
+
+    /// 显式选择场内角色作为回复对象；目标由 Rust 目录与场景成员关系校验。
+    /// # Errors
+    /// 接收对象不在当前场景、非角色实体或等于玩家角色时拒绝，且不追加输入。
+    pub async fn accept_targeted(
+        context: Arc<Context>,
+        lease: Lease,
+        frozen: FrozenRound,
+        parsed: super::input::ParsedInput<'_>,
+        target: GenerationTarget,
+    ) -> Result<Self, Fault> {
         let raw = parsed.raw.to_owned();
         let mode = parsed.mode;
         let content_range = parsed.content_range;
@@ -165,6 +179,12 @@ impl Runner {
             let position = recovered.scene.as_ref().ok_or_else(no_scene)?;
             domain.catalog().verify_position(position)?;
             let scene = domain.catalog().scene(&position.scene_id)?;
+            if mode != InputMode::InCharacter
+                && matches!(&target, GenerationTarget::CharacterSpeech { .. })
+            {
+                return Err(Fault::bad_request());
+            }
+            validate_generation_target(&target, scene, domain.catalog(), &context.actor_id)?;
             let view = domain.confirmed(&session)?;
             if !crate::record::format::valid_id(&context.player_id)
                 || !scene.actor_ids.contains(&context.actor_id)
@@ -237,7 +257,7 @@ impl Runner {
                 dice_mode: frozen.dice_mode,
                 profile_id: frozen.profile_id.clone(),
                 profile_revision: frozen.profile_revision.clone(),
-                target: GenerationTarget::Narration,
+                target: target.clone(),
                 scene_id: position.scene_id.clone(),
                 source_round_id: None,
                 checkpoint_seq: None,
@@ -256,6 +276,7 @@ impl Runner {
                 frozen,
                 state,
                 recovered: updated,
+                target,
                 selected: None,
                 public_turn: None,
                 delivery_error,
@@ -321,6 +342,7 @@ impl Runner {
                 .clone()
                 .ok_or_else(super::invalid_phase)?;
             let round = recovered.round.as_ref().ok_or_else(super::invalid_phase)?;
+            let target = round.target.clone();
             let state = State::resume(
                 context.publisher.snapshot().state.state_epoch,
                 identity.round_id.clone(),
@@ -337,7 +359,7 @@ impl Runner {
                 dice_mode: frozen.dice_mode,
                 profile_id: frozen.profile_id.clone(),
                 profile_revision: frozen.profile_revision.clone(),
-                target: GenerationTarget::Narration,
+                target: target.clone(),
                 scene_id,
                 source_round_id: Some(checkpoint.source_round_id),
                 checkpoint_seq: Some(checkpoint.through_seq),
@@ -368,6 +390,7 @@ impl Runner {
                 frozen,
                 state,
                 recovered,
+                target,
                 selected: None,
                 public_turn: None,
                 delivery_error,
@@ -601,7 +624,8 @@ impl Runner {
         } else {
             String::new()
         };
-        let request = self.request(PromptTarget::Narration, extra).await?;
+        let prompt_target = prompt_target(&self.target);
+        let request = self.request(prompt_target, extra).await?;
         ensure_running(&cancel)?;
         let delivery_error = Arc::new(Mutex::new(None));
         let writer = Arc::new(GameWriter {
@@ -610,7 +634,7 @@ impl Runner {
             lease: self.lease.clone(),
             persistent: PersistentWriter {
                 session: self.context.session.clone(),
-                target: Target::Narration,
+                target: record_target(&self.target),
                 high: false,
             },
         });
@@ -954,6 +978,45 @@ impl Runner {
     }
 }
 
+fn validate_generation_target(
+    target: &GenerationTarget,
+    scene: &super::catalog::Scene,
+    catalog: &super::catalog::SceneCatalog,
+    actor_id: &str,
+) -> Result<(), Fault> {
+    let GenerationTarget::CharacterSpeech { speaker_id } = target else {
+        return Ok(());
+    };
+    let Some(directory) = catalog.entity_directory() else {
+        return Err(Fault::bad_request());
+    };
+    if !crate::record::format::valid_id(speaker_id)
+        || speaker_id == actor_id
+        || !scene.actor_ids.iter().any(|id| id == speaker_id)
+        || !directory.is_complete()
+        || !directory.contains_character(speaker_id)
+    {
+        return Err(Fault::bad_request());
+    }
+    Ok(())
+}
+
+fn prompt_target(target: &GenerationTarget) -> PromptTarget {
+    match target {
+        GenerationTarget::Narration => PromptTarget::Narration,
+        GenerationTarget::CharacterSpeech { speaker_id } => {
+            PromptTarget::Character(speaker_id.clone())
+        }
+    }
+}
+
+fn record_target(target: &GenerationTarget) -> Target {
+    match target {
+        GenerationTarget::Narration => Target::Narration,
+        GenerationTarget::CharacterSpeech { speaker_id } => Target::Character(speaker_id.clone()),
+    }
+}
+
 fn in_flight(identity: &RoundIdentity, turn_id: Option<String>) -> InFlight {
     InFlight {
         operation_id: identity.operation_id.clone(),
@@ -1092,6 +1155,7 @@ impl OutputWriter for GameWriter {
         let delivery_error = self.delivery_error.clone();
         let turn = turn.to_owned();
         let terminal = terminal.clone();
+        let target = self.persistent.target.clone();
         Box::pin(async move {
             crate::blocking::run(move || {
                 let _lease = lease;
@@ -1101,7 +1165,7 @@ impl OutputWriter for GameWriter {
                     next.phase = Phase::Settling;
                 }
                 let prepared = context.publisher.prepare(next, None)?;
-                session.seal(&turn, &Target::Narration, &terminal)?;
+                session.seal(&turn, &target, &terminal)?;
                 // 正文已确认，通知故障单独交给驱动，不改写 child 的真实终态。
                 *lock(&delivery_error) = context.publisher.confirm_committed(prepared)?;
                 Ok(())

@@ -354,6 +354,51 @@ pub(crate) fn domain(
     }
 }
 
+pub(crate) fn character_domain(
+    script_revision: &str,
+    forced: bool,
+    consequences: Arc<AtomicUsize>,
+    complete: bool,
+) -> TestDomain {
+    let mut domain = domain(script_revision, forced, consequences);
+    let mut scene = domain.catalog.scene("room").unwrap().clone();
+    scene.actor_ids.push("keeper".into());
+    domain.catalog = SceneCatalog::new(
+        "1".into(),
+        script_revision.into(),
+        BTreeMap::from([(
+            "room".into(),
+            Node {
+                kind: "scene".into(),
+                title: "房间".into(),
+                parent: None,
+            },
+        )]),
+        BTreeMap::from([("room".into(), scene)]),
+        BTreeMap::new(),
+    )
+    .unwrap()
+    .with_entity_directory(
+        EntityDirectory::new(
+            script_revision.into(),
+            1,
+            complete,
+            ["player", "keeper", "outsider"]
+                .into_iter()
+                .map(|id| CanonicalEntity {
+                    id: id.into(),
+                    kind: EntityKind::Character,
+                    scope: "global".into(),
+                    canonical_name: id.into(),
+                })
+                .collect(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    domain
+}
+
 pub(crate) struct Fixture {
     pub(crate) context: Arc<Context>,
     pub(crate) generation: Arc<TestGeneration>,
@@ -420,6 +465,20 @@ impl Fixture {
             path,
             forced,
         }
+    }
+    pub(crate) fn with_characters(forced: bool, proposal: &'static str) -> Self {
+        let fixture = Self::new(forced, proposal);
+        let revision = lock(&fixture.context.session)
+            .header()
+            .script_revision
+            .clone();
+        *lock(&fixture.context.domain) = Box::new(character_domain(
+            &revision,
+            forced,
+            fixture.consequences.clone(),
+            true,
+        ));
+        fixture
     }
     pub(crate) async fn reopen(&self) -> Arc<Context> {
         let header = lock(&self.context.session).header().clone();
