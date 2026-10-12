@@ -5,6 +5,7 @@ use super::{
     format::{Body, InputMode as RecordMode},
     session::Session,
 };
+use crate::game::catalog::EntityDirectory;
 use crate::ports::{Outcome, Terminal};
 use aoidos_memory::{
     error::{Error, Reason, Result},
@@ -14,10 +15,31 @@ use aoidos_memory::{
 /// 引擎持有会话锁时借用；030 尚未登记角色获知端口，因此不授予 NPC 证据。
 pub struct SourcePort<'a> {
     session: &'a Session,
+    entity_directory: Option<&'a EntityDirectory>,
 }
 impl<'a> SourcePort<'a> {
     pub fn new(session: &'a Session) -> Self {
-        Self { session }
+        Self {
+            session,
+            entity_directory: None,
+        }
+    }
+    /// 将完整剧本目录绑定到当前记录，供记忆快照冻结实体 revision。
+    /// # Errors
+    /// 不完整目录或与存档剧本修订不匹配时拒绝建立记忆来源端口。
+    pub fn with_entity_directory(
+        session: &'a Session,
+        entity_directory: &'a EntityDirectory,
+    ) -> Result<Self> {
+        if !entity_directory.is_complete()
+            || entity_directory.script_revision() != session.header().script_revision
+        {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        Ok(Self {
+            session,
+            entity_directory: Some(entity_directory),
+        })
     }
     /// # Errors
     /// 只从已提交且当前有效的来源构造引用，不能从模型偏移推定资格。
@@ -101,7 +123,7 @@ impl CausalPort for SourcePort<'_> {
             script_id: self.session.header().script_id.clone(),
             session_id: self.session.header().session_id.clone(),
             history_revision: self.session.history_revision(),
-            entity_revision: 0,
+            entity_revision: self.entity_directory.map_or(0, EntityDirectory::revision),
             evidence_revision: 0,
         })
     }

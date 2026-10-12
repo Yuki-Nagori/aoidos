@@ -185,12 +185,46 @@ CREATE INDEX memory_questions_page
  ON memory_questions(run_id,status,question_id);
 "#;
 
+/// 030 将模型候选与同组操作绑定；完成结果只能声明已应用的持久操作。
+pub const CANDIDATE_OPERATION_MIGRATION: &str = r#"
+CREATE TABLE memory_batch_candidate_operations (
+ batch_id TEXT NOT NULL REFERENCES memory_batches(batch_id),
+ candidate_id TEXT NOT NULL CHECK(length(candidate_id) BETWEEN 1 AND 32),
+ operation_id TEXT NOT NULL REFERENCES memory_operations(operation_id),
+ PRIMARY KEY(batch_id,candidate_id),
+ UNIQUE(operation_id,candidate_id)
+);
+CREATE INDEX memory_batch_candidate_operations_operation
+ ON memory_batch_candidate_operations(operation_id,candidate_id);
+"#;
+
+/// 将升级前已经终结的回执标记为历史记录；其旧格式没有候选—操作映射可安全重建。
+pub const LEGACY_BATCH_COMPLETION_MIGRATION: &str = r#"
+CREATE TABLE memory_batch_legacy_completions (
+ batch_id TEXT PRIMARY KEY REFERENCES memory_batches(batch_id)
+)
+"#;
+
+/// 该一次性数据迁移只保留旧完成结果的可读性，不为旧 `applied` 推造操作关联。
+pub const LEGACY_BATCH_COMPLETION_BACKFILL: &str = r#"
+INSERT OR IGNORE INTO memory_batch_legacy_completions(batch_id)
+ SELECT r.batch_id FROM memory_batch_receipts r
+ JOIN memory_batches b USING(batch_id)
+ WHERE b.status='completed' AND r.completion_json IS NOT NULL
+"#;
+
 /// 核验迁移后的领域表 / 索引定义，不把同名但缺约束的旧库当合法 manifest。
 /// # Errors
 /// 缺少或改变已登记结构为 corrupt，SQL 读取错误保持存储类别。
 pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
     use rusqlite::OptionalExtension;
-    for migration in [SCHEMA, BATCH_RECEIPT_MIGRATION, QUESTION_MIGRATION] {
+    for migration in [
+        SCHEMA,
+        BATCH_RECEIPT_MIGRATION,
+        QUESTION_MIGRATION,
+        CANDIDATE_OPERATION_MIGRATION,
+        LEGACY_BATCH_COMPLETION_MIGRATION,
+    ] {
         for statement in migration
             .split(';')
             .map(str::trim)
@@ -249,6 +283,11 @@ mod tests {
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
         conn.execute_batch(QUESTION_MIGRATION).unwrap();
+        conn.execute_batch(CANDIDATE_OPERATION_MIGRATION).unwrap();
+        conn.execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
+            .unwrap();
+        conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
             .unwrap();
@@ -269,6 +308,15 @@ mod tests {
             .unwrap();
         missing_receipts.execute_batch(QUESTION_MIGRATION).unwrap();
         missing_receipts
+            .execute_batch(CANDIDATE_OPERATION_MIGRATION)
+            .unwrap();
+        missing_receipts
+            .execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
+            .unwrap();
+        missing_receipts
+            .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
+        missing_receipts
             .execute_batch("DROP TABLE memory_batch_receipts")
             .unwrap();
         assert!(verify(&missing_receipts).is_err());
@@ -280,9 +328,40 @@ mod tests {
             .unwrap();
         missing_questions.execute_batch(QUESTION_MIGRATION).unwrap();
         missing_questions
+            .execute_batch(CANDIDATE_OPERATION_MIGRATION)
+            .unwrap();
+        missing_questions
+            .execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
+            .unwrap();
+        missing_questions
+            .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
+        missing_questions
             .execute_batch("DROP TABLE memory_questions")
             .unwrap();
         assert!(verify(&missing_questions).is_err());
+
+        let missing_candidate_links = rusqlite::Connection::open_in_memory().unwrap();
+        missing_candidate_links.execute_batch(SCHEMA).unwrap();
+        missing_candidate_links
+            .execute_batch(BATCH_RECEIPT_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(QUESTION_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(CANDIDATE_OPERATION_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch("DROP TABLE memory_batch_candidate_operations")
+            .unwrap();
+        assert!(verify(&missing_candidate_links).is_err());
     }
 
     #[test]
@@ -291,6 +370,11 @@ mod tests {
         conn.execute_batch(&SCHEMA.replace('\n', "  ")).unwrap();
         conn.execute_batch(BATCH_RECEIPT_MIGRATION).unwrap();
         conn.execute_batch(QUESTION_MIGRATION).unwrap();
+        conn.execute_batch(CANDIDATE_OPERATION_MIGRATION).unwrap();
+        conn.execute_batch(LEGACY_BATCH_COMPLETION_MIGRATION)
+            .unwrap();
+        conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=NULL WHERE name='memory_runs'",

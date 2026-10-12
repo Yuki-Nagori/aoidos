@@ -159,7 +159,8 @@ pub async fn open(
         .script_id
         .clone();
     let original = super::assets::scenario(&id)?;
-    let revision = super::assets::revision(&id)?;
+    let entity_directory = super::assets::entity_directory(&id)?;
+    let revision = entity_directory.script_revision().to_owned();
     let expected_prefix = prefix(&id)?;
     {
         let record = session
@@ -180,6 +181,7 @@ pub async fn open(
         events,
         original.title,
         revision,
+        entity_directory,
     )
     .await
 }
@@ -192,6 +194,7 @@ async fn open_context(
     events: Arc<dyn super::state::PhaseEvents>,
     title: String,
     revision: String,
+    entity_directory: EntityDirectory,
 ) -> Result<Arc<Context>, Fault> {
     let catalog = SceneCatalog::new(
         "minimal-explore-v1".into(),
@@ -231,7 +234,8 @@ async fn open_context(
             },
         )]),
         BTreeMap::new(),
-    )?;
+    )?
+    .with_entity_directory(entity_directory)?;
     Context::open(
         session,
         Box::new(BuiltinDomain {

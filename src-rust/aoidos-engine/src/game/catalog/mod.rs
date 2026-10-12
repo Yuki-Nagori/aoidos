@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod entities;
+pub use entities::{CanonicalEntity, EntityDirectory, EntityKind};
+
 /// 最小类型化条件；数值 / 键由可信剧本登记，不解释模型自由文本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
@@ -209,6 +212,7 @@ pub struct SceneCatalog {
     nodes: BTreeMap<String, Node>,
     scenes: BTreeMap<String, Scene>,
     conditions: BTreeMap<String, Condition>,
+    entities: Option<EntityDirectory>,
 }
 impl SceneCatalog {
     /// # Errors
@@ -262,6 +266,7 @@ impl SceneCatalog {
             nodes,
             scenes,
             conditions,
+            entities: None,
         };
         for (id, scene) in &catalog.scenes {
             if id != &scene.position.scene_id
@@ -296,6 +301,32 @@ impl SceneCatalog {
             }
         }
         Ok(catalog)
+    }
+    /// 将与同一剧本版本绑定的可信实体目录接入场景目录。
+    ///
+    /// 完整目录必须包含所有场景 actor；不完整目录可保留作状态提示，但不能解析名称，
+    /// 也不会据此授予获知证据或登记别名。
+    /// # Errors
+    /// 剧本版本不匹配，或完整目录缺少任一场景 actor 时拒绝。
+    pub fn with_entity_directory(mut self, directory: EntityDirectory) -> Result<Self, Fault> {
+        if directory.script_revision() != self.script_revision {
+            return Err(Fault::bad_request());
+        }
+        if directory.is_complete()
+            && self
+                .scenes
+                .values()
+                .flat_map(|scene| &scene.actor_ids)
+                .any(|actor_id| !directory.contains_character(actor_id))
+        {
+            return Err(Fault::bad_request());
+        }
+        self.entities = Some(directory);
+        Ok(self)
+    }
+    /// 返回已接入快照；不完整状态可见，但 `resolve_exact` 会拒绝解析。
+    pub fn entity_directory(&self) -> Option<&EntityDirectory> {
+        self.entities.as_ref()
     }
     pub fn revision(&self) -> &str {
         &self.revision

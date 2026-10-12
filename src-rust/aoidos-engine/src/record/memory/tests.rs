@@ -48,6 +48,60 @@ fn source_references_preserve_original_text_and_validate_utf8_identity_and_mode(
 }
 
 #[test]
+fn source_port_freezes_only_a_complete_directory_matching_the_script_revision() {
+    let fixture = Fixture::new();
+    let revision = fixture.session.header().script_revision.clone();
+    let directory = crate::game::catalog::EntityDirectory::new(
+        revision,
+        7,
+        true,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "npc".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "NPC".into(),
+        }],
+    )
+    .unwrap();
+    let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+    assert_eq!(port.boundary().unwrap().entity_revision, 7);
+
+    let stale = crate::game::catalog::EntityDirectory::new(
+        crate::record::format::hash(b"different script"),
+        8,
+        true,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "npc".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "NPC".into(),
+        }],
+    )
+    .unwrap();
+    assert!(matches!(
+        SourcePort::with_entity_directory(&fixture.session, &stale),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+
+    let incomplete = crate::game::catalog::EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        9,
+        false,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "npc".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "NPC".into(),
+        }],
+    )
+    .unwrap();
+    assert!(matches!(
+        SourcePort::with_entity_directory(&fixture.session, &incomplete),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+}
+
+#[test]
 fn cancelled_and_failed_narration_are_not_material_and_offstage_keeps_its_mode() {
     let mut fixture = Fixture::new();
     let completed = fixture

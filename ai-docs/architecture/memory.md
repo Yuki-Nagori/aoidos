@@ -225,7 +225,9 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 登记和关联只改变实体指向，不改写玩家原文或逐字引用。输入“李磊”确认指向李雷后，记忆可以关联李雷的 ID，引用仍写“李磊”；别名也不等于 NPC 已获知某件事或旧记忆应被强化。
 
-“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。030 当前尚未接入可信实体目录、明确指向证明或别名存储；运行时仍不自动登记别名。
+“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。012 的 `SceneCatalog` 可接入绑定剧本修订的 `EntityDirectory` 快照：完整目录按类别 / 范围检查规范名唯一性、核验场景 actor，并只提供精确规范名查找；不完整快照拒绝解析。内置 Mistbell v1 通过 `resources/scripts/mistbell/entities.json` 显式登记固定初始实体，原文不作实体推断；engine 在资源登记时严格校验元数据，并将原文与清单共同纳入 `scriptRevision`，旧修订存档不会静默接受新目录。当前 `Storage::with_memory` 冻结的是静态种子目录 revision，尚不是合并周目动态实体后的完整 Rust 注册表 revision。统一实体注册与动态实体恢复由 [043](../task/043-rust-entity-registry-impl.md) 承接；固定清单只作种子数据，记忆不得依赖 Mistbell 专属路径。当前没有可信观察范围、对话接收对象或登记传闻事件，因此 `valid_evidence` 仍失败关闭；别名提交 / 撤销或回退重建也未接入，目录不会自动授予角色知识。
+
+`entities.json` 只提供固定剧本初始实体，不限制未来世界出现动态角色。当前 Rust 尚无生成式 NPC 的引擎权威创建、周目级持久注册或动态目录恢复能力。新名字或记忆提议不能创建世界实体。043 将由 Rust 建立统一注册表：剧本清单作为只读种子，动态实体由引擎在规则边界提交并持久化；记忆只引用已提交的稳定实体 ID。032 再决定哪些已登记动态 NPC 可由剧本规则授权进入轮回刻痕；不能按同名或近似名自动继承。
 
 ### 歧义询问与默认继续（已确认）
 
@@ -550,9 +552,9 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### 批次请求与结果持久化
 
-批次状态为 `queued / dispatched / received / completed / rejected / unknown`：queued 已持久冻结映射及 inputDigest；dispatched 在网络发送前登记独立 turnId / 027 物理请求身份与预留，只有首次提交身份的调用可获得发送许可；received 代表有界完整响应已持久保存；completed 代表全部候选都有 applied / no-op / rejected / pending / deferred 的逐项结果，不要求全部成功。malformed / 超限输出为 rejected；网络尝试是否发送或用量不可核验时为 unknown，不当零退款。结果重复写入必须字节一致；旧身份、迟到响应和已终态批次不能覆盖当前结果。
+批次状态为 `queued / dispatched / received / completed / rejected / unknown`：queued 已持久冻结映射及 inputDigest；dispatched 在网络发送前登记独立 turnId / 027 物理请求身份与预留，只有首次提交身份的调用可获得发送许可；received 代表有界完整响应已持久保存；completed 代表全部候选都有 applied / no-op / rejected / pending / deferred 的逐项结果，不要求全部成功。`applied` 只能由已绑定候选且已核验完整提交回执的 applied 操作支撑；被操作拒绝的候选只能标记 rejected，prepared / ready 操作不允许提前完成批次，恢复后沿同一操作身份继续核验。malformed / 超限输出为 rejected；网络尝试是否发送或用量不可核验时为 unknown，不当零退款。结果重复写入必须字节一致；旧身份、迟到响应和已终态批次不能覆盖当前结果。
 
-当前实现将 turnId / 027 requestId、响应原文、响应 hash、逐项完成摘要及错误码存入共享 SQLite 的 `memory_batch_receipts`，并与 `memory_batches.status` 在同一事务提交；响应与摘要分别限制为 64 KiB，读取先检查长度再复制 BLOB。这样避免状态与结果文件的双写窗口。完成摘要使用 version=1、outcomes 数组；candidateId 必须与响应候选集合一一对应且不重复，rejected / pending / deferred 必须带稳定 reasonCode，applied / no-op 不带原因。收到响应后不重发，恢复直接读取已保存内容；dispatched 缺完整响应只能转 unknown，不自动重发。重新发起判断须进入新的已授权批次并使用新的物理请求身份，已完成的同源操作仍幂等。该本地回执尚未接入实际付费发送路径。
+当前实现将 turnId / 027 requestId、响应原文、响应 hash、逐项完成摘要及错误码存入共享 SQLite 的 `memory_batch_receipts`，并与 `memory_batches.status` 在同一事务提交；响应与摘要分别限制为 64 KiB，读取先检查长度再复制 BLOB。这样避免状态与结果文件的双写窗口。完成摘要使用 version=1、outcomes 数组；candidateId 必须与响应候选集合一一对应且不重复，rejected / pending / deferred 必须带稳定 reasonCode，applied / no-op 不带原因。候选与依赖操作的多对一映射存入 `memory_batch_candidate_operations`，与操作计划、目标和版本在同一事务登记；读取恢复计划时必须核对映射集合，完成摘要逐项读取关联操作并审计 applied 状态与提交回执；操作进入持久 `rejected` 时只能以候选 `rejected` 终结，未决或隔离操作不能被其他 outcome 绕过。未绑定操作的候选不能声明 applied。升级前已完成的批次由一次性 backfill 标记为历史回执，以保留可读性而不伪造缺失的候选关联；新批次始终执行严格映射校验。已完成结果为 `deferred` 的候选可从原响应 / 冻结输入重新做本地验证并绑定一个操作；候选标识、原因和关联操作可由 `deferred_candidates` 读取，操作提交不改写原批次回执，其他终态候选不能重开。该路径不重新发送请求，也不创建定时重试；无有效本地计划时继续保持 deferred。dispatched 缺完整响应只能转 unknown，不自动重发。重新发起模型判断须进入新的已授权批次并使用新的物理请求身份，已完成的同源操作仍幂等。该本地回执尚未接入实际付费发送路径。
 
 原始结果已经持久保存而因待确认容量 / 本地资源暂时不能提交的候选，保留 localDeferred 原因与计划；空间释放后只重新做本地核验，不再调用模型。输入切片不足时同样等新上下文，不对同一不足输入反复收费。网络 / 顶层 schema 失败的素材标 needsExplicitRetry，只有用户主动重试 / 恢复或新的有效输入改变判定前提时才能重新排收费批次，不能用定时重扫暗中修复 JSON。
 
@@ -560,7 +562,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### manifest、操作状态机与恢复
 
-029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执和待确认问题迁移；alias 表与可信实体目录证明仍未实现。实体 canonical 数据只经可信引擎端口访问；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。
+029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射与旧完成回执兼容迁移；alias 表与可信实体目录证明仍未实现。实体 canonical 数据只经可信引擎端口访问；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。
 
 已应用操作若与 `store_applied` 回执、计划摘要或目标记录不一致，会在 `memory_run_faults` 持久登记故障，并拒绝该 run 后续所有写入，返回 `recoveryRequired`。当前没有自动解冻路径；必须经未来显式审计修复，不能以重新运行普通恢复覆盖冲突。
 
@@ -657,15 +659,16 @@ v1 记忆处理是单独授权的维护批次，在回合释放 lease 后取得�
 
 ### 分期实施规划
 
-设计经授权整体评审通过后已登记 029–033。029 已交付 `aoidos-memory` 存储 / 恢复基础，但不提供 IPC、前端入口、模型候选处理或记忆注入；后续任务按依赖接入，025 范围不扩张。
+设计经授权整体评审通过后已登记 029–033；本轮按统一身份边界新增 043。029 已交付 `aoidos-memory` 存储 / 恢复基础，但不提供 IPC、前端入口、模型候选处理或记忆注入；后续任务按依赖接入，025 范围不扩张。
 
 | 阶段                                                                   | 实施主责与依赖                                            | 验收边界                                                              |
 | ---------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------- |
 | [029 A：记忆版本与恢复](../task/029-memory-storage-recovery-impl.md)   | 依赖 007、013、022；`aoidos-memory` 已完成存储 / 恢复验收 | 迁移、正文 / manifest、状态机、幂等、回退、故障 / 清理验证            |
-| [030 B：门控与批次](../task/030-memory-gates-batches-impl.md)          | 依赖 A、018–020、023、035 计费实施                        | 来源映射、实体 / 获知证据端口、候选 schema、别名 / 待确认、取消及租约 |
+| [030 B：门控与批次](../task/030-memory-gates-batches-impl.md)          | 依赖 A、043、018–020、023、035 计费实施                   | 来源映射、实体 / 获知证据端口、候选 schema、别名 / 待确认、取消及租约 |
 | [031 C：高级设置与查询](../task/031-memory-settings-queries-impl.md)   | 依赖 A、B、025、034 国际化实施                            | 参数保存 / 继承 / 周目冻结、同型 IPC、待确认 / 诊断查询，设置失败恢复 |
-| [032 D：轮回与节点接入](../task/032-memory-cycle-nodes-impl.md)        | 依赖 A、B、022、023                                       | 授权刻痕、独立去重 / 归档、条件提示；不加入检索热路径                 |
+| [032 D：轮回与节点接入](../task/032-memory-cycle-nodes-impl.md)        | 依赖 A、B、022、023、043                                  | 授权刻痕、独立去重 / 归档、条件提示；不加入检索热路径                 |
 | [033 E：标定与产品验收](../task/033-memory-calibration-integration.md) | 依赖 B–D 与费用统计能力                                   | 独立验收集、有限重复模型实验、长对局 / 预算 / 资源报告，审定生产默认  |
+| [043：Rust 权威实体注册](../task/043-rust-entity-registry-impl.md)     | 依赖 012、023、029；供 B / D 单向消费                     | 固定种子与动态身份统一、持久恢复、分支可见性与稳定 ID                 |
 
 生产默认仅在 E 有证据后审定；开发实验配置可先支撑本地验证。未来检索与动态注入另立范围，不混入本次 v1 实施。027 / 028 已定稿，费用 / 国际化实施由 035 / 034 承接，依赖它们的 B / C 等保持等待，不绕过前置条件。
 
@@ -676,6 +679,7 @@ v1 记忆处理是单独授权的维护批次，在回合释放 lease 后取得�
 | 主题       | 实施主责 | 后续证据                                              |
 | ---------- | -------- | ----------------------------------------------------- |
 | 存储与恢复 | 029      | 持久化、独立评审与三平台 CI 已通过；未接产品流程      |
+| 实体身份   | 043      | 剧本固定种子与周目动态 NPC 的 Rust 权威注册与恢复     |
 | 门控与认知 | 030      | 候选协议、实体 / 获知证据、幂等、待确认及收费边界验证 |
 | 高级设置   | 031      | 参数继承、保存 / 冻结一致性、同型 IPC 与恢复验证      |
 | 轮回与节点 | 032      | 授权刻痕、去重 / 代际归档、条件提示及剧透隔离         |
@@ -683,4 +687,4 @@ v1 记忆处理是单独授权的维护批次，在回合释放 lease 后取得�
 
 实测参数、模型判定效果和故障恢复结果属于后续实现 / 标定证据，不能由产品确认或本地 verify 代替。这些工作的范围、约束与验收方法已列明；开发实验值尚待实测审定，不作为生产保证。
 
-007 已完成授权整体评审，029–033 分别承接存储、管线、高级设置、轮回与节点接入、标定；费用计价与国际化设计已由 [027](../task/027-llm-cost-control-design.md) / [028](../task/028-i18n-design.md) 定稿（[计价架构](billing.md)、[国际化](i18n.md)），实施分别由 [035](../task/035-llm-cost-control-impl.md) 和 [034](../task/034-i18n-impl.md) 承接。
+007 已完成授权整体评审；029–033 承接记忆存储、管线、高级设置、轮回节点与标定，043 先建立 Rust 权威实体身份供 030 / 032 单向消费。费用计价与国际化设计已由 [027](../task/027-llm-cost-control-design.md) / [028](../task/028-i18n-design.md) 定稿（[计价架构](billing.md)、[国际化](i18n.md)），实施分别由 [035](../task/035-llm-cost-control-impl.md) 和 [034](../task/034-i18n-impl.md) 承接。

@@ -96,6 +96,17 @@ fn material_identity_and_frozen_batch_survive_replays() {
 }
 
 #[test]
+fn deferred_candidates_are_unavailable_before_batch_completion() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+
+    rejected(
+        f.repo.deferred_candidates(&f.conn, &snapshot.batch_id),
+        Reason::StaleVersion,
+    );
+}
+
+#[test]
 fn logical_clock_counts_only_confirmed_rounds_once() {
     let mut f = Fixture::new();
     let source = f.source();
@@ -668,6 +679,14 @@ fn completion_must_resolve_exactly_each_persisted_candidate_once() {
         ),
         Reason::InvalidSchema,
     );
+    rejected(
+        f.repo.complete_batch(
+            &mut f.conn,
+            &snapshot.batch_id,
+            br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"applied"}]}"#,
+        ),
+        Reason::InvalidSchema,
+    );
     let completion =
         br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"noOp"}]}"#;
     assert!(
@@ -1129,7 +1148,7 @@ fn completion_and_response_protocols_validate_versions_identity_sets_and_reason_
             )
             .unwrap();
         assert!(matches!(
-            validate_completion(
+            f.repo.validate_completion(
                 &f.conn,
                 &batch,
                 &BatchCompletion {
@@ -1206,4 +1225,254 @@ fn completion_payload_and_hash_must_be_present_and_valid_together() {
         f.repo.batch_receipt(&f.conn, &batch),
         Err(Error::Corrupt)
     ));
+}
+
+#[test]
+fn claimed_candidate_cannot_complete_with_a_non_applied_outcome() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+
+    let deferred = br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"deferred","reasonCode":"policy.capacity_blocked"}]}"#;
+    assert!(matches!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, deferred),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .state,
+        BatchState::Received
+    );
+}
+
+#[test]
+fn quarantined_candidate_operation_requires_recovery_before_completion() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let version = f.version();
+    let mut plan = f.plan(version.clone());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+
+    let path = f.path(&version);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "conflicting body").unwrap();
+    assert!(matches!(
+        f.repo.write_versions(&mut f.conn, &plan.operation_id),
+        Err(Error::Corrupt)
+    ));
+    assert_eq!(
+        f.repo.operation(&f.conn, &plan.operation_id).unwrap().1,
+        OperationState::Quarantined
+    );
+
+    let applied =
+        br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"applied"}]}"#;
+    assert!(matches!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, applied),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+}
+
+#[test]
+fn rejected_candidate_operation_cannot_complete_as_applied() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+    f.repo
+        .write_versions(&mut f.conn, &plan.operation_id)
+        .unwrap();
+    f.port.invalid.set(true);
+    assert!(matches!(
+        f.repo.apply(&mut f.conn, &f.port, &plan.operation_id),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+    assert_eq!(
+        f.repo.operation(&f.conn, &plan.operation_id).unwrap().1,
+        OperationState::Rejected
+    );
+
+    let applied =
+        br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"applied"}]}"#;
+    assert!(matches!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, applied),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
+fn malformed_candidate_operation_is_skipped_during_completion_refreeze() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+
+    f.conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_batch_candidate_operations SET operation_id=?1 WHERE batch_id=?2 AND candidate_id=?3",
+            params!["x".repeat(36), snapshot.batch_id, "candidate_1"],
+        )
+        .unwrap();
+    let applied =
+        br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"applied"}]}"#;
+    assert!(matches!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, applied),
+        Err(Error::Corrupt)
+    ));
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .state,
+        BatchState::Received
+    );
+    let faults: usize = f
+        .conn
+        .query_row(
+            "SELECT count(*) FROM memory_run_faults WHERE run_id=?1",
+            [&f.run.run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(faults, 0);
+}
+
+#[test]
+fn rejected_operation_can_only_finish_its_candidate_as_rejected() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let mut plan = f.plan(f.version());
+    plan.batch_id = Some(snapshot.batch_id.clone());
+    plan.candidate_ids = vec!["candidate_1".into()];
+    f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+    f.repo
+        .write_versions(&mut f.conn, &plan.operation_id)
+        .unwrap();
+    f.port.invalid.set(true);
+    rejected(
+        f.repo.apply(&mut f.conn, &f.port, &plan.operation_id),
+        Reason::InvalidSource,
+    );
+
+    let rejected_result = br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"rejected","reasonCode":"source.invalid"}]}"#;
+    assert!(
+        f.repo
+            .complete_batch(&mut f.conn, &snapshot.batch_id, rejected_result)
+            .unwrap()
+    );
+    assert_eq!(
+        f.repo
+            .batch_receipt(&f.conn, &snapshot.batch_id)
+            .unwrap()
+            .state,
+        BatchState::Completed
+    );
+}
+
+#[test]
+fn corrupt_applied_receipt_freezes_run_after_completion_transaction_rolls_back() {
+    let applied =
+        br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"applied"}]}"#;
+    for replay in [false, true] {
+        let mut f = Fixture::new();
+        let snapshot = f.received_batch("candidate_1");
+        let mut plan = f.plan(f.version());
+        plan.batch_id = Some(snapshot.batch_id.clone());
+        plan.candidate_ids = vec!["candidate_1".into()];
+        f.commit(&plan);
+        if replay {
+            assert!(
+                f.repo
+                    .complete_batch(&mut f.conn, &snapshot.batch_id, applied)
+                    .unwrap()
+            );
+        }
+        f.conn
+            .execute(
+                "UPDATE store_applied SET content_hash='tampered' WHERE id=?1",
+                [format!("memory:{}", plan.operation_id)],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            f.repo
+                .complete_batch(&mut f.conn, &snapshot.batch_id, applied),
+            Err(Error::Corrupt)
+        ));
+        let frozen: bool = f
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memory_run_faults WHERE run_id=?1)",
+                [&f.run.run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(frozen);
+        let subsequent = f.plan(f.version());
+        rejected(
+            f.repo.prepare(&mut f.conn, &f.port, &subsequent),
+            Reason::RecoveryRequired,
+        );
+    }
+}
+
+#[test]
+fn upgrade_preserves_completed_legacy_applied_results_without_inventing_links() {
+    let mut f = Fixture::new();
+    let snapshot = f.received_batch("candidate_1");
+    let no_op = br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"noOp"}]}"#;
+    f.repo
+        .complete_batch(&mut f.conn, &snapshot.batch_id, no_op)
+        .unwrap();
+
+    let legacy_applied =
+        br#"{"version":1,"outcomes":[{"candidateId":"candidate_1","outcome":"applied"}]}"#;
+    f.conn
+        .execute(
+            "UPDATE memory_batch_receipts SET completion_json=?1,completion_hash=?2 WHERE batch_id=?3",
+            params![legacy_applied, hash(legacy_applied).as_slice(), snapshot.batch_id],
+        )
+        .unwrap();
+    f.conn
+        .execute_batch("DROP TABLE memory_batch_legacy_completions")
+        .unwrap();
+    f.conn
+        .execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_MIGRATION)
+        .unwrap();
+    f.conn
+        .execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_BACKFILL)
+        .unwrap();
+
+    let receipt = f.repo.batch_receipt(&f.conn, &snapshot.batch_id).unwrap();
+    assert_eq!(receipt.state, BatchState::Completed);
+    assert_eq!(
+        receipt.completion.as_deref(),
+        Some(legacy_applied.as_slice())
+    );
+    assert_eq!(
+        f.conn
+            .query_row(
+                "SELECT count(*) FROM memory_batch_candidate_operations WHERE batch_id=?1",
+                [&snapshot.batch_id],
+                |row| row.get::<_, usize>(0),
+            )
+            .unwrap(),
+        0
+    );
 }

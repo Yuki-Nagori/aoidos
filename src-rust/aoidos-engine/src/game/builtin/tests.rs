@@ -240,6 +240,7 @@ async fn invalid_registered_catalog_metadata_refuses_context_before_record_chang
         Arc::new(super::super::test_support::PhaseEventsFixture::default()),
         "中".repeat(86),
         super::super::assets::revision("mistbell").unwrap(),
+        super::super::assets::entity_directory("mistbell").unwrap(),
     )
     .await
     .err()

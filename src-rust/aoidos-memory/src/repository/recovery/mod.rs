@@ -274,6 +274,8 @@ impl Repository {
                     entity_revision: boundary.entity_revision,
                     evidence_revision: boundary.evidence_revision,
                     policy_hash: run.policy_hash,
+                    batch_id: None,
+                    candidate_ids: vec![],
                     targets: vec![Target {
                         entry_id: id.into(),
                         expected: Expected {

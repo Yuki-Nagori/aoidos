@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "revision": 1,
+  "complete": true,
+  "entities": [
+    {
+      "id": "player",
+      "kind": "character",
+      "scope": "global",
+      "canonicalName": "玩家"
+    },
+    {
+      "id": "luo-wei",
+      "kind": "character",
+      "scope": "mistbell",
+      "canonicalName": "洛苇"
+    },
+    {
+      "id": "taoquan-village",
+      "kind": "place",
+      "scope": "mistbell",
+      "canonicalName": "苔泉村"
+    },
+    {
+      "id": "old-tower",
+      "kind": "place",
+      "scope": "mistbell",
+      "canonicalName": "旧塔"
+    },
+    {
+      "id": "tower-gate",
+      "kind": "place",
+      "scope": "mistbell",
+      "canonicalName": "塔门"
+    },
+    {
+      "id": "mistbell-cellar",
+      "kind": "place",
+      "scope": "mistbell",
+      "canonicalName": "雾钟地窖"
+    },
+    {
+      "id": "echo-stair",
+      "kind": "place",
+      "scope": "mistbell",
+      "canonicalName": "回声梯"
+    },
+    {
+      "id": "bell-vault",
+      "kind": "place",
+      "scope": "mistbell",
+      "canonicalName": "钟室"
+    },
+    {
+      "id": "bronze-bell",
+      "kind": "item",
+      "scope": "mistbell",
+      "canonicalName": "铜钟"
+    },
+    {
+      "id": "bell-tongue",
+      "kind": "item",
+      "scope": "mistbell",
+      "canonicalName": "钟舌"
+    },
+    {
+      "id": "lantern",
+      "kind": "item",
+      "scope": "mistbell",
+      "canonicalName": "灯"
+    },
+    {
+      "id": "bronze-clasp",
+      "kind": "item",
+      "scope": "mistbell",
+      "canonicalName": "铜扣"
+    },
+    {
+      "id": "handbell",
+      "kind": "item",
+      "scope": "mistbell",
+      "canonicalName": "手铃"
+    },
+    {
+      "id": "rope",
+      "kind": "item",
+      "scope": "mistbell",
+      "canonicalName": "绳索"
+    },
+    {
+      "id": "torch",
+      "kind": "item",
+      "scope": "mistbell",
+      "canonicalName": "火把"
+    },
+    {
+      "id": "mountain-fog",
+      "kind": "term",
+      "scope": "mistbell",
+      "canonicalName": "山雾"
+    },
+    {
+      "id": "dragon-echo",
+      "kind": "term",
+      "scope": "mistbell",
+      "canonicalName": "龙的回声"
+    },
+    {
+      "id": "scale-shadow",
+      "kind": "term",
+      "scope": "mistbell",
+      "canonicalName": "鳞影"
+    }
+  ]
+}

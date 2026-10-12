@@ -70,6 +70,15 @@ pub struct CandidateResult {
     pub reason_code: Option<String>,
 }
 
+/// A candidate whose original model result is retained for a local-only retry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredCandidate {
+    pub candidate_id: String,
+    pub reason_code: String,
+    /// Present after a local operation plan has claimed this candidate.
+    pub operation_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchCompletion {
@@ -423,6 +432,27 @@ impl Repository {
         let result: BatchCompletion =
             aoidos_json::decode_bytes(completion, MAX_PROPOSAL_BYTES).map_err(|_| reject())?;
         let completion_hash = hash(completion);
+        let outcome =
+            self.complete_batch_transaction(conn, batch_id, completion, &completion_hash, &result);
+        if matches!(
+            &outcome,
+            Err(Error::Corrupt | Error::Rejected(Reason::RecoveryRequired))
+        ) {
+            // Operation reads inside the completion transaction may detect corrupt applied
+            // receipts and freeze the run. Re-audit after rollback so that freeze persists.
+            self.persist_completion_operation_faults(conn, batch_id, &result);
+        }
+        outcome
+    }
+
+    fn complete_batch_transaction(
+        &self,
+        conn: &mut Connection,
+        batch_id: &str,
+        completion: &[u8],
+        completion_hash: &Hash,
+        result: &BatchCompletion,
+    ) -> Result<bool> {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql)?;
@@ -447,6 +477,7 @@ impl Repository {
                 .ok_or(Error::Corrupt)?
                 .into_result()?;
             if previous == completion {
+                self.batch_receipt(&tx, batch_id)?;
                 return Ok(false);
             }
             return Err(Error::Rejected(Reason::StaleVersion));
@@ -456,7 +487,7 @@ impl Repository {
         }
         let receipt = self.batch_receipt(&tx, batch_id)?;
         validate_received_receipt(&receipt)?;
-        validate_completion(&tx, batch_id, &result)?;
+        self.validate_completion(&tx, batch_id, result)?;
         let changed = tx
             .execute(
                 "UPDATE memory_batch_receipts SET completion_json=?1,completion_hash=?2 WHERE batch_id=?3 AND response_json IS NOT NULL AND completion_json IS NULL",
@@ -477,6 +508,21 @@ impl Repository {
         }
         tx.commit().map_err(sql)?;
         Ok(true)
+    }
+
+    fn persist_completion_operation_faults(
+        &self,
+        conn: &Connection,
+        batch_id: &str,
+        completion: &BatchCompletion,
+    ) {
+        for outcome in &completion.outcomes {
+            let Ok(Some(operation_id)) = candidate_operation(conn, batch_id, &outcome.candidate_id)
+            else {
+                continue;
+            };
+            let _ = self.operation(conn, &operation_id);
+        }
     }
 
     /// 明确记录无法判定请求是否已发送的结果；此状态禁止同批次重发。
@@ -650,7 +696,8 @@ impl Repository {
         if let Some(bytes) = &completion {
             let parsed: BatchCompletion =
                 aoidos_json::decode_bytes(bytes, MAX_PROPOSAL_BYTES).map_err(|_| Error::Corrupt)?;
-            validate_completion(conn, batch_id, &parsed).map_err(|_| Error::Corrupt)?;
+            self.validate_completion(conn, batch_id, &parsed)
+                .map_err(|_| Error::Corrupt)?;
         }
         if completion.is_none() && completion_digest.is_some() {
             return Err(Error::Corrupt);
@@ -674,6 +721,42 @@ impl Repository {
             completion,
             error_code: row.7,
         })
+    }
+
+    /// Lists deferred candidate identities from an immutable completed response.
+    ///
+    /// The caller can revalidate the frozen proposal and prepare a local operation without
+    /// dispatching another provider request. Candidate contents remain in `BatchReceipt` so
+    /// this index does not copy or reinterpret model-provided data.
+    ///
+    /// # Errors
+    /// An unfinished batch, malformed completion, or inconsistent operation mapping is rejected.
+    pub fn deferred_candidates(
+        &self,
+        conn: &Connection,
+        batch_id: &str,
+    ) -> Result<Vec<DeferredCandidate>> {
+        let receipt = self.batch_receipt(conn, batch_id)?;
+        if receipt.state != BatchState::Completed {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        let bytes = receipt.completion.as_deref().ok_or(Error::Corrupt)?;
+        let completion: BatchCompletion =
+            aoidos_json::decode_bytes(bytes, MAX_PROPOSAL_BYTES).map_err(|_| Error::Corrupt)?;
+        completion
+            .outcomes
+            .into_iter()
+            .filter(|outcome| outcome.outcome == CandidateOutcome::Deferred)
+            .map(|outcome| {
+                let reason_code = outcome.reason_code.ok_or(Error::Corrupt)?;
+                let operation_id = candidate_operation(conn, batch_id, &outcome.candidate_id)?;
+                Ok(DeferredCandidate {
+                    candidate_id: outcome.candidate_id,
+                    reason_code,
+                    operation_id,
+                })
+            })
+            .collect()
     }
     /// 只登记已确认的场内完成回执；回退时钟由有效来源重建，不按墙钟增加。
     /// # Errors
@@ -729,6 +812,81 @@ impl Repository {
         Ok(next)
     }
 }
+impl Repository {
+    pub(super) fn validate_completion(
+        &self,
+        conn: &Connection,
+        batch_id: &str,
+        completion: &BatchCompletion,
+    ) -> Result<()> {
+        validate_completion_shape(conn, batch_id, completion)?;
+        let batch_completed: bool = conn
+            .query_row(
+                "SELECT status='completed' FROM memory_batches WHERE batch_id=?1",
+                [batch_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()
+            .map_err(sql)?
+            .ok_or(Error::NotFound)?;
+        let legacy: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memory_batch_legacy_completions WHERE batch_id=?1)",
+                [batch_id],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )
+            .map_err(sql)?;
+        if legacy {
+            return Ok(());
+        }
+        for outcome in &completion.outcomes {
+            let operation_id = candidate_operation(conn, batch_id, &outcome.candidate_id)?;
+            match operation_id {
+                Some(operation_id) => {
+                    let (_, state) = self.operation(conn, &operation_id)?;
+                    match (state, outcome.outcome) {
+                        (OperationState::Applied, CandidateOutcome::Applied)
+                        | (OperationState::Rejected, CandidateOutcome::Rejected) => {}
+                        (_, CandidateOutcome::Deferred) if batch_completed => {}
+                        (OperationState::Prepared | OperationState::Ready, _) => {
+                            return Err(Error::Rejected(Reason::RecoveryRequired));
+                        }
+                        (OperationState::Quarantined, _) => {
+                            return Err(Error::Rejected(Reason::RecoveryRequired));
+                        }
+                        _ => return Err(reject()),
+                    }
+                }
+                None if outcome.outcome == CandidateOutcome::Applied => return Err(reject()),
+                None => {}
+            }
+        }
+        Ok(())
+    }
+}
+pub(super) fn candidate_operation(
+    conn: &Connection,
+    batch_id: &str,
+    candidate_id: &str,
+) -> Result<Option<String>> {
+    let mut statement = conn
+        .prepare(
+            "SELECT operation_id FROM memory_batch_candidate_operations WHERE batch_id=?1 AND candidate_id=?2",
+        )
+        .map_err(sql)?;
+    let mut rows = statement
+        .query(params![batch_id, candidate_id])
+        .map_err(sql)?;
+    let Some(row) = rows.next().map_err(sql)? else {
+        return Ok(None);
+    };
+    let operation_id = read_bounded_text(row, 0, 36)?;
+    if !valid_id(&operation_id) || rows.next().map_err(sql)?.is_some() {
+        return Err(Error::Corrupt);
+    }
+    Ok(Some(operation_id))
+}
+
 fn read_material(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, BoundedBlob)> {
     Ok((row.get(0)?, read_bounded_blob(row, 1, 2, 32 * 1024)?))
 }
@@ -791,7 +949,7 @@ fn read_optional_bounded_blob(
         _ => Ok(Some(BoundedBlob(None))),
     }
 }
-fn validate_completion(
+fn validate_completion_shape(
     conn: &Connection,
     batch_id: &str,
     completion: &BatchCompletion,
@@ -843,7 +1001,7 @@ fn validate_completion(
     }
     Ok(())
 }
-fn decode_proposal_response(bytes: &[u8]) -> Result<crate::model::Proposal> {
+pub(super) fn decode_proposal_response(bytes: &[u8]) -> Result<crate::model::Proposal> {
     let proposal: crate::model::Proposal =
         aoidos_json::decode_bytes(bytes, MAX_PROPOSAL_BYTES).map_err(|_| reject())?;
     if proposal.version != 1 {

@@ -41,6 +41,9 @@ impl Storage {
                     aoidos_billing::schema::SETTLEMENT_DIAGNOSTICS_MIGRATION,
                     aoidos_memory::schema::BATCH_RECEIPT_MIGRATION,
                     aoidos_memory::schema::QUESTION_MIGRATION,
+                    aoidos_memory::schema::CANDIDATE_OPERATION_MIGRATION,
+                    aoidos_memory::schema::LEGACY_BATCH_COMPLETION_MIGRATION,
+                    aoidos_memory::schema::LEGACY_BATCH_COMPLETION_BACKFILL,
                 ],
                 |connection| {
                     let valid:i64=connection.query_row("SELECT count(*)=2 AND sum(name='id' AND type='TEXT' AND pk=1)=1 AND sum(name='content_hash' AND type='TEXT' AND \"notnull\"=1)=1 FROM pragma_table_info('store_applied')",[],|row|row.get(0)).map_err(aoidos_store::db::sqlite_error)?;
@@ -78,7 +81,10 @@ impl Storage {
         let session = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = crate::record::memory::SourcePort::new(&session);
+        let entity_directory = crate::game::assets::entity_directory(&session.header().script_id)
+            .map_err(memory_context_error)?;
+        let port =
+            crate::record::memory::SourcePort::with_entity_directory(&session, &entity_directory)?;
         self.with_database(|conn| Ok(job(&self.memory, conn, &port)))
             .map_err(memory_context_error)?
     }

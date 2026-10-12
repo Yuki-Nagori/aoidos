@@ -73,6 +73,12 @@ impl Fixture {
             .unwrap();
         conn.execute_batch(crate::schema::QUESTION_MIGRATION)
             .unwrap();
+        conn.execute_batch(crate::schema::CANDIDATE_OPERATION_MIGRATION)
+            .unwrap();
+        conn.execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_MIGRATION)
+            .unwrap();
+        conn.execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
         let port = Port {
             view: Boundary {
                 script_id: "mistbell".into(),
@@ -143,6 +149,8 @@ impl Fixture {
             entity_revision: self.port.view.entity_revision,
             evidence_revision: self.port.view.evidence_revision,
             policy_hash: self.run.policy_hash,
+            batch_id: None,
+            candidate_ids: vec![],
             targets: vec![Target {
                 entry_id: version.entry_id.clone(),
                 expected: Expected {
@@ -156,6 +164,74 @@ impl Fixture {
             processed_materials: vec![],
             reason: "fixture".into(),
         }
+    }
+    pub(super) fn received_batch(&mut self, candidate_id: &str) -> BatchSnapshot {
+        let source = self.source();
+        let material = self
+            .repo
+            .register_material(&self.conn, &self.port, &source, 0)
+            .unwrap();
+        let snapshot = BatchSnapshot {
+            logical_clock: 0,
+            version: 1,
+            batch_id: new_id(),
+            run_id: self.run.run_id.clone(),
+            history_revision: self.port.view.history_revision,
+            entity_revision: self.port.view.entity_revision,
+            evidence_revision: self.port.view.evidence_revision,
+            policy_hash: self.run.policy_hash,
+            spans: vec![Span {
+                source_id: "s1".into(),
+                material_id: material,
+                source,
+                text: "钟声".into(),
+                context: false,
+                continuation: false,
+            }],
+            input: serde_json::json!({}),
+        };
+        self.repo
+            .freeze_batch(&mut self.conn, &self.port, &snapshot)
+            .unwrap();
+        let turn_id = new_id();
+        let request_id = new_id();
+        self.repo
+            .dispatch_batch(
+                &mut self.conn,
+                &self.port,
+                &snapshot.batch_id,
+                &turn_id,
+                &request_id,
+            )
+            .unwrap();
+        let response = crate::model::Proposal {
+            version: 1,
+            candidates: vec![crate::model::Candidate {
+                candidate_id: candidate_id.into(),
+                classification: crate::model::Classification::New,
+                source_ids: vec!["s1".into()],
+                subject_ref: crate::model::SubjectRef::PlayerPreference,
+                entity_ids: vec![],
+                evidence_ids: vec![],
+                target_ref: None,
+                dimension: Some(crate::model::Dimension::PlayerPreference),
+                summary: Some("喜欢钟声".into()),
+                attitude: Some(crate::model::Attitude::Believed),
+                attitude_evidence_ids: vec![],
+                inferred: Some(false),
+                reason: "稳定偏好".into(),
+            }],
+        };
+        self.repo
+            .receive_batch(
+                &mut self.conn,
+                &snapshot.batch_id,
+                &turn_id,
+                &request_id,
+                &serde_json::to_vec(&response).unwrap(),
+            )
+            .unwrap();
+        snapshot
     }
     pub(super) fn commit(&mut self, plan: &Plan) {
         self.repo.prepare(&mut self.conn, &self.port, plan).unwrap();

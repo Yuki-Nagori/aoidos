@@ -415,6 +415,89 @@ fn malformed_catalogs_paths_and_rule_budgets_are_rejected_before_registration() 
 }
 
 #[test]
+fn entity_directory_is_version_bound_and_complete_actor_sets_are_closed() {
+    fn directory(script_revision: String, complete: bool) -> EntityDirectory {
+        EntityDirectory::new(
+            script_revision,
+            1,
+            complete,
+            vec![CanonicalEntity {
+                id: "player".into(),
+                kind: EntityKind::Character,
+                scope: "global".into(),
+                canonical_name: "玩家".into(),
+            }],
+        )
+        .unwrap()
+    }
+
+    let registered = catalog();
+    let script_revision = registered.script_revision.clone();
+    let with_directory = registered
+        .with_entity_directory(directory(script_revision.clone(), true))
+        .unwrap();
+    let entities = with_directory.entity_directory().unwrap();
+    assert!(entities.is_complete());
+    assert_eq!(entities.revision(), 1);
+    assert_eq!(
+        entities
+            .resolve_exact(EntityKind::Character, "global", "玩家")
+            .unwrap()
+            .unwrap()
+            .id,
+        "player"
+    );
+
+    assert!(
+        catalog()
+            .with_entity_directory(directory(
+                crate::record::format::hash(b"another script"),
+                true
+            ))
+            .is_err()
+    );
+
+    let mut unknown_actor = catalog();
+    unknown_actor
+        .scenes
+        .get_mut("room")
+        .unwrap()
+        .actor_ids
+        .push("unregistered".into());
+    assert!(
+        unknown_actor
+            .with_entity_directory(directory(script_revision.clone(), true))
+            .is_err()
+    );
+
+    let non_character = EntityDirectory::new(
+        script_revision.clone(),
+        1,
+        true,
+        vec![CanonicalEntity {
+            id: "player".into(),
+            kind: EntityKind::Place,
+            scope: "global".into(),
+            canonical_name: "玩家".into(),
+        }],
+    )
+    .unwrap();
+    assert!(catalog().with_entity_directory(non_character).is_err());
+
+    let partial = catalog()
+        .with_entity_directory(directory(script_revision, false))
+        .unwrap();
+    assert!(!partial.entity_directory().unwrap().is_complete());
+    assert!(
+        partial
+            .entity_directory()
+            .unwrap()
+            .resolve_exact(EntityKind::Character, "global", "玩家")
+            .is_err()
+    );
+}
+
+#[test]
 fn record_evidence_is_verified_against_confirmed_history_and_content_hash() {
     use crate::record::format::Body;
     let mut fixture = Fixture::new();
