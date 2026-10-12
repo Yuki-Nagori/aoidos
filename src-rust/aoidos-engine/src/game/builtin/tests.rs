@@ -137,9 +137,6 @@ async fn registered_domain_freezes_rules_and_commits_only_supported_idempotent_i
         "engine.invalid-phase"
     );
     assert!(domain.exit_reason("entry", &view).unwrap().is_none());
-    assert!(domain.registered("sessionEnded", 1));
-    assert!(!domain.registered("sessionEnded", 2));
-    assert!(!domain.registered("npcRevived", 1));
     let id = uuid::Uuid::new_v4().to_string();
     let hash = format::hash(b"end-session");
     let mut mutation = WorldMutation {
@@ -151,16 +148,34 @@ async fn registered_domain_freezes_rules_and_commits_only_supported_idempotent_i
         },
     };
     assert_eq!(
-        domain.apply(&mutation, &hash).unwrap_err().code,
+        WorldPort::validate(domain.as_ref(), &record, std::slice::from_ref(&mutation))
+            .unwrap_err()
+            .code,
+        "engine.invalid-phase"
+    );
+    assert_eq!(
+        WorldPort::apply(domain.as_mut(), &record, 1, &mutation, &hash)
+            .unwrap_err()
+            .code,
         "engine.invalid-phase"
     );
     assert!(!WorldPort::applied(domain.as_ref(), &id, &hash).unwrap());
     mutation.data.version = 1;
-    domain.apply(&mutation, &hash).unwrap();
-    domain.apply(&mutation, &hash).unwrap();
+    WorldPort::validate(domain.as_ref(), &record, std::slice::from_ref(&mutation)).unwrap();
+    WorldPort::apply(domain.as_mut(), &record, 1, &mutation, &hash).unwrap();
+    WorldPort::apply(domain.as_mut(), &record, 1, &mutation, &hash).unwrap();
     assert!(WorldPort::applied(domain.as_ref(), &id, &hash).unwrap());
     assert!(HistoryPort::applied(domain.as_ref(), &id, &hash).unwrap());
-    assert!(domain.apply(&mutation, &format::hash(b"conflict")).is_err());
+    assert!(
+        WorldPort::apply(
+            domain.as_mut(),
+            &record,
+            1,
+            &mutation,
+            &format::hash(b"conflict")
+        )
+        .is_err()
+    );
     let rewind_id = uuid::Uuid::new_v4().to_string();
     domain.rebuild(&record, &[], &rewind_id, &hash).unwrap();
     domain.rebuild(&record, &[], &rewind_id, &hash).unwrap();
@@ -177,7 +192,7 @@ async fn registered_domain_freezes_rules_and_commits_only_supported_idempotent_i
         })
         .unwrap();
     assert!(WorldPort::applied(domain.as_ref(), &id, &hash).is_err());
-    assert!(domain.apply(&mutation, &hash).is_err());
+    assert!(WorldPort::apply(domain.as_mut(), &record, 1, &mutation, &hash).is_err());
     assert!(domain.rebuild(&record, &[], &rewind_id, &hash).is_err());
     fixture.storage.close().unwrap();
     assert_eq!(domain.confirmed(&record).unwrap_err().code, "app.not-ready");
@@ -226,6 +241,7 @@ async fn read_only_completion_does_not_create_world_consequences() {
         .catalog,
         storage: fixture.storage.clone(),
         revision: "revision".into(),
+        entity_seed: super::super::assets::entity_directory("mistbell").unwrap(),
     };
     assert!(domain.baseline_scene().is_none());
 }
@@ -248,4 +264,67 @@ async fn invalid_registered_catalog_metadata_refuses_context_before_record_chang
     assert_eq!(error.code, "app.bad-request");
     assert_eq!(fixture.session.lock().unwrap().last_event_seq(), 0);
     assert!(fixture.open().await.is_ok());
+}
+
+#[test]
+fn builtin_domain_commits_registered_dynamic_identity_in_shared_storage() {
+    let fixture = Fixture::new(|_| {});
+    let seed = super::super::assets::entity_directory("mistbell").unwrap();
+    let mut domain = BuiltinDomain {
+        catalog: super::super::test_support::domain(
+            seed.script_revision(),
+            false,
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        )
+        .catalog
+        .with_entity_creation_rules(vec![
+            EntityCreationRule::new(
+                "generated".into(),
+                EntityKind::Character,
+                "global".into(),
+                2,
+            )
+            .unwrap(),
+        ])
+        .unwrap(),
+        storage: fixture.storage.clone(),
+        revision: seed.script_revision().into(),
+        entity_seed: seed.clone(),
+    };
+    let mut session = fixture.session.lock().unwrap();
+    let mutation = domain
+        .catalog
+        .prepare_entity_creation_for_session(
+            &session.header().session_id,
+            "generated",
+            "New guide",
+            &seed,
+        )
+        .unwrap();
+    let mut unsupported_mutation = mutation.clone();
+    unsupported_mutation.data.kind = "unknown".into();
+    assert!(WorldPort::validate(&domain, &session, &[unsupported_mutation]).is_err());
+    session
+        .append(crate::record::format::Body::Narration {
+            text: "Confirmed introduction".into(),
+            turn_id: uuid::Uuid::new_v4().to_string(),
+            terminal: crate::ports::Terminal::Completed {
+                finish_reason: aoidos_llm::schedule::FinishReason::Stop,
+            },
+        })
+        .unwrap();
+    session.commit_world(crate::record::format::Body::System {
+        code: "settlementPlanned".into(), message: "Create registered identity".into(), related_seq: None, turn_id: None,
+        data: serde_json::json!({"version":1,"roundId":uuid::Uuid::new_v4().to_string(),"operationId":uuid::Uuid::new_v4().to_string(),"narrativeSeq":1,"worldRevision":"0","mutations":[mutation]}),
+    }, &mut domain).unwrap();
+    let snapshot = fixture
+        .storage
+        .with_database(|connection| EntityRegistry.snapshot(connection, &session, &seed))
+        .unwrap();
+    assert!(
+        snapshot
+            .resolve_exact(EntityKind::Character, "global", "New guide")
+            .unwrap()
+            .is_some()
+    );
 }

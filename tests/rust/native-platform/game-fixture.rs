@@ -127,15 +127,28 @@ struct LocalDomain {
     scenario: Option<String>,
 }
 impl WorldPort for LocalDomain {
-    fn registered(&self, kind: &str, version: u32) -> bool {
-        kind == "sessionEnded" && version == 1
+    fn validate(&self, _: &Session, mutations: &[WorldMutation]) -> Result<(), Fault> {
+        if mutations
+            .iter()
+            .all(|mutation| mutation.data.kind == "sessionEnded" && mutation.data.version == 1)
+        {
+            Ok(())
+        } else {
+            Err(Fault::new("engine.invalid-phase", "夹具世界操作未登记"))
+        }
     }
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault> {
         self.storage.with_database(|connection| {
             aoidos_store::applied::contains(connection, id, hash).map_err(Fault::from)
         })
     }
-    fn apply(&mut self, mutation: &WorldMutation, hash: &str) -> Result<(), Fault> {
+    fn apply(
+        &mut self,
+        _: &Session,
+        _: u64,
+        mutation: &WorldMutation,
+        hash: &str,
+    ) -> Result<(), Fault> {
         self.storage.with_database(|connection| {
             aoidos_store::applied::apply_once(connection, &mutation.mutation_id, hash, &mut |_| {
                 Ok(())

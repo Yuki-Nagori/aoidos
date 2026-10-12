@@ -178,6 +178,8 @@ sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、
 
 WorldMutation 是类型化变更载荷，不是独立 system.code。结算变更随 012 注册的 settlementPlanned 保存有序 mutationId / 版本化 data，场景切换 / 结束变更由 sceneAdvanced / sessionEnded 的登记类型和 mutationId 承载；关联 seq 与字段以[阶段机的因果事实表](turn-state-machine.md#因果事实与重启投影)为准。记录 message 使用中性的变更意图说明，不先宣称成功；SQLite 事务同时更新窄表与 applied mutation 标记。具体属性键 / 数据 schema 由后续世界状态设计定义，未定义的操作不得写入；LLM 正文不会自动解析成 SQL / 状态补丁。
 
+043 将 `entityCreated` 接入 023 的同一意图 / 恢复协议：intent 必须引用可信 `SceneCatalog` 中的创建规则，Rust 在追加前校验整个 mutation 组并生成不依赖名称的动态 ID。应用时，在一笔 SQLite 事务内写实体行、推进 `entityRevision` 并写入 `store_applied`；JSONL 的 `settlementPlanned` 仍为意图事实源。未确认或待恢复会话不能向记忆提供实体快照；恢复按记录中的原 ID / hash 重放。回退保留外分支注册记录供审计，`EntityRegistry` 只把当前有效路径上的身份并入只读快照，见[记忆协议](memory.md)与[043 实施](../task/043-rust-entity-registry-impl.md)。
+
 ```text
 准备带 mutationId 的事实块和事件载荷
   → JSONL 完整追加 + 强制 fsync（意图成为持久事实）

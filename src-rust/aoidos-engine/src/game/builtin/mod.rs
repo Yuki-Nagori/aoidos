@@ -46,18 +46,67 @@ struct BuiltinDomain {
     catalog: SceneCatalog,
     storage: Arc<Storage>,
     revision: String,
+    entity_seed: EntityDirectory,
 }
 impl WorldPort for BuiltinDomain {
-    fn registered(&self, kind: &str, version: u32) -> bool {
-        kind == "sessionEnded" && version == 1
+    fn validate(&self, session: &Session, mutations: &[WorldMutation]) -> Result<(), Fault> {
+        if mutations
+            .iter()
+            .any(|mutation| mutation.data.kind == "sessionEnded" && mutation.data.version != 1)
+        {
+            return Err(unsupported());
+        }
+        if mutations.iter().any(|mutation| {
+            mutation.data.kind != "sessionEnded" && mutation.data.kind != "entityCreated"
+        }) {
+            return Err(unsupported());
+        }
+        let entity_mutations = mutations
+            .iter()
+            .filter(|mutation| mutation.data.kind == "entityCreated")
+            .cloned()
+            .collect::<Vec<_>>();
+        if entity_mutations.is_empty() {
+            return Ok(());
+        }
+        self.storage.with_database(|connection| {
+            EntityRegistry.validate_group(
+                connection,
+                session,
+                &self.entity_seed,
+                &self.catalog,
+                &entity_mutations,
+            )
+        })
     }
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault> {
         self.storage.with_database(|connection| {
             aoidos_store::applied::contains(connection, id, hash).map_err(Fault::from)
         })
     }
-    fn apply(&mut self, mutation: &WorldMutation, hash: &str) -> Result<(), Fault> {
-        if !self.registered(&mutation.data.kind, mutation.data.version) {
+    fn apply(
+        &mut self,
+        session: &Session,
+        record_seq: u64,
+        mutation: &WorldMutation,
+        hash: &str,
+    ) -> Result<(), Fault> {
+        if mutation.data.kind == "entityCreated" {
+            return self.storage.with_database(|connection| {
+                EntityRegistry.apply(
+                    connection,
+                    session,
+                    &self.entity_seed,
+                    &self.catalog,
+                    EntityCreationCommit {
+                        record_seq,
+                        mutation,
+                        content_hash: hash,
+                    },
+                )
+            });
+        }
+        if mutation.data.kind != "sessionEnded" || mutation.data.version != 1 {
             return Err(unsupported());
         }
         self.storage.with_database(|connection| {
@@ -235,13 +284,14 @@ async fn open_context(
         )]),
         BTreeMap::new(),
     )?
-    .with_entity_directory(entity_directory)?;
+    .with_entity_directory(entity_directory.clone())?;
     Context::open(
         session,
         Box::new(BuiltinDomain {
             catalog,
             storage,
             revision,
+            entity_seed: entity_directory,
         }),
         "player".into(),
         "player".into(),

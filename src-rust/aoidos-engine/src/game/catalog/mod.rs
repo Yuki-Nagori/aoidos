@@ -9,7 +9,10 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod entities;
-pub use entities::{CanonicalEntity, EntityDirectory, EntityKind};
+pub use entities::{
+    CanonicalEntity, ENTITY_REGISTRY_MIGRATION, EntityCreationCommit, EntityCreationIntent,
+    EntityCreationRule, EntityDirectory, EntityKind, EntityRegistry, verify_entity_registry_schema,
+};
 
 /// 最小类型化条件；数值 / 键由可信剧本登记，不解释模型自由文本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +216,7 @@ pub struct SceneCatalog {
     scenes: BTreeMap<String, Scene>,
     conditions: BTreeMap<String, Condition>,
     entities: Option<EntityDirectory>,
+    entity_creation_rules: BTreeMap<String, EntityCreationRule>,
 }
 impl SceneCatalog {
     /// # Errors
@@ -267,6 +271,7 @@ impl SceneCatalog {
             scenes,
             conditions,
             entities: None,
+            entity_creation_rules: BTreeMap::new(),
         };
         for (id, scene) in &catalog.scenes {
             if id != &scene.position.scene_id
@@ -328,8 +333,38 @@ impl SceneCatalog {
     pub fn entity_directory(&self) -> Option<&EntityDirectory> {
         self.entities.as_ref()
     }
+
+    /// 登记可由可信世界解释器调用的动态实体创建规则。
+    ///
+    /// 这些规则属于场景目录版本；调用方必须在规则变化时更新 `revision`。仅有规则登记不
+    /// 授予模型、IPC 或记忆候选创建身份的能力。
+    /// # Errors
+    /// 重复规则身份、空规则集、超限或规则身份非法时拒绝。
+    pub fn with_entity_creation_rules(
+        mut self,
+        rules: Vec<EntityCreationRule>,
+    ) -> Result<Self, Fault> {
+        if rules.is_empty() || rules.len() > 256 {
+            return Err(Fault::bad_request());
+        }
+        let mut registered = BTreeMap::new();
+        for rule in rules {
+            if registered.insert(rule.rule_id.clone(), rule).is_some() {
+                return Err(Fault::bad_request());
+            }
+        }
+        self.entity_creation_rules = registered;
+        Ok(self)
+    }
+
+    pub(crate) fn entity_creation_rule(&self, id: &str) -> Option<&EntityCreationRule> {
+        self.entity_creation_rules.get(id)
+    }
     pub fn revision(&self) -> &str {
         &self.revision
+    }
+    pub(crate) fn script_revision(&self) -> &str {
+        &self.script_revision
     }
     /// # Errors
     /// 未登记场景为 not-found。

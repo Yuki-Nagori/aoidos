@@ -225,9 +225,9 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 登记和关联只改变实体指向，不改写玩家原文或逐字引用。输入“李磊”确认指向李雷后，记忆可以关联李雷的 ID，引用仍写“李磊”；别名也不等于 NPC 已获知某件事或旧记忆应被强化。
 
-“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。012 的 `SceneCatalog` 可接入绑定剧本修订的 `EntityDirectory` 快照：完整目录按类别 / 范围检查规范名唯一性、核验场景 actor，并只提供精确规范名查找；不完整快照拒绝解析。内置 Mistbell v1 通过 `resources/scripts/mistbell/entities.json` 显式登记固定初始实体，原文不作实体推断；engine 在资源登记时严格校验元数据，并将原文与清单共同纳入 `scriptRevision`，旧修订存档不会静默接受新目录。当前 `Storage::with_memory` 冻结的是静态种子目录 revision，尚不是合并周目动态实体后的完整 Rust 注册表 revision。统一实体注册与动态实体恢复由 [043](../task/043-rust-entity-registry-impl.md) 承接；固定清单只作种子数据，记忆不得依赖 Mistbell 专属路径。当前没有可信观察范围、对话接收对象或登记传闻事件，因此 `valid_evidence` 仍失败关闭；别名提交 / 撤销或回退重建也未接入，目录不会自动授予角色知识。
+“明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。012 的 `SceneCatalog` 接入绑定剧本修订的 `EntityDirectory`：完整目录按类别 / 范围检查规范名唯一性、核验场景 actor，并只提供精确规范名查找；不完整快照拒绝解析。内置 Mistbell v1 通过 `resources/scripts/mistbell/entities.json` 显式登记固定初始实体，原文不作实体推断；engine 在资源登记时严格校验元数据，并将原文与清单共同纳入 `scriptRevision`，旧修订存档不会静默接受新目录。043 的 `EntityRegistry` 将固定种子与周目级动态实体合并为有界快照；`Storage::with_memory` 在 session → SQLite 锁顺序下装配当前有效分支的完整 `entityRevision`，再冻结到 `SourcePort`。动态身份只能由可信 catalog rule 生成意图、经 023 世界操作持久提交；分支外身份留在审计表但不对记忆可见。固定清单只作种子数据，记忆不依赖 Mistbell 专属路径。当前没有可信观察范围、对话接收对象或登记传闻事件，因此 `valid_evidence` 仍失败关闭；别名提交 / 撤销或回退重建也未接入，目录不会自动授予角色知识。
 
-`entities.json` 只提供固定剧本初始实体，不限制未来世界出现动态角色。当前 Rust 尚无生成式 NPC 的引擎权威创建、周目级持久注册或动态目录恢复能力。新名字或记忆提议不能创建世界实体。043 将由 Rust 建立统一注册表：剧本清单作为只读种子，动态实体由引擎在规则边界提交并持久化；记忆只引用已提交的稳定实体 ID。032 再决定哪些已登记动态 NPC 可由剧本规则授权进入轮回刻痕；不能按同名或近似名自动继承。
+`entities.json` 只提供固定剧本初始实体，不限制未来世界出现动态角色。043 已建立统一 Rust 注册表：动态身份由引擎生成 UUID 派生 ID，不以名字推导；持久记录绑定 session、脚本 / catalog 修订、WorldMutation hash 与 recordSeq，登记表、entityRevision 和 `store_applied` 回执在同一 SQLite 事务提交。未提交意图不会进入快照；重放按稳定 mutation ID 幂等恢复，快照验证来源记录与回执并只暴露当前因果路径上的身份。记忆只消费已提交稳定 ID。032 再决定哪些已登记动态 NPC 可由剧本规则授权进入轮回刻痕；不能按同名或近似名自动继承。注册身份本身仍不证明角色知情，也不会自动登记别名。
 
 ### 歧义询问与默认继续（已确认）
 
@@ -562,7 +562,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 ### manifest、操作状态机与恢复
 
-029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射与旧完成回执兼容迁移；alias 表与可信实体目录证明仍未实现。实体 canonical 数据只经可信引擎端口访问；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。
+029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射与旧完成回执兼容迁移；alias 表与可信观察证据仍未实现。canonical 数据归 engine 的 `EntityRegistry` 所有，经恢复校验后的有界只读快照交给 memory；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。
 
 已应用操作若与 `store_applied` 回执、计划摘要或目标记录不一致，会在 `memory_run_faults` 持久登记故障，并拒绝该 run 后续所有写入，返回 `recoveryRequired`。当前没有自动解冻路径；必须经未来显式审计修复，不能以重新运行普通恢复覆盖冲突。
 

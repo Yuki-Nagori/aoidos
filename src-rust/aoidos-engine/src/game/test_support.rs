@@ -225,13 +225,17 @@ pub(crate) struct TestDomain {
     consequences: Arc<AtomicUsize>,
 }
 impl WorldPort for TestDomain {
-    fn registered(&self, _: &str, _: u32) -> bool {
-        false
+    fn validate(&self, _: &Session, mutations: &[WorldMutation]) -> Result<(), Fault> {
+        if mutations.is_empty() {
+            Ok(())
+        } else {
+            Err(Fault::new("engine.invalid-phase", "夹具未登记世界操作"))
+        }
     }
     fn applied(&self, _: &str, _: &str) -> Result<bool, Fault> {
         Ok(false)
     }
-    fn apply(&mut self, _: &WorldMutation, _: &str) -> Result<(), Fault> {
+    fn apply(&mut self, _: &Session, _: u64, _: &WorldMutation, _: &str) -> Result<(), Fault> {
         Err(Fault::new("engine.invalid-phase", "夹具未登记世界操作"))
     }
 }
@@ -496,9 +500,25 @@ mod tests {
                 payload: serde_json::json!({}),
             },
         };
-        assert!(!WorldPort::registered(&domain, &mutation.data.kind, 1));
+        assert!(
+            WorldPort::validate(
+                &domain,
+                &lock(&fixture.context.session),
+                std::slice::from_ref(&mutation)
+            )
+            .is_err()
+        );
         assert!(!WorldPort::applied(&domain, &mutation.mutation_id, "hash").unwrap());
-        assert!(WorldPort::apply(&mut domain, &mutation, "hash").is_err());
+        assert!(
+            WorldPort::apply(
+                &mut domain,
+                &lock(&fixture.context.session),
+                1,
+                &mutation,
+                "hash",
+            )
+            .is_err()
+        );
         assert!(!HistoryPort::applied(&domain, "unknown", "hash").unwrap());
         assert!(
             HistoryPort::verify_replay_target(&domain, &lock(&fixture.context.session), 0, 1)
