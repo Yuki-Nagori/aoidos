@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-12。
+更新日期：2026-10-13。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -50,7 +50,11 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 025 依赖 004、008、024、026、034，024 经 021 / 023 覆盖业务依赖；024 保留最小提交链路和故障联调范围，完整界面验收归 025。026 提供受控 main 构建与主题 bootstrap，025 在该入口接窗口几何恢复；面板 / 骰判偏好存储归 022，回合冻结骰判偏好归 023，避免重复接线。
 
-007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022；[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作、支持从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前完成回执保持可读。043 已交付 Rust 权威实体注册表：Mistbell `entities.json` 作为只读种子，动态身份只经 023 世界意图提交到共享 SQLite；恢复校验 applied 与因果记录，快照按当前有效分支过滤并供 `Storage::with_memory` 的 SourcePort 消费。030 的 SourcePort 现可验证严格的角色定向 `told` 证据，并复用 023 恢复状态机；正式引擎 / Tauri 入口现支持显式指定当前场景内的固定登记角色，目标贯穿接纳、恢复、角色提示与持久回复。交叉评审确认观察 / 传闻尚无可信事件源，因此依赖改为 [044 协议](../task/044-scene-presence-dialogue-design.md)→[045 引擎事件源](../task/045-scene-presence-dialogue-impl.md)→030 消费，定向选择 UI 独立由 [046](../task/046-scene-presence-ui-impl.md)接线；记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。观察 / 传闻证据与真实付费发送仍未接入；别名已支持玩家确认后的登记、撤销及按当前有效来源重建，自动明确指向仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等其他前置，030 / 033 可用 035 已实现的费用端口开展本地联调；收费批次与真实费用实验仍须等 035 三平台实机验收完成并获明确授权。
+007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022。[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作，可从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前的完成回执保持可读。
+
+043 提供 Rust 权威实体注册表：Mistbell `entities.json` 是只读种子，动态身份经 023 世界意图提交到共享 SQLite；恢复核验 applied 与因果记录，快照只包含当前有效分支身份。045 提供 Rust 权威场景在场及 observed / rumor 证据端口：观察 v1 只接受来源时同场、主体在场的已完成公开旁白区间；传闻逐跳核验来源作者和传播链。获知事件必须 applied、属于成功完整回合并位于当前有效路径。`SourcePort::with_evidence_context` 仅在有效目录、场景规则和共享数据库齐备时接受这些事件；当前 `Storage::with_memory` 尚未接入场景目录，因此正式记忆链路仍只消费严格的角色定向 `told`，后续由 030 接线。
+
+正式引擎 / Tauri 入口已支持显式指定当前场景内的固定登记角色，接收目标贯穿接纳、恢复、角色提示与持久回复。046 接入在场选择 UI 和快照 IPC；记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。别名支持玩家确认后的登记、撤销及按当前有效来源重建，自动明确指向仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等前置，030 / 033 可使用 035 的费用端口开展本地联调；收费批次和真实费用实验仍须等待 035 完成三平台实机验收并获授权。
 
 027 已定稿[计价与费用预算](billing.md)。035 已接入精确金额、不可变价格登记、按 profile 选择计价币种、每局 CNY / USD 独立预算、物理请求预留 / 结算、双币种用量与月报、80% 提醒及分页明细；参考 Token 只生成同币种建议值。历史恢复限完整 usage 和原冻结价格，余额查询仅支持 DeepSeek 显式只读请求；三平台实机展示留证仍待补，验收状态见 [035](../task/035-llm-cost-control-impl.md)。全应用月报不设总额度。
 

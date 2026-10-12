@@ -1240,6 +1240,8 @@ fn alias_context_does_not_trust_an_incomplete_directory() {
     let port = SourcePort {
         session: &fixture.session,
         entity_directory: Some(&incomplete),
+        scene_catalog: None,
+        evidence_connection: None,
     };
     assert!(matches!(
         port.entity_alias_context("missing"),

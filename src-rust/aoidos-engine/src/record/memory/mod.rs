@@ -2,10 +2,14 @@
 
 use super::{
     facts::{Fact, GenerationTarget, RoundIdentity},
-    format::{Body, InputMode as RecordMode},
+    format::{self, Body, InputMode as RecordMode},
     session::Session,
 };
 use crate::game::catalog::EntityDirectory;
+use crate::game::{
+    catalog::SceneCatalog,
+    presence::{EvidenceKind, SceneEvidence},
+};
 use crate::ports::{Outcome, Terminal};
 use aoidos_memory::{
     error::{Error, Reason, Result},
@@ -22,12 +26,16 @@ const DIRECT_DIALOGUE_RULE: &str = "directDialogueV1";
 pub struct SourcePort<'a> {
     session: &'a Session,
     entity_directory: Option<&'a EntityDirectory>,
+    scene_catalog: Option<&'a SceneCatalog>,
+    evidence_connection: Option<&'a rusqlite::Connection>,
 }
 impl<'a> SourcePort<'a> {
     pub fn new(session: &'a Session) -> Self {
         Self {
             session,
             entity_directory: None,
+            scene_catalog: None,
+            evidence_connection: None,
         }
     }
     /// 将完整剧本目录绑定到当前记录，供记忆快照冻结实体 revision。
@@ -45,6 +53,32 @@ impl<'a> SourcePort<'a> {
         Ok(Self {
             session,
             entity_directory: Some(entity_directory),
+            scene_catalog: None,
+            evidence_connection: None,
+        })
+    }
+
+    /// 绑定校验 observed / rumor mutation 所需的引擎上下文。
+    /// # Errors
+    /// 目录 / catalog 过期或互不匹配时，在查询证据前拒绝。
+    pub fn with_evidence_context(
+        session: &'a Session,
+        entity_directory: &'a EntityDirectory,
+        scene_catalog: &'a SceneCatalog,
+        connection: &'a rusqlite::Connection,
+    ) -> Result<Self> {
+        if !entity_directory.is_complete()
+            || entity_directory.script_revision() != session.header().script_revision
+            || scene_catalog.script_revision() != session.header().script_revision
+            || scene_catalog.presence_policy().is_none()
+        {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        Ok(Self {
+            session,
+            entity_directory: Some(entity_directory),
+            scene_catalog: Some(scene_catalog),
+            evidence_connection: Some(connection),
         })
     }
     /// # Errors
@@ -181,7 +215,7 @@ impl<'a> SourcePort<'a> {
                                 && previous_speaker == &speaker_id
                                 && !same_round(previous, &identity) =>
                         {
-                            // 023 validates the checkpoint anchor and inherited target below.
+                            // 023 随后会校验 checkpoint 锚点及继承的接收目标。
                             accepted = Some((identity, speaker_id));
                         }
                         _ => return Ok(None),
@@ -197,9 +231,8 @@ impl<'a> SourcePort<'a> {
                     .is_some_and(|(accepted, _)| same_round(accepted, &identity)) =>
                 {
                     if matches!(outcome, Outcome::Failed | Outcome::Cancelled) {
-                        // A later RoundAccepted may continue this input from a valid checkpoint.
-                        // Keep the accepted identity so that continuation must link to this round;
-                        // 023's recovery validator decides whether that checkpoint is resumable.
+                        // 后续 RoundAccepted 可能从有效 checkpoint 继续处理该输入。
+                        // 保留已接纳身份以约束继承关系；是否可恢复由 023 校验。
                         continue;
                     }
                     let recovered = crate::game::recovery::derive_evidence_path(
@@ -239,6 +272,45 @@ impl<'a> SourcePort<'a> {
 
         Ok(None)
     }
+
+    fn valid_scene_evidence(&self, evidence: &KnowledgeEvidence) -> Result<bool> {
+        let (Some(directory), Some(catalog), Some(connection)) = (
+            self.entity_directory,
+            self.scene_catalog,
+            self.evidence_connection,
+        ) else {
+            return Ok(false);
+        };
+        let trusted = SceneEvidence::get(
+            connection,
+            self.session,
+            catalog,
+            directory,
+            &evidence.evidence_id,
+        )
+        .map_err(|_| Error::Rejected(Reason::PolicyUnavailable))?;
+        let Some(trusted) = trusted else {
+            return Ok(false);
+        };
+        let Some((source_text, _)) = self.text(evidence.source.record_seq)? else {
+            return Ok(false);
+        };
+        let expected_kind = match trusted.kind {
+            EvidenceKind::Observed => aoidos_memory::model::KnowledgeKind::Observed,
+            EvidenceKind::Rumor => aoidos_memory::model::KnowledgeKind::Rumor,
+        };
+        Ok(evidence.kind == expected_kind
+            && evidence.subject_id == trusted.subject_id
+            && evidence.informant_id == trusted.informant_id
+            && evidence.scope == trusted.scope_id
+            && evidence.rule_id == trusted.rule_id
+            && evidence.source.record_seq == trusted.source.record_seq
+            && evidence.source.body_hash == hash(source_text.as_bytes())
+            && format::hash(source_text.as_bytes()) == trusted.source.body_hash
+            && evidence.source.start_byte == trusted.source.start_byte
+            && evidence.source.end_byte == trusted.source.end_byte
+            && self.source_text(&evidence.source)?.is_some())
+    }
 }
 impl CausalPort for SourcePort<'_> {
     fn boundary(&self) -> Result<Boundary> {
@@ -262,7 +334,7 @@ impl CausalPort for SourcePort<'_> {
             || evidence.scope != DIRECT_DIALOGUE_SCOPE
             || evidence.rule_id != DIRECT_DIALOGUE_RULE
         {
-            return Ok(false);
+            return self.valid_scene_evidence(evidence);
         }
         let Some(directory) = self.entity_directory else {
             return Ok(false);

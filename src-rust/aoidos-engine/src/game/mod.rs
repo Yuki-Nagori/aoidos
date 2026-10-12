@@ -6,6 +6,7 @@ pub mod dice;
 pub mod domain;
 pub mod execution;
 pub mod input;
+pub mod presence;
 pub mod proposal;
 pub mod publication;
 pub mod recovery;

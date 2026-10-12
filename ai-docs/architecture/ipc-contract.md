@@ -1,6 +1,6 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-12。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
+更新日期：2026-10-13。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
 实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。下文分别标明已实现接口与设计接口。
 
@@ -178,7 +178,7 @@ scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-fo
 
 text 为非空白字符串，最多 32 KiB UTF-8，保留原文；角色内 / 场外前缀及内容范围由 012 的 Rust 解析，不增加前端可覆盖身份 / 规则的参数，不接受模型 / 骰式 / 状态覆盖参数。所有身份由 Rust 分配，operationId 不是客户端重试幂等键；收到接纳后不自动重发命令。已在飞时新提交 busy；interrupt / cancel / submit_check 仅控制指定的本 round。其他合法性、错误优先级和 rewind 检查点见阶段机。cancel 的重复返回限于本进程有界缓存，旧 round 驱逐为 not-found；暂停恢复由持久检查点决定，不靠 ring 跨进程恢复。
 
-044 定义场景在场快照契约，045 提供 Rust 权威的内部只读快照，046 规划将其接成 IPC 命令 `engine_get_scene_presence({ sessionId })`，返回 `{ sessionId, sceneId, presenceRevision, characters }`；最多 128 人、规范 JSON 总长最多 64 KiB，超限整体失败且不截断。待恢复 / 缺少可信基线映射 `engine.invalid-phase`，快照超限映射 `app.bad-request` + `detail.reason=presenceSnapshotLimit`。该 IPC 命令尚未实现；角色提交的 `expectedPresenceRevision` 也仍是 046 计划字段。
+044 定义场景在场快照契约，045 提供 Rust 权威的内部只读快照；计划中的 046 将其接成 IPC 命令 `engine_get_scene_presence({ sessionId })`，返回 `{ sessionId, sceneId, presenceRevision, characters }`。快照最多 512 人、规范 JSON 总长最多 256 KiB，超限整体失败且不截断。待恢复 / 缺少可信基线映射 `engine.invalid-phase`，快照超限映射 `app.bad-request` + `detail.reason=presenceSnapshotLimit`。该 IPC 命令尚未实现；角色提交的 `expectedPresenceRevision` 也仍是 046 计划字段。
 
 ```ts
 type EnginePhase = "idle" | "generating" | "awaitingCheck" | "settling" | "advancing";

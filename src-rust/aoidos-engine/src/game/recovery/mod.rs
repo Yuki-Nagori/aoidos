@@ -101,6 +101,43 @@ pub(crate) fn derive_evidence_path(
     derive_path(session, None, path, through, false)
 }
 
+/// 与证据索引共用已核验的有界缓存，回合校验不额外读取记录文件。
+/// # Errors
+/// 缓存缺少路径记录或终态 / 因果步骤失配时返回 store.corrupt。
+pub(crate) fn derive_evidence_records(
+    records: &std::collections::BTreeMap<u64, crate::record::format::Parsed>,
+    path: Vec<u64>,
+    through: u64,
+) -> Result<Recovery, Fault> {
+    if path.last() != Some(&through) {
+        return Err(corrupt());
+    }
+    derive_records(RecordSource::Cached(records), None, path, through, false)
+}
+
+enum RecordSource<'a> {
+    Session(&'a Session),
+    Cached(&'a std::collections::BTreeMap<u64, crate::record::format::Parsed>),
+}
+
+impl RecordSource<'_> {
+    fn body(&self, seq: u64) -> Result<Body, Fault> {
+        match self {
+            Self::Session(session) => session
+                .read(seq)
+                .map_err(store_fault)?
+                .body
+                .ok_or_else(corrupt)
+                .map(|record| record.body),
+            Self::Cached(records) => records
+                .get(&seq)
+                .and_then(|parsed| parsed.body.as_ref())
+                .map(|record| record.body.clone())
+                .ok_or_else(corrupt),
+        }
+    }
+}
+
 pub(crate) fn derive_prefix(
     session: &Session,
     baseline: Option<ScenePosition>,
@@ -129,6 +166,22 @@ pub(super) fn derive_path(
     revision: u64,
     needs_recovery: bool,
 ) -> Result<Recovery, Fault> {
+    derive_records(
+        RecordSource::Session(session),
+        baseline,
+        path,
+        revision,
+        needs_recovery,
+    )
+}
+
+fn derive_records(
+    records: RecordSource<'_>,
+    baseline: Option<ScenePosition>,
+    path: Vec<u64>,
+    revision: u64,
+    needs_recovery: bool,
+) -> Result<Recovery, Fault> {
     let mut result = Recovery {
         phase: Phase::Idle,
         scene: baseline,
@@ -142,12 +195,7 @@ pub(super) fn derive_path(
         return Ok(result);
     }
     for seq in path {
-        let body = session
-            .read(seq)
-            .map_err(store_fault)?
-            .body
-            .ok_or_else(corrupt)?
-            .body;
+        let body = records.body(seq)?;
         apply_record(&mut result, seq, body)?;
     }
     project(&mut result, revision);
@@ -159,12 +207,7 @@ pub(super) fn derive_path(
                 .map_or(round.accepted_seq, |(seq, _, _)| *seq)
         })
     {
-        let body = session
-            .read(revision)
-            .map_err(store_fault)?
-            .body
-            .ok_or_else(corrupt)?
-            .body;
+        let body = records.body(revision)?;
         let Body::System { code, data, .. } = body else {
             return Err(corrupt());
         };

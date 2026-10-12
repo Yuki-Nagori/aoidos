@@ -248,6 +248,52 @@ impl Session {
         }
         format::parse(&raw)
     }
+
+    /// 已核验当前路径的最近有界后缀；先用索引限定总量，再逐条读取一次。
+    /// 窗口外记录不读取，调用方不能据此推断更早的历史状态。
+    /// # Errors
+    /// 路径尚未恢复或行内容改变时拒绝。
+    pub(crate) fn bounded_current_records(
+        &self,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> std::result::Result<BTreeMap<u64, Parsed>, Fault> {
+        self.bounded_records_before(max_records, max_bytes, None)
+    }
+
+    /// 恢复世界意图时按该意图之前的有效路径取窗口；pending world 不取消既有 applied 证明。
+    /// # Errors
+    /// 只读、因果路径待恢复或记录 hash 失配时拒绝。
+    pub(crate) fn bounded_records_before(
+        &self,
+        max_records: usize,
+        max_bytes: usize,
+        before_seq: Option<u64>,
+    ) -> std::result::Result<BTreeMap<u64, Parsed>, Fault> {
+        if self.pending_history || self.is_read_only() {
+            return Err(Fault::new("engine.invalid-phase", "记录需要恢复或只读"));
+        }
+        let mut path = Vec::new();
+        let mut bytes = 0usize;
+        for (&seq, entry) in self.index.range(..before_seq.unwrap_or(u64::MAX)).rev() {
+            if entry.control || !self.includes_record(seq, entry) {
+                continue;
+            }
+            let next_bytes = bytes.saturating_add(entry.len);
+            if path.len() >= max_records || next_bytes > max_bytes {
+                break;
+            }
+            bytes = next_bytes;
+            path.push(seq);
+        }
+        path.into_iter()
+            .map(|seq| {
+                self.read(seq)
+                    .map(|record| (seq, record))
+                    .map_err(Fault::from)
+            })
+            .collect::<std::result::Result<BTreeMap<_, _>, _>>()
+    }
     pub(super) fn known(&self, seq: u64) -> Result<Record> {
         self.read(seq)?.body.ok_or_else(format::corrupt)
     }
