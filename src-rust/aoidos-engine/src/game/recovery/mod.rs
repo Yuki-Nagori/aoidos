@@ -85,6 +85,21 @@ pub struct Recovery {
 pub fn derive(session: &Session, baseline: Option<ScenePosition>) -> Result<Recovery, Fault> {
     derive_prefix(session, baseline, None)
 }
+
+/// 验证记忆证据调用方在有界扫描中收集的单回合有效路径。
+/// # Errors
+/// 路径不以指定终态结束、因果步骤不完整或记录损坏时返回 store.corrupt。
+pub(crate) fn derive_evidence_path(
+    session: &Session,
+    path: Vec<u64>,
+    through: u64,
+) -> Result<Recovery, Fault> {
+    if path.last() != Some(&through) {
+        return Err(corrupt());
+    }
+    derive_path(session, None, path, through, false)
+}
+
 pub(crate) fn derive_prefix(
     session: &Session,
     baseline: Option<ScenePosition>,

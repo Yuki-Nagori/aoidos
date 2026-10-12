@@ -640,3 +640,10 @@ fn invalid_control_revision_and_unowned_narration_cannot_become_a_round_anchor()
     .unwrap();
     assert_eq!(recovered.round.unwrap().skipped, Some(skipped));
 }
+
+#[test]
+fn evidence_path_requires_the_exact_terminal_boundary() {
+    let fixture = Fixture::new();
+    assert!(derive_evidence_path(&fixture.session, vec![], 1).is_err());
+    assert!(derive_evidence_path(&fixture.session, vec![1], 2).is_err());
+}

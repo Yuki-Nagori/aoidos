@@ -190,7 +190,7 @@ impl EntityDirectory {
             .and_then(|id| self.by_id.get(id)))
     }
 
-    pub(super) fn contains_character(&self, id: &str) -> bool {
+    pub(crate) fn contains_character(&self, id: &str) -> bool {
         self.by_id
             .get(id)
             .is_some_and(|entity| entity.kind == EntityKind::Character)
