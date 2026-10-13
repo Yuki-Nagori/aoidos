@@ -938,7 +938,8 @@ fn persisted_alias_rows_reject_unknown_tags_and_invalid_identity() {
 
 #[test]
 fn alias_source_capacity_is_bounded_and_corrupt_sources_fail_closed() {
-    let mut fixture = Fixture::new();
+    // 此用例验证来源数量策略与损坏拒绝，不验证 SQLite 耐久性。
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 35, ENTITY_ID);
     let question = opened_question(&mut fixture, 36);
     // 不同问题可贡献同一来源；满额必须拒绝整笔新增确认。
