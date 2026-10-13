@@ -1,12 +1,13 @@
 import { effectScope, ref } from "vue";
 import { describe, expect, it, vi } from "vitest";
-import { useLlmTurn, type TurnTransport } from "../../../src-web/composables/useLlmTurn";
-import {
-  type TurnSnapshot,
-  type TurnEnvelope,
-  type TurnChunk,
-  type TurnDone,
-  type TurnFailed,
+import type { TurnTransport } from "../../../src-web/composables/useLlmTurn";
+import { useLlmTurn } from "../../../src-web/composables/useLlmTurn";
+import type {
+  TurnSnapshot,
+  TurnEnvelope,
+  TurnChunk,
+  TurnDone,
+  TurnFailed,
 } from "../../../src-web/api/llm";
 
 vi.mock("../../../src-web/api/llm", async (importOriginal) => ({

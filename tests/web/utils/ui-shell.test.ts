@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { PanelState } from "../../../src-web/utils/ui-shell";
 import {
   previewComposerInput,
   canSubmitComposer,
   transitionPanel,
-  type PanelState,
 } from "../../../src-web/utils/ui-shell";
 
 describe("panel transitions", () => {

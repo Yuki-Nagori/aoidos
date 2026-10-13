@@ -1,11 +1,6 @@
-import {
-  onScopeDispose,
-  ref,
-  shallowRef,
-  toValue,
-  type DeepReadonly,
-  type MaybeRefOrGetter,
-} from "vue";
+import type { DeepReadonly, MaybeRefOrGetter } from "vue";
+import { onScopeDispose, ref, shallowRef, toValue } from "vue";
+import type { PhaseSnapshot } from "../api/engine";
 import {
   cancelRound,
   interruptRound,
@@ -13,7 +8,6 @@ import {
   resume,
   rewind,
   submitCheck,
-  type PhaseSnapshot,
 } from "../api/engine";
 import { turnRecoveryError } from "../utils/turn-recovery";
 const defaults = { cancelRound, interruptRound, regenerate, resume, rewind, submitCheck };

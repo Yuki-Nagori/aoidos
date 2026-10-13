@@ -1,6 +1,7 @@
 // 三平台实际主 Webview；消费产品模块，测试等待有截止时间，不加入运行期轮询。
 import { effectScope, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import type { PhaseSnapshot } from "../../../../src-web/api/engine";
 import {
   getPhase,
   listenPhaseEvent,
@@ -9,7 +10,6 @@ import {
   submitInput,
   cancelRound,
   submitCheck,
-  type PhaseSnapshot,
 } from "../../../../src-web/api/engine";
 import { getTurn, listenTurnEvent } from "../../../../src-web/api/llm";
 import {

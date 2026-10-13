@@ -1,21 +1,10 @@
-import {
-  onScopeDispose,
-  readonly,
-  shallowRef,
-  toValue,
-  watch,
-  type DeepReadonly,
-  type ShallowRef,
-  type MaybeRefOrGetter,
-} from "vue";
+import type { DeepReadonly, ShallowRef, MaybeRefOrGetter } from "vue";
+import { onScopeDispose, readonly, shallowRef, toValue, watch } from "vue";
 import { getTurn, listenTurnEvent } from "../api/llm";
 import { createListenerGroup } from "../utils/listener-group";
 import type { TurnNotification } from "../utils/turn-consumer";
-import {
-  createTurnRecovery,
-  turnRecoveryError,
-  type TurnRecoveryView,
-} from "../utils/turn-recovery";
+import type { TurnRecoveryView } from "../utils/turn-recovery";
+import { createTurnRecovery, turnRecoveryError } from "../utils/turn-recovery";
 
 /** 平台端口只注入真实调用的替代点；消费规则不依赖平台对象。 */
 export interface TurnTransport {

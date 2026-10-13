@@ -1,9 +1,12 @@
-import { onScopeDispose, readonly, shallowRef, toValue, watch, type MaybeRefOrGetter } from "vue";
-import { getPhase, listenPhaseEvent, type PhaseEventMap, type PhaseState } from "../api/engine";
+import type { MaybeRefOrGetter } from "vue";
+import { onScopeDispose, readonly, shallowRef, toValue, watch } from "vue";
+import type { PhaseEventMap, PhaseState } from "../api/engine";
+import { getPhase, listenPhaseEvent } from "../api/engine";
 import type { TurnEnvelope } from "../api/llm";
 import { createListenerGroup } from "../utils/listener-group";
 import { phaseEventKeys } from "../utils/phase-consumer";
-import { createPhaseRecovery, type PhaseRecoveryState } from "../utils/phase-recovery";
+import type { PhaseRecoveryState } from "../utils/phase-recovery";
+import { createPhaseRecovery } from "../utils/phase-recovery";
 
 interface Transport {
   read: typeof getPhase;

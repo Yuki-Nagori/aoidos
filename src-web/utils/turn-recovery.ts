@@ -1,10 +1,10 @@
-import { type TurnSnapshot } from "../api/llm";
+import type { TurnSnapshot } from "../api/llm";
+import type { TurnNotification } from "./turn-consumer";
 import {
   consumeTurnEvent,
   consumeTurnSnapshot,
   coversSequences,
   validTurnEvent,
-  type TurnNotification,
 } from "./turn-consumer";
 
 /** 网络恢复错误与回合失败分开，恢复失败不清掉已确认正文。 */

@@ -1,6 +1,6 @@
 # 目录与模块规划
 
-更新日期：2026-10-10。
+更新日期：2026-10-13。
 
 [架构总览](README.md)
 
@@ -56,7 +56,7 @@
 ├── .husky/pre-commit          # 提交前查双端格式（全量门禁在 CI）
 ├── ai-docs/                   # 本文档体系
 ├── public/                    # Vite 静态资产（icon.png 作 favicon）
-├── eslint.config.ts / knip.json / vite.config.ts / vitest.config.ts
+├── biome.json / dprint.json / knip.json / vite.config.ts / vitest.config.ts
 ├── rust-toolchain.toml        # Rust 工具链锁定
 └── Cargo.toml                 # 虚拟工作区根（members 与 profile 调优）
 ```

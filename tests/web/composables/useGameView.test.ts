@@ -1,7 +1,8 @@
 import { effectScope, ref } from "vue";
 import { expect, it, vi } from "vitest";
 import { getPhase, listenPhaseEvent } from "../../../src-web/api/engine";
-import { getTurn, type TurnSnapshot } from "../../../src-web/api/llm";
+import type { TurnSnapshot } from "../../../src-web/api/llm";
+import { getTurn } from "../../../src-web/api/llm";
 import type { RecordItem, RecordView } from "../../../src-web/api/records";
 import { useGameView } from "../../../src-web/composables/useGameView";
 import { snapshot } from "../utils/phase-fixture";
@@ -43,13 +44,15 @@ function ports() {
       listen: vi.fn().mockResolvedValue(off),
     },
     turn: {
-      getTurn: vi.fn(getTurn).mockImplementation(async (turnId): Promise<TurnSnapshot> => ({
-        turnId,
-        text: "正文",
-        outcome: "completed",
-        finishReason: "stop",
-        seq: { chunk: 1, done: 1, failed: 0 },
-      })),
+      getTurn: vi.fn(getTurn).mockImplementation(
+        async (turnId): Promise<TurnSnapshot> => ({
+          turnId,
+          text: "正文",
+          outcome: "completed",
+          finishReason: "stop",
+          seq: { chunk: 1, done: 1, failed: 0 },
+        }),
+      ),
       listen: vi.fn(async () => off),
     },
     off,

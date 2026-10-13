@@ -1,9 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { MigrationSnapshot } from "../../../src-web/api/store";
-import {
-  createMigrationRecovery,
-  type MigrationState,
-} from "../../../src-web/utils/migration-recovery";
+import type { MigrationState } from "../../../src-web/utils/migration-recovery";
+import { createMigrationRecovery } from "../../../src-web/utils/migration-recovery";
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: unknown) => void;
   const promise = new Promise<T>((yes, no) => {

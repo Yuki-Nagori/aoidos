@@ -1,12 +1,5 @@
-import {
-  onScopeDispose,
-  computed,
-  ref,
-  shallowRef,
-  toValue,
-  watch,
-  type MaybeRefOrGetter,
-} from "vue";
+import type { MaybeRefOrGetter } from "vue";
+import { onScopeDispose, computed, ref, shallowRef, toValue, watch } from "vue";
 import { submitInput } from "../api/engine";
 import { turnRecoveryError } from "../utils/turn-recovery";
 

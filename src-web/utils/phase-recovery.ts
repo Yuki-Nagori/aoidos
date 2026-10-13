@@ -1,10 +1,10 @@
 import type { PhaseSequences, PhaseSnapshot } from "../api/engine";
+import type { PhaseNotification } from "./phase-consumer";
 import {
   consumePhaseEvent,
   consumePhaseSnapshot,
   validPhaseState,
   phaseEventKeys,
-  type PhaseNotification,
 } from "./phase-consumer";
 
 export interface PhaseRecoveryState {

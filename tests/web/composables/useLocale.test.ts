@@ -1,11 +1,10 @@
 import { createApp, effectScope } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { LocaleStartup, LocaleResult } from "../../../src-web/api/locale";
 import {
   getLocalePreference,
   localeStartupKey,
   setLocalePreference,
-  type LocaleStartup,
-  type LocaleResult,
 } from "../../../src-web/api/locale";
 import { useLocale } from "../../../src-web/composables/useLocale";
 import { i18n } from "../../../src-web/i18n";

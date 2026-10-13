@@ -1,14 +1,7 @@
-import {
-  computed,
-  nextTick,
-  onScopeDispose,
-  readonly,
-  ref,
-  toValue,
-  watch,
-  type MaybeRefOrGetter,
-} from "vue";
-import { transitionPanel, type PanelEvent, type PanelState } from "../utils/ui-shell";
+import type { MaybeRefOrGetter } from "vue";
+import { computed, nextTick, onScopeDispose, readonly, ref, toValue, watch } from "vue";
+import type { PanelEvent, PanelState } from "../utils/ui-shell";
+import { transitionPanel } from "../utils/ui-shell";
 
 interface Options {
   pinned: MaybeRefOrGetter<boolean>;

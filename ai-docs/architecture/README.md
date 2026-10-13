@@ -102,7 +102,6 @@ src-tauri
   ├─→ aoidos-locale
   │     └─→ aoidos-store
   └─→ aoidos-json
-
 ```
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。记忆产品流程仍按任务接入；计费运行时由 engine 持有账本并实现 LLM 的预算端口。端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。

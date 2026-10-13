@@ -15,7 +15,9 @@ export type ProfileMode = "completion" | "chat";
  * （用户名 / 密码合并存储），明文不进配置或 IPC。
  */
 export type ProxyConfig =
-  { mode: "system" } | { mode: "none" } | { mode: "manual"; url: string; authRef?: string };
+  | { mode: "system" }
+  | { mode: "none" }
+  | { mode: "manual"; url: string; authRef?: string };
 
 /** 对应 Rust LlmProfile；可保存的用户配置，提交回合时冻结。 */
 export interface LlmProfile {

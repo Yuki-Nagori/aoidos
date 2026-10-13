@@ -87,6 +87,7 @@ function finishReasonName(reason: string): string {
 
 <template>
   <button
+    type="button"
     v-if="props.olderCursor"
     class="mb-3 w-full rounded-lg border border-hairline px-3 py-2 text-xs text-muted"
     :disabled="props.loadingOlder"
@@ -100,15 +101,13 @@ function finishReasonName(reason: string): string {
       v-for="item in props.items"
       :key="item.recordSeq"
       class="record-entry"
-      :class="
-        item.kind === 'playerSpeech'
-          ? 'record-player'
-          : item.kind === 'narration'
-            ? 'record-narrator'
-            : item.kind === 'characterSpeech'
-              ? 'record-story'
-              : 'record-system'
-      "
+      :class="item.kind === 'playerSpeech'
+      ? 'record-player'
+      : item.kind === 'narration'
+        ? 'record-narrator'
+        : item.kind === 'characterSpeech'
+          ? 'record-story'
+          : 'record-system'"
     >
       <span class="record-kind">{{
         t("game.recordKind", { kind: recordKindName(item.kind) })
@@ -140,6 +139,7 @@ function finishReasonName(reason: string): string {
         }}
       </div>
       <button
+        type="button"
         v-else-if="item.bodyRef"
         class="text-xs text-ink underline"
         @click="emit('loadBody', item.bodyRef)"
@@ -154,13 +154,12 @@ function finishReasonName(reason: string): string {
       </p>
       <p v-else class="whitespace-pre-wrap break-words">{{ t("game.compatRecord") }}</p>
       <button
-        v-if="
-          props.canRewind &&
-          item.kind === 'system' &&
-          item.body &&
-          'code' in item.body &&
-          ['checkPlanned', 'checkSkipped'].includes(item.body.code)
-        "
+        type="button"
+        v-if="props.canRewind &&
+        item.kind === 'system' &&
+        item.body &&
+        'code' in item.body &&
+        ['checkPlanned', 'checkSkipped'].includes(item.body.code)"
         class="mt-2 text-xs text-danger"
         @click="emit('rewind', item.recordSeq)"
       >
@@ -172,11 +171,11 @@ function finishReasonName(reason: string): string {
     v-if="props.preview"
     class="record-entry record-story whitespace-pre-wrap break-words"
     data-testid="live-text"
-    >{{ props.preview.text }}</pre>
+  >{{ props.preview.text }}</pre>
   <pre
     v-if="props.expandedBody !== undefined"
     class="record-expanded whitespace-pre-wrap break-words"
-    >{{ props.expandedBody }}</pre>
+  >{{ props.expandedBody }}</pre>
   <p v-if="props.generation" class="record-system">
     {{ t("game.generation", { outcome: outcomeName(props.generation.outcome) }) }}
     <span v-if="props.generation.finishReason">{{

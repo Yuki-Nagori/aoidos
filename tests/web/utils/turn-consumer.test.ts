@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { type TurnSnapshot } from "../../../src-web/api/llm";
+import type { TurnSnapshot } from "../../../src-web/api/llm";
+import type { TurnNotification } from "../../../src-web/utils/turn-consumer";
 import {
   consumeTurnEvent,
   consumeTurnSnapshot,
   coversSequences,
   validTurnEvent,
-  type TurnNotification,
 } from "../../../src-web/utils/turn-consumer";
 
 function snapshot(extra: Partial<TurnSnapshot> = {}): TurnSnapshot {

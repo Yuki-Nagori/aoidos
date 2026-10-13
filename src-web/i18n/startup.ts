@@ -1,4 +1,5 @@
-import { getLocalePreference, type LocaleStartup } from "../api/locale";
+import type { LocaleStartup } from "../api/locale";
+import { getLocalePreference } from "../api/locale";
 import { applyLocale } from "./index";
 
 /** 首次挂载前对齐持久偏好，失败时保留 HTML bootstrap 的语言。 */

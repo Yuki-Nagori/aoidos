@@ -1,11 +1,10 @@
 import { expect, it, vi } from "vitest";
+import type { RecordState, RecordTransport } from "../../../src-web/utils/record-recovery";
 import {
   createRecordRecovery,
   validRecordPage,
   previewIsCommitted,
   recordItems,
-  type RecordState,
-  type RecordTransport,
 } from "../../../src-web/utils/record-recovery";
 import type { RecordView, RecordPage, RecordBodyPage } from "../../../src-web/api/records";
 function deferred<T>() {

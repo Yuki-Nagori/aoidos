@@ -147,7 +147,6 @@
     "closePanel": "Close dialogue panel",
     "openPanel": "Open dialogue panel",
     "latest": "Jump to latest",
-    "unreadRecords": "{count} new records · Jump to latest",
     "earlierRecords": "Load earlier records",
     "compatRecord": "This record uses a format this version cannot display.",
     "noRecords": "No records yet. Your first action will start the story.",
@@ -173,9 +172,7 @@
     "regenerate": "Regenerate last response",
     "interrupt": "Interrupt and say",
     "stopTurn": "Stop generation",
-    "rollTotal": "Total: {total}",
     "rollDie": "d{sides}: {value}",
-    "difficultyClass": "Difficulty {dc}",
     "rollSummary": "{expression} · total {total} · {rolls}",
     "checkSummary": "{result} · difficulty {dc}",
     "checkPlanned": "A check is ready.",
@@ -188,7 +185,6 @@
       "criticalSuccess": "Critical success",
       "criticalFailure": "Critical failure"
     },
-    "cancelTurn": "Cancel turn",
     "resume": "Resume",
     "confirmCheck": "Confirm check ({expression})",
     "outcomes": {

@@ -1,6 +1,6 @@
 # 前端约定
 
-更新日期：2026-10-10。除标注官方依据外均为项目约定。
+更新日期：2026-10-13。除标注官方依据外均为项目约定。
 
 ## 逻辑归属
 
@@ -14,7 +14,7 @@ Composable 遵循 [Vue 官方约定](https://vuejs.org/guide/reusability/composa
 
 ## SFC 与类型
 
-组件一律 `<script setup lang="ts">`；类型导入用 inline 形态 `import { type Foo }`（ESLint `consistent-type-imports` 强制）；局部类型标注允许 `import("module").Type`，规则显式设置 `disallowTypeAnnotations: false`（[官方选项](https://typescript-eslint.io/rules/consistent-type-imports/#disallowtypeannotations)）；函数写显式返回类型，ref 给显式初值。模板内避免 `<img src="/...">` 这类运行时资产解析——happy-dom 测试环境会踩 vite 资产解析错误，需要图形就用内联 SVG。
+组件一律 `<script setup lang="ts">`；纯类型依赖用 `import type { Foo }`（Biome `useImportType` 强制分离类型导入）；函数写显式返回类型，ref 给显式初值。模板内避免 `<img src="/...">` 这类运行时资产解析——happy-dom 测试环境会踩 vite 资产解析错误，需要图形就用内联 SVG。
 
 ## 测试
 
@@ -28,7 +28,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 ## 排版分工
 
-Prettier 独占排版，ESLint 只管质量规则：Vue 排版类规则（`max-attributes-per-line` 等）已关闭，`eslint-config-prettier` 兜底关停冲突项。格式争议以 `bun run format` 的输出为准，不手调。
+Biome 负责 JavaScript / TypeScript、CSS、JSON 的 lint 与格式化；Vue、HTML、Markdown 和 YAML 由 dprint 格式化。Biome 的 Vue lint 支持仍属实验阶段，项目启用前须保持 `vue-tsc`、组件测试及 i18n 静态检查通过。`bun run lint` 还会运行 `i18n:check`：TypeScript 调用由语法树提取，Vue SFC 通过 Vue 编译器解析脚本与模板表达式，校验静态 key、占位符、未使用键与预留命名空间。格式争议以 `bun run format` 的输出为准，不手调；剧本发布原文按字节冻结并从格式化范围排除。
 
 ## 样式分工
 

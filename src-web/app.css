@@ -46,13 +46,7 @@
     min-height: 100vh;
     user-select: none;
     font-family:
-      Inter,
-      ui-sans-serif,
-      system-ui,
-      -apple-system,
-      "Segoe UI",
-      "PingFang SC",
-      "Microsoft YaHei",
+      Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei",
       sans-serif;
     /* 星云渐变直接画在 body（渐变本身即软边），不逐帧 backdrop-filter（ui.md 性能决策）。 */
     background: var(--app-bg) fixed;
@@ -73,12 +67,16 @@
     *,
     *::before,
     *::after {
+      /* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must win the cascade. */
       animation-duration: 0.01ms !important;
+      /* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must win the cascade. */
       transition-duration: 0.01ms !important;
     }
 
     .dialogue-panel {
+      /* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must win the cascade. */
       transform: none !important;
+      /* biome-ignore lint/complexity/noImportantStyles: reduced-motion preference must win the cascade. */
       transition-duration: 120ms !important;
     }
   }

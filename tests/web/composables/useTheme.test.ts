@@ -1,4 +1,5 @@
-import { effectScope, nextTick, ref, type Ref } from "vue";
+import type { Ref } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 import { afterEach, expect, it, vi } from "vitest";
 import { useTheme } from "../../../src-web/composables/useTheme";
 import type { Skin, ThemeId } from "../../../src-web/api/theme";

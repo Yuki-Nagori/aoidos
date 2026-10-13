@@ -1,12 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  listBackups,
-  getMigration,
-  type CmdError,
-  type BackupItem,
-  type MigrationSnapshot,
-} from "../../../src-web/api/store";
+import type { CmdError, BackupItem, MigrationSnapshot } from "../../../src-web/api/store";
+import { listBackups, getMigration } from "../../../src-web/api/store";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 

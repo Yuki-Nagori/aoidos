@@ -1,0 +1,23 @@
+{
+  "lineWidth": 100,
+  "indentWidth": 2,
+  "useTabs": false,
+  "incremental": false,
+  "includes": ["**/*.md", "**/*.vue", "**/*.html", "**/*.yaml", "**/*.yml"],
+  "excludes": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/target/**",
+    "src-tauri/gen/**",
+    "tests/rust/native-platform/gen/**",
+    "resources/scripts/mistbell/**"
+  ],
+  "markdown": {},
+  "markup": {},
+  "yaml": {},
+  "plugins": [
+    "npm:@dprint/markdown@0.26.0",
+    "npm:dprint-plugin-markup@0.27.5",
+    "npm:dprint-plugin-yaml@0.6.0"
+  ]
+}

@@ -1,12 +1,6 @@
 import { inject, onScopeDispose, ref } from "vue";
-import {
-  getLocalePreference,
-  localeStartupKey,
-  setLocalePreference,
-  type Locale,
-  type LocaleChoice,
-  type LocaleResult,
-} from "../api/locale";
+import type { Locale, LocaleChoice, LocaleResult } from "../api/locale";
+import { getLocalePreference, localeStartupKey, setLocalePreference } from "../api/locale";
 import { applyLocale } from "../i18n";
 
 /** 语言切换只确认 Rust 已保存的结果；并发选择串行化且只应用最新意图。 */
