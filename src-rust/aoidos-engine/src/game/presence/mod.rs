@@ -134,8 +134,8 @@ impl PresencePolicy {
             observations: BTreeMap::new(),
             rumors: BTreeMap::new(),
         };
-        let encoded =
-            aoidos_json::to_vec(&policy.wire_value()).map_err(|_| Fault::bad_request())?;
+        let encoded = aoidos_json::to_vec(&policy.wire_value())
+            .expect("presence policy contains only JSON-compatible fields");
         if encoded.len() > MAX_POLICY_BYTES {
             return Err(Fault::bad_request());
         }
@@ -226,13 +226,21 @@ impl PresencePolicy {
         if self
             .changes
             .len()
+            .saturating_add(self.observations.len())
+            .saturating_add(self.rumors.len())
             .saturating_add(observations.len())
             .saturating_add(rumors.len())
             > MAX_RULES
         {
             return Err(Fault::bad_request());
         }
-        let mut ids = self.changes.keys().cloned().collect::<BTreeSet<_>>();
+        let mut ids = self
+            .changes
+            .keys()
+            .chain(self.observations.keys())
+            .chain(self.rumors.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
         for rule in observations {
             if !valid_knowledge_rule(
                 &rule.rule_id,
@@ -260,7 +268,8 @@ impl PresencePolicy {
                 return Err(Fault::bad_request());
             }
         }
-        let encoded = aoidos_json::to_vec(&self.wire_value()).map_err(|_| Fault::bad_request())?;
+        let encoded = aoidos_json::to_vec(&self.wire_value())
+            .expect("presence policy contains only JSON-compatible fields");
         if encoded.len() > MAX_POLICY_BYTES {
             return Err(Fault::bad_request());
         }
@@ -326,8 +335,7 @@ impl ScenePresence {
             .iter()
             .map(|id| {
                 directory
-                    .entity(id)
-                    .map_err(|_| super::invalid_phase())?
+                    .entity(id)?
                     .filter(|entity| entity.kind == EntityKind::Character)
                     .cloned()
                     .ok_or_else(super::invalid_phase)
@@ -340,7 +348,8 @@ impl ScenePresence {
             presence_revision: state.revision,
             characters,
         };
-        let encoded = aoidos_json::to_vec(&snapshot).map_err(|_| Fault::bad_request())?;
+        let encoded = aoidos_json::to_vec(&snapshot)
+            .expect("presence snapshot contains only JSON-compatible fields");
         if encoded.len() > MAX_SNAPSHOT_BYTES || snapshot.characters.len() > MAX_CHARACTERS {
             return Err(
                 Fault::new("app.bad-request", "presence snapshot exceeds limits")
@@ -405,7 +414,8 @@ impl ScenePresence {
             data: MutationData {
                 version: 1,
                 kind: "scenePresenceChanged".into(),
-                payload: aoidos_json::to_value(change).map_err(|_| Fault::bad_request())?,
+                payload: aoidos_json::to_value(change)
+                    .expect("presence change contains only JSON-compatible fields"),
             },
         })
     }
@@ -420,19 +430,22 @@ impl ScenePresence {
         directory: &EntityDirectory,
         mutations: &[WorldMutation],
     ) -> Result<(), Fault> {
+        if session.needs_recovery() || session.is_read_only() {
+            return Err(super::invalid_phase());
+        }
         let mut state = derive(connection, session, catalog, directory)?;
         let policy = catalog.presence_policy().ok_or_else(super::invalid_phase)?;
-        evidence::validate_ordered(
+        evidence::validate_ordered(evidence::OrderedValidation {
             connection,
-            &mut state,
+            state: &mut state,
             session,
             catalog,
             directory,
             policy,
-            session.history_revision(),
-            None,
+            validation_revision: session.history_revision(),
+            lookup_before_seq: None,
             mutations,
-        )
+        })
     }
 
     /// 从 intent 之前的已应用状态校验原始有序 mutation 组，供崩溃恢复使用。
@@ -464,17 +477,17 @@ impl ScenePresence {
             branch_revision,
         )?;
         let policy = catalog.presence_policy().ok_or_else(super::invalid_phase)?;
-        evidence::validate_ordered(
+        evidence::validate_ordered(evidence::OrderedValidation {
             connection,
-            &mut state,
+            state: &mut state,
             session,
             catalog,
             directory,
             policy,
-            branch_revision,
-            Some(record_seq),
+            validation_revision: branch_revision,
+            lookup_before_seq: Some(record_seq),
             mutations,
-        )
+        })
     }
 
     /// 确认已提交的场景切换具有可信的进入成员快照。
@@ -561,7 +574,7 @@ fn derive_through(
         &state.scene_id,
         &state.members,
         &state.last_mutation_id,
-    )?;
+    );
     let path = session.path_at(session.history_revision())?;
     for seq in path {
         if before_seq.is_some_and(|before| seq >= before) {
@@ -582,21 +595,22 @@ fn derive_through(
             } => {
                 ScenePresence::validate_scene_advance(catalog, &position)?;
                 let mutation = scene_advanced_mutation(&code, &data, &mutation_id);
-                if is_applied(connection, &mutation)? {
-                    let entry = policy
-                        .entry(&position.scene_id)
-                        .ok_or_else(super::invalid_phase)?;
-                    state.scene_id = position.scene_id;
-                    state.members = entry.character_ids.iter().cloned().collect();
-                    state.last_mutation_id = mutation_id;
-                    state.revision = revision(
-                        &session.header().session_id,
-                        record.branch_seq.unwrap_or(0),
-                        &state.scene_id,
-                        &state.members,
-                        &state.last_mutation_id,
-                    )?;
+                if !is_applied(connection, &mutation)? {
+                    continue;
                 }
+                let entry = policy
+                    .entry(&position.scene_id)
+                    .ok_or_else(super::invalid_phase)?;
+                state.scene_id = position.scene_id;
+                state.members = entry.character_ids.iter().cloned().collect();
+                state.last_mutation_id = mutation_id;
+                state.revision = revision(
+                    &session.header().session_id,
+                    record.branch_seq.unwrap_or(0),
+                    &state.scene_id,
+                    &state.members,
+                    &state.last_mutation_id,
+                );
             }
             Fact::SettlementPlanned { mutations, .. } => {
                 for mutation in mutations {
@@ -627,7 +641,7 @@ fn derive_through(
         &state.scene_id,
         &state.members,
         &state.last_mutation_id,
-    )?;
+    );
     Ok(state)
 }
 
@@ -637,7 +651,7 @@ fn revision(
     scene_id: &str,
     members: &BTreeSet<String>,
     last_mutation_id: &str,
-) -> Result<String, Fault> {
+) -> String {
     let digest = aoidos_json::canonical_string(&serde_json::json!({
         "sessionId": session_id,
         "historyRevision": history_revision,
@@ -645,8 +659,8 @@ fn revision(
         "members": members,
         "lastMutationId": last_mutation_id,
     }))
-    .map_err(|_| Fault::bad_request())?;
-    Ok(format::hash(digest.as_bytes()))
+    .expect("presence revisions contain only JSON-compatible values");
+    format::hash(digest.as_bytes())
 }
 
 fn is_applied(connection: &rusqlite::Connection, mutation: &WorldMutation) -> Result<bool, Fault> {
@@ -684,8 +698,7 @@ fn apply_presence_change(
         .change_rule(&change.rule_id)
         .ok_or_else(super::invalid_phase)?;
     let entity = directory
-        .entity(&change.entity_id)
-        .map_err(|_| super::invalid_phase())?
+        .entity(&change.entity_id)?
         .filter(|entity| entity.kind == EntityKind::Character)
         .ok_or_else(super::invalid_phase)?;
     if mutation.data.version != 1
@@ -703,7 +716,7 @@ fn apply_presence_change(
                 &state.scene_id,
                 &state.members,
                 &state.last_mutation_id,
-            )?
+            )
         || entity.scope != rule.entity_scope
         || (change.action == PresenceAction::Enter && !rule.allow_enter)
         || (change.action == PresenceAction::Leave && !rule.allow_leave)
@@ -721,7 +734,7 @@ fn apply_presence_change(
         &state.scene_id,
         &state.members,
         &state.last_mutation_id,
-    )?;
+    );
     Ok(())
 }
 

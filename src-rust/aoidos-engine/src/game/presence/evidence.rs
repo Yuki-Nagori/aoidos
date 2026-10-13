@@ -115,7 +115,7 @@ pub struct SceneEvidence;
 impl SceneEvidence {
     /// 解析一个当前有效、已应用且所属回合完整的事件及其全部传闻链。
     /// 索引、来源回合与传闻链共用一次读取的缓存，总量最多 4096 条 / 16 MiB。
-    /// 窗口内已应用事件的在场证明来自 commit / recovery 的完整校验；窗口外来源不消费。
+    /// 提交与恢复已校验在场约束；查询只认证有界窗口内的来源。
     /// # Errors
     /// 记录损坏、待恢复或证据不可用时失败关闭。
     pub fn get(
@@ -177,14 +177,12 @@ impl SceneEvidence {
 
 impl ObservedEvent {
     /// 从可信规则输入构造带唯一事件身份的版本化 mutation。
-    /// # Errors
-    /// 事件无法编码为规范载荷时拒绝。
     pub fn mutation(
         session: &Session,
         catalog: &SceneCatalog,
         input: ObservedEvidenceInput,
         rule: &ObservationRule,
-    ) -> Result<WorldMutation, Fault> {
+    ) -> WorldMutation {
         let mutation_id = uuid::Uuid::new_v4().to_string();
         let event = Self {
             version: 1,
@@ -200,21 +198,20 @@ impl ObservedEvent {
             rule_id: rule.rule_id.clone(),
             rule_version: rule.rule_version,
         };
-        Ok(WorldMutation {
+        WorldMutation {
             mutation_id,
             data: MutationData {
                 version: 1,
                 kind: "observed".into(),
-                payload: aoidos_json::to_value(event).map_err(|_| Fault::bad_request())?,
+                payload: aoidos_json::to_value(event)
+                    .expect("observed evidence contains only JSON-compatible fields"),
             },
-        })
+        }
     }
 }
 
 impl RumorDelivery {
     /// 构造单次带父链链接的传闻交付 mutation。
-    /// # Errors
-    /// 事件无法编码为规范载荷时拒绝。
     #[allow(clippy::too_many_arguments)]
     pub fn mutation(
         session: &Session,
@@ -228,7 +225,7 @@ impl RumorDelivery {
         scope_id: String,
         uncertainty: RumorUncertainty,
         rule: &RumorRule,
-    ) -> Result<WorldMutation, Fault> {
+    ) -> WorldMutation {
         let mutation_id = uuid::Uuid::new_v4().to_string();
         let event = Self {
             version: 1,
@@ -247,28 +244,42 @@ impl RumorDelivery {
             rule_id: rule.rule_id.clone(),
             rule_version: rule.rule_version,
         };
-        Ok(WorldMutation {
+        WorldMutation {
             mutation_id,
             data: MutationData {
                 version: 1,
                 kind: "rumorDelivered".into(),
-                payload: aoidos_json::to_value(event).map_err(|_| Fault::bad_request())?,
+                payload: aoidos_json::to_value(event)
+                    .expect("rumor delivery contains only JSON-compatible fields"),
             },
-        })
+        }
     }
 }
 
-pub(super) fn validate_ordered(
-    connection: &rusqlite::Connection,
-    state: &mut State,
-    session: &Session,
-    catalog: &SceneCatalog,
-    directory: &EntityDirectory,
-    policy: &PresencePolicy,
-    validation_revision: u64,
-    lookup_before_seq: Option<u64>,
-    mutations: &[WorldMutation],
-) -> Result<(), Fault> {
+pub(super) struct OrderedValidation<'a> {
+    pub connection: &'a rusqlite::Connection,
+    pub state: &'a mut State,
+    pub session: &'a Session,
+    pub catalog: &'a SceneCatalog,
+    pub directory: &'a EntityDirectory,
+    pub policy: &'a PresencePolicy,
+    pub validation_revision: u64,
+    pub lookup_before_seq: Option<u64>,
+    pub mutations: &'a [WorldMutation],
+}
+
+pub(super) fn validate_ordered(input: OrderedValidation<'_>) -> Result<(), Fault> {
+    let OrderedValidation {
+        connection,
+        state,
+        session,
+        catalog,
+        directory,
+        policy,
+        validation_revision,
+        lookup_before_seq,
+        mutations,
+    } = input;
     let path = session.path_at(session.history_revision())?;
     let positions = path
         .iter()
@@ -340,7 +351,8 @@ struct EvidenceValidationContext<'a> {
     policy: &'a PresencePolicy,
     positions: &'a BTreeMap<u64, usize>,
     successful_sources: Option<&'a BTreeSet<u64>>,
-    /// 只读索引在 applied/hash 与成功回合核验后提供缓存，信任应用边界的在场证明。
+    /// 记录缓存覆盖有界读取窗口；证据 mutation 另经应用回执与成功回合筛选。
+    /// 在场约束已由提交或恢复校验。
     records: Option<&'a BTreeMap<u64, crate::record::format::Parsed>>,
     lookup_before_seq: Option<u64>,
 }
@@ -371,9 +383,6 @@ fn validate_observed(
         .policy
         .observation_rule(&event.rule_id)
         .ok_or_else(super::invalid_phase)?;
-    if rule.source_kind != super::ObservationSourceKind::SceneNarration {
-        return Err(super::invalid_phase());
-    }
     if mutation.data.version != 1
         || event.version != 1
         || event.evidence_id != mutation.mutation_id
@@ -428,6 +437,7 @@ fn validate_rumor(
         || event.scene_id != state.scene_id
         || event.scene_id != rule.scene_id
         || event.scope_id != rule.scope_id
+        || event.recipient_id == event.informant_id
         || !receiver_present
         || !sender_present
         || context
@@ -441,42 +451,34 @@ fn validate_rumor(
     {
         return Err(super::invalid_phase());
     }
-    let delivery_author = validate_rumor_source(
+    validate_rumor_source(
         context,
         &event.delivery_source,
         context.session.next_sequence(),
         &event.scene_id,
         &event.informant_id,
     )?;
-    if delivery_author != event.informant_id {
-        return Err(super::invalid_phase());
-    }
-    let root_author = validate_source(
-        context,
-        &event.root_source,
-        context.session.next_sequence(),
-        None,
-    )?
-    .and_then(|record| author_id(&record.body));
+    let root_author = if event.previous_evidence_id.is_none() {
+        Some(validate_rumor_source(
+            context,
+            &event.root_source,
+            context.session.next_sequence(),
+            &event.scene_id,
+            &event.informant_id,
+        )?)
+    } else {
+        validate_source(context, &event.root_source, context.session.next_sequence())
+            .map(|record| author_id(&record.body))?
+    };
     let pending = match event.previous_evidence_id.as_deref() {
-        None if root_author.as_deref() == Some(&event.informant_id) => {
-            validate_rumor_source(
-                context,
-                &event.root_source,
-                context.session.next_sequence(),
-                &event.scene_id,
-                &event.informant_id,
-            )?;
-            PendingRumor {
-                recipient_id: event.recipient_id.clone(),
-                root_source: event.root_source.clone(),
-                scope_id: event.scope_id.clone(),
-                hops: 1,
-                root_informant: event.informant_id.clone(),
-                chain: BTreeSet::from([event.informant_id.clone(), event.recipient_id.clone()]),
-            }
-        }
-        None => return Err(super::invalid_phase()),
+        None => PendingRumor {
+            recipient_id: event.recipient_id.clone(),
+            root_source: event.root_source.clone(),
+            scope_id: event.scope_id.clone(),
+            hops: 1,
+            root_informant: event.informant_id.clone(),
+            chain: BTreeSet::from([event.informant_id.clone(), event.recipient_id.clone()]),
+        },
         Some(parent_id) if group_ids.contains(parent_id) => {
             let parent = same_group.get(parent_id).ok_or_else(super::invalid_phase)?;
             if parent.recipient_id != event.informant_id
@@ -487,7 +489,7 @@ fn validate_rumor(
             {
                 return Err(super::invalid_phase());
             }
-            extend_pending_rumor(parent, event)?
+            extend_pending_rumor(parent, event)
         }
         Some(parent_id) => {
             let Some(parent) = find_trusted_evidence(
@@ -529,7 +531,7 @@ fn validate_rumor(
                     chain,
                 },
                 event,
-            )?
+            )
         }
     };
     Ok(pending)
@@ -542,8 +544,7 @@ fn validate_observation_source(
     scene_id: &str,
     subject_id: &str,
 ) -> Result<(), Fault> {
-    let record =
-        validate_source(context, source, before_seq, None)?.ok_or_else(super::invalid_phase)?;
+    let record = validate_source(context, source, before_seq)?;
     if !matches!(
         record.body,
         Body::Narration {
@@ -576,8 +577,7 @@ fn validate_rumor_source(
     scene_id: &str,
     character_id: &str,
 ) -> Result<String, Fault> {
-    let record =
-        validate_source(context, source, before_seq, None)?.ok_or_else(super::invalid_phase)?;
+    let record = validate_source(context, source, before_seq)?;
     let author = author_id(&record.body).ok_or_else(super::invalid_phase)?;
     if author != character_id {
         return Err(super::invalid_phase());
@@ -598,22 +598,17 @@ fn validate_rumor_source(
     Ok(author)
 }
 
-fn extend_pending_rumor(
-    parent: &PendingRumor,
-    event: &RumorDelivery,
-) -> Result<PendingRumor, Fault> {
+fn extend_pending_rumor(parent: &PendingRumor, event: &RumorDelivery) -> PendingRumor {
     let mut chain = parent.chain.clone();
-    if !chain.insert(event.recipient_id.clone()) || parent.hops >= MAX_RUMOR_HOPS {
-        return Err(super::invalid_phase());
-    }
-    Ok(PendingRumor {
+    chain.insert(event.recipient_id.clone());
+    PendingRumor {
         recipient_id: event.recipient_id.clone(),
         root_source: event.root_source.clone(),
         scope_id: event.scope_id.clone(),
         hops: parent.hops + 1,
         root_informant: parent.root_informant.clone(),
         chain,
-    })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -636,8 +631,7 @@ fn validate_source(
     context: &EvidenceValidationContext<'_>,
     source: &EvidenceSource,
     before_seq: u64,
-    expected_author: Option<&str>,
-) -> Result<Option<crate::record::format::Record>, Fault> {
+) -> Result<crate::record::format::Record, Fault> {
     if !context.positions.contains_key(&source.record_seq) {
         return Err(super::invalid_phase());
     }
@@ -655,12 +649,10 @@ fn validate_source(
         || text
             .get(source.start_byte as usize..source.end_byte as usize)
             .is_none()
-        || expected_author
-            .is_some_and(|expected| author_id(&record.body).as_deref() != Some(expected))
     {
         return Err(super::invalid_phase());
     }
-    Ok(Some(record))
+    Ok(record)
 }
 
 fn body_text(body: &Body) -> Option<&str> {
@@ -714,6 +706,20 @@ struct IndexedEvent {
     payload: TrustedPayload,
 }
 
+struct AcceptedRound {
+    seq: u64,
+    input_seq: u64,
+    order_index: usize,
+}
+
+struct EndedRound {
+    seq: u64,
+    order_index: usize,
+    identity: crate::record::facts::RoundIdentity,
+    outcome: crate::ports::Outcome,
+    through_seq: u64,
+}
+
 fn find_trusted_evidence(
     connection: &rusqlite::Connection,
     session: &Session,
@@ -739,15 +745,10 @@ fn find_trusted_evidence(
         .collect::<BTreeMap<_, _>>();
     let policy = catalog.presence_policy().ok_or_else(super::invalid_phase)?;
     let mut events = BTreeMap::<String, IndexedEvent>::new();
-    let mut accepted = BTreeMap::<(String, String), (u64, u64)>::new();
-    let mut ended = Vec::<(
-        u64,
-        crate::record::facts::RoundIdentity,
-        crate::ports::Outcome,
-        u64,
-    )>::new();
+    let mut accepted = BTreeMap::<(String, String), AcceptedRound>::new();
+    let mut ended = Vec::<EndedRound>::new();
     let mut candidates = Vec::new();
-    for (seq, record) in &records {
+    for (order_index, (seq, record)) in records.iter().enumerate() {
         let Some(record) = &record.body else { continue };
         let Body::System { code, data, .. } = &record.body else {
             continue;
@@ -760,7 +761,11 @@ fn find_trusted_evidence(
             } => {
                 accepted.insert(
                     (identity.round_id, identity.operation_id),
-                    (*seq, input_seq),
+                    AcceptedRound {
+                        seq: *seq,
+                        input_seq,
+                        order_index,
+                    },
                 );
             }
             Fact::RoundEnded {
@@ -769,7 +774,13 @@ fn find_trusted_evidence(
                 through_seq,
                 ..
             } => {
-                ended.push((*seq, identity, outcome, through_seq));
+                ended.push(EndedRound {
+                    seq: *seq,
+                    order_index,
+                    identity,
+                    outcome,
+                    through_seq,
+                });
             }
             Fact::SettlementPlanned {
                 identity,
@@ -888,7 +899,6 @@ fn validate_indexed_event(
                 || event.rule_version != rule.rule_version
                 || event.scene_id != rule.scene_id
                 || event.scope_id != rule.scope_id
-                || rule.source_kind != super::ObservationSourceKind::SceneNarration
                 || !format::valid_hash(&event.presence_revision)
                 || context
                     .directory
@@ -938,17 +948,23 @@ fn validate_indexed_event(
             {
                 return Err(super::invalid_phase());
             }
-            let delivery = validate_rumor_source(
+            validate_rumor_source(
                 context,
                 &event.delivery_source,
                 indexed.seq,
                 &event.scene_id,
                 &event.informant_id,
             )?;
-            let root = validate_source(context, &event.root_source, indexed.seq, None)?
-                .and_then(|record| author_id(&record.body));
-            if delivery != event.informant_id {
-                return Err(super::invalid_phase());
+            if event.previous_evidence_id.is_none() {
+                validate_rumor_source(
+                    context,
+                    &event.root_source,
+                    indexed.seq,
+                    &event.scene_id,
+                    &event.informant_id,
+                )?;
+            } else {
+                validate_source(context, &event.root_source, indexed.seq)?;
             }
             if !context.successful_sources.is_some_and(|sources| {
                 sources.contains(&event.delivery_source.record_seq)
@@ -979,23 +995,11 @@ fn validate_indexed_event(
                     depth + 1,
                 )?
                 .ok_or_else(super::invalid_phase)?;
-                if root.as_deref() != Some(parent_chain.0.as_str()) {
-                    return Err(super::invalid_phase());
-                }
                 (parent_chain.0, parent_chain.1 + 1)
-            } else if root.as_deref() != Some(&event.informant_id) {
-                return Err(super::invalid_phase());
             } else {
                 if !recipients.insert(event.informant_id.clone()) {
                     return Err(super::invalid_phase());
                 }
-                validate_rumor_source(
-                    context,
-                    &event.root_source,
-                    indexed.seq,
-                    &event.scene_id,
-                    &event.informant_id,
-                )?;
                 (event.informant_id.clone(), 1)
             };
             if chain_info.1 > MAX_RUMOR_HOPS {
@@ -1011,53 +1015,39 @@ fn successful_source_records(
     records: &BTreeMap<u64, crate::record::format::Parsed>,
     path: &[u64],
     positions: &BTreeMap<u64, usize>,
-    accepted: &BTreeMap<(String, String), (u64, u64)>,
-    ended: &[(
-        u64,
-        crate::record::facts::RoundIdentity,
-        crate::ports::Outcome,
-        u64,
-    )],
+    accepted: &BTreeMap<(String, String), AcceptedRound>,
+    ended: &[EndedRound],
 ) -> Result<BTreeSet<u64>, Fault> {
     let mut sources = BTreeSet::new();
-    for ((round_id, operation_id), &(accepted_seq, input_seq)) in accepted {
+    for ((round_id, operation_id), accepted) in accepted {
+        let input_seq = accepted.input_seq;
         let Some(&input_index) = positions.get(&input_seq) else {
             continue;
         };
-        let Some(&accepted_index) = positions.get(&accepted_seq) else {
+        let Some(end) = ended.iter().find(|ended| {
+            ended.outcome == crate::ports::Outcome::Completed
+                && ended.identity.round_id == *round_id
+                && ended.identity.operation_id == *operation_id
+        }) else {
             continue;
         };
-        if accepted_index < input_index {
+        if end.order_index < accepted.order_index {
             continue;
         }
-        let Some((end_seq, _, crate::ports::Outcome::Completed, through_seq)) =
-            ended.iter().find(|(_, identity, outcome, _)| {
-                *outcome == crate::ports::Outcome::Completed
-                    && identity.round_id == *round_id
-                    && identity.operation_id == *operation_id
-            })
-        else {
-            continue;
-        };
-        let Some(&end_index) = positions.get(end_seq) else {
-            continue;
-        };
-        if end_index < accepted_index {
-            continue;
-        }
-        let round_path = path[input_index..=end_index].to_vec();
-        let round = crate::game::recovery::derive_evidence_records(records, round_path, *end_seq)?;
+        // Session 已校验输入先于接纳；仍需排除同一身份更早留下的孤立终态。
+        let round_path = path[input_index..=end.order_index].to_vec();
+        let round = crate::game::recovery::derive_evidence_records(records, round_path, end.seq)?;
         if round.round.is_some_and(|round| {
             round.identity.round_id == *round_id
                 && round.identity.operation_id == *operation_id
                 && round.input_seq == input_seq
-                && round.advance == Some(*through_seq)
+                && round.advance == Some(end.through_seq)
                 && round
                     .ended
                     .as_ref()
                     .is_some_and(|(_, outcome, _)| *outcome == crate::ports::Outcome::Completed)
         }) {
-            sources.extend(path[input_index..=end_index].iter().copied());
+            sources.extend(path[input_index..=end.order_index].iter().copied());
         }
     }
     Ok(sources)
@@ -1069,47 +1059,35 @@ fn successful_round(
     positions: &BTreeMap<u64, usize>,
     settlement_seq: u64,
     identity: &crate::record::facts::RoundIdentity,
-    accepted: &BTreeMap<(String, String), (u64, u64)>,
-    ended: &[(
-        u64,
-        crate::record::facts::RoundIdentity,
-        crate::ports::Outcome,
-        u64,
-    )],
+    accepted: &BTreeMap<(String, String), AcceptedRound>,
+    ended: &[EndedRound],
 ) -> Result<bool, Fault> {
     let key = (identity.round_id.clone(), identity.operation_id.clone());
-    let Some(&(accepted_seq, input_seq)) = accepted.get(&key) else {
+    let Some(accepted) = accepted.get(&key) else {
         return Ok(false);
     };
-    if accepted_seq >= settlement_seq {
+    if accepted.seq >= settlement_seq {
         return Ok(false);
     }
-    let Some(&input_index) = positions.get(&input_seq) else {
+    let Some(&input_index) = positions.get(&accepted.input_seq) else {
         return Ok(false);
     };
-    let Some((end_seq, _, crate::ports::Outcome::Completed, through_seq)) =
-        ended.iter().find(|(seq, ended_id, outcome, _)| {
-            *seq > settlement_seq
-                && *outcome == crate::ports::Outcome::Completed
-                && ended_id.round_id == identity.round_id
-                && ended_id.operation_id == identity.operation_id
-        })
-    else {
+    let Some(end) = ended.iter().find(|ended| {
+        ended.seq > settlement_seq
+            && ended.outcome == crate::ports::Outcome::Completed
+            && ended.identity.round_id == identity.round_id
+            && ended.identity.operation_id == identity.operation_id
+    }) else {
         return Ok(false);
     };
-    let Some(&end_index) = positions.get(end_seq) else {
-        return Ok(false);
-    };
-    if end_index < input_index {
-        return Ok(false);
-    }
-    let evidence_path = path[input_index..=end_index].to_vec();
+    // 接纳和终态都来自同一条扫描路径，且终态晚于结算；这些索引可直接组成回合区间。
+    let evidence_path = path[input_index..=end.order_index].to_vec();
     let recovered =
-        crate::game::recovery::derive_evidence_records(records, evidence_path, *end_seq)?;
+        crate::game::recovery::derive_evidence_records(records, evidence_path, end.seq)?;
     Ok(recovered.round.is_some_and(|round| {
         round.identity.round_id == identity.round_id
             && round.identity.operation_id == identity.operation_id
-            && round.advance == Some(*through_seq)
+            && round.advance == Some(end.through_seq)
             && round
                 .ended
                 .as_ref()

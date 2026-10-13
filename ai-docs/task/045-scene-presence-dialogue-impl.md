@@ -1,6 +1,6 @@
 # 045 — 实现：场景在场与可信获知事件
 
-- 状态：in-progress
+- 状态：done
 - 依赖：023、043、044
 - 优先级：P1
 - 创建 / 更新：2026-10-12 / 2026-10-13
@@ -30,7 +30,7 @@
 3. 已实现 rumor delivery，校验接收者与规则要求的告知者在场、交付正文作者及其来源时刻在场、原始来源、前一跳接收者 / informant 对应、root source 和 scope 一致、父事件先行、根告知者与接收者集合无环及最多 8 跳。规则不会将主张提升为世界事实。
 4. 已实现 Rust 只读快照及 evidence source：snapshot 限 512 人 / 256 KiB；evidence 查询每次最多读取最近有效路径的 4096 条记录 / 16 MiB，仅返回 applied、有效分支上的成功完整回合事件，来源正文和父链须在同一预算窗口并属于成功完整回合。恢复按原有序 mutation 组校验并只重放未应用 intent，支持组内已部分应用的父子事件；不从 partial 补事件，未知事件与不完整链失败关闭。
 5. 已接入内置 domain 对 presence / observed / rumor mutation 的登记校验和幂等 applied 回执；engine presence 模块不依赖 memory、Tauri 或 UI。`SourcePort::with_evidence_context` 接受显式有效目录、catalog 和共享数据库上下文；正式 `Storage::with_memory` 产品消费仍只使用 `told`，由 030 承接后续接线。
-6. 已覆盖策略完整性、初始快照、在场进入 / 过期 revision、跨场景观察来源拒绝、观察主体缺席、失败回合来源拒绝、传闻作者身份、部分应用恢复及成功终态；coverage 子代理修复、完整 verify 和最终 review 待完成。
+6. 已覆盖策略完整性、初始快照、在场进入 / 过期 revision、跨场景观察来源拒绝、观察主体缺席、失败回合来源拒绝、传闻作者身份、部分应用恢复、持久化损坏链和成功终态。规则累计上限及跨调用身份冲突也有回归测试。
 
 ## 预计改动
 
@@ -38,21 +38,25 @@ engine 的 scene presence / trusted-evidence source、023 record facts、043 ent
 
 ## 验收标准
 
-- [ ] 初始在场与进入 / 离开只由可信规则提交；NPC 注册本身不构成在场，固定 / 动态身份使用同一稳定 ID 约束。
-- [ ] presence 仅按 applied / effective path 重建；observed / rumor 作为记忆证据还须来源回合成功完整、mutation 已 applied，恢复补写不会从 partial 创造事件。
-- [ ] observed 有可验证范围和触发记录；rumor 每跳保留 informant、原始主张、交付来源、规则版本及不确定性。
-- [ ] 缺少主体、场景 revision、规则、因果位置或恢复回执时只读端口失败关闭；presence 最多 512 人 / 256 KiB，单次来源扫描最多 4096 记录 / 16 MiB，传闻最多 8 跳。
-- [ ] engine crate 不依赖 memory / Tauri / UI；架构、类型、注释和 044 一致，独立 review 通过。
+- [x] 初始在场与进入 / 离开只由可信规则提交；NPC 注册本身不构成在场，固定 / 动态身份使用同一稳定 ID 约束。
+- [x] presence 仅按 applied / effective path 重建；observed / rumor 作为记忆证据还须来源回合成功完整、mutation 已 applied，恢复补写不会从 partial 创造事件。
+- [x] observed 有可验证范围和触发记录；rumor 每跳保留 informant、原始主张、交付来源、规则版本及不确定性。
+- [x] 缺少主体、场景 revision、规则、因果位置或恢复回执时只读端口失败关闭；presence 最多 512 人 / 256 KiB，单次来源扫描最多 4096 记录 / 16 MiB，传闻最多 8 跳。
+- [x] engine crate 不依赖 memory / Tauri / UI；架构、类型、注释和 044 一致，独立 review 通过。
 
 ## 验证计划与结果
 
 覆盖 engine 因果路径和 SQLite 故障 / 恢复测试、有效分支过滤、事件源只读验证及全量 `bun run verify`。
 
-| 日期       | 环境 / 命令                                                  | 预期                             | 实际结果  |
-| ---------- | ------------------------------------------------------------ | -------------------------------- | --------- |
-| 2026-10-13 | `cargo clippy -p aoidos-engine --all-targets -- -D warnings` | engine lint 无警告               | 通过      |
-| 2026-10-13 | `cargo test -p aoidos-engine --lib game::presence::tests`    | 在场 / 观察 / 传闻与恢复测试通过 | 26 项通过 |
-| —          | Rust coverage、分支回退 / 扫描上限与 `bun run verify`        | 所有门禁通过                     | 待完成    |
+| 日期       | 环境 / 命令                                                    | 预期                             | 实际结果                                                  |
+| ---------- | -------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------- |
+| 2026-10-13 | `cargo clippy -p aoidos-engine --all-targets -- -D warnings`   | engine lint 无警告               | 通过                                                      |
+| 2026-10-13 | `cargo test -p aoidos-engine --lib game::presence::tests`      | 在场 / 观察 / 传闻与恢复测试通过 | 52 项通过                                                 |
+| 2026-10-13 | `cargo test --workspace`                                       | workspace 单元与文档测试通过     | 通过                                                      |
+| 2026-10-13 | `bun run lint:rust:fix` / `bun run lint:rust`                  | 自动修复后 lint 无警告           | 两项通过                                                  |
+| 2026-10-13 | `cargo test --manifest-path Cargo.toml -p aoidos-engine --lib` | engine 全量库测试通过            | 402 项通过                                                |
+| 2026-10-13 | `bun run coverage:rust`                                        | Rust coverage 门禁通过           | 113 个库目标通过；报告 2 行 LLVM 映射未覆盖，未超配置预算 |
+| 2026-10-13 | `bun run verify`                                               | 所有门禁通过                     | 通过                                                      |
 
 ## 风险与回退
 
@@ -64,4 +68,4 @@ engine 的 scene presence / trusted-evidence source、023 record facts、043 ent
 
 ## 完成摘要
 
-实现已推进；023、043 与 044 前置均已完成。当前分支已提供引擎事件源，正式 030 消费与 046 快照 IPC / UI 接线仍由各自任务承接。本任务在补齐恢复和预算边界验证、文档复核及最终 verify 前保持 in-progress。
+实现与验证已完成；023、043 与 044 前置均已完成。当前分支提供引擎事件源，正式 030 消费与 046 快照 IPC / UI 接线仍由各自任务承接。独立 review 修复了知识规则跨调用累计上限 / ID 冲突问题，未发现未解决的 P0/P1/P2。完整 `bun run verify` 通过。

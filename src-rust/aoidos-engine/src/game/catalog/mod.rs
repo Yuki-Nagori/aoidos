@@ -345,9 +345,10 @@ impl SceneCatalog {
     /// 场景未登记，或策略与实体目录不兼容时拒绝。
     pub fn with_presence_policy(mut self, policy: PresencePolicy) -> Result<Self, Fault> {
         policy.validate_catalog(&self)?;
-        if let Some(directory) = &self.entities {
-            policy.validate_directory(directory)?;
-        }
+        self.entities
+            .as_ref()
+            .map(|directory| policy.validate_directory(directory))
+            .transpose()?;
         self.presence = Some(policy);
         Ok(self)
     }

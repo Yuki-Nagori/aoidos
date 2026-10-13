@@ -157,12 +157,10 @@ impl WorldPort for BuiltinDomain {
                 )
             });
         }
-        if mutation.data.kind == "sceneAdvanced" {
-            let Fact::SceneAdvanced { position, .. } =
+        if mutation.data.kind == "sceneAdvanced"
+            && let Fact::SceneAdvanced { position, .. } =
                 Fact::decode(&mutation.data.kind, &mutation.data.payload).map_err(Fault::from)?
-            else {
-                return Err(unsupported());
-            };
+        {
             crate::game::presence::ScenePresence::validate_scene_advance(&self.catalog, &position)?;
         }
         if !matches!(
@@ -366,41 +364,7 @@ async fn open_context(
         BTreeMap::new(),
     )?
     .with_entity_directory(entity_directory.clone())?
-    .with_presence_policy(
-        crate::game::presence::PresencePolicy::new(
-            "entry".into(),
-            crate::game::presence::SceneEntryPresence {
-                rule_id: "mistbell-entry-presence-v1".into(),
-                rule_version: 1,
-                character_ids: vec!["player".into()],
-            },
-            BTreeMap::from([(
-                "entry".into(),
-                crate::game::presence::SceneEntryPresence {
-                    rule_id: "mistbell-entry-presence-v1".into(),
-                    rule_version: 1,
-                    character_ids: vec!["player".into()],
-                },
-            )]),
-            vec![],
-        )?
-        .with_knowledge_rules(
-            vec![crate::game::presence::ObservationRule {
-                rule_id: "mistbell-entry-observation-v1".into(),
-                rule_version: 1,
-                scene_id: "entry".into(),
-                scope_id: "mistbell-entry-visible-v1".into(),
-                source_kind: crate::game::presence::ObservationSourceKind::SceneNarration,
-            }],
-            vec![crate::game::presence::RumorRule {
-                rule_id: "mistbell-entry-rumor-v1".into(),
-                rule_version: 1,
-                scene_id: "entry".into(),
-                scope_id: "mistbell-entry-rumor-v1".into(),
-                require_informant_present: true,
-            }],
-        )?,
-    )?;
+    .with_presence_policy(entry_presence_policy())?;
     Context::open(
         session,
         Box::new(BuiltinDomain {
@@ -417,6 +381,46 @@ async fn open_context(
     )
     .await
 }
+
+// 此策略只含源码固定的内置规则；通用构造器的输入错误由 PresencePolicy 测试覆盖。
+fn entry_presence_policy() -> crate::game::presence::PresencePolicy {
+    crate::game::presence::PresencePolicy::new(
+        "entry".into(),
+        crate::game::presence::SceneEntryPresence {
+            rule_id: "mistbell-entry-presence-v1".into(),
+            rule_version: 1,
+            character_ids: vec!["player".into()],
+        },
+        BTreeMap::from([(
+            "entry".into(),
+            crate::game::presence::SceneEntryPresence {
+                rule_id: "mistbell-entry-presence-v1".into(),
+                rule_version: 1,
+                character_ids: vec!["player".into()],
+            },
+        )]),
+        vec![],
+    )
+    .expect("内置初始在场策略固定有效")
+    .with_knowledge_rules(
+        vec![crate::game::presence::ObservationRule {
+            rule_id: "mistbell-entry-observation-v1".into(),
+            rule_version: 1,
+            scene_id: "entry".into(),
+            scope_id: "mistbell-entry-visible-v1".into(),
+            source_kind: crate::game::presence::ObservationSourceKind::SceneNarration,
+        }],
+        vec![crate::game::presence::RumorRule {
+            rule_id: "mistbell-entry-rumor-v1".into(),
+            rule_version: 1,
+            scene_id: "entry".into(),
+            scope_id: "mistbell-entry-rumor-v1".into(),
+            require_informant_present: true,
+        }],
+    )
+    .expect("内置获知规则固定有效")
+}
+
 fn asset_unavailable() -> Fault {
     Fault::new("app.not-ready", "内置剧本或存档版本不可用")
 }

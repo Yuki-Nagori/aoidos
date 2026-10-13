@@ -247,6 +247,203 @@ async fn read_only_completion_does_not_create_world_consequences() {
 }
 
 #[tokio::test]
+async fn builtin_domain_ports_fail_closed_and_recovery_delegates_supported_facts() {
+    let fixture = Fixture::new(|_| {});
+    let context = fixture.open().await.unwrap();
+    let mut domain = context.domain.lock().unwrap();
+    let session = fixture.session.lock().unwrap();
+
+    let mutation = |kind: &str, version| WorldMutation {
+        mutation_id: uuid::Uuid::new_v4().to_string(),
+        data: MutationData {
+            version,
+            kind: kind.into(),
+            payload: serde_json::json!({}),
+        },
+    };
+    for invalid in [mutation("unknown", 1), mutation("sessionEnded", 2)] {
+        assert_eq!(
+            WorldPort::validate(domain.as_ref(), &session, std::slice::from_ref(&invalid))
+                .unwrap_err()
+                .code,
+            "engine.invalid-phase"
+        );
+        assert_eq!(
+            WorldPort::apply(
+                domain.as_mut(),
+                &session,
+                1,
+                &invalid,
+                &format::hash(b"invalid builtin mutation"),
+            )
+            .unwrap_err()
+            .code,
+            "engine.invalid-phase"
+        );
+    }
+
+    let invalid_entity = mutation("entityCreated", 1);
+    assert!(
+        WorldPort::validate(
+            domain.as_ref(),
+            &session,
+            std::slice::from_ref(&invalid_entity)
+        )
+        .is_err()
+    );
+
+    let ended = mutation("sessionEnded", 1);
+    WorldPort::validate_recovery(domain.as_ref(), &session, 1, std::slice::from_ref(&ended))
+        .unwrap();
+    let hash = format::hash(b"builtin session ended");
+    WorldPort::apply(domain.as_mut(), &session, 1, &ended, &hash).unwrap();
+    WorldPort::apply(domain.as_mut(), &session, 1, &ended, &hash).unwrap();
+    assert!(WorldPort::applied(domain.as_ref(), &ended.mutation_id, &hash).unwrap());
+
+    let invalid_advance = Fact::SceneAdvanced {
+        identity: crate::record::facts::RoundIdentity {
+            version: 1,
+            round_id: uuid::Uuid::new_v4().to_string(),
+            operation_id: uuid::Uuid::new_v4().to_string(),
+        },
+        previous_scene_id: "entry".into(),
+        position: ScenePosition {
+            scene_id: "unregistered".into(),
+            path: vec![],
+        },
+        world_revision: "0".into(),
+        mutation_id: uuid::Uuid::new_v4().to_string(),
+    }
+    .body("invalid advance")
+    .unwrap();
+    let crate::record::format::Body::System { code, data, .. } = invalid_advance else {
+        panic!("scene advance encodes as a system fact");
+    };
+    let invalid_advance = WorldMutation {
+        mutation_id: uuid::Uuid::new_v4().to_string(),
+        data: MutationData {
+            version: 1,
+            kind: code,
+            payload: data,
+        },
+    };
+    assert!(
+        WorldPort::apply(
+            domain.as_mut(),
+            &session,
+            2,
+            &invalid_advance,
+            &format::hash(b"invalid scene advance"),
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn builtin_presence_snapshot_and_validation_use_the_registered_catalog() {
+    let fixture = Fixture::new(|_| {});
+    let context = fixture.open().await.unwrap();
+    let domain = context.domain.lock().unwrap();
+    let session = fixture.session.lock().unwrap();
+
+    let snapshot = Domain::scene_presence(domain.as_ref(), &session).unwrap();
+    assert_eq!(snapshot.scene_id, "entry");
+    assert!(
+        snapshot
+            .characters
+            .iter()
+            .any(|entity| entity.id == "player")
+    );
+
+    let invalid_change = WorldMutation {
+        mutation_id: uuid::Uuid::new_v4().to_string(),
+        data: MutationData {
+            version: 1,
+            kind: "scenePresenceChanged".into(),
+            payload: serde_json::json!({}),
+        },
+    };
+    assert!(
+        WorldPort::validate(domain.as_ref(), &session, &[invalid_change]).is_err(),
+        "registered presence policy rejects malformed change payloads"
+    );
+    let invalid_recovery_change = WorldMutation {
+        mutation_id: uuid::Uuid::new_v4().to_string(),
+        data: MutationData {
+            version: 1,
+            kind: "scenePresenceChanged".into(),
+            payload: serde_json::json!({}),
+        },
+    };
+    assert_eq!(
+        WorldPort::validate_recovery(
+            domain.as_ref(),
+            &session,
+            1,
+            std::slice::from_ref(&invalid_recovery_change),
+        )
+        .unwrap_err()
+        .code,
+        "engine.invalid-phase",
+        "recovery rejects presence intents that are not on the current history path"
+    );
+}
+
+#[tokio::test]
+async fn builtin_open_rejects_incomplete_entity_seed_before_context_creation() {
+    let fixture = Fixture::new(|_| {});
+    let seed = super::super::assets::entity_directory("mistbell").unwrap();
+    let incomplete = EntityDirectory::new(
+        seed.script_revision().into(),
+        seed.revision(),
+        false,
+        vec![CanonicalEntity {
+            id: "player".into(),
+            kind: EntityKind::Character,
+            scope: "global".into(),
+            canonical_name: "玩家".into(),
+        }],
+    )
+    .unwrap();
+    let error = open_context(
+        fixture.storage.clone(),
+        fixture.session.clone(),
+        Coordinator::new(Arc::new(crate::test_support::Events::default()), 16).unwrap(),
+        Arc::new(super::super::test_support::PhaseEventsFixture::default()),
+        "雾钟地窖".into(),
+        seed.script_revision().into(),
+        incomplete,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(error.code, "app.bad-request");
+    assert_eq!(fixture.session.lock().unwrap().last_event_seq(), 0);
+}
+
+#[test]
+fn default_domain_presence_and_bounded_recovery_cache_reject_unsupported_state() {
+    let fixture = crate::record::test_support::Fixture::new();
+    let domain = super::super::test_support::domain(
+        &fixture.session.header().script_revision,
+        false,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    );
+    assert_eq!(
+        Domain::scene_presence(&domain, &fixture.session)
+            .unwrap_err()
+            .code,
+        "engine.invalid-phase"
+    );
+    assert_eq!(
+        crate::game::recovery::derive_evidence_records(&BTreeMap::new(), vec![1], 2)
+            .unwrap_err()
+            .code,
+        "store.corrupt"
+    );
+}
+
+#[tokio::test]
 async fn invalid_registered_catalog_metadata_refuses_context_before_record_changes() {
     let fixture = Fixture::new(|_| {});
     let error = open_context(

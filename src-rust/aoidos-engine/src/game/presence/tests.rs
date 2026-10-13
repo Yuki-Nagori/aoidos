@@ -233,6 +233,14 @@ fn catalog_version(
     script_revision: &str,
     catalog_revision: &str,
 ) -> (SceneCatalog, EntityDirectory) {
+    catalog_version_with_informant_presence(script_revision, catalog_revision, true)
+}
+
+fn catalog_version_with_informant_presence(
+    script_revision: &str,
+    catalog_revision: &str,
+    require_informant_present: bool,
+) -> (SceneCatalog, EntityDirectory) {
     let directory = EntityDirectory::new(
         script_revision.into(),
         1,
@@ -317,7 +325,7 @@ fn catalog_version(
             rule_version: 1,
             scene_id: "room".into(),
             scope_id: "room-rumor-v1".into(),
-            require_informant_present: true,
+            require_informant_present,
         }],
     )
     .unwrap();
@@ -523,6 +531,75 @@ fn append_failed_source_round(session: &mut Session, text: &str) -> u64 {
     source_seq
 }
 
+fn append_failed_character_source_round(
+    session: &mut Session,
+    speaker_id: &str,
+    text: &str,
+) -> u64 {
+    let input_seq = session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我尝试转述一条消息".into(),
+            mode: Some(crate::record::format::InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let identity = RoundIdentity {
+        version: 1,
+        round_id: uuid::Uuid::new_v4().to_string(),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+    };
+    session
+        .append(
+            Fact::RoundAccepted {
+                identity: identity.clone(),
+                input_seq,
+                mode: crate::record::format::InputMode::InCharacter,
+                dice_mode: DiceMode::Manual,
+                profile_id: "default".into(),
+                profile_revision: "1".into(),
+                target: GenerationTarget::CharacterSpeech {
+                    speaker_id: speaker_id.into(),
+                },
+                scene_id: "room".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("接纳失败的角色发言回合")
+            .unwrap(),
+        )
+        .unwrap();
+    session
+        .append(
+            Fact::CheckSkipped {
+                identity: identity.clone(),
+                reason: SkipReason::NoCheck,
+                world_revision: "world-v1".into(),
+            }
+            .body("无需检定")
+            .unwrap(),
+        )
+        .unwrap();
+    let source_seq = append_completed_character_line(session, speaker_id, text);
+    session
+        .append(
+            Fact::RoundEnded {
+                identity,
+                outcome: crate::ports::Outcome::Failed,
+                through_seq: source_seq,
+                completed_steps: vec![Step::Check, Step::Narration],
+                error: Some(crate::fault::Fault::new(
+                    "engine.invalid-phase",
+                    "角色发言回合未完成",
+                )),
+            }
+            .body("失败的角色发言回合")
+            .unwrap(),
+        )
+        .unwrap();
+    source_seq
+}
+
 fn evidence_source(seq: u64, text: &str) -> EvidenceSource {
     EvidenceSource {
         record_seq: seq,
@@ -656,6 +733,65 @@ fn applied_presence_changes_update_snapshot_and_stale_revisions_are_rejected() {
         )
         .unwrap_err();
     assert_eq!(error.code, "engine.invalid-phase");
+}
+
+#[test]
+fn presence_derivation_ignores_a_committed_intent_without_its_applied_receipt() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let change = ScenePresence::prepare_change(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        "keeper-presence-v1",
+        "keeper",
+        PresenceAction::Enter,
+    )
+    .unwrap();
+    commit_presence_change(&mut fixture, &mut port, change);
+
+    assert_eq!(
+        ScenePresence::snapshot(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap()
+        .characters
+        .len(),
+        2,
+        "a committed and applied intent updates the derived scene"
+    );
+
+    let missing_receipt_port = self::port(&fixture.session);
+    let snapshot = ScenePresence::snapshot(
+        &missing_receipt_port.connection,
+        &fixture.session,
+        &missing_receipt_port.catalog,
+        &missing_receipt_port.directory,
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot
+            .characters
+            .iter()
+            .map(|character| character.id.as_str())
+            .collect::<Vec<_>>(),
+        ["player"],
+        "an intent without its durable application receipt must not affect current presence"
+    );
+    assert!(
+        ScenePresence::snapshot(
+            &Connection::open_in_memory().unwrap(),
+            &fixture.session,
+            &missing_receipt_port.catalog,
+            &missing_receipt_port.directory,
+        )
+        .is_err(),
+        "an unavailable applied-receipt store must fail closed"
+    );
 }
 
 #[test]
@@ -1108,6 +1244,32 @@ fn knowledge_rules_reject_invalid_identity_duplicates_and_total_rule_overflow() 
             .with_knowledge_rules(vec![], vec![rumor("duplicate-v1"), rumor("duplicate-v1")])
             .is_err()
     );
+    let existing_observation = policy
+        .clone()
+        .with_knowledge_rules(vec![observation("shared-across-calls")], vec![])
+        .unwrap();
+    assert!(
+        existing_observation
+            .with_knowledge_rules(vec![], vec![rumor("shared-across-calls")])
+            .is_err()
+    );
+
+    let first_batch = (0..128)
+        .map(|index| observation(&format!("first-batch-{index}")))
+        .collect();
+    let second_batch = (0..128)
+        .map(|index| observation(&format!("second-batch-{index}")))
+        .collect();
+    let accumulated = policy
+        .clone()
+        .with_knowledge_rules(first_batch, vec![])
+        .unwrap();
+    assert!(
+        accumulated
+            .with_knowledge_rules(second_batch, vec![])
+            .is_err()
+    );
+
     let too_many_observations = (0..=MAX_RULES)
         .map(|index| observation(&format!("observation-{index}")))
         .collect();
@@ -1227,11 +1389,11 @@ fn presence_change_preparation_enforces_rule_scene_and_membership() {
 fn scene_advance_requires_a_registered_scene_entry() {
     let (catalog, _) = catalog(&crate::record::format::hash(b"scene-advance"));
     let position = ScenePosition {
-        scene_id: "room".into(),
+        scene_id: "hall".into(),
         path: vec![SceneNode {
             kind: "scene".into(),
-            id: "room".into(),
-            title: "房间".into(),
+            id: "hall".into(),
+            title: "走廊".into(),
         }],
     };
     assert!(ScenePresence::validate_scene_advance(&catalog, &position).is_ok());
@@ -1264,7 +1426,7 @@ fn scene_advance_requires_a_registered_scene_entry() {
         &port.directory,
     )
     .unwrap();
-    assert_eq!(snapshot.scene_id, "room");
+    assert_eq!(snapshot.scene_id, "hall");
 
     let missing_entry = ScenePosition {
         scene_id: "unregistered".into(),
@@ -1313,11 +1475,11 @@ fn pending_world_intent_blocks_presence_reads_and_new_mutations() {
     let mut port = port(&fixture.session);
     port.fail_apply = true;
     let position = ScenePosition {
-        scene_id: "room".into(),
+        scene_id: "hall".into(),
         path: vec![SceneNode {
             kind: "scene".into(),
-            id: "room".into(),
-            title: "房间".into(),
+            id: "hall".into(),
+            title: "走廊".into(),
         }],
     };
     assert!(
@@ -1340,6 +1502,19 @@ fn pending_world_intent_blocks_presence_reads_and_new_mutations() {
                 &mut port,
             )
             .is_err()
+    );
+
+    assert_eq!(
+        derive(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap()
+        .scene_id,
+        "room",
+        "a committed scene change without its applied receipt must not advance presence"
     );
 
     assert!(
@@ -1378,6 +1553,51 @@ fn pending_world_intent_blocks_presence_reads_and_new_mutations() {
             "keeper-presence-v1",
             "keeper",
             PresenceAction::Enter,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn unknown_record_keeps_presence_derivation_read_only_and_rejects_mutation_validation() {
+    let mut fixture = Fixture::new();
+    let port = port(&fixture.session);
+    append_completed_narration(&mut fixture.session, "房间里传来一阵轻响。");
+
+    // 未知记录重开后只读保留；状态派生兼容跳过，但公开校验仍必须失败关闭。
+    let next_seq = fixture.session.last_event_seq() + 1;
+    let raw = serde_json::json!({
+        "seq": next_seq,
+        "createdAt": format::now(),
+        "kind": "futurePresenceCheckpoint",
+        "payload": {"sceneId": "room"},
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.path)
+        .unwrap();
+    use std::io::Write;
+    writeln!(file, "{raw}").unwrap();
+    drop(file);
+
+    fixture.session = Session::open(fixture.path.clone(), fixture.events.clone()).unwrap();
+    assert!(fixture.session.is_read_only());
+    assert!(
+        derive(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .is_ok()
+    );
+    assert!(
+        ScenePresence::validate_mutations(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &[],
         )
         .is_err()
     );
@@ -1448,6 +1668,66 @@ fn recovery_validation_rebuilds_the_root_branch_baseline_before_an_intent() {
             &[],
         )
         .is_err()
+    );
+}
+
+#[test]
+fn presence_recovery_fails_closed_when_prior_applied_receipts_are_unavailable() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let first_change = ScenePresence::prepare_change(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        "keeper-presence-v1",
+        "keeper",
+        PresenceAction::Enter,
+    )
+    .unwrap();
+    commit_presence_change(&mut fixture, &mut port, first_change);
+
+    let second_change = ScenePresence::prepare_change(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        "keeper-presence-v1",
+        "messenger",
+        PresenceAction::Enter,
+    )
+    .unwrap();
+    let narrative_seq = append_completed_narration(&mut fixture.session, "信使也走进房间。 ");
+    let record_seq = fixture
+        .session
+        .commit_world(
+            Fact::SettlementPlanned {
+                identity: RoundIdentity {
+                    version: 1,
+                    round_id: uuid::Uuid::new_v4().to_string(),
+                    operation_id: uuid::Uuid::new_v4().to_string(),
+                },
+                narrative_seq,
+                world_revision: "world-v1".into(),
+                mutations: vec![second_change.clone()],
+            }
+            .body("第二个在场意图")
+            .unwrap(),
+            &mut port,
+        )
+        .unwrap();
+
+    assert!(
+        ScenePresence::validate_recovery_mutations(
+            &Connection::open_in_memory().unwrap(),
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            record_seq,
+            &[second_change],
+        )
+        .is_err(),
+        "recovery cannot validate a later intent without the prior applied-state ledger"
     );
 }
 
@@ -1558,8 +1838,7 @@ fn observed_evidence_requires_the_subject_to_be_present_and_a_registered_rule() 
             presence_revision: snapshot.presence_revision.clone(),
         },
         rule,
-    )
-    .unwrap();
+    );
     ScenePresence::validate_mutations(
         &port.connection,
         &fixture.session,
@@ -1587,8 +1866,7 @@ fn observed_evidence_requires_the_subject_to_be_present_and_a_registered_rule() 
             .presence_revision,
         },
         rule,
-    )
-    .unwrap();
+    );
     assert!(
         ScenePresence::validate_mutations(
             &port.connection,
@@ -1631,8 +1909,7 @@ fn observed_evidence_rejects_malformed_payloads_and_untrusted_source_ranges() {
             presence_revision: snapshot.presence_revision,
         },
         rule,
-    )
-    .unwrap();
+    );
 
     let mut unsupported_version = valid.clone();
     unsupported_version.data.version = 2;
@@ -1732,8 +2009,7 @@ fn duplicate_observed_evidence_identity_is_rejected_within_one_settlement() {
             presence_revision: snapshot.presence_revision,
         },
         rule,
-    )
-    .unwrap();
+    );
 
     assert!(
         ScenePresence::validate_mutations(
@@ -1804,8 +2080,7 @@ fn observed_evidence_cannot_use_narration_from_another_scene() {
             presence_revision: snapshot.presence_revision,
         },
         rule,
-    )
-    .unwrap();
+    );
 
     assert!(
         ScenePresence::validate_mutations(
@@ -1857,8 +2132,7 @@ fn observed_evidence_rejects_player_input_as_a_narration_source() {
             presence_revision: snapshot.presence_revision,
         },
         rule,
-    )
-    .unwrap();
+    );
 
     assert!(
         ScenePresence::validate_mutations(
@@ -1869,6 +2143,545 @@ fn observed_evidence_rejects_player_input_as_a_narration_source() {
             &[event],
         )
         .is_err()
+    );
+}
+
+#[test]
+fn observed_evidence_is_hidden_until_its_round_finishes_successfully() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let identity = begin_round(&mut fixture.session);
+    let text = "玩家注意到石门边缘有一道新划痕。";
+    let narrative_seq = append_completed_narration(&mut fixture.session, text);
+    let snapshot = ScenePresence::snapshot(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+    )
+    .unwrap();
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .observation_rule("room-observation-v1")
+        .unwrap();
+    let event = ObservedEvent::mutation(
+        &fixture.session,
+        &port.catalog,
+        ObservedEvidenceInput {
+            subject_id: "player".into(),
+            source: evidence_source(narrative_seq, text),
+            scene_id: snapshot.scene_id,
+            scope_id: rule.scope_id.clone(),
+            presence_revision: snapshot.presence_revision,
+        },
+        rule,
+    );
+    let settlement_seq = fixture
+        .session
+        .commit_world(
+            Fact::SettlementPlanned {
+                identity: identity.clone(),
+                narrative_seq,
+                world_revision: "world-v1".into(),
+                mutations: vec![event.clone()],
+            }
+            .body("登记观察事实")
+            .unwrap(),
+            &mut port,
+        )
+        .unwrap();
+
+    assert!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &event.mutation_id,
+        )
+        .unwrap()
+        .is_none(),
+        "applied evidence is not readable before its round has a successful terminal record"
+    );
+    assert_eq!(
+        ScenePresence::snapshot(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap()
+        .scene_id,
+        "room",
+        "deriving presence ignores knowledge-only mutations"
+    );
+
+    fixture
+        .session
+        .append(
+            Fact::RoundSettled {
+                identity: identity.clone(),
+                narrative_seq,
+                settlement_seq,
+                applied_through_mutation_id: Some(event.mutation_id.clone()),
+            }
+            .body("观察事实结算完成")
+            .unwrap(),
+        )
+        .unwrap();
+    let through_seq = fixture
+        .session
+        .append(
+            Fact::SceneStayed {
+                identity: identity.clone(),
+                scene_id: "room".into(),
+                world_revision: "world-v1".into(),
+            }
+            .body("留在原场景")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundEnded {
+                identity,
+                outcome: crate::ports::Outcome::Completed,
+                through_seq,
+                completed_steps: vec![
+                    Step::Check,
+                    Step::Narration,
+                    Step::Settlement,
+                    Step::Advance,
+                ],
+                error: None,
+            }
+            .body("观察回合完成")
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &event.mutation_id,
+        )
+        .unwrap()
+        .is_some()
+    );
+}
+
+#[test]
+fn observed_evidence_without_a_matching_accepted_round_is_not_published() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let text = "门边缘留着一道新划痕。";
+    let narrative_seq = append_completed_narration(&mut fixture.session, text);
+    let snapshot = ScenePresence::snapshot(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+    )
+    .unwrap();
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .observation_rule("room-observation-v1")
+        .unwrap();
+    let event = ObservedEvent::mutation(
+        &fixture.session,
+        &port.catalog,
+        ObservedEvidenceInput {
+            subject_id: "player".into(),
+            source: evidence_source(narrative_seq, text),
+            scene_id: snapshot.scene_id,
+            scope_id: rule.scope_id.clone(),
+            presence_revision: snapshot.presence_revision,
+        },
+        rule,
+    );
+    let identity = RoundIdentity {
+        version: 1,
+        round_id: uuid::Uuid::new_v4().to_string(),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+    };
+    fixture
+        .session
+        .commit_world(
+            Fact::SettlementPlanned {
+                identity: identity.clone(),
+                narrative_seq,
+                world_revision: "world-v1".into(),
+                mutations: vec![event.clone()],
+            }
+            .body("无接纳回合的证据意图")
+            .unwrap(),
+            &mut port,
+        )
+        .unwrap();
+
+    assert!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &event.mutation_id,
+        )
+        .unwrap()
+        .is_none(),
+        "a settlement identity cannot publish evidence unless its matching input was accepted"
+    );
+
+    let input_seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我刚才发现了划痕。".into(),
+            mode: Some(crate::record::format::InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity,
+                input_seq,
+                mode: crate::record::format::InputMode::InCharacter,
+                dice_mode: DiceMode::Manual,
+                profile_id: "default".into(),
+                profile_revision: "1".into(),
+                target: GenerationTarget::Narration,
+                scene_id: "room".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("迟到的回合接纳")
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &event.mutation_id,
+        )
+        .unwrap()
+        .is_none(),
+        "a later acceptance cannot retroactively certify an earlier settlement"
+    );
+    assert!(
+        SceneEvidence::get(
+            &Connection::open_in_memory().unwrap(),
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &event.mutation_id,
+        )
+        .is_err(),
+        "an unavailable applied-receipt store must fail closed"
+    );
+}
+
+#[test]
+fn evidence_lookup_fails_closed_when_the_round_input_falls_out_of_the_shared_window() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let input_seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "x".repeat(crate::record::format::MAX_TEXT),
+            mode: Some(crate::record::format::InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+
+    // These cancelled outputs are valid historical records, but consume enough of the
+    // bounded suffix that the large input no longer fits while the newer round remains.
+    for _ in 0..127 {
+        fixture
+            .session
+            .append(Body::Narration {
+                text: "x".repeat(crate::record::format::MAX_TEXT / 2),
+                turn_id: uuid::Uuid::new_v4().to_string(),
+                terminal: Terminal::Cancelled,
+            })
+            .unwrap();
+    }
+
+    let identity = RoundIdentity {
+        version: 1,
+        round_id: uuid::Uuid::new_v4().to_string(),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+    };
+    let accepted_seq = fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity: identity.clone(),
+                input_seq,
+                mode: crate::record::format::InputMode::InCharacter,
+                dice_mode: DiceMode::Manual,
+                profile_id: "default".into(),
+                profile_revision: "1".into(),
+                target: GenerationTarget::Narration,
+                scene_id: "room".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("接纳回合")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::CheckSkipped {
+                identity: identity.clone(),
+                reason: SkipReason::NoCheck,
+                world_revision: "world-v1".into(),
+            }
+            .body("无需检定")
+            .unwrap(),
+        )
+        .unwrap();
+    let text = "玩家在门框上发现一道新刻痕。";
+    let narrative_seq = append_completed_narration(&mut fixture.session, text);
+    let snapshot = ScenePresence::snapshot(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+    )
+    .unwrap();
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .observation_rule("room-observation-v1")
+        .unwrap();
+    let event = ObservedEvent::mutation(
+        &fixture.session,
+        &port.catalog,
+        ObservedEvidenceInput {
+            subject_id: "player".into(),
+            source: evidence_source(narrative_seq, text),
+            scene_id: snapshot.scene_id,
+            scope_id: rule.scope_id.clone(),
+            presence_revision: snapshot.presence_revision,
+        },
+        rule,
+    );
+    finish_round(
+        &mut fixture.session,
+        &mut port,
+        identity,
+        narrative_seq,
+        vec![event.clone()],
+    );
+
+    let window = fixture
+        .session
+        .bounded_current_records(MAX_EVIDENCE_RECORDS, MAX_EVIDENCE_BYTES)
+        .unwrap();
+    assert!(!window.contains_key(&input_seq));
+    assert!(window.contains_key(&accepted_seq));
+    assert!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &event.mutation_id,
+        )
+        .unwrap()
+        .is_none(),
+        "an incomplete query window cannot certify a successful round"
+    );
+
+    // Keep a newer verified event in the query window. Source reconstruction must
+    // skip the older accepted round whose input is outside the same bounded suffix.
+    let identity = begin_round(&mut fixture.session);
+    let text = "门上的新刻痕仍然清晰。";
+    let source_seq = append_completed_narration(&mut fixture.session, text);
+    let snapshot = ScenePresence::snapshot(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+    )
+    .unwrap();
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .observation_rule("room-observation-v1")
+        .unwrap();
+    let recent_event = ObservedEvent::mutation(
+        &fixture.session,
+        &port.catalog,
+        ObservedEvidenceInput {
+            subject_id: "player".into(),
+            source: evidence_source(source_seq, text),
+            scene_id: snapshot.scene_id,
+            scope_id: rule.scope_id.clone(),
+            presence_revision: snapshot.presence_revision,
+        },
+        rule,
+    );
+    finish_round(
+        &mut fixture.session,
+        &mut port,
+        identity,
+        source_seq,
+        vec![recent_event.clone()],
+    );
+    let recent_window = fixture
+        .session
+        .bounded_current_records(MAX_EVIDENCE_RECORDS, MAX_EVIDENCE_BYTES)
+        .unwrap();
+    assert!(!recent_window.contains_key(&input_seq));
+    assert!(recent_window.contains_key(&accepted_seq));
+    assert!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &recent_event.mutation_id,
+        )
+        .unwrap()
+        .is_some(),
+        "a newer complete round remains verifiable when an older round input falls out of the bounded window"
+    );
+}
+
+#[test]
+fn earlier_orphan_round_end_cannot_vouch_for_a_later_round_source() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let prior_seq = append_completed_narration(&mut fixture.session, "此前的旧记录。 ");
+    let identity = RoundIdentity {
+        version: 1,
+        round_id: uuid::Uuid::new_v4().to_string(),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+    };
+    fixture
+        .session
+        .append(
+            Fact::RoundEnded {
+                identity: identity.clone(),
+                outcome: crate::ports::Outcome::Completed,
+                through_seq: prior_seq,
+                completed_steps: vec![
+                    Step::Check,
+                    Step::Narration,
+                    Step::Settlement,
+                    Step::Advance,
+                ],
+                error: None,
+            }
+            .body("孤立的旧终态")
+            .unwrap(),
+        )
+        .unwrap();
+    let input_seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "检查门边的刻痕。".into(),
+            mode: Some(crate::record::format::InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity: identity.clone(),
+                input_seq,
+                mode: crate::record::format::InputMode::InCharacter,
+                dice_mode: DiceMode::Manual,
+                profile_id: "default".into(),
+                profile_revision: "1".into(),
+                target: GenerationTarget::Narration,
+                scene_id: "room".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("接纳新回合")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::CheckSkipped {
+                identity: identity.clone(),
+                reason: SkipReason::NoCheck,
+                world_revision: "world-v1".into(),
+            }
+            .body("无需检定")
+            .unwrap(),
+        )
+        .unwrap();
+    let text = "门框上有一道新鲜的划痕。";
+    let narrative_seq = append_completed_narration(&mut fixture.session, text);
+    let snapshot = ScenePresence::snapshot(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+    )
+    .unwrap();
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .observation_rule("room-observation-v1")
+        .unwrap();
+    let event = ObservedEvent::mutation(
+        &fixture.session,
+        &port.catalog,
+        ObservedEvidenceInput {
+            subject_id: "player".into(),
+            source: evidence_source(narrative_seq, text),
+            scene_id: snapshot.scene_id,
+            scope_id: rule.scope_id.clone(),
+            presence_revision: snapshot.presence_revision,
+        },
+        rule,
+    );
+    finish_round(
+        &mut fixture.session,
+        &mut port,
+        identity,
+        narrative_seq,
+        vec![event.clone()],
+    );
+
+    assert_eq!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &event.mutation_id,
+        )
+        .unwrap_err()
+        .code,
+        "engine.invalid-phase",
+        "an earlier end marker with the same identity cannot certify this round's source"
     );
 }
 
@@ -1919,8 +2732,7 @@ fn rumor_evidence_requires_present_receiver_and_matching_delivery_author() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     assert!(
         ScenePresence::validate_mutations(
             &port.connection,
@@ -1943,8 +2755,7 @@ fn rumor_evidence_requires_present_receiver_and_matching_delivery_author() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     assert!(
         ScenePresence::validate_mutations(
             &port.connection,
@@ -1979,8 +2790,7 @@ fn rumor_evidence_requires_present_receiver_and_matching_delivery_author() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     assert!(
         ScenePresence::validate_mutations(
             &port.connection,
@@ -2005,8 +2815,7 @@ fn rumor_evidence_requires_present_receiver_and_matching_delivery_author() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     assert!(
         ScenePresence::validate_mutations(
             &port.connection,
@@ -2033,8 +2842,7 @@ fn rumor_evidence_requires_present_receiver_and_matching_delivery_author() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     assert!(
         ScenePresence::validate_mutations(
             &port.connection,
@@ -2044,6 +2852,79 @@ fn rumor_evidence_requires_present_receiver_and_matching_delivery_author() {
             &[wrong_root],
         )
         .is_err()
+    );
+}
+
+#[test]
+fn rumor_source_must_be_present_when_spoken_even_if_the_rule_allows_an_absent_informant() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let (catalog, directory) = catalog_version_with_informant_presence(
+        &fixture.session.header().script_revision,
+        "catalog-v1",
+        false,
+    );
+    port.catalog = catalog;
+    port.directory = directory;
+
+    let enter = ScenePresence::prepare_change(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        "keeper-presence-v1",
+        "keeper",
+        PresenceAction::Enter,
+    )
+    .unwrap();
+    commit_presence_change(&mut fixture, &mut port, enter);
+    let leave = ScenePresence::prepare_change(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        "keeper-presence-v1",
+        "keeper",
+        PresenceAction::Leave,
+    )
+    .unwrap();
+    commit_presence_change(&mut fixture, &mut port, leave);
+
+    let text = "守门人离开后，仍试图传来井下回声的消息。";
+    let source = evidence_source(
+        append_completed_character_line(&mut fixture.session, "keeper", text),
+        text,
+    );
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .rumor_rule("room-rumor-v1")
+        .unwrap();
+    let rumor = RumorDelivery::mutation(
+        &fixture.session,
+        &port.catalog,
+        "player".into(),
+        "keeper".into(),
+        source.clone(),
+        source,
+        None,
+        "room".into(),
+        rule.scope_id.clone(),
+        RumorUncertainty::Unverified,
+        rule,
+    );
+
+    assert!(
+        ScenePresence::validate_mutations(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &[rumor],
+        )
+        .is_err(),
+        "a rumor source must establish the informant's presence when the source was recorded"
     );
 }
 
@@ -2121,7 +3002,6 @@ fn rumor_sources_accept_in_character_player_speech_but_reject_other_bodies() {
             RumorUncertainty::Unverified,
             rule,
         )
-        .unwrap()
     };
     let validate = |event: &WorldMutation| {
         ScenePresence::validate_mutations(
@@ -2227,8 +3107,7 @@ fn rumor_delivery_chain_accepts_eight_hops_and_rejects_a_ninth() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     let mut mutations = vec![root.clone()];
     let recipients = std::iter::once("messenger".to_owned())
         .chain(relay_ids.iter().take(6).cloned())
@@ -2254,8 +3133,7 @@ fn rumor_delivery_chain_accepts_eight_hops_and_rejects_a_ninth() {
             rule.scope_id.clone(),
             RumorUncertainty::Unverified,
             rule,
-        )
-        .unwrap();
+        );
         previous = next.clone();
         mutations.push(next);
         assert_eq!(index + 2, mutations.len());
@@ -2285,8 +3163,7 @@ fn rumor_delivery_chain_accepts_eight_hops_and_rejects_a_ninth() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     mutations.push(ninth);
     assert!(
         ScenePresence::validate_mutations(
@@ -2352,8 +3229,7 @@ fn recovery_validates_and_finishes_a_partially_applied_rumor_group() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     let second = RumorDelivery::mutation(
         &fixture.session,
         &port.catalog,
@@ -2366,8 +3242,7 @@ fn recovery_validates_and_finishes_a_partially_applied_rumor_group() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     let mutations = vec![first.clone(), second.clone()];
     let intent = Fact::SettlementPlanned {
         identity: RoundIdentity {
@@ -2509,8 +3384,7 @@ fn completed_rumor_round_returns_only_the_verified_delivery_metadata() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         &rule,
-    )
-    .unwrap();
+    );
     let settlement_seq = fixture
         .session
         .commit_world(
@@ -2675,8 +3549,7 @@ fn completed_rumor_round_returns_only_the_verified_delivery_metadata() {
         rule.scope_id.clone(),
         RumorUncertainty::Disputed,
         &rule,
-    )
-    .unwrap();
+    );
     let mut missing_parent = second_event.clone();
     missing_parent.data.payload["previousEvidenceId"] =
         serde_json::json!(uuid::Uuid::new_v4().to_string());
@@ -2988,8 +3861,7 @@ fn evidence_query_uses_a_shared_recent_window_in_long_sessions() {
                 presence_revision: snapshot.presence_revision,
             },
             rule,
-        )
-        .unwrap();
+        );
         finish_round(
             &mut fixture.session,
             &mut port,
@@ -3068,8 +3940,7 @@ fn evidence_query_rejects_a_new_event_whose_source_is_outside_the_byte_window() 
             presence_revision: snapshot.presence_revision,
         },
         rule,
-    )
-    .unwrap();
+    );
     finish_round(
         &mut fixture.session,
         &mut port,
@@ -3150,8 +4021,7 @@ fn rumor_relay_cannot_use_a_parent_outside_the_shared_query_window() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         &rule,
-    )
-    .unwrap();
+    );
     finish_round(
         &mut fixture.session,
         &mut port,
@@ -3205,8 +4075,7 @@ fn rumor_relay_cannot_use_a_parent_outside_the_shared_query_window() {
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         &rule,
-    )
-    .unwrap();
+    );
     let last_event_seq = fixture.session.last_event_seq();
     assert!(
         fixture
@@ -3274,8 +4143,7 @@ fn recovery_anchors_rumor_parent_lookup_before_each_intent() {
             rule.scope_id.clone(),
             RumorUncertainty::Unverified,
             &rule,
-        )
-        .unwrap();
+        );
         finish_round(
             &mut fixture.session,
             &mut port,
@@ -3303,8 +4171,7 @@ fn recovery_anchors_rumor_parent_lookup_before_each_intent() {
             rule.scope_id.clone(),
             RumorUncertainty::Unverified,
             &rule,
-        )
-        .unwrap();
+        );
         if later_history {
             finish_round(
                 &mut fixture.session,
@@ -3346,7 +4213,7 @@ fn recovery_anchors_rumor_parent_lookup_before_each_intent() {
                     .session
                     .commit_world(
                         Fact::SettlementPlanned {
-                            identity,
+                            identity: identity.clone(),
                             narrative_seq: reply_seq,
                             world_revision: "world-v1".into(),
                             mutations: vec![child.clone()],
@@ -3390,17 +4257,17 @@ fn recovery_anchors_rumor_parent_lookup_before_each_intent() {
             .unwrap()
         );
         assert!(!fixture.session.needs_recovery());
+        let recovered_evidence = SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &child.mutation_id,
+        )
+        .unwrap();
         assert!(
-            SceneEvidence::get(
-                &port.connection,
-                &fixture.session,
-                &port.catalog,
-                &port.directory,
-                &child.mutation_id,
-            )
-            .unwrap()
-            .is_none(),
-            "incomplete rounds and events outside the current window are not published"
+            recovered_evidence.is_none(),
+            "a recovered intent without a successful terminal, or an event outside the bounded window, is not published"
         );
     }
 }
@@ -3482,8 +4349,7 @@ fn read_only_evidence_requires_an_applied_event_and_a_complete_successful_round(
             presence_revision: snapshot.presence_revision.clone(),
         },
         rule,
-    )
-    .unwrap();
+    );
     let successful_source_event = ObservedEvent::mutation(
         &fixture.session,
         &port.catalog,
@@ -3495,8 +4361,7 @@ fn read_only_evidence_requires_an_applied_event_and_a_complete_successful_round(
             presence_revision: snapshot.presence_revision.clone(),
         },
         rule,
-    )
-    .unwrap();
+    );
     let settlement_seq = fixture
         .session
         .commit_world(
@@ -3638,8 +4503,7 @@ fn read_only_evidence_requires_an_applied_event_and_a_complete_successful_round(
         rule.scope_id.clone(),
         RumorUncertainty::Unverified,
         rule,
-    )
-    .unwrap();
+    );
     assert!(
         ScenePresence::validate_mutations(
             &port.connection,
@@ -3651,4 +4515,1277 @@ fn read_only_evidence_requires_an_applied_event_and_a_complete_successful_round(
         .is_err(),
         "an observed event cannot serve as the previous delivery of a rumor chain"
     );
+}
+
+#[test]
+fn rumor_cannot_be_delivered_to_its_own_informant_before_commit() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let enter_keeper = ScenePresence::prepare_change(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        "keeper-presence-v1",
+        "keeper",
+        PresenceAction::Enter,
+    )
+    .unwrap();
+    commit_presence_change(&mut fixture, &mut port, enter_keeper);
+
+    let identity = begin_round(&mut fixture.session);
+    let source_text = "守门人把井下的回声记在心里。";
+    let source_seq = append_completed_character_line(&mut fixture.session, "keeper", source_text);
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .rumor_rule("room-rumor-v1")
+        .unwrap();
+    let rumor = RumorDelivery::mutation(
+        &fixture.session,
+        &port.catalog,
+        "keeper".into(),
+        "keeper".into(),
+        evidence_source(source_seq, source_text),
+        evidence_source(source_seq, source_text),
+        None,
+        "room".into(),
+        rule.scope_id.clone(),
+        RumorUncertainty::Unverified,
+        rule,
+    );
+    let mutation_id = rumor.mutation_id.clone();
+    let next_sequence = fixture.session.next_sequence();
+    let applied_count = port.applied_count;
+    let intent = Fact::SettlementPlanned {
+        identity,
+        narrative_seq: source_seq,
+        world_revision: "world-v1".into(),
+        mutations: vec![rumor],
+    }
+    .body("拒绝向告知者本人交付传闻")
+    .unwrap();
+
+    let error = fixture.session.commit_world(intent, &mut port).unwrap_err();
+
+    assert_eq!(error.code, "engine.invalid-phase");
+    assert_eq!(fixture.session.next_sequence(), next_sequence);
+    assert_eq!(port.applied_count, applied_count);
+    assert!(!fixture.session.needs_recovery());
+    let has_receipt = port
+        .connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM store_applied WHERE id = ?1)",
+            [&mutation_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap();
+    assert!(!has_receipt);
+}
+
+#[test]
+fn read_only_rumor_rejects_source_from_a_failed_speaker_round() {
+    let mut fixture = Fixture::new();
+    let mut port = port(&fixture.session);
+    let enter = ScenePresence::prepare_change(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        "keeper-presence-v1",
+        "keeper",
+        PresenceAction::Enter,
+    )
+    .unwrap();
+    commit_presence_change(&mut fixture, &mut port, enter);
+
+    let failed_text = "玩家在失败的转述回合里听到井下回声。";
+    let failed_source_seq =
+        append_failed_character_source_round(&mut fixture.session, "player", failed_text);
+    let identity = begin_round(&mut fixture.session);
+    let narrative_seq = append_completed_narration(&mut fixture.session, "门边传来一阵回声。 ");
+    let rule = port
+        .catalog
+        .presence_policy()
+        .unwrap()
+        .rumor_rule("room-rumor-v1")
+        .unwrap();
+    let failed_source = evidence_source(failed_source_seq, failed_text);
+    let rumor = RumorDelivery::mutation(
+        &fixture.session,
+        &port.catalog,
+        "keeper".into(),
+        "player".into(),
+        failed_source.clone(),
+        failed_source,
+        None,
+        "room".into(),
+        rule.scope_id.clone(),
+        RumorUncertainty::Unverified,
+        rule,
+    );
+    finish_round(
+        &mut fixture.session,
+        &mut port,
+        identity,
+        narrative_seq,
+        vec![rumor.clone()],
+    );
+
+    assert_eq!(
+        SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &rumor.mutation_id,
+        )
+        .unwrap_err()
+        .code,
+        "engine.invalid-phase",
+        "a successful delivery cannot make a source from a failed round trustworthy"
+    );
+}
+
+mod persisted_evidence_faults {
+    use super::*;
+
+    fn parent_fixture() -> (Fixture, Port, WorldMutation, EvidenceSource) {
+        let mut fixture = Fixture::new();
+        let mut port = port(&fixture.session);
+        for entity_id in ["keeper", "messenger"] {
+            let enter = ScenePresence::prepare_change(
+                &port.connection,
+                &fixture.session,
+                &port.catalog,
+                &port.directory,
+                "keeper-presence-v1",
+                entity_id,
+                PresenceAction::Enter,
+            )
+            .unwrap();
+            commit_presence_change(&mut fixture, &mut port, enter);
+        }
+        let identity = begin_round_for_target(
+            &mut fixture.session,
+            GenerationTarget::CharacterSpeech {
+                speaker_id: "keeper".into(),
+            },
+        );
+        let text = "守门人告诉玩家，井里有回声。";
+        let source_seq = append_completed_character_line(&mut fixture.session, "keeper", text);
+        let source = evidence_source(source_seq, text);
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .rumor_rule("room-rumor-v1")
+            .unwrap();
+        let parent = RumorDelivery::mutation(
+            &fixture.session,
+            &port.catalog,
+            "player".into(),
+            "keeper".into(),
+            source.clone(),
+            source.clone(),
+            None,
+            "room".into(),
+            rule.scope_id.clone(),
+            RumorUncertainty::Unverified,
+            rule,
+        );
+        finish_round(
+            &mut fixture.session,
+            &mut port,
+            identity,
+            source_seq,
+            vec![parent.clone()],
+        );
+        (fixture, port, parent, source)
+    }
+
+    #[test]
+    fn recovery_parent_window_read_failure_preserves_the_pending_intent() {
+        let (mut fixture, mut port, parent, source) = parent_fixture();
+        let identity = begin_round_for_target(
+            &mut fixture.session,
+            GenerationTarget::CharacterSpeech {
+                speaker_id: "player".into(),
+            },
+        );
+        let text = "玩家把井里的回声转告信使。";
+        let reply_seq = append_completed_character_line(&mut fixture.session, "player", text);
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .rumor_rule("room-rumor-v1")
+            .unwrap();
+        let child = RumorDelivery::mutation(
+            &fixture.session,
+            &port.catalog,
+            "messenger".into(),
+            "player".into(),
+            evidence_source(reply_seq, text),
+            source,
+            Some(parent.mutation_id),
+            "room".into(),
+            rule.scope_id.clone(),
+            RumorUncertainty::Unverified,
+            rule,
+        );
+        let record_seq = fixture.session.next_sequence();
+        port.fail_apply = true;
+        let error = fixture
+            .session
+            .commit_world(
+                Fact::SettlementPlanned {
+                    identity,
+                    narrative_seq: reply_seq,
+                    world_revision: "world-v1".into(),
+                    mutations: vec![child.clone()],
+                }
+                .body("等待恢复的传闻意图")
+                .unwrap(),
+                &mut port,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "store.unavailable");
+        port.fail_apply = false;
+        use std::io::Write;
+        let unknown = serde_json::json!({
+            "seq": fixture.session.next_sequence(), "createdAt": format::now(),
+            "kind": "futureEvidenceCheckpoint", "payload": {"sceneId":"room"},
+        });
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&fixture.path)
+            .unwrap();
+        writeln!(file, "{unknown}").unwrap();
+        drop(file);
+        fixture.session = Session::open(fixture.path.clone(), fixture.events.clone()).unwrap();
+        assert!(fixture.session.is_read_only());
+        assert!(fixture.session.needs_recovery());
+        let last_event = fixture.session.last_event_seq();
+        let next_sequence = fixture.session.next_sequence();
+        let applied_count = port.applied_count;
+        let error = ScenePresence::validate_recovery_mutations(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            record_seq,
+            std::slice::from_ref(&child),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "engine.invalid-phase");
+        assert_eq!(fixture.session.last_event_seq(), last_event);
+        assert_eq!(fixture.session.next_sequence(), next_sequence);
+        assert!(fixture.session.needs_recovery());
+        assert_eq!(port.applied_count, applied_count);
+        assert_eq!(
+            port.connection
+                .query_row("SELECT count(*) FROM store_applied", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            port.connection
+                .query_row(
+                    "SELECT count(*) FROM store_applied WHERE id=?1",
+                    [&child.mutation_id],
+                    |row| row.get::<_, u64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    // This port only injects persisted corruption with matching receipts. Real
+    // commit/recovery validation remains in Port and rejects these proposals.
+    struct CorruptionPort<'a>(&'a mut Port);
+
+    impl WorldPort for CorruptionPort<'_> {
+        fn validate(&self, _: &Session, _: &[WorldMutation]) -> Result<(), Fault> {
+            Ok(())
+        }
+        fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault> {
+            WorldPort::applied(self.0, id, hash)
+        }
+        fn apply(
+            &mut self,
+            session: &Session,
+            seq: u64,
+            mutation: &WorldMutation,
+            hash: &str,
+        ) -> Result<(), Fault> {
+            self.0.apply(session, seq, mutation, hash)
+        }
+    }
+
+    fn persist_corruption(
+        fixture: &mut Fixture,
+        port: &mut Port,
+        identity: RoundIdentity,
+        narrative_seq: u64,
+        mutation: WorldMutation,
+    ) {
+        let mutation_id = mutation.mutation_id.clone();
+        let settlement_seq = fixture
+            .session
+            .commit_world(
+                Fact::SettlementPlanned {
+                    identity: identity.clone(),
+                    narrative_seq,
+                    world_revision: "world-v1".into(),
+                    mutations: vec![mutation],
+                }
+                .body("注入带匹配回执的持久损坏事件")
+                .unwrap(),
+                &mut CorruptionPort(port),
+            )
+            .unwrap();
+        fixture
+            .session
+            .append(
+                Fact::RoundSettled {
+                    identity: identity.clone(),
+                    narrative_seq,
+                    settlement_seq,
+                    applied_through_mutation_id: Some(mutation_id),
+                }
+                .body("损坏夹具回合结算完成")
+                .unwrap(),
+            )
+            .unwrap();
+        let through_seq = fixture
+            .session
+            .append(
+                Fact::SceneStayed {
+                    identity: identity.clone(),
+                    scene_id: "room".into(),
+                    world_revision: "world-v1".into(),
+                }
+                .body("损坏夹具保持场景")
+                .unwrap(),
+            )
+            .unwrap();
+        fixture
+            .session
+            .append(
+                Fact::RoundEnded {
+                    identity,
+                    outcome: crate::ports::Outcome::Completed,
+                    through_seq,
+                    completed_steps: vec![
+                        Step::Check,
+                        Step::Narration,
+                        Step::Settlement,
+                        Step::Advance,
+                    ],
+                    error: None,
+                }
+                .body("损坏夹具回合终态")
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn persisted_rumor_rejects_bad_sources_parent_order_and_parent_links() {
+        enum Defect {
+            DeliveryAuthor,
+            SelfParent,
+            ParentRecipient,
+            RootAuthor,
+            SelfDelivery,
+        }
+        for defect in [
+            Defect::DeliveryAuthor,
+            Defect::SelfParent,
+            Defect::ParentRecipient,
+            Defect::RootAuthor,
+            Defect::SelfDelivery,
+        ] {
+            let (mut fixture, mut port, parent, root_source) = parent_fixture();
+            let identity = begin_round_for_target(
+                &mut fixture.session,
+                GenerationTarget::CharacterSpeech {
+                    speaker_id: "player".into(),
+                },
+            );
+            let text = "玩家向信使转述了井里的回声。";
+            let reply_seq = append_completed_character_line(&mut fixture.session, "player", text);
+            let rule = port
+                .catalog
+                .presence_policy()
+                .unwrap()
+                .rumor_rule("room-rumor-v1")
+                .unwrap();
+            let mut mutation = RumorDelivery::mutation(
+                &fixture.session,
+                &port.catalog,
+                "messenger".into(),
+                "player".into(),
+                evidence_source(reply_seq, text),
+                root_source.clone(),
+                Some(parent.mutation_id),
+                "room".into(),
+                rule.scope_id.clone(),
+                RumorUncertainty::Unverified,
+                rule,
+            );
+            match defect {
+                Defect::DeliveryAuthor => {
+                    mutation.data.payload["informantId"] = serde_json::json!("keeper")
+                }
+                Defect::SelfParent => {
+                    mutation.data.payload["previousEvidenceId"] =
+                        serde_json::json!(mutation.mutation_id)
+                }
+                Defect::ParentRecipient => {
+                    mutation.data.payload["informantId"] = serde_json::json!("keeper");
+                    mutation.data.payload["deliverySource"] =
+                        serde_json::to_value(&root_source).unwrap();
+                }
+                Defect::RootAuthor => {
+                    mutation.data.payload["previousEvidenceId"] = serde_json::Value::Null
+                }
+                Defect::SelfDelivery => {
+                    mutation.data.payload["previousEvidenceId"] = serde_json::Value::Null;
+                    mutation.data.payload["recipientId"] = serde_json::json!("player");
+                    mutation.data.payload["rootSource"] =
+                        serde_json::to_value(evidence_source(reply_seq, text)).unwrap();
+                }
+            }
+            assert!(
+                ScenePresence::validate_mutations(
+                    &port.connection,
+                    &fixture.session,
+                    &port.catalog,
+                    &port.directory,
+                    std::slice::from_ref(&mutation)
+                )
+                .is_err()
+            );
+            let evidence_id = mutation.mutation_id.clone();
+            persist_corruption(&mut fixture, &mut port, identity, reply_seq, mutation);
+            assert_eq!(
+                SceneEvidence::get(
+                    &port.connection,
+                    &fixture.session,
+                    &port.catalog,
+                    &port.directory,
+                    &evidence_id
+                )
+                .unwrap_err()
+                .code,
+                "engine.invalid-phase"
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_rumor_rejects_an_observed_parent() {
+        let (mut fixture, mut port, _, _) = parent_fixture();
+        let identity = begin_round(&mut fixture.session);
+        let text = "玩家观察到井口的划痕。";
+        let source_seq = append_completed_narration(&mut fixture.session, text);
+        let root_source = evidence_source(source_seq, text);
+        let snapshot = ScenePresence::snapshot(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap();
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .observation_rule("room-observation-v1")
+            .unwrap();
+        let observed = ObservedEvent::mutation(
+            &fixture.session,
+            &port.catalog,
+            ObservedEvidenceInput {
+                subject_id: "player".into(),
+                source: root_source.clone(),
+                scene_id: snapshot.scene_id,
+                scope_id: rule.scope_id.clone(),
+                presence_revision: snapshot.presence_revision,
+            },
+            rule,
+        );
+        let parent_id = observed.mutation_id.clone();
+        finish_round(
+            &mut fixture.session,
+            &mut port,
+            identity,
+            source_seq,
+            vec![observed],
+        );
+        let identity = begin_round_for_target(
+            &mut fixture.session,
+            GenerationTarget::CharacterSpeech {
+                speaker_id: "player".into(),
+            },
+        );
+        let text = "玩家把划痕当作传闻转告信使。";
+        let source_seq = append_completed_character_line(&mut fixture.session, "player", text);
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .rumor_rule("room-rumor-v1")
+            .unwrap();
+        let mutation = RumorDelivery::mutation(
+            &fixture.session,
+            &port.catalog,
+            "messenger".into(),
+            "player".into(),
+            evidence_source(source_seq, text),
+            root_source,
+            Some(parent_id),
+            "room".into(),
+            rule.scope_id.clone(),
+            RumorUncertainty::Unverified,
+            rule,
+        );
+        assert!(
+            ScenePresence::validate_mutations(
+                &port.connection,
+                &fixture.session,
+                &port.catalog,
+                &port.directory,
+                std::slice::from_ref(&mutation)
+            )
+            .is_err()
+        );
+        let evidence_id = mutation.mutation_id.clone();
+        persist_corruption(&mut fixture, &mut port, identity, source_seq, mutation);
+        assert_eq!(
+            SceneEvidence::get(
+                &port.connection,
+                &fixture.session,
+                &port.catalog,
+                &port.directory,
+                &evidence_id
+            )
+            .unwrap_err()
+            .code,
+            "engine.invalid-phase"
+        );
+    }
+
+    #[test]
+    fn persisted_evidence_rejects_a_round_with_duplicate_completed_outputs() {
+        let (mut fixture, mut port, _, _) = parent_fixture();
+        let identity = begin_round_for_target(
+            &mut fixture.session,
+            GenerationTarget::CharacterSpeech {
+                speaker_id: "keeper".into(),
+            },
+        );
+        let text = "守门人说井里有回声。";
+        let source_seq = append_completed_character_line(&mut fixture.session, "keeper", text);
+        let duplicate_seq =
+            append_completed_character_line(&mut fixture.session, "keeper", "守门人再次输出。");
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .rumor_rule("room-rumor-v1")
+            .unwrap();
+        let source = evidence_source(source_seq, text);
+        let mutation = RumorDelivery::mutation(
+            &fixture.session,
+            &port.catalog,
+            "player".into(),
+            "keeper".into(),
+            source.clone(),
+            source,
+            None,
+            "room".into(),
+            rule.scope_id.clone(),
+            RumorUncertainty::Unverified,
+            rule,
+        );
+        let evidence_id = mutation.mutation_id.clone();
+        persist_corruption(&mut fixture, &mut port, identity, duplicate_seq, mutation);
+        assert_eq!(
+            SceneEvidence::get(
+                &port.connection,
+                &fixture.session,
+                &port.catalog,
+                &port.directory,
+                &evidence_id
+            )
+            .unwrap_err()
+            .code,
+            "store.corrupt"
+        );
+    }
+
+    #[test]
+    fn persisted_rumor_rejects_nine_and_ten_hop_chains() {
+        for hops in [9, 10] {
+            let mut fixture = Fixture::new();
+            let mut port = port(&fixture.session);
+            let relay_ids = (1..=hops)
+                .map(|hop| format!("relay{hop:02}"))
+                .collect::<Vec<_>>();
+            let ids = [
+                "player".to_owned(),
+                "keeper".to_owned(),
+                "messenger".to_owned(),
+            ]
+            .into_iter()
+            .chain(relay_ids.iter().cloned())
+            .collect::<Vec<_>>();
+            port.directory = EntityDirectory::new(
+                fixture.session.header().script_revision.clone(),
+                1,
+                true,
+                ids.iter()
+                    .map(|id| CanonicalEntity {
+                        id: id.clone(),
+                        kind: EntityKind::Character,
+                        scope: "global".into(),
+                        canonical_name: format!("传闻角色{id}"),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+            for id in std::iter::once("keeper").chain(relay_ids.iter().map(String::as_str)) {
+                let mutation = ScenePresence::prepare_change(
+                    &port.connection,
+                    &fixture.session,
+                    &port.catalog,
+                    &port.directory,
+                    "keeper-presence-v1",
+                    id,
+                    PresenceAction::Enter,
+                )
+                .unwrap();
+                commit_presence_change(&mut fixture, &mut port, mutation);
+            }
+            let rule = port
+                .catalog
+                .presence_policy()
+                .unwrap()
+                .rumor_rule("room-rumor-v1")
+                .unwrap()
+                .clone();
+            let mut previous = None;
+            let mut root_source = None;
+            let mut informant = "keeper".to_owned();
+            for (hop, recipient) in relay_ids.iter().enumerate() {
+                let identity = begin_round_for_target(
+                    &mut fixture.session,
+                    GenerationTarget::CharacterSpeech {
+                        speaker_id: informant.clone(),
+                    },
+                );
+                let text = format!("{informant} 向 {recipient} 转述井里的回声。");
+                let source_seq =
+                    append_completed_character_line(&mut fixture.session, &informant, &text);
+                let source = evidence_source(source_seq, &text);
+                let root = root_source.get_or_insert_with(|| source.clone()).clone();
+                let mutation = RumorDelivery::mutation(
+                    &fixture.session,
+                    &port.catalog,
+                    recipient.clone(),
+                    informant.clone(),
+                    source,
+                    root,
+                    previous.clone(),
+                    "room".into(),
+                    rule.scope_id.clone(),
+                    RumorUncertainty::Unverified,
+                    &rule,
+                );
+                let validation = ScenePresence::validate_mutations(
+                    &port.connection,
+                    &fixture.session,
+                    &port.catalog,
+                    &port.directory,
+                    std::slice::from_ref(&mutation),
+                );
+                assert_eq!(validation.is_ok(), hop < 8);
+                previous = Some(mutation.mutation_id.clone());
+                persist_corruption(&mut fixture, &mut port, identity, source_seq, mutation);
+                informant = recipient.clone();
+            }
+            assert_eq!(
+                SceneEvidence::get(
+                    &port.connection,
+                    &fixture.session,
+                    &port.catalog,
+                    &port.directory,
+                    &previous.unwrap()
+                )
+                .unwrap_err()
+                .code,
+                "engine.invalid-phase"
+            );
+        }
+    }
+
+    #[test]
+    fn completed_root_rumor_and_observation_publish_their_successful_sources() {
+        let (mut fixture, mut port, parent, root_source) = parent_fixture();
+        let trusted = SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &parent.mutation_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(trusted.kind, EvidenceKind::Rumor);
+        assert_eq!(trusted.subject_id, "player");
+        assert_eq!(trusted.informant_id.as_deref(), Some("keeper"));
+        assert_eq!(trusted.source, root_source);
+
+        let identity = begin_round(&mut fixture.session);
+        let text = "玩家发现井口旁有新鲜的划痕。";
+        let source_seq = append_completed_narration(&mut fixture.session, text);
+        let source = evidence_source(source_seq, text);
+        let snapshot = ScenePresence::snapshot(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap();
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .observation_rule("room-observation-v1")
+            .unwrap();
+        let observed = ObservedEvent::mutation(
+            &fixture.session,
+            &port.catalog,
+            ObservedEvidenceInput {
+                subject_id: "player".into(),
+                source: source.clone(),
+                scene_id: snapshot.scene_id,
+                scope_id: rule.scope_id.clone(),
+                presence_revision: snapshot.presence_revision,
+            },
+            rule,
+        );
+        let evidence_id = observed.mutation_id.clone();
+        finish_round(
+            &mut fixture.session,
+            &mut port,
+            identity,
+            source_seq,
+            vec![observed],
+        );
+        let trusted = SceneEvidence::get(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &evidence_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(trusted.kind, EvidenceKind::Observed);
+        assert_eq!(trusted.subject_id, "player");
+        assert_eq!(trusted.informant_id, None);
+        assert_eq!(trusted.source, source);
+    }
+
+    #[test]
+    fn persisted_observation_rejects_character_speech_as_its_source() {
+        let (mut fixture, mut port, _, _) = parent_fixture();
+        let identity = begin_round_for_target(
+            &mut fixture.session,
+            GenerationTarget::CharacterSpeech {
+                speaker_id: "player".into(),
+            },
+        );
+        let text = "玩家说自己看见了划痕。";
+        let source_seq = append_completed_character_line(&mut fixture.session, "player", text);
+        let snapshot = ScenePresence::snapshot(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap();
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .observation_rule("room-observation-v1")
+            .unwrap();
+        let mutation = ObservedEvent::mutation(
+            &fixture.session,
+            &port.catalog,
+            ObservedEvidenceInput {
+                subject_id: "player".into(),
+                source: evidence_source(source_seq, text),
+                scene_id: snapshot.scene_id,
+                scope_id: rule.scope_id.clone(),
+                presence_revision: snapshot.presence_revision,
+            },
+            rule,
+        );
+        assert!(
+            ScenePresence::validate_mutations(
+                &port.connection,
+                &fixture.session,
+                &port.catalog,
+                &port.directory,
+                std::slice::from_ref(&mutation)
+            )
+            .is_err()
+        );
+        let evidence_id = mutation.mutation_id.clone();
+        persist_corruption(&mut fixture, &mut port, identity, source_seq, mutation);
+        assert_eq!(
+            SceneEvidence::get(
+                &port.connection,
+                &fixture.session,
+                &port.catalog,
+                &port.directory,
+                &evidence_id
+            )
+            .unwrap_err()
+            .code,
+            "engine.invalid-phase"
+        );
+    }
+}
+
+mod parent_lookup_and_system_sources {
+    use super::*;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn recovery_parent_receipt_read_failure_keeps_the_existing_intent_pending() {
+        let mut fixture = Fixture::new();
+        let mut port = port(&fixture.session);
+        for entity_id in ["keeper", "messenger"] {
+            let enter = ScenePresence::prepare_change(
+                &port.connection,
+                &fixture.session,
+                &port.catalog,
+                &port.directory,
+                "keeper-presence-v1",
+                entity_id,
+                PresenceAction::Enter,
+            )
+            .unwrap();
+            commit_presence_change(&mut fixture, &mut port, enter);
+        }
+        let identity = begin_round_for_target(
+            &mut fixture.session,
+            GenerationTarget::CharacterSpeech {
+                speaker_id: "keeper".into(),
+            },
+        );
+        let root_text = "守门人告诉玩家井里有回声。";
+        let root_seq = append_completed_character_line(&mut fixture.session, "keeper", root_text);
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .rumor_rule("room-rumor-v1")
+            .unwrap()
+            .clone();
+        let root_source = evidence_source(root_seq, root_text);
+        let parent = RumorDelivery::mutation(
+            &fixture.session,
+            &port.catalog,
+            "player".into(),
+            "keeper".into(),
+            root_source.clone(),
+            root_source.clone(),
+            None,
+            "room".into(),
+            rule.scope_id.clone(),
+            RumorUncertainty::Unverified,
+            &rule,
+        );
+        let parent_id = parent.mutation_id.clone();
+        finish_round(
+            &mut fixture.session,
+            &mut port,
+            identity,
+            root_seq,
+            vec![parent],
+        );
+        let identity = begin_round_for_target(
+            &mut fixture.session,
+            GenerationTarget::CharacterSpeech {
+                speaker_id: "player".into(),
+            },
+        );
+        let reply = "玩家向信使转述井里的回声。";
+        let reply_seq = append_completed_character_line(&mut fixture.session, "player", reply);
+        let child = RumorDelivery::mutation(
+            &fixture.session,
+            &port.catalog,
+            "messenger".into(),
+            "player".into(),
+            evidence_source(reply_seq, reply),
+            root_source,
+            Some(parent_id),
+            "room".into(),
+            rule.scope_id.clone(),
+            RumorUncertainty::Unverified,
+            &rule,
+        );
+        let child_id = child.mutation_id.clone();
+        let record_seq = fixture.session.next_sequence();
+        port.fail_apply = true;
+        let apply_error = fixture
+            .session
+            .commit_world(
+                Fact::SettlementPlanned {
+                    identity,
+                    narrative_seq: reply_seq,
+                    world_revision: "world-v1".into(),
+                    mutations: vec![child.clone()],
+                }
+                .body("保留待恢复传闻意图")
+                .unwrap(),
+                &mut port,
+            )
+            .unwrap_err();
+        port.fail_apply = false;
+        assert_eq!(apply_error.code, "store.unavailable");
+        assert_eq!(fixture.session.next_sequence(), record_seq + 1);
+        let intent = fixture.session.read(record_seq).unwrap().body.unwrap();
+        assert!(matches!(
+            intent.body,
+            Body::System { code, data, .. } if matches!(
+                Fact::decode(&code, &data).unwrap(),
+                Fact::SettlementPlanned { mutations, .. }
+                    if mutations.len() == 1
+                        && mutations[0].mutation_id == child_id
+                        && mutations[0].data.payload == child.data.payload
+            )
+        ));
+        assert!(fixture.session.needs_recovery());
+        ScenePresence::validate_recovery_mutations(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            record_seq,
+            std::slice::from_ref(&child),
+        )
+        .unwrap();
+        let last_event = fixture.session.last_event_seq();
+        let next_sequence = fixture.session.next_sequence();
+        let applied_count = port.applied_count;
+        let receipt_count: u64 = port
+            .connection
+            .query_row("SELECT count(*) FROM store_applied", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(receipt_count, 3);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let hook_reads = Arc::clone(&reads);
+        // Current and delivery-source presence each read the two enter receipts.
+        // The fifth query authenticates the parent inside the pre-intent window.
+        port.connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "store_applied",
+                        column_name: "content_hash",
+                    }
+                ) && hook_reads.fetch_add(1, Ordering::SeqCst) == 4
+                {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }));
+        let error = ScenePresence::validate_recovery_mutations(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            record_seq,
+            std::slice::from_ref(&child),
+        )
+        .unwrap_err();
+        port.connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        assert_eq!(reads.load(Ordering::SeqCst), 5);
+        assert_eq!(error.code, "store.io");
+        assert_eq!(fixture.session.last_event_seq(), last_event);
+        assert_eq!(fixture.session.next_sequence(), next_sequence);
+        assert!(fixture.session.needs_recovery());
+        assert_eq!(port.applied_count, applied_count);
+        assert_eq!(
+            port.connection
+                .query_row("SELECT count(*) FROM store_applied", [], |row| row
+                    .get::<_, u64>(0),)
+                .unwrap(),
+            receipt_count
+        );
+        assert_eq!(
+            port.connection
+                .query_row(
+                    "SELECT count(*) FROM store_applied WHERE id=?1",
+                    [&child_id],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn system_fact_cannot_supply_observed_body_text_or_append_an_intent() {
+        let mut fixture = Fixture::new();
+        let mut port = port(&fixture.session);
+        let accepted_seq = fixture.session.next_sequence() + 1;
+        let identity = begin_round(&mut fixture.session);
+        assert!(
+            matches!(fixture.session.read(accepted_seq).unwrap().body.unwrap().body,
+            Body::System { ref code, .. } if code == "roundAccepted")
+        );
+        let narrative_seq =
+            append_completed_narration(&mut fixture.session, "玩家观察到门上的划痕。");
+        let snapshot = ScenePresence::snapshot(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap();
+        let rule = port
+            .catalog
+            .presence_policy()
+            .unwrap()
+            .observation_rule("room-observation-v1")
+            .unwrap();
+        let mutation = ObservedEvent::mutation(
+            &fixture.session,
+            &port.catalog,
+            ObservedEvidenceInput {
+                subject_id: "player".into(),
+                source: evidence_source(accepted_seq, "a"),
+                scene_id: snapshot.scene_id,
+                scope_id: rule.scope_id.clone(),
+                presence_revision: snapshot.presence_revision,
+            },
+            rule,
+        );
+        let mutation_id = mutation.mutation_id.clone();
+        let last_event = fixture.session.last_event_seq();
+        let next_sequence = fixture.session.next_sequence();
+        let applied_count = port.applied_count;
+        let error = fixture
+            .session
+            .commit_world(
+                Fact::SettlementPlanned {
+                    identity,
+                    narrative_seq,
+                    world_revision: "world-v1".into(),
+                    mutations: vec![mutation],
+                }
+                .body("系统事实不能成为观察正文来源")
+                .unwrap(),
+                &mut port,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "engine.invalid-phase");
+        assert_eq!(fixture.session.last_event_seq(), last_event);
+        assert_eq!(fixture.session.next_sequence(), next_sequence);
+        assert!(!fixture.session.needs_recovery());
+        assert_eq!(port.applied_count, applied_count);
+        assert_eq!(
+            port.connection
+                .query_row("SELECT count(*) FROM store_applied", [], |row| row
+                    .get::<_, u64>(0),)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            port.connection
+                .query_row(
+                    "SELECT count(*) FROM store_applied WHERE id=?1",
+                    [&mutation_id],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+}
+
+mod source_receipt_read_failures {
+    use super::*;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn observed_source_receipt_failure_does_not_append_an_intent() {
+        assert_source_receipt_failure(false);
+    }
+
+    #[test]
+    fn rumor_source_receipt_failure_does_not_append_an_intent() {
+        assert_source_receipt_failure(true);
+    }
+
+    fn assert_source_receipt_failure(rumor: bool) {
+        let mut fixture = Fixture::new();
+        let mut port = port(&fixture.session);
+        let enter = ScenePresence::prepare_change(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            "keeper-presence-v1",
+            "keeper",
+            PresenceAction::Enter,
+        )
+        .unwrap();
+        commit_presence_change(&mut fixture, &mut port, enter);
+        let identity = begin_round(&mut fixture.session);
+        let text = "守门人指出门上的新鲜划痕。";
+        let source_seq = if rumor {
+            append_completed_character_line(&mut fixture.session, "keeper", text)
+        } else {
+            append_completed_narration(&mut fixture.session, text)
+        };
+        let snapshot = ScenePresence::snapshot(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+        )
+        .unwrap();
+        let mutation = if rumor {
+            let rule = port
+                .catalog
+                .presence_policy()
+                .unwrap()
+                .rumor_rule("room-rumor-v1")
+                .unwrap();
+            RumorDelivery::mutation(
+                &fixture.session,
+                &port.catalog,
+                "player".into(),
+                "keeper".into(),
+                evidence_source(source_seq, text),
+                evidence_source(source_seq, text),
+                None,
+                snapshot.scene_id,
+                rule.scope_id.clone(),
+                RumorUncertainty::Unverified,
+                rule,
+            )
+        } else {
+            let rule = port
+                .catalog
+                .presence_policy()
+                .unwrap()
+                .observation_rule("room-observation-v1")
+                .unwrap();
+            ObservedEvent::mutation(
+                &fixture.session,
+                &port.catalog,
+                ObservedEvidenceInput {
+                    subject_id: "player".into(),
+                    source: evidence_source(source_seq, text),
+                    scene_id: snapshot.scene_id,
+                    scope_id: rule.scope_id.clone(),
+                    presence_revision: snapshot.presence_revision,
+                },
+                rule,
+            )
+        };
+        ScenePresence::validate_mutations(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            std::slice::from_ref(&mutation),
+        )
+        .unwrap();
+        let mutation_id = mutation.mutation_id.clone();
+        let intent = Fact::SettlementPlanned {
+            identity,
+            narrative_seq: source_seq,
+            world_revision: "world-v1".into(),
+            mutations: vec![mutation],
+        }
+        .body("来源回执读取失败时不提交意图")
+        .unwrap();
+        let last_event = fixture.session.last_event_seq();
+        let next_sequence = fixture.session.next_sequence();
+        let applied_count = port.applied_count;
+        let receipt_count: u64 = port
+            .connection
+            .query_row("SELECT count(*) FROM store_applied", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(receipt_count, 1);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let hook_reads = Arc::clone(&reads);
+        // The first receipt query validates current presence. Reject only the
+        // second query, when source validation rebuilds historical presence.
+        port.connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "store_applied",
+                        column_name: "content_hash",
+                    }
+                ) && hook_reads.fetch_add(1, Ordering::SeqCst) == 1
+                {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }));
+        let error = fixture.session.commit_world(intent, &mut port).unwrap_err();
+        port.connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert_eq!(error.code, "store.io");
+        assert_eq!(fixture.session.last_event_seq(), last_event);
+        assert_eq!(fixture.session.next_sequence(), next_sequence);
+        assert!(!fixture.session.needs_recovery());
+        assert_eq!(port.applied_count, applied_count);
+        let receipts_after: u64 = port
+            .connection
+            .query_row("SELECT count(*) FROM store_applied", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(receipts_after, receipt_count);
+        assert_eq!(
+            port.connection
+                .query_row(
+                    "SELECT count(*) FROM store_applied WHERE id=?1",
+                    [&mutation_id],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
 }

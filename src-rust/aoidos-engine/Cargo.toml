@@ -30,4 +30,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 aoidos-store = {workspace = true, features=["test-support"]}
+rusqlite = { workspace = true, features = ["hooks"] }
 tokio = { workspace = true, features = ["test-util"] }
