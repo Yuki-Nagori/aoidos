@@ -87,7 +87,6 @@ src-tauri
   │     │     ├─→ aoidos-store
   │     │     └─→ aoidos-json
   │     ├─→ aoidos-store
-  │     │     └─→ aoidos-json
   │     ├─→ aoidos-theme
   │     │     └─→ aoidos-store
   │     ├─→ aoidos-locale
@@ -110,7 +109,7 @@ src-tauri
 
 ### JSON 共用能力
 
-`aoidos-json` 基于 serde / serde_json，供 engine、llm 和 Tauri 单向消费，只依赖第三方序列化库。公共 API 使用 `serde_json::Value`；消费方显式依赖 serde_json，不由工具 crate 转导出其类型或宏。
+`aoidos-json` 基于 serde / serde_json，供 engine、llm、memory 和 Tauri 单向消费，只依赖第三方序列化库。公共 API 使用 `serde_json::Value`；消费方显式依赖 serde_json，不由工具 crate 转导出其类型或宏。
 
 共用能力包括按 UTF-8 字节限制输入、递归拒绝重复键、完整值解码、类型转换、紧凑编码及显式规范化。错误只保留静态类别，区分容量、UTF-8、JSON、schema 与编码失败，不携带原文。`InvalidShape` 统一覆盖缺字段与类型错误，不匹配第三方错误字符串。
 
