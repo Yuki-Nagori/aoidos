@@ -1,5 +1,7 @@
 //! 记忆来源适配：当前有效路径、原文 UTF-8 与角色获知证据均在会话锁内核验。
 
+pub mod processing;
+
 use super::{
     facts::{Fact, GenerationTarget, RoundIdentity},
     format::{self, Body, InputMode as RecordMode},
@@ -27,7 +29,6 @@ pub struct SourcePort<'a> {
     session: &'a Session,
     entity_directory: Option<&'a EntityDirectory>,
     scene_catalog: Option<&'a SceneCatalog>,
-    evidence_connection: Option<&'a rusqlite::Connection>,
 }
 impl<'a> SourcePort<'a> {
     pub fn new(session: &'a Session) -> Self {
@@ -35,7 +36,6 @@ impl<'a> SourcePort<'a> {
             session,
             entity_directory: None,
             scene_catalog: None,
-            evidence_connection: None,
         }
     }
     /// 将完整剧本目录绑定到当前记录，供记忆快照冻结实体 revision。
@@ -54,22 +54,23 @@ impl<'a> SourcePort<'a> {
             session,
             entity_directory: Some(entity_directory),
             scene_catalog: None,
-            evidence_connection: None,
         })
     }
 
     /// 绑定校验 observed / rumor mutation 所需的引擎上下文。
     /// # Errors
-    /// 目录 / catalog 过期或互不匹配时，在查询证据前拒绝。
+    /// 实体目录或场景目录不完整、过期或互不匹配时，在查询证据前拒绝。
     pub fn with_evidence_context(
         session: &'a Session,
         entity_directory: &'a EntityDirectory,
         scene_catalog: &'a SceneCatalog,
-        connection: &'a rusqlite::Connection,
     ) -> Result<Self> {
         if !entity_directory.is_complete()
             || entity_directory.script_revision() != session.header().script_revision
             || scene_catalog.script_revision() != session.header().script_revision
+            || !scene_catalog
+                .entity_directory()
+                .is_some_and(EntityDirectory::is_complete)
             || scene_catalog.presence_policy().is_none()
         {
             return Err(Error::Rejected(Reason::StaleVersion));
@@ -78,7 +79,6 @@ impl<'a> SourcePort<'a> {
             session,
             entity_directory: Some(entity_directory),
             scene_catalog: Some(scene_catalog),
-            evidence_connection: Some(connection),
         })
     }
     /// # Errors
@@ -273,12 +273,12 @@ impl<'a> SourcePort<'a> {
         Ok(None)
     }
 
-    fn valid_scene_evidence(&self, evidence: &KnowledgeEvidence) -> Result<bool> {
-        let (Some(directory), Some(catalog), Some(connection)) = (
-            self.entity_directory,
-            self.scene_catalog,
-            self.evidence_connection,
-        ) else {
+    fn valid_scene_evidence(
+        &self,
+        evidence: &KnowledgeEvidence,
+        connection: &rusqlite::Connection,
+    ) -> Result<bool> {
+        let (Some(directory), Some(catalog)) = (self.entity_directory, self.scene_catalog) else {
             return Ok(false);
         };
         let trusted = SceneEvidence::get(
@@ -334,7 +334,7 @@ impl CausalPort for SourcePort<'_> {
             || evidence.scope != DIRECT_DIALOGUE_SCOPE
             || evidence.rule_id != DIRECT_DIALOGUE_RULE
         {
-            return self.valid_scene_evidence(evidence);
+            return Ok(false);
         }
         let Some(directory) = self.entity_directory else {
             return Ok(false);
@@ -346,6 +346,19 @@ impl CausalPort for SourcePort<'_> {
         Ok(speaker_id == evidence.subject_id
             && evidence.informant_id.as_deref() == Some(player_id.as_str())
             && directory.contains_character(&speaker_id))
+    }
+    fn valid_evidence_with_connection(
+        &self,
+        evidence: &KnowledgeEvidence,
+        connection: &rusqlite::Connection,
+    ) -> Result<bool> {
+        if evidence.kind == aoidos_memory::model::KnowledgeKind::Told
+            && evidence.scope == DIRECT_DIALOGUE_SCOPE
+            && evidence.rule_id == DIRECT_DIALOGUE_RULE
+        {
+            return self.valid_evidence(evidence);
+        }
+        self.valid_scene_evidence(evidence, connection)
     }
     fn entity_alias_context(&self, entity_id: &str) -> Result<Option<EntityAliasContext>> {
         let Some(directory) = self.entity_directory else {

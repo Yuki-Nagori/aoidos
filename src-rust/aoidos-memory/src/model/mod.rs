@@ -329,6 +329,16 @@ pub trait CausalPort {
     /// # Errors
     /// 证据必须由可信引擎建立；未知或已失效返回 false。
     fn valid_evidence(&self, evidence: &KnowledgeEvidence) -> Result<bool>;
+    /// 数据库支持的证据校验入口；纯端口默认沿用不需要连接的校验。
+    /// # Errors
+    /// 数据库读取错误应失败关闭，未知或已失效证据返回 false。
+    fn valid_evidence_with_connection(
+        &self,
+        evidence: &KnowledgeEvidence,
+        _connection: &rusqlite::Connection,
+    ) -> Result<bool> {
+        self.valid_evidence(evidence)
+    }
     /// # Errors
     /// 返回精确区间原文；hash / 模式 / 资格不合法时返回 None。
     fn source_text(&self, source: &SourceRef) -> Result<Option<String>>;

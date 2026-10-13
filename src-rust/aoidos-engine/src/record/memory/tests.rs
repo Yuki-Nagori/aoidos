@@ -1241,7 +1241,6 @@ fn alias_context_does_not_trust_an_incomplete_directory() {
         session: &fixture.session,
         entity_directory: Some(&incomplete),
         scene_catalog: None,
-        evidence_connection: None,
     };
     assert!(matches!(
         port.entity_alias_context("missing"),
@@ -1362,7 +1361,6 @@ fn evidence_catalog(
 fn evidence_context_rejects_stale_inputs_and_requires_presence_policy() {
     let fixture = Fixture::new();
     let (catalog, directory) = evidence_catalog(&fixture);
-    let connection = rusqlite::Connection::open_in_memory().unwrap();
     let stale_directory = crate::game::catalog::EntityDirectory::new(
         crate::record::format::hash(b"another script"),
         2,
@@ -1376,12 +1374,7 @@ fn evidence_context_rejects_stale_inputs_and_requires_presence_policy() {
     )
     .unwrap();
     assert!(matches!(
-        SourcePort::with_evidence_context(
-            &fixture.session,
-            &stale_directory,
-            &catalog,
-            &connection,
-        ),
+        SourcePort::with_evidence_context(&fixture.session, &stale_directory, &catalog,),
         Err(Error::Rejected(Reason::StaleVersion))
     ));
     let incomplete_directory = crate::game::catalog::EntityDirectory::new(
@@ -1397,12 +1390,7 @@ fn evidence_context_rejects_stale_inputs_and_requires_presence_policy() {
     )
     .unwrap();
     assert!(matches!(
-        SourcePort::with_evidence_context(
-            &fixture.session,
-            &incomplete_directory,
-            &catalog,
-            &connection
-        ),
+        SourcePort::with_evidence_context(&fixture.session, &incomplete_directory, &catalog),
         Err(Error::Rejected(Reason::StaleVersion))
     ));
 
@@ -1415,12 +1403,7 @@ fn evidence_context_rejects_stale_inputs_and_requires_presence_policy() {
     )
     .unwrap();
     assert!(matches!(
-        SourcePort::with_evidence_context(
-            &fixture.session,
-            &directory,
-            &stale_catalog,
-            &connection,
-        ),
+        SourcePort::with_evidence_context(&fixture.session, &directory, &stale_catalog,),
         Err(Error::Rejected(Reason::StaleVersion))
     ));
 
@@ -1433,14 +1416,11 @@ fn evidence_context_rejects_stale_inputs_and_requires_presence_policy() {
     )
     .unwrap();
     assert!(matches!(
-        SourcePort::with_evidence_context(&fixture.session, &directory, &no_policy, &connection),
+        SourcePort::with_evidence_context(&fixture.session, &directory, &no_policy),
         Err(Error::Rejected(Reason::StaleVersion))
     ));
 
-    assert!(
-        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
-            .is_ok()
-    );
+    assert!(SourcePort::with_evidence_context(&fixture.session, &directory, &catalog).is_ok());
 }
 
 #[test]
@@ -1613,62 +1593,109 @@ fn scene_evidence_requires_complete_context_and_exact_committed_source_metadata(
 
     let no_context = SourcePort::new(&fixture.session);
     assert!(!no_context.valid_evidence(&evidence).unwrap());
-    let port =
-        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
-            .unwrap();
-    assert!(port.valid_evidence(&evidence).unwrap());
+    let port = SourcePort::with_evidence_context(&fixture.session, &directory, &catalog).unwrap();
+    assert!(
+        port.valid_evidence_with_connection(&evidence, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.evidence_id = aoidos_memory::model::new_id();
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.kind = aoidos_memory::model::KnowledgeKind::Rumor;
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.subject_id = "other".into();
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.informant_id = Some("someone".into());
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.scope = "wrong-scope".into();
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.rule_id = "wrong-rule".into();
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.source.record_seq += 1;
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.source.body_hash = [0; 32];
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.source.start_byte = 1;
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence.clone();
     invalid.source.end_byte -= 1;
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
     let mut invalid = evidence;
     invalid.source.start_byte = 0;
     invalid.source.end_byte += 1;
-    assert!(!port.valid_evidence(&invalid).unwrap());
+    assert!(
+        !port
+            .valid_evidence_with_connection(&invalid, &connection)
+            .unwrap()
+    );
 
     let recovering_source = SourcePort::new(&fixture.session)
         .reference(&aoidos_memory::model::new_id(), source_seq)
         .unwrap();
     fixture.session.pending_world = true;
     let recovering =
-        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
-            .unwrap();
+        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog).unwrap();
     assert!(matches!(
-        recovering.valid_evidence(&KnowledgeEvidence {
-            evidence_id: event.mutation_id,
-            subject_id: "player".into(),
-            source: recovering_source,
-            kind: aoidos_memory::model::KnowledgeKind::Observed,
-            informant_id: None,
-            scope: "room-visible-v1".into(),
-            rule_id: "room-observation-v1".into(),
-        }),
+        recovering.valid_evidence_with_connection(
+            &KnowledgeEvidence {
+                evidence_id: event.mutation_id,
+                subject_id: "player".into(),
+                source: recovering_source,
+                kind: aoidos_memory::model::KnowledgeKind::Observed,
+                informant_id: None,
+                scope: "room-visible-v1".into(),
+                rule_id: "room-observation-v1".into(),
+            },
+            &connection
+        ),
         Err(Error::Rejected(Reason::PolicyUnavailable))
     ));
 }
@@ -1832,9 +1859,7 @@ fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
         )
         .unwrap();
 
-    let port =
-        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
-            .unwrap();
+    let port = SourcePort::with_evidence_context(&fixture.session, &directory, &catalog).unwrap();
     let evidence = KnowledgeEvidence {
         evidence_id: event.mutation_id,
         subject_id: "player".into(),
@@ -1846,5 +1871,8 @@ fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
         scope: "room-rumor-v1".into(),
         rule_id: "room-rumor-v1".into(),
     };
-    assert!(port.valid_evidence(&evidence).unwrap());
+    assert!(
+        port.valid_evidence_with_connection(&evidence, &connection)
+            .unwrap()
+    );
 }

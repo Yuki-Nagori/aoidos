@@ -213,14 +213,14 @@ impl Repository {
                     }
                 } else {
                     let current = self.read_version(conn, &run, &target.entry_id, current_id)?;
-                    if !self.valid_version(&run, &current, port)? {
+                    if !self.valid_version(conn, &run, &current, port)? {
                         return Err(Error::Rejected(Reason::InvalidSource));
                     }
                     subject = Some(current.subject);
                 }
             }
             if let Some(version) = &target.next {
-                if !self.valid_version(&run, version, port)? {
+                if !self.valid_version(conn, &run, version, port)? {
                     return Err(Error::Rejected(Reason::InvalidSource));
                 }
                 if let Some(restored) = &version.restored_from_version_id {
@@ -229,7 +229,7 @@ impl Repository {
                         return Err(Error::Rejected(Reason::InvalidSource));
                     }
                     let healthy = self.read_version(conn, &run, &target.entry_id, restored)?;
-                    if !self.valid_version(&run, &healthy, port)?
+                    if !self.valid_version(conn, &run, &healthy, port)?
                         || !same_content(version, &healthy)
                     {
                         return Err(Error::Rejected(Reason::InvalidSource));

@@ -28,7 +28,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 已交付界面语言、持久偏好与本地化格式；后续补齐英文消息 schema 基准、主题名和剧本目录展示名本地化。[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 三平台 CI 与本机全量 verify 均通过。025 已实现舞台、四态面板、有界记录呈现、composer、偏好及窗口恢复；本机 `bun run verify` 全项通过。跨平台原生 WebView、DPI、IME 与辅助技术验收仍未完成，任务保持 implemented。证据见[任务索引](../task-index.md)。
 
-记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，尚未接入产品记忆流程；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
+记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，030 已提供需显式调用的 private 批次执行器，但冻结 Prompt / 候选构造与产品触发仍未接入；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
 
 ## 设计与实施对应
 
@@ -50,9 +50,9 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 025 依赖 004、008、024、026、034，024 经 021 / 023 覆盖业务依赖；024 保留最小提交链路和故障联调范围，完整界面验收归 025。026 提供受控 main 构建与主题 bootstrap，025 在该入口接窗口几何恢复；面板 / 骰判偏好存储归 022，回合冻结骰判偏好归 023，避免重复接线。
 
-007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022。[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作，可从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前的完成回执保持可读。
+007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022。[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作，可从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前的完成回执保持可读。030 的显式执行器复用 020 `Coordinator` private lease 与请求携带的 027 预算端口，发送前登记物理请求身份，成功响应进入 received，未知结果不重发；没有自动触发，也不增加 012 回合调用次数。
 
-043 提供 Rust 权威实体注册表：Mistbell `entities.json` 是只读种子，动态身份经 023 世界意图提交到共享 SQLite；恢复核验 applied 与因果记录，快照只包含当前有效分支身份。045 提供 Rust 权威场景在场及 observed / rumor 证据端口：观察 v1 只接受来源时同场、主体在场的已完成公开旁白区间；传闻逐跳核验来源作者和传播链。获知事件必须 applied、属于成功完整回合并位于当前有效路径。`SourcePort::with_evidence_context` 仅在有效目录、场景规则和共享数据库齐备时接受这些事件；当前 `Storage::with_memory` 尚未接入场景目录，因此正式记忆链路仍只消费严格的角色定向 `told`，后续由 030 接线。
+043 提供 Rust 权威实体注册表：Mistbell `entities.json` 是只读种子，动态身份经 023 世界意图提交到共享 SQLite；恢复核验 applied 与因果记录，快照只包含当前有效分支身份。045 提供 Rust 权威场景在场及 observed / rumor 证据端口：观察 v1 只接受来源时同场、主体在场的已完成公开旁白区间；传闻逐跳核验来源作者和传播链。获知事件必须 applied、属于成功完整回合并位于当前有效路径。`Storage::with_memory` 接收活动目录，在会话 → SQLite 锁内装配实体快照并绑定到 `SourcePort`；仓储执行证据校验时将共享连接显式传入。缺少完整实体目录、场景修订或在场策略时失败关闭。这样存储入口已能校验 `told`、`observed` 与 `rumor`，但产品记忆候选 / Prompt 调用链尚未接入；UI 选择和记忆专属 IPC 仍由后续任务承接。
 
 正式引擎 / Tauri 入口已支持显式指定当前场景内的固定登记角色，接收目标贯穿接纳、恢复、角色提示与持久回复。046 接入在场选择 UI 和快照 IPC；记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。别名支持玩家确认后的登记、撤销及按当前有效来源重建，自动明确指向仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等前置，030 / 033 可使用 035 的费用端口开展本地联调；收费批次和真实费用实验仍须等待 035 完成三平台实机验收并获授权。
 
@@ -146,9 +146,16 @@ resources/scripts/<scriptId>/（编译期登记的 Markdown + 固定实体种子
     ├→ game::builtin::SceneCatalog（精确规范实体查询）
     └→ EntityDirectory seed
          ├→ 023 WorldPort → EntityRegistry（共享 SQLite；事务化写入 applied + 动态实体）
-         └→ Storage::with_memory → EntityRegistry snapshot → SourcePort（只读、当前分支、有界）
+         └→ Storage::with_memory（活动 SceneCatalog）→ EntityRegistry snapshot + SQLite + Session
+              └→ SourcePort（只读、当前分支、有界；told / observed / rumor 校验）
               └→ game::recovery::derive_evidence_path（复用 023 回合因果状态机）
+
+授权记忆批次：冻结输入 + 显式授权 → process_authorized_batch
+  → Coordinator 空闲检查 / private lease → 027 预算预留 → SQLite dispatch(turnId, requestId)
+  → 一次 Provider 请求 → SQLite received(response)；不确定结果 → unknown（不重发）
 ```
+
+记忆执行器只负责单次模型调用与批次收据，不负责构造产品 Prompt、解析并应用候选或自动排队；这些接入由后续记忆产品任务承接。真实供应商授权门仍关闭。
 
 记录事实、估算与压缩属于 engine；存储原语属于 store，供应商 / 传输仍属于 llm。生产依赖保持单向，测试夹具不进入生产链路；023 接领域决策，024 接最小产品联调，025 接完整界面。
 

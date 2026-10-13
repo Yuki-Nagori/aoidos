@@ -223,7 +223,7 @@ impl Repository {
             }
             match self.read_version(conn, run, id, &entry.current_version_id) {
                 Ok(version)
-                    if self.valid_version(run, &version, port)?
+                    if self.valid_version(conn, run, &version, port)?
                         && entry.state != EntryState::Unavailable =>
                 {
                     return Ok(EntryRecovery::Healthy);
@@ -258,7 +258,7 @@ impl Repository {
             };
             let corrupt = candidate.is_none();
             if let Some(candidate) = candidate
-                && self.valid_version(run, &candidate, port)?
+                && self.valid_version(conn, run, &candidate, port)?
             {
                 let expected = self.entry(conn, &run.run_id, id)?;
                 let mut restored = candidate;

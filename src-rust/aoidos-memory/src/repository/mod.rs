@@ -202,6 +202,7 @@ impl Repository {
     }
     pub(super) fn valid_version(
         &self,
+        connection: &Connection,
         run: &Run,
         version: &Version,
         port: &dyn CausalPort,
@@ -212,7 +213,7 @@ impl Repository {
             return Ok(false);
         }
         for evidence in &version.evidence {
-            if !port.valid_evidence(evidence)? {
+            if !port.valid_evidence_with_connection(evidence, connection)? {
                 return Ok(false);
             }
         }
@@ -298,7 +299,7 @@ impl Repository {
             return Err(Error::Rejected(Reason::RecoveryRequired));
         }
         let version = self.read_version(conn, &run, entry_id, &entry.current_version_id)?;
-        if !self.valid_version(&run, &version, port)? {
+        if !self.valid_version(conn, &run, &version, port)? {
             return Err(Error::Rejected(Reason::InvalidSource));
         }
         Ok(version)

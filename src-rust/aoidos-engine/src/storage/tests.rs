@@ -37,6 +37,14 @@ fn policy() -> Policy {
         decay_rate: 1,
     }
 }
+fn scene_catalog() -> crate::game::catalog::SceneCatalog {
+    let scenario = crate::game::assets::scenario("mistbell").unwrap();
+    crate::game::builtin::memory_scene_catalog(
+        scenario.title,
+        crate::game::assets::entity_directory("mistbell").unwrap(),
+    )
+    .unwrap()
+}
 #[test]
 fn memory_borrows_registered_session_and_shared_migrated_connection() {
     let root = std::env::temp_dir().join(format!("aoidos-memory-storage-{}", uuid::Uuid::new_v4()));
@@ -48,8 +56,9 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
     let header = crate::game::builtin::header("mistbell").unwrap();
     let session_id = header.session_id.clone();
     storage.records.create(header).unwrap();
+    let catalog = scene_catalog();
     let run = storage
-        .with_memory(&session_id, |repository, conn, port| {
+        .with_memory(&session_id, &catalog, |repository, conn, port| {
             assert_eq!(port.boundary()?.session_id, session_id);
             assert_eq!(port.boundary()?.entity_revision, 1);
             assert_eq!(port.boundary()?.evidence_revision, 0);
@@ -68,14 +77,20 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
         .unwrap();
     assert_eq!(
         storage
-            .with_memory(&uuid::Uuid::new_v4().to_string(), |_, _, _| Ok(()))
+            .with_memory(
+                &uuid::Uuid::new_v4().to_string(),
+                &catalog,
+                |_, _, _| Ok(())
+            )
             .unwrap_err()
             .code(),
         "app.not-found"
     );
     assert_eq!(
         storage
-            .with_memory(&session_id, |_, _, _| Err::<(), _>(Error::Corrupt))
+            .with_memory(&session_id, &catalog, |_, _, _| Err::<(), _>(
+                Error::Corrupt
+            ))
             .unwrap_err()
             .code(),
         "store.corrupt"
@@ -86,13 +101,15 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
         Reason::PolicyUnavailable,
     ] {
         let error = storage
-            .with_memory(&session_id, |_, _, _| Err::<(), _>(Error::Rejected(reason)))
+            .with_memory(&session_id, &catalog, |_, _, _| {
+                Err::<(), _>(Error::Rejected(reason))
+            })
             .unwrap_err();
         assert!(matches!(error, Error::Rejected(actual) if actual == reason));
     }
     storage.close().unwrap();
     assert!(matches!(
-        storage.with_memory(&session_id, |_, _, _| Ok(())),
+        storage.with_memory(&session_id, &catalog, |_, _, _| Ok(())),
         Err(Error::Rejected(Reason::RecoveryRequired))
     ));
     drop(storage);
@@ -103,7 +120,7 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
     );
     reopened.records.open(&run.script_id, &session_id).unwrap();
     let recovered = reopened
-        .with_memory(&session_id, |repository, conn, port| {
+        .with_memory(&session_id, &catalog, |repository, conn, port| {
             let mut latest = policy();
             latest.config_version = 2;
             latest.base_strength = 150_000;
@@ -184,9 +201,10 @@ fn memory_requires_an_open_database_even_for_registered_records() {
     let header = crate::game::builtin::header("mistbell").unwrap();
     let session_id = header.session_id.clone();
     storage.records.create(header).unwrap();
+    let catalog = scene_catalog();
     storage.database.lock().unwrap().take();
     assert!(matches!(
-        storage.with_memory(&session_id, |_, _, _| Ok(())),
+        storage.with_memory(&session_id, &catalog, |_, _, _| Ok(())),
         Err(Error::Rejected(Reason::RecoveryRequired))
     ));
     storage.close().unwrap();
@@ -204,7 +222,10 @@ fn memory_rejects_corrupt_registry_snapshots_before_invoking_the_job() {
     let header = crate::game::builtin::header("mistbell").unwrap();
     let session_id = header.session_id.clone();
     storage.records.create(header).unwrap();
-    storage.with_memory(&session_id, |_, _, _| Ok(())).unwrap();
+    let catalog = scene_catalog();
+    storage
+        .with_memory(&session_id, &catalog, |_, _, _| Ok(()))
+        .unwrap();
     storage
         .with_database(|connection| {
             connection
@@ -215,7 +236,7 @@ fn memory_rejects_corrupt_registry_snapshots_before_invoking_the_job() {
         .unwrap();
     assert!(
         storage
-            .with_memory::<()>(&session_id, |_, _, _| panic!(
+            .with_memory::<()>(&session_id, &catalog, |_, _, _| panic!(
                 "corrupt identity must not reach memory job"
             ))
             .is_err()
