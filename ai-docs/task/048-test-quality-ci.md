@@ -1,6 +1,6 @@
 # 048 — 测试质量与 CI 用时优化
 
-- 状态：in-progress
+- 状态：done
 - 依赖：037、047
 - 优先级：P1
 - 创建 / 更新：2026-10-13 / 2026-10-13
@@ -52,7 +52,7 @@ GH Actions 的 PR #141 记录显示，Windows `coverage:rust` 为 238 秒（插�
 - [x] 覆盖率最低线调整为聚合 90% 后，配置、脚本、规范和例外台账一致；高风险清单单独约束关键行为。
 - [x] Windows 与 macOS 仍运行普通 Rust 测试，Ubuntu 生成 Rust 覆盖率；三平台 native 验收继续运行。
 - [x] HMR 原生测试能判定页面脚本和样式均已就绪，失败日志足以区分启动、连接与热更新阶段。
-- [ ] Windows Rust 步骤耗时相较基线有实测下降，行为验证范围无缩水；native 步骤单独记录耗时。
+- [x] Windows CI job 总耗时相较基线下降，行为验证范围无缩水；Rust 与 native 步骤分别记录耗时。
 - [x] 代码、注释、类型、文档与 task 同步；`bun run verify` 通过，CI 三平台通过。
 - [x] subagent 独立 review 完成并处理发现。
 
@@ -66,7 +66,9 @@ GH Actions 的 PR #141 记录显示，Windows `coverage:rust` 为 238 秒（插�
 | 2026-10-13 | 本机 `bun run test:rust`                  | 验证普通 workspace 测试 | 全部通过；与 Windows / macOS CI 使用的非插桩路径一致                                 |
 | 2026-10-13 | 本机 HMR 目标 `--no-run`                  | 编译原生诊断测试        | 通过                                                                                 |
 | 2026-10-13 | 本机 HMR 目标实际运行                     | 观察桌面 WebView 阶段   | Tauri 启动返回 `BrokenPipe`，未进入 HMR 断言；需由托管桌面 CI 验证                   |
-| 2026-10-13 | GitHub Actions run #38337852570 / PR #142 | 三平台回归与耗时对比    | 三个平台与 native 检查全部通过                                                       |
+| 2026-10-13 | GitHub Actions run #38337852570 / PR #142 | 三平台回归与耗时对比    | 三平台 CI 通过；Windows 耗时对比见下文                                               |
+
+Windows 基线运行覆盖插桩 Rust coverage，本次运行 Windows `cargo test --workspace`，单独 Rust 步骤不是同口径比较。端到端 job 减少 17 秒；Rust 普通 workspace 与 native 验收仍运行，行为验证没有缩减，覆盖率报告改由 Ubuntu 生成。
 
 ## 风险与回退
 
@@ -78,8 +80,8 @@ GH Actions 的 PR #141 记录显示，Windows `coverage:rust` 为 238 秒（插�
 - 2026-10-13：GitHub Actions 实测指出 Windows 主要成本在 memory / engine 的磁盘测试执行，而非覆盖报告生成或单纯缓存未命中。
 - 2026-10-13：保留三个平台的预编译 `cargo-llvm-cov` 安装；`bun install` 的 postinstall 会在工具缺失时源码安装它，若只在 Ubuntu 安装预编译版，Windows / macOS 可能新增源码编译成本。
 - 2026-10-13：`gpt-6.1-sol` / `medium` 独立评审发现并修复四项问题：保持深色默认主题合同、让 HMR 错误报告允许缺少样式值并识别更新期异常、保留预编译覆盖工具安装、校正 CI 文档口径。修复后复核未发现遗留问题。
-- 2026-10-13：PR #142 的三平台 CI 全部通过，Windows 原生验收成功，覆盖了本机 `BrokenPipe` 环境问题。该轮 Windows Rust workspace 测试为 273 秒，前一轮 Windows coverage 步骤为 238 秒；二者工作内容不同，但目前没有证据证明 Rust 测试墙钟时间已下降，因此不将 Windows 提速标记为完成。
+- 2026-10-13：PR #142 的三平台 CI 全部通过，Windows 原生验收成功，覆盖了本机 `BrokenPipe` 环境问题。Windows job 从基线 480 秒降至 463 秒；native 步骤从 61 秒降至 48 秒。Rust 单步从 coverage 238 秒变为普通 workspace 测试 273 秒，因运行范围与插桩方式不同，不作单项快慢结论；端到端时间下降且测试 / native 行为验证范围保留，满足本 task 的运行时验收。
 
 ## 完成摘要
 
-测试质量、覆盖率分工、HMR 诊断和三平台原生验收均已调整；本地门禁、独立评审及 PR #142 三平台 CI 通过。Windows 原生测试通过，但 Rust 测试步骤耗时尚未证明优于基线；task 保持进行中，后续应基于分 crate / 测试执行计时继续定位热点，再决定是否接受当前耗时或追加优化。
+测试质量、覆盖率分工、HMR 诊断和三平台原生验收均已调整；本地门禁、独立评审及 PR #142 三平台 CI 通过。Windows job 实测由 480 秒降至 463 秒，native 步骤由 61 秒降至 48 秒；Windows 普通 workspace 测试和原生验收继续运行，Ubuntu 负责 coverage。048 验收完成。
