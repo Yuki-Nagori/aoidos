@@ -7,7 +7,7 @@
 
 ## 目标与背景
 
-044 定稿场景在场与获知事件协议后，将固定 / 动态角色成员关系和观察 / 传闻交付写入可恢复的引擎因果记录，并提供按当前有效路径读取的有界快照。030 消费这些已提交事件并自行校验记忆权限；本任务不依赖记忆 crate，避免形成反向依赖。
+044 定稿场景在场与获知事件协议后，将固定 / 动态角色成员关系和观察 / 传闻交付写入可恢复的引擎因果记录，并提供按当前有效路径读取的有界快照。030 消费这些已提交事件并自行校验记忆权限；`game/presence/` 业务模块不依赖记忆 crate，记忆证据由 engine `record/memory` 适配层通过只读端口提供。
 
 ## 必读
 
@@ -21,7 +21,7 @@
 
 ## 前置条件与待决策
 
-044 必须已评审通过；023 提供有效因果记录 / 恢复边界，043 提供完整稳定的固定 / 动态实体注册表。本任务产出的事实只依赖 engine / record / entity registry，不依赖 aoidos-memory、Tauri 命令或 UI；030 作为下游只读消费方。
+044 必须已评审通过；023 提供有效因果记录 / 恢复边界，043 提供完整稳定的固定 / 动态实体注册表。本任务产出的事实由 engine / record / entity registry 提交；`game/presence/` 不依赖 `aoidos-memory`、Tauri 命令或 UI。记忆证据通过 engine `record/memory` 适配 `aoidos-memory` 的只读端口，030 作为下游消费方。
 
 ## 实施步骤
 
@@ -42,7 +42,7 @@ engine 的 scene presence / trusted-evidence source、023 record facts、043 ent
 - [x] presence 仅按 applied / effective path 重建；observed / rumor 作为记忆证据还须来源回合成功完整、mutation 已 applied，恢复补写不会从 partial 创造事件。
 - [x] observed 有可验证范围和触发记录；rumor 每跳保留 informant、原始主张、交付来源、规则版本及不确定性。
 - [x] 缺少主体、场景 revision、规则、因果位置或恢复回执时只读端口失败关闭；presence 最多 512 人 / 256 KiB，单次来源扫描最多 4096 记录 / 16 MiB，传闻最多 8 跳。
-- [x] engine crate 不依赖 memory / Tauri / UI；架构、类型、注释和 044 一致，独立 review 通过。
+- [x] `game/presence/` 不依赖 memory / Tauri / UI；记忆证据通过 engine `record/memory` 适配层暴露只读端口；架构、类型、注释和 044 一致，独立 review 通过。
 
 ## 验证计划与结果
 
@@ -65,6 +65,7 @@ engine 的 scene presence / trusted-evidence source、023 record facts、043 ent
 ## 决策与工作记录
 
 - 2026-10-12：按交叉评审重定范围为 engine 权威状态 / 事件源；不依赖 030、UI 或 Tauri，避免与 030 双向等待。角色选择 UI 改由 046 承接，记忆 IPC 仍归 031。
+- 2026-10-13：按 issue #140 收窄 crate 依赖边界表述：`game/presence/` 不依赖 memory；engine `record/memory` 适配层仍依赖 `aoidos-memory` 并提供证据只读端口。代码无需修改。
 
 ## 完成摘要
 

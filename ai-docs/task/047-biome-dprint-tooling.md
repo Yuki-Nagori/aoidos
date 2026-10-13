@@ -1,6 +1,6 @@
 # 047 — Biome 与 dprint 工具链迁移
 
-- 状态：in-progress
+- 状态：done
 - 依赖：无
 - 优先级：P1
 - 创建 / 更新：2026-10-13 / 2026-10-13
@@ -56,7 +56,7 @@
 - [x] i18n 专用检查覆盖缺失 / 未使用键、跨语言键和占位符一致性及保留命名空间。
 - [x] 当前工具链配置、VS Code、CI、hook 与活动文档不再调用 ESLint / Prettier；历史 task 记录保留当时的工具状态，Rust 门禁不变。
 - [x] 生成主题 CSS 的检查和构建可重复，产物不含无关格式漂移。
-- [ ] `bun run verify` 十三项全通过；CI 复验通过。
+- [x] `bun run verify` 十三项全通过；CI 复验通过。
 - [x] subagent 独立评审完成，发现的问题已修复并复验。
 
 ## 验证计划与结果
@@ -65,6 +65,7 @@
 | ---------- | ------------------------------ | ----------------------------- | ------------------------------------------------------------------------ |
 | 2026-10-13 | Biome / dprint / i18n 局部门禁 | 格式、规则及静态 key 诊断正确 | 通过；覆盖 SFC 模板反引号 key、注释伪引用、动态对象 / 函数参数和缺失 key |
 | 2026-10-13 | `bun run verify`               | 十三项全部通过                | 全部通过；覆盖报告仅含既有 2 行预算，生产构建与 rustdoc 通过             |
+| 2026-10-13 | PR #141 三平台 CI              | macOS、Ubuntu、Windows 全通过 | 全部通过；PR 已 squash 合并至 main                                       |
 
 ## 风险与回退
 
@@ -75,7 +76,8 @@ Biome 的 Vue lint / formatter 尚属实验支持；dprint 的 Vue 格式插件�
 - 2026-10-13：登记激进迁移方案，采用 Biome + dprint 全面替换 ESLint / Prettier；明确保留 i18n 语义检查并替换主题生成器的 Prettier API 调用。
 - 2026-10-13：按 Biome 官方配置收窄扫描排除，补 `vcs.defaultBranch` 与本地 schema；Vue lint 保留、格式交给 dprint。编辑器同步切换 Biome / dprint；i18n 检查改用 TypeScript 与 Vue AST，避免正则误判模板字面量和注释。生成主题 CSS 改为直接输出 Biome 认可的确定格式。
 - 2026-10-13：6.1 Sol medium 独立评审发现 i18n AST 检查器对普通 `key` 属性及条件分支中的动态函数参数误报；已限制收集范围并用 fixture 验证动态对象 / 参数不会误识别、真实静态 key 仍能诊断。最终复审无遗留问题；本地 `bun run verify` 十三项通过，等待 CI 复验。
+- 2026-10-13：PR #141 的 macOS、Ubuntu、Windows CI 全部通过并已 squash 合并；本 task 验收完成。
 
 ## 完成摘要
 
-本地工具链迁移、i18n 检查和独立整体评审已完成，`bun run verify` 十三项全部通过；等待 CI 复验后关闭 task。
+Biome + dprint 工具链迁移、i18n 静态检查、独立整体评审和三平台 CI 均已通过；PR #141 已合并，`bun run verify` 十三项全部通过。
