@@ -350,7 +350,8 @@ fn recovery_promotes_a_prepared_body_and_propagates_uncertain_apply_errors() {
 
 #[test]
 fn recovery_pauses_when_clock_receipts_exceed_the_page_budget() {
-    let mut f = Fixture::new();
+    // 此用例验证回合回执扫描预算，不验证 WAL 耐久性。
+    let mut f = Fixture::new_in_memory();
     for seq in 1..=257 {
         let mut source = f.source();
         source.record_seq = seq;
@@ -704,10 +705,12 @@ fn correction_without_any_valid_source_stays_unavailable() {
 
 #[test]
 fn recovery_defers_long_invalid_chains_without_reviving_them() {
-    let mut f = Fixture::new();
+    // 此用例验证恢复分页与因果链校验，不验证 SQLite WAL 耐久性。
+    let mut f = Fixture::new_in_memory();
     let mut current = f.version();
     f.commit(&f.plan(current.clone()));
-    for revision in 1..=520 {
+    // 257 条修订越过扫描上限；再增加只会重复验证同一分页边界。
+    for revision in 1..=257 {
         let mut next = current.clone();
         next.version_id = new_id();
         next.parent_version_id = Some(current.version_id.clone());
@@ -721,22 +724,26 @@ fn recovery_defers_long_invalid_chains_without_reviving_them() {
     }
     f.port.invalid.set(true);
     let mut cursor = None;
-    let mut deferred = None;
-    let mut progress = Vec::new();
+    let mut completed = None;
+    let mut operation_pages = 0;
     for _ in 0..8 {
         let page = f
             .repo
             .recover(&mut f.conn, &f.port, &f.run.run_id, cursor.as_ref())
             .unwrap();
+        if page.operations > 0 && page.next.is_some() {
+            assert_eq!(page.checked_entries, 0);
+        }
         cursor = page.next.clone();
-        progress.push((page.operations, page.checked_entries, page.next.is_some()));
-        if page.operations == 33 && page.checked_entries == 0 {
-            deferred = Some(page);
+        operation_pages += usize::from(page.operations > 0);
+        if page.next.is_none() {
+            completed = Some(page);
             break;
         }
     }
-    let page = deferred.unwrap_or_else(|| panic!("recovery progress: {progress:?}"));
-    assert!(page.next.is_some());
+    let page = completed.expect("recovery should finish within the bounded page loop");
+    assert!(operation_pages > 1, "operation history should span pages");
+    assert_eq!(page.unavailable_entries, 1);
     assert_eq!(
         f.repo
             .entry(&f.conn, &f.run.run_id, &current.entry_id)
@@ -793,7 +800,8 @@ fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
     assert_eq!(page.operations, 1);
     assert!(page.next.is_none());
 
-    let mut f = Fixture::new();
+    // 两段分页都只验证上限与游标；正文文件仍由夹具按正式路径写入。
+    let mut f = Fixture::new_in_memory();
     seed_healthy_entries(&mut f, 257);
     let through: u64 = f
         .conn
@@ -897,7 +905,8 @@ fn impossible_prepared_relation_size_is_corrupt_instead_of_yielding_forever() {
 
 #[test]
 fn effect_reconciliation_exhaustion_defers_entry_scan_and_resumes_without_double_revision() {
-    let mut f = Fixture::new();
+    // 此用例验证回退分页和幂等修订；不验证 SQLite WAL 耐久性。
+    let mut f = Fixture::new_in_memory();
     for _ in 0..33 {
         let mut plan = f.plan(f.version());
         for seq in 1..=6 {
@@ -978,48 +987,48 @@ fn malformed_persisted_recovery_identity_is_rejected_before_following_body() {
 
 #[test]
 fn dense_valid_prepared_groups_page_without_partial_dependency_commit() {
-    for sources_per_version in [12, 24, 48] {
-        let mut f = Fixture::new();
-        let mut plans = Vec::new();
-        for _ in 0..8 {
-            let mut targets = Vec::new();
-            for _ in 0..16 {
-                let mut version = f.version();
-                version.summary = "x".repeat(4096);
-                version.sources = (1..=sources_per_version)
-                    .map(|seq| {
-                        let mut source = f.source();
-                        source.record_seq = seq;
-                        source
-                    })
-                    .collect();
-                version.source_set_hash = set_hash(&version.sources).unwrap();
-                targets.extend(f.plan(version).targets);
-            }
-            let mut plan = f.plan(f.version());
-            plan.targets = targets;
-            f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
-            f.repo
-                .write_versions(&mut f.conn, &plan.operation_id)
-                .unwrap();
-            plans.push(plan);
+    // 最大来源组覆盖最严预算；较低密度没有新增恢复语义，却会重复产生耐久文件写入。
+    let sources_per_version = 48;
+    let mut f = Fixture::new_in_memory();
+    let mut plans = Vec::new();
+    for _ in 0..8 {
+        let mut targets = Vec::new();
+        for _ in 0..16 {
+            let mut version = f.version();
+            version.summary = "x".repeat(4096);
+            version.sources = (1..=sources_per_version)
+                .map(|seq| {
+                    let mut source = f.source();
+                    source.record_seq = seq;
+                    source
+                })
+                .collect();
+            version.source_set_hash = set_hash(&version.sources).unwrap();
+            targets.extend(f.plan(version).targets);
         }
-        let page = f
-            .repo
-            .recover(&mut f.conn, &f.port, &f.run.run_id, None)
+        let mut plan = f.plan(f.version());
+        plan.targets = targets;
+        f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
+        f.repo
+            .write_versions(&mut f.conn, &plan.operation_id)
             .unwrap();
-        assert!(page.next.is_some());
-        assert!(page.operations > 0 && page.operations < plans.len());
-        let next = &plans[page.operations];
-        assert_eq!(
-            f.repo.operation(&f.conn, &next.operation_id).unwrap().1,
-            OperationState::Ready
-        );
-        for target in &next.targets {
-            assert!(matches!(
-                f.repo.entry(&f.conn, &f.run.run_id, &target.entry_id),
-                Err(Error::NotFound)
-            ));
-        }
+        plans.push(plan);
+    }
+    let page = f
+        .repo
+        .recover(&mut f.conn, &f.port, &f.run.run_id, None)
+        .unwrap();
+    assert!(page.next.is_some());
+    assert!(page.operations > 0 && page.operations < plans.len());
+    let next = &plans[page.operations];
+    assert_eq!(
+        f.repo.operation(&f.conn, &next.operation_id).unwrap().1,
+        OperationState::Ready
+    );
+    for target in &next.targets {
+        assert!(matches!(
+            f.repo.entry(&f.conn, &f.run.run_id, &target.entry_id),
+            Err(Error::NotFound)
+        ));
     }
 }

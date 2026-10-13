@@ -5,7 +5,7 @@ use std::{
     net::{SocketAddr, TcpStream},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -16,13 +16,23 @@ use tauri::{WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent};
 // Windows CI 曾出现 localhost 探测成功但 WebView2 未加载的超时；显式回环地址让两者命中同一接口。
 const HMR_HOST: &str = "127.0.0.1";
 const HMR_PORT: u16 = 1420;
+const WEBVIEW_CREATE_TIMEOUT: Duration = Duration::from_secs(60);
+const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(60);
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(20);
 
-struct ViteServer(Child);
+struct ViteServer(Arc<Mutex<Child>>);
+
+fn stop_server(child: &Mutex<Child>) {
+    let mut child = child
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 impl Drop for ViteServer {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        stop_server(&self.0);
     }
 }
 
@@ -34,9 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report = fixture.join("hmr-report.json");
     let vite = root.join("node_modules/vite/bin/vite.js");
     std::fs::copy(fixture_source, &css)?;
-    let _server = ViteServer(start_vite(&fixture, &vite)?);
+    let server = ViteServer(Arc::new(Mutex::new(start_vite(&fixture, &vite)?)));
     wait_for_server()?;
     let _ = std::fs::remove_file(&report);
+    let server_process = server.0.clone();
 
     let passed = Arc::new(AtomicBool::new(false));
     let app_passed = passed.clone();
@@ -55,9 +66,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let page_finished_for_callback = page_finished.clone();
             let css = css.clone();
             let report = report.clone();
+            let server_for_watchdog = server_process.clone();
+            let webview_created = Arc::new(AtomicBool::new(false));
+            let webview_created_for_watchdog = webview_created.clone();
             thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while Instant::now() < deadline {
+                let deadline = Instant::now() + WEBVIEW_CREATE_TIMEOUT;
+                while Instant::now() < deadline
+                    && !webview_created_for_watchdog.load(Ordering::Acquire)
+                {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                if !webview_created_for_watchdog.load(Ordering::Acquire) {
+                    eprintln!(
+                        "native HMR fixture WebView creation timed out after {:.0}s",
+                        WEBVIEW_CREATE_TIMEOUT.as_secs_f64()
+                    );
+                    // 创建卡在原生消息泵时事件循环可能无法处理 exit 请求；先清理 Vite，再结束测试进程。
+                    stop_server(&server_for_watchdog);
+                    std::process::exit(1);
+                }
+            });
+            let build_started = Instant::now();
+            eprintln!("HMR fixture WebView creation started");
+            WebviewWindowBuilder::new(
+                app,
+                "main",
+                WebviewUrl::External(format!("http://{HMR_HOST}:{HMR_PORT}").parse()?),
+            )
+            .title("Aoidos HMR fixture")
+            .visible(false)
+            .on_page_load(move |_, payload| match payload.event() {
+                PageLoadEvent::Started => {
+                    page_started_for_callback.store(true, Ordering::Release);
+                    eprintln!("HMR fixture navigation started: {}", payload.url());
+                }
+                PageLoadEvent::Finished => {
+                    page_finished_for_callback.store(true, Ordering::Release);
+                    eprintln!("HMR fixture navigation finished: {}", payload.url());
+                }
+            })
+            .build()?;
+            webview_created.store(true, Ordering::Release);
+            eprintln!(
+                "HMR fixture WebView creation finished in {:.2}s",
+                build_started.elapsed().as_secs_f64()
+            );
+            thread::spawn(move || {
+                let navigation_deadline = Instant::now() + NAVIGATION_TIMEOUT;
+                while Instant::now() < navigation_deadline {
                     let first = read_report(&report);
                     if let Some(initial) = first {
                         if initial.phase == "runtime-error" {
@@ -78,7 +134,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 handle.exit(1);
                                 return;
                             }
-                            while Instant::now() < deadline {
+                            let update_deadline = Instant::now() + UPDATE_TIMEOUT;
+                            while Instant::now() < update_deadline {
                                 if let Some(updated) = read_report(&report) {
                                     if updated.phase == "runtime-error" {
                                         eprintln!(
@@ -118,27 +175,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "WebView loaded the page but its startup module did not report"
                 };
-                eprintln!("native HMR fixture startup timed out: {stage}");
+                eprintln!(
+                    "native HMR fixture navigation timed out after {:.0}s: {stage}",
+                    NAVIGATION_TIMEOUT.as_secs_f64()
+                );
                 handle.exit(1);
             });
-            WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::External(format!("http://{HMR_HOST}:{HMR_PORT}").parse()?),
-            )
-            .title("Aoidos HMR fixture")
-            .visible(false)
-            .on_page_load(move |_, payload| match payload.event() {
-                PageLoadEvent::Started => {
-                    page_started_for_callback.store(true, Ordering::Release);
-                    eprintln!("HMR fixture navigation started: {}", payload.url());
-                }
-                PageLoadEvent::Finished => {
-                    page_finished_for_callback.store(true, Ordering::Release);
-                    eprintln!("HMR fixture navigation finished: {}", payload.url());
-                }
-            })
-            .build()?;
             Ok(())
         })
         .build(context)?;
