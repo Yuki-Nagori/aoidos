@@ -26,6 +26,7 @@
 │   ├── src/turn_commands/     # 回合服务 / 事件适配，mod.rs 与 tests.rs 并列
 │   ├── src/theme_commands/    # 主题目录、偏好与剧本皮肤命令适配
 │   ├── src/locale_commands/   # 语言偏好 IPC；native.rs 单独封装真实 Wry 菜单 / 托盘适配
+│   ├── src/billing_commands/  # 预算、计价、账本与供应商余额命令适配
 │   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；平台原生输入经 aoidos-llm 分发
 │   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
 │   ├── src/events.rs          # 每流序号与事件信封，窗口投递由 turn_commands 适配
@@ -39,6 +40,7 @@
 │   ├── aoidos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
 │   ├── aoidos-theme/          # 主题目录 / 偏好 / 剧本皮肤校验，含 assets/themes/ 与 build.rs
+│   ├── aoidos-billing/        # 模型计价、周期、账本与预算领域规则
 │   ├── aoidos-memory/         # 029：记忆版本、SQLite manifest、幂等操作、因果核验与恢复
 │   ├── aoidos-locale/         # 034：受限语言偏好、系统语言归一化与独立 SQLite schema
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建

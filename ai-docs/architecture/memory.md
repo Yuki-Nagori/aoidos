@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-13。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复基础已交付，030 门控与批次实现进行中；算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
+更新日期：2026-10-13。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复基础与 030 门控 / 批次基础已交付；候选构造、Prompt、调用触发、UI 与记忆 IPC 尚未接入，算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
 
 ## 阅读路径
 
@@ -576,7 +576,7 @@ engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造
 
 审计同时核验效果 / 已处理素材的完整集合和效果来源的 run / session / recordSeq 去重索引；已应用目标缺失按损坏冻结，不能透传为普通未知身份。效果查询返回前审计本页关联的已应用操作，每页最多 32 个效果和 32 份有界计划，同一操作只核验一次；集合核验使用 operation 索引，避免扫描全周目效果。来源因回退失效仍按原规则过滤，不以重新计算放大原 gain。
 
-当前 `Effect` 只持有一般来源，不能证明某个角色通过其获知权限得到强化。029 因此拒绝所有 Character 目标效果（`policyUnavailable`）；030 必须扩展主体绑定的 `KnowledgeEvidence` 存储，并确保最终提交、审计和恢复均重新核验后，才可开放此类效果。
+当前 `Effect` 只持有一般来源，不能证明某个角色通过其获知权限得到强化，因此 Character 目标效果仍以 `policyUnavailable` 拒绝。只有后续实现补齐主体绑定的 `KnowledgeEvidence` 存储，并在最终提交、审计和恢复时重新核验，才可开放此类效果；这不属于已完成的 030 范围。
 
 entries 当前指向 versions，并保存 stateRevision；正文指向、强度效果、归档 / 复活状态等任一确认变化都递增它，避免正文未变时旧数值计划仍通过 CAS。versions 保留父版本、正文 hash / 长度与有效来源；effects 保留 event / source 依据及加分 / 复活原因，计算时仅装载当前有效路径。外键、唯一幂等索引与 `(run_id,status,entry_id)` 分页索引在迁移中建立；应用字段长度校验与 SQL CHECK 联合保证合法状态。状态 / applied / targets 在同一事务更新，不依赖内存标记。没有正文变化的 no-op / notWorthy 仅事务保存处理结果；需要正文时才准备新 version 文件，不能为记一个拒绝原因反复复制正文。
 
