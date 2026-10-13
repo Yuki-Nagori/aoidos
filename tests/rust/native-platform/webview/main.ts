@@ -1,16 +1,12 @@
 // 真实主 Webview 装载产品消费者，不复制恢复算法；夹具始终运行本地 Rust Provider。
-import { createApp, h, ref, watch, type DeepReadonly } from "vue";
+import type { DeepReadonly } from "vue";
+import { createApp, h, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  getTurn,
-  submitTurn,
-  cancelTurn,
-  listenTurnEvent,
-  type TurnInput,
-  type TurnSnapshot,
-} from "../../../../src-web/api/llm";
-import { useLlmTurn, type TurnTransport } from "../../../../src-web/composables/useLlmTurn";
-import { type TurnNotification } from "../../../../src-web/utils/turn-consumer";
+import type { TurnInput, TurnSnapshot } from "../../../../src-web/api/llm";
+import { getTurn, submitTurn, cancelTurn, listenTurnEvent } from "../../../../src-web/api/llm";
+import type { TurnTransport } from "../../../../src-web/composables/useLlmTurn";
+import { useLlmTurn } from "../../../../src-web/composables/useLlmTurn";
+import type { TurnNotification } from "../../../../src-web/utils/turn-consumer";
 
 import { useRecordView } from "../../../../src-web/composables/useRecordView";
 import { useMigration } from "../../../../src-web/composables/useMigration";
@@ -18,6 +14,7 @@ import { getUiPreferences, setUiPreferences } from "../../../../src-web/api/stor
 import { getRecordPage } from "../../../../src-web/api/records";
 import { getThemePreference, loadSkin, setThemePreference } from "../../../../src-web/api/theme";
 import { useEnginePhase } from "../../../../src-web/composables/useEnginePhase";
+import type { PhaseState } from "../../../../src-web/api/engine";
 import {
   submitInput,
   interruptRound,
@@ -28,7 +25,6 @@ import {
   submitCheck,
   getPhase,
   listenPhaseEvent,
-  type PhaseState,
 } from "../../../../src-web/api/engine";
 
 // The fixture module runs after the trusted head bootstrap and product CSS,

@@ -1,19 +1,8 @@
-import {
-  computed,
-  onScopeDispose,
-  readonly,
-  shallowRef,
-  toValue,
-  watch,
-  type MaybeRefOrGetter,
-} from "vue";
+import type { MaybeRefOrGetter } from "vue";
+import { computed, onScopeDispose, readonly, shallowRef, toValue, watch } from "vue";
 import { getRecordView, getRecordPage, getRecordBody, listenRecords } from "../api/records";
-import {
-  createRecordRecovery,
-  recordItems,
-  type RecordState,
-  type RecordTransport,
-} from "../utils/record-recovery";
+import type { RecordState, RecordTransport } from "../utils/record-recovery";
+import { createRecordRecovery, recordItems } from "../utils/record-recovery";
 
 import { createListenerGroup } from "../utils/listener-group";
 

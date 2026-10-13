@@ -147,7 +147,6 @@
     "closePanel": "收起对话面板",
     "openPanel": "打开对话面板",
     "latest": "跳转到最新内容",
-    "unreadRecords": "{count} 条新记录 · 跳转到最新内容",
     "earlierRecords": "加载更早记录",
     "compatRecord": "此记录使用了当前版本无法显示的格式。",
     "noRecords": "还没有记录。提交第一个行动即可开始故事。",
@@ -173,9 +172,7 @@
     "regenerate": "重新生成上一条回复",
     "interrupt": "打断并发送",
     "stopTurn": "停止生成",
-    "rollTotal": "结果：{total}",
     "rollDie": "d{sides}：{value}",
-    "difficultyClass": "难度 {dc}",
     "rollSummary": "{expression} · 合计 {total} · {rolls}",
     "checkSummary": "{result} · 难度 {dc}",
     "checkPlanned": "等待进行判定。",
@@ -188,7 +185,6 @@
       "criticalSuccess": "大成功",
       "criticalFailure": "大失败"
     },
-    "cancelTurn": "取消回合",
     "resume": "恢复",
     "confirmCheck": "确认判定（{expression}）",
     "outcomes": {

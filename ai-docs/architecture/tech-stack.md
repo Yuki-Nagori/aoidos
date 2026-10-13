@@ -1,6 +1,6 @@
 # 技术栈
 
-更新日期：2026-10-10。
+更新日期：2026-10-13。
 
 [架构总览](README.md)
 
@@ -10,7 +10,7 @@
 | ----------------- | ---------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | 包管理 / 脚本聚合 | Bun                                                        | ^1                                   | 依赖管理与全部命令入口                                                                                                                                       | `package.json`                                                      |
 | UI 框架           | Vue                                                        | ^3.5                                 | 视图与 UI 编排（`<script setup>`）                                                                                                                           | `src-web/`                                                          |
-| 界面国际化        | vue-i18n + intlify Vite / ESLint 插件                      | ^11 / ^11 / ^4                       | 可信 JSON 资源预编译、强类型消息与语言文案检查                                                                                                               | `locales/`、`vite.config.ts`、`eslint.config.ts`                    |
+| 界面国际化        | vue-i18n + intlify Vite 插件 + 仓库检查脚本                | ^11 / ^11                            | 可信 JSON 资源预编译、强类型消息与语言文案检查                                                                                                               | `locales/`、`vite.config.ts`、`scripts/i18n-check.mts`              |
 | 语言              | TypeScript                                                 | ^5.9（strict 全开）                  | 前端类型安全                                                                                                                                                 | `tsconfig.json`                                                     |
 | 构建              | Vite                                                       | ^8                                   | dev server（端口 1420 固定）与生产构建                                                                                                                       | `vite.config.ts`                                                    |
 | 桌面壳            | Tauri                                                      | ^2                                   | 窗口、系统集成、跨平台打包                                                                                                                                   | `src-tauri/tauri.conf.json`                                         |
@@ -28,12 +28,12 @@
 | 前端测试          | Vitest + @vitest/coverage-v8 + happy-dom + @vue/test-utils | ^5 / ^5 / ^20 / ^2                   | 单测与覆盖率门槛                                                                                                                                             | `vitest.config.ts`                                                  |
 | Rust 测试         | cargo test / cargo-llvm-cov                                | 工具链 + 独立子命令                  | 单测与覆盖率门槛                                                                                                                                             | `package.json`                                                      |
 | 样式              | Tailwind CSS v4（@tailwindcss/vite）                       | ^4                                   | 工具类消费层；设计基线见 ui.md，运行时 token 真源与生成映射见 theming.md                                                                                     | `src-web/app.css`                                                   |
-| 格式化            | Prettier / rustfmt                                         | ^3 / 工具链内置                      | 排版唯一权威                                                                                                                                                 | `.prettierrc.json`                                                  |
-| Lint              | ESLint / clippy                                            | ^10 / 工具链内置                     | 质量规则（不管排版）                                                                                                                                         | `eslint.config.ts`                                                  |
+| 格式化            | Biome / dprint / rustfmt                                   | ^2 / ^0 / 工具链内置                 | Biome 格式化前端代码；dprint 格式化 Markdown、Vue、HTML、YAML；rustfmt 格式化 Rust                                                                           | `biome.json`、`dprint.json`                                         |
+| Lint              | Biome / 仓库 i18n 检查 / clippy                            | ^2 / — / 工具链内置                  | Biome 负责前端质量规则；脚本校验语言资源；clippy 检查 Rust                                                                                                   | `biome.json`、`scripts/i18n-check.mts`                              |
 | 死代码检查        | knip                                                       | ^6                                   | 未用依赖、导出与文件                                                                                                                                         | `knip.json`                                                         |
 | 基准              | tinybench                                                  | ^6                                   | 前端微基准示例                                                                                                                                               | `src-web/bench/`                                                    |
 
-TypeScript 停在 5.x：TypeScript 7 尚无 typescript-eslint 支持，等工具链跟上再升。npm 镜像可能缺失部分包的 `latest` dist-tag，`bun update --latest` 报 tag not found 时按 `bun outdated` 的具体版本号手动写入 `package.json`。
+TypeScript 主版本升级前，先核对 Vue 类型检查、Vite、Bun 脚本与测试工具的兼容性，并在完整 `verify` 通过后再更新锁定版本。npm 镜像可能缺失部分包的 `latest` dist-tag，`bun update --latest` 报 tag not found 时按 `bun outdated` 的具体版本号手动写入 `package.json`。
 
 原生密钥输入使用 Windows CredUI、macOS AppKit（objc2）和 Linux GTK 3（gtk-rs）；依赖按目标平台声明，使用点经同型接口调用。平台验证记录归 [019 配置与凭据](../task/019-llm-profile-credentials-impl.md)，不把原生输入可用等同于安装包已验证。
 

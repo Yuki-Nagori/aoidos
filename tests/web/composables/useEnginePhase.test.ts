@@ -1,6 +1,7 @@
 import { effectScope, ref } from "vue";
 import { expect, it, vi } from "vitest";
-import { listenPhaseEvent, type PhaseState } from "../../../src-web/api/engine";
+import type { PhaseState } from "../../../src-web/api/engine";
+import { listenPhaseEvent } from "../../../src-web/api/engine";
 import type { TurnEnvelope } from "../../../src-web/api/llm";
 import { useEnginePhase } from "../../../src-web/composables/useEnginePhase";
 import { snapshot } from "../utils/phase-fixture";

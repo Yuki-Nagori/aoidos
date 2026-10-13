@@ -22,7 +22,6 @@
     "tests/web",
     "vite.config.ts",
     "vitest.config.ts",
-    "eslint.config.ts",
     "tests/rust/native-platform/webview/**/*.ts"
   ]
 }

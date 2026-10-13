@@ -42,14 +42,14 @@ $ bun run dev            # 或：浏览器界面预览（无桌面 IPC，不能�
 
 ## 常用命令
 
-| 命令                                | 作用                                                 |
-| ----------------------------------- | ---------------------------------------------------- |
-| `bun run verify`                    | 提交门禁（CI 逐步执行同一组检查）                    |
-| `bun run tauri:dev` / `tauri:build` | 桌面开发 / 打包安装包（`target/release/bundle/`）    |
-| `bun run build`                     | 类型检查 + 前端构建                                  |
-| `bun run test` / `test:coverage`    | 测试 / 测试 + 覆盖率门槛                             |
-| `bun run lint` / `format`           | ESLint / Prettier（`:rust` 后缀为 Clippy / rustfmt） |
-| `bun run bench` / `knip`            | 正文消费基准 / 死代码检查                            |
+| 命令                                | 作用                                                     |
+| ----------------------------------- | -------------------------------------------------------- |
+| `bun run verify`                    | 提交门禁（CI 逐步执行同一组检查）                        |
+| `bun run tauri:dev` / `tauri:build` | 桌面开发 / 打包安装包（`target/release/bundle/`）        |
+| `bun run build`                     | 类型检查 + 前端构建                                      |
+| `bun run test` / `test:coverage`    | 测试 / 测试 + 覆盖率门槛                                 |
+| `bun run lint` / `format`           | Biome + i18n / dprint（`:rust` 后缀为 Clippy / rustfmt） |
+| `bun run bench` / `knip`            | 正文消费基准 / 死代码检查                                |
 
 ## 文档
 

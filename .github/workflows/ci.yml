@@ -59,9 +59,9 @@ jobs:
         run: bun install --frozen-lockfile
       - name: typecheck（前端 + 仓库脚本）
         run: bun run typecheck
-      - name: lint（eslint）
+      - name: lint（Biome + i18n）
         run: bun run lint
-      - name: format（prettier）
+      - name: format（Biome + dprint）
         run: bun run format:check
       - name: format（rustfmt）
         run: bun run format:rust:check

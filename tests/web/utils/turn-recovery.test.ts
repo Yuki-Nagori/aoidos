@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { type TurnSnapshot } from "../../../src-web/api/llm";
-import {
-  createTurnRecovery,
-  turnRecoveryError,
-  type TurnRecoveryView,
-} from "../../../src-web/utils/turn-recovery";
-import { type TurnNotification } from "../../../src-web/utils/turn-consumer";
+import type { TurnSnapshot } from "../../../src-web/api/llm";
+import type { TurnRecoveryView } from "../../../src-web/utils/turn-recovery";
+import { createTurnRecovery, turnRecoveryError } from "../../../src-web/utils/turn-recovery";
+import type { TurnNotification } from "../../../src-web/utils/turn-consumer";
 
 function deferred<T>(): {
   promise: Promise<T>;

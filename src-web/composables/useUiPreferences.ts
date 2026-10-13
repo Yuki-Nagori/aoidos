@@ -1,5 +1,6 @@
 import { onScopeDispose, readonly, ref, shallowRef } from "vue";
-import { getUiPreferences, setUiPreferences, type UiPreferences } from "../api/store";
+import type { UiPreferences } from "../api/store";
+import { getUiPreferences, setUiPreferences } from "../api/store";
 
 interface Transport {
   get: typeof getUiPreferences;

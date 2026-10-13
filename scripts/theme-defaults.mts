@@ -1,7 +1,6 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { format, resolveConfig } from "prettier";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const themesPath = resolve(root, "src-rust/aoidos-theme/assets/themes");
@@ -80,16 +79,17 @@ for (const file of files) {
   const selector = id === "dark" ? ':root,\n:root[data-theme="dark"]' : `:root[data-theme="${id}"]`;
   output.push(
     `${selector} {\n  color-scheme: ${scheme};\n${[...values]
-      .map(([name, value]) => `  ${name}: ${value};`)
+      .map(([name, value]) => {
+        const lines = value.split("\n").map((line) => line.trim());
+        const firstLine = `  ${name}: ${lines[0]};`;
+        if (firstLine.length <= 100 && lines.length === 1) return firstLine;
+        return `  ${name}:\n${lines.map((line) => `    ${line}`).join("\n")};`;
+      })
       .join("\n")}\n}`,
   );
 }
 
-const prettierOptions = (await resolveConfig(outputPath)) ?? {};
-const generated = await format(`${output.join("\n\n")}\n`, {
-  ...prettierOptions,
-  parser: "css",
-});
+const generated = `${output.join("\n\n")}\n`;
 if (process.argv.includes("--write")) {
   await mkdir(resolve(root, "src-web/styles/generated"), { recursive: true });
   await writeFile(outputPath, generated);

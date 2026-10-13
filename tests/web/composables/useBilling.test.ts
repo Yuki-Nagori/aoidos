@@ -1,5 +1,15 @@
 import { effectScope, nextTick, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  BillingRequestPage,
+  BillingBackfillPreview,
+  BudgetSettings,
+  MonthlyPeriod,
+  PriceVersion,
+  RunPeriod,
+  SuggestedLimits,
+  ProviderBalanceSnapshot,
+} from "../../../src-web/api/billing";
 import {
   getBudgetSettings,
   getMonthlyPeriod,
@@ -15,14 +25,6 @@ import {
   registerPrice,
   selectPrice,
   setBudgetSettings,
-  type BillingRequestPage,
-  type BillingBackfillPreview,
-  type BudgetSettings,
-  type MonthlyPeriod,
-  type PriceVersion,
-  type RunPeriod,
-  type SuggestedLimits,
-  type ProviderBalanceSnapshot,
 } from "../../../src-web/api/billing";
 import { useBilling } from "../../../src-web/composables/useBilling";
 

@@ -1,13 +1,7 @@
-import { onScopeDispose, ref, watch, type Ref } from "vue";
-import {
-  getThemePreference,
-  getThemes,
-  loadSkin,
-  setThemePreference,
-  type Skin,
-  type ThemeId,
-  type ThemeInfo,
-} from "../api/theme";
+import type { Ref } from "vue";
+import { onScopeDispose, ref, watch } from "vue";
+import type { Skin, ThemeId, ThemeInfo } from "../api/theme";
+import { getThemePreference, getThemes, loadSkin, setThemePreference } from "../api/theme";
 
 // Rust owns the semantic allowlist; the UI only prevents a returned name escaping CSS syntax.
 const SAFE_TOKEN_NAME = /^--[a-z][a-z0-9-]*$/;

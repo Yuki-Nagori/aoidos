@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getLocalePreference, type LocaleResult } from "../../../src-web/api/locale";
+import type { LocaleResult } from "../../../src-web/api/locale";
+import { getLocalePreference } from "../../../src-web/api/locale";
 import { i18n } from "../../../src-web/i18n";
 import { hydrateLocale } from "../../../src-web/i18n/startup";
 

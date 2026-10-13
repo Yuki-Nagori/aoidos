@@ -88,9 +88,7 @@ defineExpose({ focus });
     {{ t("game.outOfCharacter") }}
   </p>
   <p
-    v-else-if="
-      props.preview.command?.name === 'interrupt' && !props.preview.command.argument.trim()
-    "
+    v-else-if="props.preview.command?.name === 'interrupt' && !props.preview.command.argument.trim()"
     class="mt-2 text-xs text-warning"
   >
     {{ t("game.interruptNeedsText") }}

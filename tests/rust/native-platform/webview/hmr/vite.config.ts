@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { defineConfig, type Plugin } from "vite";
+import type { Plugin } from "vite";
+import { defineConfig } from "vite";
 
 const config = JSON.parse(readFileSync("../../../../../src-tauri/tauri.conf.json", "utf8")) as {
   app: { security: { devCsp: string } };

@@ -1,6 +1,8 @@
 import { computed, onScopeDispose, ref, shallowRef, watch } from "vue";
-import { listProfiles, saveProfile, setKey, type LlmProfile, type KeyStatus } from "../api/llm";
-import { listScripts, openSession, type OpenedSession, type ScriptInfo } from "../api/engine";
+import type { LlmProfile, KeyStatus } from "../api/llm";
+import { listProfiles, saveProfile, setKey } from "../api/llm";
+import type { OpenedSession, ScriptInfo } from "../api/engine";
+import { listScripts, openSession } from "../api/engine";
 import { turnRecoveryError } from "../utils/turn-recovery";
 
 interface Transport {

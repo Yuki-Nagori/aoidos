@@ -1,7 +1,8 @@
 import { onScopeDispose, readonly, shallowRef } from "vue";
 import { getMigration, listenMigration } from "../api/store";
 import type { MigrationSnapshot } from "../api/store";
-import { createMigrationRecovery, type MigrationState } from "../utils/migration-recovery";
+import type { MigrationState } from "../utils/migration-recovery";
+import { createMigrationRecovery } from "../utils/migration-recovery";
 import { createListenerGroup } from "../utils/listener-group";
 
 const defaults = { read: getMigration, listen: listenMigration };

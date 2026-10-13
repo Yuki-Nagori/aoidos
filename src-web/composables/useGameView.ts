@@ -1,12 +1,5 @@
-import {
-  onScopeDispose,
-  readonly,
-  shallowRef,
-  toValue,
-  watch,
-  type DeepReadonly,
-  type MaybeRefOrGetter,
-} from "vue";
+import type { DeepReadonly, MaybeRefOrGetter } from "vue";
+import { onScopeDispose, readonly, shallowRef, toValue, watch } from "vue";
 import type { RecordItem } from "../api/records";
 import { useEnginePhase } from "./useEnginePhase";
 import { useLlmTurn } from "./useLlmTurn";

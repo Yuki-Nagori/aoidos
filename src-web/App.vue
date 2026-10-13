@@ -488,7 +488,11 @@ void preferences.load();
             </option>
           </select>
         </label>
-        <button v-if="product.scriptId.value === 'mistbell'" @click="theme.toggleSkin">
+        <button
+          type="button"
+          v-if="product.scriptId.value === 'mistbell'"
+          @click="theme.toggleSkin"
+        >
           {{ theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin") }}
         </button>
       </div>
@@ -503,11 +507,9 @@ void preferences.load();
           :value="locale.choice.value"
           :aria-label="t('settings.language')"
           :disabled="!locale.ready.value || locale.saving.value"
-          @change="
-            locale.setChoice(
-              ($event.target as HTMLSelectElement).value as 'system' | 'zh-Hans' | 'en',
-            )
-          "
+          @change="locale.setChoice(
+            ($event.target as HTMLSelectElement).value as 'system' | 'zh-Hans' | 'en',
+          )"
         >
           <option value="system">
             {{
@@ -549,9 +551,8 @@ void preferences.load();
           <option v-for="model in product.models.value" :key="model.id" :value="model.id">
             {{ model.label }}
           </option>
-        </select></label
-      >
-      <button :disabled="product.busy.value" @click="product.configureKey">
+        </select></label>
+      <button type="button" :disabled="product.busy.value" @click="product.configureKey">
         {{ t("settings.setApiKey") }}
       </button>
       <p v-if="product.keyStatus.value">
@@ -567,14 +568,15 @@ void preferences.load();
           >
             {{ script.displayNames[locale.resolved.value] ?? script.title }}
           </option>
-        </select></label
-      >
+        </select></label>
       <div class="flex gap-4">
-        <button :disabled="product.busy.value" @click="product.open(false)">
-          {{ t("game.restart") }}</button
-        ><button :disabled="product.busy.value" @click="product.open(true)">
-          {{ t("game.newCycle") }}</button
-        ><button @click="game.reconnect">{{ t("common.reconnect") }}</button>
+        <button type="button" :disabled="product.busy.value" @click="product.open(false)">
+          {{ t("game.restart") }}
+        </button>
+        <button type="button" :disabled="product.busy.value" @click="product.open(true)">
+          {{ t("game.newCycle") }}
+        </button>
+        <button type="button" @click="game.reconnect">{{ t("common.reconnect") }}</button>
       </div>
       <details v-if="product.session.value" class="glass-panel">
         <summary>{{ t("billing.title") }}</summary>
@@ -745,26 +747,25 @@ void preferences.load();
             >
               {{
                 billing.retryingRequestId.value === item.requestId
-                  ? t("billing.settlementRetrying")
-                  : t("billing.retrySettlement")
+                ? t("billing.settlementRetrying")
+                : t("billing.retrySettlement")
               }}
             </button>
             <button
-              v-if="
-                item.state === 'unconfirmed' &&
-                !item.actualAmount &&
-                !item.settlementPending &&
-                item.inputTotal !== null &&
-                item.inputCached !== null &&
-                item.inputCachedWrite !== null &&
-                item.outputTotal !== null
-              "
+              v-if="item.state === 'unconfirmed' &&
+              !item.actualAmount &&
+              !item.settlementPending &&
+              item.inputTotal !== null &&
+              item.inputCached !== null &&
+              item.inputCachedWrite !== null &&
+              item.outputTotal !== null"
               type="button"
               :disabled="billing.backfillingRequestId.value !== undefined"
               @click="billing.previewBackfill(item.requestId)"
             >
               {{ t("billing.previewBackfill") }}
             </button>
+            <!-- biome-ignore lint/a11y/useSemanticElements: This groups preview status and controls, not form fields. -->
             <div
               v-if="billing.backfillPreview.value?.requestId === item.requestId"
               class="grid gap-2 rounded border border-line p-3"
@@ -1019,11 +1020,9 @@ void preferences.load();
           </label>
           <button
             type="submit"
-            :disabled="
-              billing.busy.value ||
-              !billing.inputCachedWrite.value.trim() ||
-              !billing.scheduledPriceComplete.value
-            "
+            :disabled="billing.busy.value ||
+            !billing.inputCachedWrite.value.trim() ||
+            !billing.scheduledPriceComplete.value"
           >
             {{ t("billing.savePrice") }}
           </button>
@@ -1083,14 +1082,13 @@ void preferences.load();
         </button>
       </template>
       <template #panel>
+        <!-- biome-ignore lint/a11y/noStaticElementInteractions: These handlers track text selection and reading state; this panel is not an activation target. -->
         <div
           class="flex min-h-0 flex-1 flex-col"
           @focusin="panelProtected = true"
-          @focusout="
-            panelProtected = Boolean(
-              ($event.relatedTarget as Node | null)?.parentElement?.closest('.dialogue-panel'),
-            )
-          "
+          @focusout="panelProtected = Boolean(
+            ($event.relatedTarget as Node | null)?.parentElement?.closest('.dialogue-panel'),
+          )"
           @mouseup="panelProtected = hasTextSelection()"
           @keyup="panelProtected = hasTextSelection()"
           @pointerdown="onReadingPointerDown"
@@ -1118,7 +1116,7 @@ void preferences.load();
           <p v-else role="status" class="m-3 rounded-lg bg-panel p-3 text-sm">
             {{ t("game.historyPending") }}
           </p>
-          <button v-if="unreadRecords" class="jump-latest" @click="jumpToLatest">
+          <button type="button" v-if="unreadRecords" class="jump-latest" @click="jumpToLatest">
             {{ t("game.newRecords") }}
           </button>
           <dialog
@@ -1132,15 +1130,22 @@ void preferences.load();
             <p id="confirmation-message">
               {{
                 confirmation?.kind === "regenerate"
-                  ? t("game.regenerateConfirm")
-                  : confirmation
-                    ? t("game.rewindConfirm", { seq: confirmation.seq })
-                    : ""
+                ? t("game.regenerateConfirm")
+                : confirmation
+                  ? t("game.rewindConfirm", { seq: confirmation.seq })
+                  : ""
               }}
             </p>
             <div class="mt-3 flex justify-end gap-2">
-              <button @click="confirmation = undefined">{{ t("common.cancel") }}</button>
-              <button class="text-danger" :disabled="controls.busy.value" @click="confirmOperation">
+              <button type="button" @click="confirmation = undefined">
+                {{ t("common.cancel") }}
+              </button>
+              <button
+                type="button"
+                class="text-danger"
+                :disabled="controls.busy.value"
+                @click="confirmOperation"
+              >
                 {{ t("game.confirmDestructive") }}
               </button>
             </div>
@@ -1152,11 +1157,9 @@ void preferences.load();
                 <select
                   :value="preferences.diceMode.value"
                   :disabled="preferences.saving.value"
-                  @change="
-                    preferences.setDiceMode(
-                      ($event.target as HTMLSelectElement).value as 'manual' | 'auto',
-                    )
-                  "
+                  @change="preferences.setDiceMode(
+                    ($event.target as HTMLSelectElement).value as 'manual' | 'auto',
+                  )"
                 >
                   <option value="manual">{{ t("game.manual") }}</option>
                   <option value="auto">{{ t("game.automatic") }}</option>
@@ -1167,7 +1170,7 @@ void preferences.load();
               }}</span>
               <span v-if="preferences.loadError.value" role="status">
                 {{ t("game.preferenceLoadFailed") }}
-                <button class="text-ink underline" @click="preferences.load">
+                <button type="button" class="text-ink underline" @click="preferences.load">
                   {{ t("common.retry") }}
                 </button>
               </span>
@@ -1189,6 +1192,7 @@ void preferences.load();
             />
             <div class="mt-3 flex flex-wrap gap-2">
               <button
+                type="button"
                 v-if="current?.inFlight"
                 :disabled="controls.busy.value"
                 @click="controls.control('cancel')"
@@ -1196,6 +1200,7 @@ void preferences.load();
                 {{ t("game.stopTurn") }}
               </button>
               <button
+                type="button"
                 v-if="current?.inFlight?.roundId && input.draft.value.trim()"
                 :disabled="controls.busy.value || input.composing.value"
                 @click="interruptDraft()"
@@ -1203,6 +1208,7 @@ void preferences.load();
                 {{ t("game.interrupt") }}
               </button>
               <button
+                type="button"
                 v-if="current?.resumeRequired"
                 :disabled="controls.busy.value"
                 @click="controls.control('resume')"
@@ -1210,17 +1216,17 @@ void preferences.load();
                 {{ t("game.resume") }}
               </button>
               <button
-                v-if="
-                  current?.check?.status === 'waiting' &&
-                  current.check.mode === 'manual' &&
-                  current.inFlight?.roundId
-                "
+                type="button"
+                v-if="current?.check?.status === 'waiting' &&
+                current.check.mode === 'manual' &&
+                current.inFlight?.roundId"
                 :disabled="controls.busy.value"
                 @click="controls.control('check')"
               >
                 {{ t("game.confirmCheck", { expression: current.check.expression }) }}
               </button>
               <button
+                type="button"
                 v-if="current?.needsRecovery"
                 :disabled="phase.connecting.value || records.state.value.recovering"
                 @click="game.recover"
@@ -1228,11 +1234,10 @@ void preferences.load();
                 {{ t("common.reconnect") }}
               </button>
               <button
-                v-if="
-                  current?.phase === 'idle' &&
-                  current.lastOperation?.roundId &&
-                  !current.needsRecovery
-                "
+                type="button"
+                v-if="current?.phase === 'idle' &&
+                current.lastOperation?.roundId &&
+                !current.needsRecovery"
                 @click="confirmation = { kind: 'regenerate' }"
               >
                 {{ t("game.regenerate") }}

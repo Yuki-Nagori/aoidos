@@ -1,0 +1,65 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "main"
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!!**/dist",
+      "!!**/target",
+      "!!**/node_modules",
+      "!!**/coverage",
+      "!!src-tauri/gen",
+      "!!tests/rust/native-platform/gen",
+      "!!public/theme-bootstrap.js",
+      "!!public/locale-bootstrap.js",
+      "!!resources/scripts/mistbell"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "includes": ["**/*.{css,cjs,cts,js,json,jsonc,mjs,mts,ts,tsx}"],
+    "lineEnding": "lf"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "useIterableCallbackReturn": {
+          "level": "error",
+          "options": { "checkForEach": false }
+        }
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useImportType": {
+          "level": "error",
+          "options": { "style": "separatedType" }
+        }
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "trailingCommas": "all"
+    }
+  },
+  "css": {
+    "parser": { "tailwindDirectives": true }
+  },
+  "html": {
+    "experimentalFullSupportEnabled": true,
+    "formatter": { "enabled": false }
+  },
+  "assist": { "enabled": false }
+}

@@ -1,9 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { PhaseSnapshot } from "../../../src-web/api/engine";
-import {
-  createPhaseRecovery,
-  type PhaseRecoveryState,
-} from "../../../src-web/utils/phase-recovery";
+import type { PhaseRecoveryState } from "../../../src-web/utils/phase-recovery";
+import { createPhaseRecovery } from "../../../src-web/utils/phase-recovery";
 import { snapshot } from "./phase-fixture";
 
 function deferred() {
