@@ -1240,9 +1240,611 @@ fn alias_context_does_not_trust_an_incomplete_directory() {
     let port = SourcePort {
         session: &fixture.session,
         entity_directory: Some(&incomplete),
+        scene_catalog: None,
+        evidence_connection: None,
     };
     assert!(matches!(
         port.entity_alias_context("missing"),
         Err(Error::Rejected(Reason::PolicyUnavailable))
     ));
+}
+
+fn evidence_catalog(
+    fixture: &Fixture,
+) -> (
+    crate::game::catalog::SceneCatalog,
+    crate::game::catalog::EntityDirectory,
+) {
+    use crate::game::{
+        catalog::{Condition, Node, Scene, SceneRuleView},
+        presence::{ObservationRule, ObservationSourceKind, PresencePolicy, SceneEntryPresence},
+    };
+    use crate::record::facts::{SceneNode, ScenePosition};
+    use std::collections::BTreeMap;
+
+    let revision = fixture.session.header().script_revision.clone();
+    let directory = crate::game::catalog::EntityDirectory::new(
+        revision.clone(),
+        1,
+        true,
+        [
+            ("player", "玩家"),
+            ("keeper", "守门人"),
+            ("messenger", "信使"),
+        ]
+        .into_iter()
+        .map(
+            |(id, canonical_name)| crate::game::catalog::CanonicalEntity {
+                id: id.into(),
+                kind: crate::game::catalog::EntityKind::Character,
+                scope: "global".into(),
+                canonical_name: canonical_name.into(),
+            },
+        )
+        .collect(),
+    )
+    .unwrap();
+    let catalog_revision = "evidence-catalog-v1";
+    let scene = Scene {
+        position: ScenePosition {
+            scene_id: "room".into(),
+            path: vec![SceneNode {
+                kind: "scene".into(),
+                id: "room".into(),
+                title: "房间".into(),
+            }],
+        },
+        rules: SceneRuleView {
+            scene_id: "room".into(),
+            catalog_revision: catalog_revision.into(),
+            advance_rule_ids: vec![],
+            progress_rule_ids: vec![],
+            hint_rules: vec![],
+            exit_rule_ids: vec![],
+        },
+        advance: vec![],
+        check_rule_ids: vec![],
+        actor_ids: vec!["player".into(), "keeper".into(), "messenger".into()],
+        forced_check: None,
+        dice_disabled: true,
+    };
+    let mut catalog = crate::game::catalog::SceneCatalog::new(
+        catalog_revision.into(),
+        revision,
+        BTreeMap::from([(
+            "room".into(),
+            Node {
+                kind: "scene".into(),
+                title: "房间".into(),
+                parent: None,
+            },
+        )]),
+        BTreeMap::from([("room".into(), scene)]),
+        BTreeMap::<String, Condition>::new(),
+    )
+    .unwrap()
+    .with_entity_directory(directory.clone())
+    .unwrap();
+    let entry = SceneEntryPresence {
+        rule_id: "room-entry-v1".into(),
+        rule_version: 1,
+        character_ids: vec!["player".into(), "keeper".into(), "messenger".into()],
+    };
+    let policy = PresencePolicy::new(
+        "room".into(),
+        entry.clone(),
+        BTreeMap::from([("room".into(), entry)]),
+        vec![],
+    )
+    .unwrap()
+    .with_knowledge_rules(
+        vec![ObservationRule {
+            rule_id: "room-observation-v1".into(),
+            rule_version: 1,
+            scene_id: "room".into(),
+            scope_id: "room-visible-v1".into(),
+            source_kind: ObservationSourceKind::SceneNarration,
+        }],
+        vec![crate::game::presence::RumorRule {
+            rule_id: "room-rumor-v1".into(),
+            rule_version: 1,
+            scene_id: "room".into(),
+            scope_id: "room-rumor-v1".into(),
+            require_informant_present: true,
+        }],
+    )
+    .unwrap();
+    catalog = catalog.with_presence_policy(policy).unwrap();
+    (catalog, directory)
+}
+
+#[test]
+fn evidence_context_rejects_stale_inputs_and_requires_presence_policy() {
+    let fixture = Fixture::new();
+    let (catalog, directory) = evidence_catalog(&fixture);
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    let stale_directory = crate::game::catalog::EntityDirectory::new(
+        crate::record::format::hash(b"another script"),
+        2,
+        true,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "player".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "玩家".into(),
+        }],
+    )
+    .unwrap();
+    assert!(matches!(
+        SourcePort::with_evidence_context(
+            &fixture.session,
+            &stale_directory,
+            &catalog,
+            &connection,
+        ),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+    let incomplete_directory = crate::game::catalog::EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        3,
+        false,
+        vec![crate::game::catalog::CanonicalEntity {
+            id: "player".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "demo".into(),
+            canonical_name: "玩家".into(),
+        }],
+    )
+    .unwrap();
+    assert!(matches!(
+        SourcePort::with_evidence_context(
+            &fixture.session,
+            &incomplete_directory,
+            &catalog,
+            &connection
+        ),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+
+    let stale_catalog = crate::game::catalog::SceneCatalog::new(
+        "stale-catalog".into(),
+        crate::record::format::hash(b"another script"),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        SourcePort::with_evidence_context(
+            &fixture.session,
+            &directory,
+            &stale_catalog,
+            &connection,
+        ),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+
+    let no_policy = crate::game::catalog::SceneCatalog::new(
+        "no-policy".into(),
+        fixture.session.header().script_revision.clone(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        SourcePort::with_evidence_context(&fixture.session, &directory, &no_policy, &connection),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+
+    assert!(
+        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
+            .is_ok()
+    );
+}
+
+#[test]
+fn scene_evidence_requires_complete_context_and_exact_committed_source_metadata() {
+    use crate::game::presence::{ObservedEvent, ObservedEvidenceInput, ScenePresence};
+    use crate::record::facts::{DiceMode, Fact, GenerationTarget, SkipReason, Step};
+    use crate::record::format::Body;
+
+    let mut fixture = Fixture::new();
+    let (catalog, directory) = evidence_catalog(&fixture);
+    let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(aoidos_store::applied::SCHEMA)
+        .unwrap();
+    let identity = identity(&aoidos_memory::model::new_id());
+    let input_seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我看见墙上的刻痕。".into(),
+            mode: Some(RecordMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity: identity.clone(),
+                input_seq,
+                mode: RecordMode::InCharacter,
+                dice_mode: DiceMode::Auto,
+                profile_id: "profile".into(),
+                profile_revision: "a".repeat(64),
+                target: GenerationTarget::Narration,
+                scene_id: "room".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("回合接纳")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::CheckSkipped {
+                identity: identity.clone(),
+                reason: SkipReason::NoCheck,
+                world_revision: "world-v1".into(),
+            }
+            .body("无需检定")
+            .unwrap(),
+        )
+        .unwrap();
+    let narrative = "玩家看到墙上的刻痕。";
+    let source_seq = fixture
+        .session
+        .append(Body::Narration {
+            text: narrative.into(),
+            turn_id: aoidos_memory::model::new_id(),
+            terminal: Terminal::Completed {
+                finish_reason: FinishReason::Stop,
+            },
+        })
+        .unwrap();
+    let snapshot =
+        ScenePresence::snapshot(&connection, &fixture.session, &catalog, &directory).unwrap();
+    let rule = catalog
+        .presence_policy()
+        .unwrap()
+        .observation_rule("room-observation-v1")
+        .unwrap();
+    let event = ObservedEvent::mutation(
+        &fixture.session,
+        &catalog,
+        ObservedEvidenceInput {
+            subject_id: "player".into(),
+            source: crate::game::presence::EvidenceSource {
+                record_seq: source_seq,
+                body_hash: crate::record::format::hash(narrative.as_bytes()),
+                start_byte: 0,
+                end_byte: narrative.len() as u64,
+            },
+            scene_id: snapshot.scene_id,
+            scope_id: rule.scope_id.clone(),
+            presence_revision: snapshot.presence_revision,
+        },
+        rule,
+    );
+    let settlement_seq = fixture
+        .session
+        .commit_world(
+            Fact::SettlementPlanned {
+                identity: identity.clone(),
+                narrative_seq: source_seq,
+                world_revision: "world-v1".into(),
+                mutations: vec![event.clone()],
+            }
+            .body("记录观察")
+            .unwrap(),
+            &mut NoopWorld,
+        )
+        .unwrap();
+    let mutation_hash = crate::record::world::mutation_hash(&event).unwrap();
+    aoidos_store::applied::apply_once(
+        &mut connection,
+        &event.mutation_id,
+        &mutation_hash,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundSettled {
+                identity: identity.clone(),
+                narrative_seq: source_seq,
+                settlement_seq,
+                applied_through_mutation_id: Some(event.mutation_id.clone()),
+            }
+            .body("观察已结算")
+            .unwrap(),
+        )
+        .unwrap();
+    let through_seq = fixture
+        .session
+        .append(
+            Fact::SceneStayed {
+                identity: identity.clone(),
+                scene_id: "room".into(),
+                world_revision: "world-v1".into(),
+            }
+            .body("留在房间")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundEnded {
+                identity,
+                outcome: Outcome::Completed,
+                through_seq,
+                completed_steps: vec![
+                    Step::Check,
+                    Step::Narration,
+                    Step::Settlement,
+                    Step::Advance,
+                ],
+                error: None,
+            }
+            .body("回合完成")
+            .unwrap(),
+        )
+        .unwrap();
+
+    let source = SourcePort::new(&fixture.session)
+        .reference(&aoidos_memory::model::new_id(), source_seq)
+        .unwrap();
+    let evidence = KnowledgeEvidence {
+        evidence_id: event.mutation_id.clone(),
+        subject_id: "player".into(),
+        source,
+        kind: aoidos_memory::model::KnowledgeKind::Observed,
+        informant_id: None,
+        scope: "room-visible-v1".into(),
+        rule_id: "room-observation-v1".into(),
+    };
+
+    let no_context = SourcePort::new(&fixture.session);
+    assert!(!no_context.valid_evidence(&evidence).unwrap());
+    let port =
+        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
+            .unwrap();
+    assert!(port.valid_evidence(&evidence).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.evidence_id = aoidos_memory::model::new_id();
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.kind = aoidos_memory::model::KnowledgeKind::Rumor;
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.subject_id = "other".into();
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.informant_id = Some("someone".into());
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.scope = "wrong-scope".into();
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.rule_id = "wrong-rule".into();
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.source.record_seq += 1;
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.source.body_hash = [0; 32];
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.source.start_byte = 1;
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence.clone();
+    invalid.source.end_byte -= 1;
+    assert!(!port.valid_evidence(&invalid).unwrap());
+    let mut invalid = evidence;
+    invalid.source.start_byte = 0;
+    invalid.source.end_byte += 1;
+    assert!(!port.valid_evidence(&invalid).unwrap());
+
+    let recovering_source = SourcePort::new(&fixture.session)
+        .reference(&aoidos_memory::model::new_id(), source_seq)
+        .unwrap();
+    fixture.session.pending_world = true;
+    let recovering =
+        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
+            .unwrap();
+    assert!(matches!(
+        recovering.valid_evidence(&KnowledgeEvidence {
+            evidence_id: event.mutation_id,
+            subject_id: "player".into(),
+            source: recovering_source,
+            kind: aoidos_memory::model::KnowledgeKind::Observed,
+            informant_id: None,
+            scope: "room-visible-v1".into(),
+            rule_id: "room-observation-v1".into(),
+        }),
+        Err(Error::Rejected(Reason::PolicyUnavailable))
+    ));
+}
+
+#[test]
+fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
+    use crate::game::presence::{RumorDelivery, RumorUncertainty, ScenePresence};
+    use crate::record::facts::{DiceMode, Fact, GenerationTarget, SkipReason, Step};
+    use crate::record::format::Body;
+
+    let mut fixture = Fixture::new();
+    let (catalog, directory) = evidence_catalog(&fixture);
+    let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(aoidos_store::applied::SCHEMA)
+        .unwrap();
+    let identity = identity(&aoidos_memory::model::new_id());
+    let input_seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "守门人告诉我门后的消息。".into(),
+            mode: Some(RecordMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundAccepted {
+                identity: identity.clone(),
+                input_seq,
+                mode: RecordMode::InCharacter,
+                dice_mode: DiceMode::Auto,
+                profile_id: "profile".into(),
+                profile_revision: "a".repeat(64),
+                target: GenerationTarget::CharacterSpeech {
+                    speaker_id: "keeper".into(),
+                },
+                scene_id: "room".into(),
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("角色回合接纳")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::CheckSkipped {
+                identity: identity.clone(),
+                reason: SkipReason::NoCheck,
+                world_revision: "world-v1".into(),
+            }
+            .body("无需检定")
+            .unwrap(),
+        )
+        .unwrap();
+    let text = "守门人说：门后藏着一封旧信。";
+    let source_seq = fixture
+        .session
+        .append(Body::CharacterSpeech {
+            speaker_id: "keeper".into(),
+            text: text.into(),
+            turn_id: aoidos_memory::model::new_id(),
+            terminal: Terminal::Completed {
+                finish_reason: FinishReason::Stop,
+            },
+        })
+        .unwrap();
+    let snapshot =
+        ScenePresence::snapshot(&connection, &fixture.session, &catalog, &directory).unwrap();
+    let rule = catalog
+        .presence_policy()
+        .unwrap()
+        .rumor_rule("room-rumor-v1")
+        .unwrap();
+    let source = crate::game::presence::EvidenceSource {
+        record_seq: source_seq,
+        body_hash: crate::record::format::hash(text.as_bytes()),
+        start_byte: 0,
+        end_byte: text.len() as u64,
+    };
+    let event = RumorDelivery::mutation(
+        &fixture.session,
+        &catalog,
+        "player".into(),
+        "keeper".into(),
+        source.clone(),
+        source,
+        None,
+        snapshot.scene_id,
+        rule.scope_id.clone(),
+        RumorUncertainty::Unverified,
+        rule,
+    );
+    let settlement_seq = fixture
+        .session
+        .commit_world(
+            Fact::SettlementPlanned {
+                identity: identity.clone(),
+                narrative_seq: source_seq,
+                world_revision: "world-v1".into(),
+                mutations: vec![event.clone()],
+            }
+            .body("记录传闻")
+            .unwrap(),
+            &mut NoopWorld,
+        )
+        .unwrap();
+    aoidos_store::applied::apply_once(
+        &mut connection,
+        &event.mutation_id,
+        &crate::record::world::mutation_hash(&event).unwrap(),
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundSettled {
+                identity: identity.clone(),
+                narrative_seq: source_seq,
+                settlement_seq,
+                applied_through_mutation_id: Some(event.mutation_id.clone()),
+            }
+            .body("传闻已结算")
+            .unwrap(),
+        )
+        .unwrap();
+    let through_seq = fixture
+        .session
+        .append(
+            Fact::SceneStayed {
+                identity: identity.clone(),
+                scene_id: "room".into(),
+                world_revision: "world-v1".into(),
+            }
+            .body("留在房间")
+            .unwrap(),
+        )
+        .unwrap();
+    fixture
+        .session
+        .append(
+            Fact::RoundEnded {
+                identity,
+                outcome: Outcome::Completed,
+                through_seq,
+                completed_steps: vec![
+                    Step::Check,
+                    Step::Narration,
+                    Step::Settlement,
+                    Step::Advance,
+                ],
+                error: None,
+            }
+            .body("传闻回合完成")
+            .unwrap(),
+        )
+        .unwrap();
+
+    let port =
+        SourcePort::with_evidence_context(&fixture.session, &directory, &catalog, &connection)
+            .unwrap();
+    let evidence = KnowledgeEvidence {
+        evidence_id: event.mutation_id,
+        subject_id: "player".into(),
+        source: SourcePort::new(&fixture.session)
+            .reference(&aoidos_memory::model::new_id(), source_seq)
+            .unwrap(),
+        kind: aoidos_memory::model::KnowledgeKind::Rumor,
+        informant_id: Some("keeper".into()),
+        scope: "room-rumor-v1".into(),
+        rule_id: "room-rumor-v1".into(),
+    };
+    assert!(port.valid_evidence(&evidence).unwrap());
 }

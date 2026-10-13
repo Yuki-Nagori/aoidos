@@ -52,13 +52,16 @@ impl WorldPort for BuiltinDomain {
     fn validate(&self, session: &Session, mutations: &[WorldMutation]) -> Result<(), Fault> {
         if mutations
             .iter()
-            .any(|mutation| mutation.data.kind == "sessionEnded" && mutation.data.version != 1)
+            .any(|mutation| match mutation.data.kind.as_str() {
+                "sessionEnded"
+                | "sceneAdvanced"
+                | "scenePresenceChanged"
+                | "entityCreated"
+                | "observed"
+                | "rumorDelivered" => mutation.data.version != 1,
+                _ => true,
+            })
         {
-            return Err(unsupported());
-        }
-        if mutations.iter().any(|mutation| {
-            mutation.data.kind != "sessionEnded" && mutation.data.kind != "entityCreated"
-        }) {
             return Err(unsupported());
         }
         let entity_mutations = mutations
@@ -66,16 +69,64 @@ impl WorldPort for BuiltinDomain {
             .filter(|mutation| mutation.data.kind == "entityCreated")
             .cloned()
             .collect::<Vec<_>>();
-        if entity_mutations.is_empty() {
+        let has_presence_or_evidence = mutations.iter().any(|mutation| {
+            matches!(
+                mutation.data.kind.as_str(),
+                "scenePresenceChanged" | "observed" | "rumorDelivered"
+            )
+        });
+        if entity_mutations.is_empty() && !has_presence_or_evidence {
             return Ok(());
         }
         self.storage.with_database(|connection| {
-            EntityRegistry.validate_group(
+            if !entity_mutations.is_empty() {
+                EntityRegistry.validate_group(
+                    connection,
+                    session,
+                    &self.entity_seed,
+                    &self.catalog,
+                    &entity_mutations,
+                )?;
+            }
+            if has_presence_or_evidence {
+                let directory =
+                    EntityRegistry.validation_snapshot(connection, session, &self.entity_seed)?;
+                crate::game::presence::ScenePresence::validate_mutations(
+                    connection,
+                    session,
+                    &self.catalog,
+                    &directory,
+                    mutations,
+                )?;
+            }
+            Ok(())
+        })
+    }
+    fn validate_recovery(
+        &self,
+        session: &Session,
+        record_seq: u64,
+        mutations: &[WorldMutation],
+    ) -> Result<(), Fault> {
+        let has_presence_or_evidence = mutations.iter().any(|mutation| {
+            matches!(
+                mutation.data.kind.as_str(),
+                "scenePresenceChanged" | "observed" | "rumorDelivered"
+            )
+        });
+        if !has_presence_or_evidence {
+            return self.validate(session, mutations);
+        }
+        self.storage.with_database(|connection| {
+            let directory =
+                EntityRegistry.validation_snapshot(connection, session, &self.entity_seed)?;
+            crate::game::presence::ScenePresence::validate_recovery_mutations(
                 connection,
                 session,
-                &self.entity_seed,
                 &self.catalog,
-                &entity_mutations,
+                &directory,
+                record_seq,
+                mutations,
             )
         })
     }
@@ -106,7 +157,21 @@ impl WorldPort for BuiltinDomain {
                 )
             });
         }
-        if mutation.data.kind != "sessionEnded" || mutation.data.version != 1 {
+        if mutation.data.kind == "sceneAdvanced"
+            && let Fact::SceneAdvanced { position, .. } =
+                Fact::decode(&mutation.data.kind, &mutation.data.payload).map_err(Fault::from)?
+        {
+            crate::game::presence::ScenePresence::validate_scene_advance(&self.catalog, &position)?;
+        }
+        if !matches!(
+            mutation.data.kind.as_str(),
+            "sessionEnded"
+                | "sceneAdvanced"
+                | "scenePresenceChanged"
+                | "observed"
+                | "rumorDelivered"
+        ) || mutation.data.version != 1
+        {
             return Err(unsupported());
         }
         self.storage.with_database(|connection| {
@@ -150,6 +215,20 @@ impl Domain for BuiltinDomain {
             .scene("entry")
             .ok()
             .map(|scene| scene.position.clone())
+    }
+    fn scene_presence(
+        &self,
+        session: &Session,
+    ) -> Result<crate::game::presence::ScenePresenceSnapshot, Fault> {
+        self.storage.with_database(|connection| {
+            let directory = EntityRegistry.snapshot(connection, session, &self.entity_seed)?;
+            crate::game::presence::ScenePresence::snapshot(
+                connection,
+                session,
+                &self.catalog,
+                &directory,
+            )
+        })
     }
     fn confirmed(&self, session: &Session) -> Result<ConfirmedWorldView, Fault> {
         self.storage.ready()?;
@@ -284,7 +363,8 @@ async fn open_context(
         )]),
         BTreeMap::new(),
     )?
-    .with_entity_directory(entity_directory.clone())?;
+    .with_entity_directory(entity_directory.clone())?
+    .with_presence_policy(entry_presence_policy())?;
     Context::open(
         session,
         Box::new(BuiltinDomain {
@@ -301,6 +381,46 @@ async fn open_context(
     )
     .await
 }
+
+// 此策略只含源码固定的内置规则；通用构造器的输入错误由 PresencePolicy 测试覆盖。
+fn entry_presence_policy() -> crate::game::presence::PresencePolicy {
+    crate::game::presence::PresencePolicy::new(
+        "entry".into(),
+        crate::game::presence::SceneEntryPresence {
+            rule_id: "mistbell-entry-presence-v1".into(),
+            rule_version: 1,
+            character_ids: vec!["player".into()],
+        },
+        BTreeMap::from([(
+            "entry".into(),
+            crate::game::presence::SceneEntryPresence {
+                rule_id: "mistbell-entry-presence-v1".into(),
+                rule_version: 1,
+                character_ids: vec!["player".into()],
+            },
+        )]),
+        vec![],
+    )
+    .expect("内置初始在场策略固定有效")
+    .with_knowledge_rules(
+        vec![crate::game::presence::ObservationRule {
+            rule_id: "mistbell-entry-observation-v1".into(),
+            rule_version: 1,
+            scene_id: "entry".into(),
+            scope_id: "mistbell-entry-visible-v1".into(),
+            source_kind: crate::game::presence::ObservationSourceKind::SceneNarration,
+        }],
+        vec![crate::game::presence::RumorRule {
+            rule_id: "mistbell-entry-rumor-v1".into(),
+            rule_version: 1,
+            scene_id: "entry".into(),
+            scope_id: "mistbell-entry-rumor-v1".into(),
+            require_informant_present: true,
+        }],
+    )
+    .expect("内置获知规则固定有效")
+}
+
 fn asset_unavailable() -> Fault {
     Fault::new("app.not-ready", "内置剧本或存档版本不可用")
 }

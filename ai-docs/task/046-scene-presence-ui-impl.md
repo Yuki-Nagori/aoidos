@@ -3,7 +3,7 @@
 - 状态：planned
 - 依赖：025、030、034、043、044、045
 - 优先级：P1
-- 创建 / 更新：2026-10-12 / 2026-10-12
+- 创建 / 更新：2026-10-12 / 2026-10-13
 
 ## 目标与背景
 
@@ -25,7 +25,7 @@
 
 ## 实施步骤
 
-1. 调用 `engine_get_scene_presence`，读取仅含当前场景在场、完整目录登记的 Character 快照及不透明 revision；遵守 128 人 / 64 KiB 上限，缺失或恢复不完整时不展示角色选项。
+1. 调用 `engine_get_scene_presence`，读取仅含当前场景在场、完整目录登记的 Character 快照及不透明 revision；遵守 512 人 / 256 KiB 上限，超限整体失败、不展示截断选项，缺失或恢复不完整时不展示角色选项。
 2. 在 composer 提供旁白默认和显式角色选择；选择绑定 session、scene 与 snapshot revision，revision 改变时清理失效选择。
 3. 在 `engine_submit_input` 请求中传入 `recipientCharacterId` 和 `expectedPresenceRevision`；Rust 校验当前 revision / 在场身份，成功接纳时将二者写入 `RoundAccepted`，恢复 / 重生成沿用原值；过期或未知选择必须在任何输入记录写入前拒绝。
 4. 处理切换 session、scene、phase、presence snapshot 与并发响应；已接纳回合目标按 023 checkpoint 恢复规则保留，不让旧快照覆盖新状态。

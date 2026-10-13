@@ -1,6 +1,7 @@
 //! 可信剧本 / 世界解释器与冻结请求的接入边界；产品参数不包含规则、SQL 或 profile。
 
 use super::catalog::{ConfirmedWorldView, SceneCatalog};
+use super::presence::ScenePresenceSnapshot;
 use crate::{
     fault::Fault,
     record::{
@@ -41,8 +42,8 @@ pub trait RoundFactory: Send + Sync {
     /// 未登记 profile、凭据缺失、代理 / 能力或偏好不合法均拒绝接纳。
     fn freeze(&self) -> Result<FrozenRound, Fault>;
 
-    /// Freezes a round with its stable billing scope when the runtime knows the session identity.
-    /// Custom/test factories may keep the legacy behavior; product billing overrides this method.
+    /// runtime 已知 session 身份时，为回合冻结稳定的计费范围。
+    /// 自定义 / 测试 factory 可沿用旧行为；产品计费实现会覆盖此方法。
     fn freeze_for_run(&self, _run_id: &str) -> Result<FrozenRound, Fault> {
         self.freeze()
     }
@@ -66,6 +67,12 @@ pub trait CompletedRounds: Send + Sync {
 pub trait Domain: WorldPort + HistoryPort + Send {
     fn catalog(&self) -> &SceneCatalog;
     fn baseline_scene(&self) -> Option<ScenePosition>;
+    /// 读取当前完整在场快照；仅查询，不写入状态。
+    /// # Errors
+    /// 待恢复、策略缺失或 applied 历史无效时失败关闭。
+    fn scene_presence(&self, _session: &Session) -> Result<ScenePresenceSnapshot, Fault> {
+        Err(super::invalid_phase())
+    }
     /// # Errors
     /// 从已 applied 的当前世界构造有依据的视图；pending / 未知解释器拒绝。
     fn confirmed(&self, session: &Session) -> Result<ConfirmedWorldView, Fault>;

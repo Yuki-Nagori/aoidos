@@ -178,6 +178,26 @@ impl EntityRegistry {
         )
     }
 
+    /// Reads the applied registry while a world intent is being recovered or validated.
+    /// # Errors
+    /// A corrupt receipt, stale script, or oversized registry is rejected.
+    pub(crate) fn validation_snapshot(
+        &self,
+        connection: &mut Connection,
+        session: &Session,
+        seed: &EntityDirectory,
+    ) -> Result<EntityDirectory, Fault> {
+        ensure_run(connection, session, seed)?;
+        let rows = read_rows(connection, session, seed)?;
+        seed.with_dynamic(
+            rows.revision,
+            rows.visible
+                .into_iter()
+                .map(|stored| stored.entity)
+                .collect(),
+        )
+    }
+
     /// Revalidates a complete planned group against a fresh snapshot before the record is appended.
     /// # Errors
     /// Unknown rules, identity conflicts, cross-session reuse, inactive provenance, or exhausted bounds are rejected.

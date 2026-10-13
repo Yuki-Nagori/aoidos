@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod entities;
+use super::presence::PresencePolicy;
 pub use entities::{
     CanonicalEntity, ENTITY_REGISTRY_MIGRATION, EntityCreationCommit, EntityCreationIntent,
     EntityCreationRule, EntityDirectory, EntityKind, EntityRegistry, verify_entity_registry_schema,
@@ -217,6 +218,7 @@ pub struct SceneCatalog {
     conditions: BTreeMap<String, Condition>,
     entities: Option<EntityDirectory>,
     entity_creation_rules: BTreeMap<String, EntityCreationRule>,
+    presence: Option<PresencePolicy>,
 }
 impl SceneCatalog {
     /// # Errors
@@ -272,6 +274,7 @@ impl SceneCatalog {
             conditions,
             entities: None,
             entity_creation_rules: BTreeMap::new(),
+            presence: None,
         };
         for (id, scene) in &catalog.scenes {
             if id != &scene.position.scene_id
@@ -326,12 +329,32 @@ impl SceneCatalog {
         {
             return Err(Fault::bad_request());
         }
+        if let Some(policy) = &self.presence {
+            policy.validate_directory(&directory)?;
+        }
         self.entities = Some(directory);
         Ok(self)
     }
     /// 返回已接入快照；不完整状态可见，但 `resolve_exact` 会拒绝解析。
     pub fn entity_directory(&self) -> Option<&EntityDirectory> {
         self.entities.as_ref()
+    }
+
+    /// 将完整且带版本的场景在场策略绑定到可信目录。
+    /// # Errors
+    /// 场景未登记，或策略与实体目录不兼容时拒绝。
+    pub fn with_presence_policy(mut self, policy: PresencePolicy) -> Result<Self, Fault> {
+        policy.validate_catalog(&self)?;
+        self.entities
+            .as_ref()
+            .map(|directory| policy.validate_directory(directory))
+            .transpose()?;
+        self.presence = Some(policy);
+        Ok(self)
+    }
+
+    pub fn presence_policy(&self) -> Option<&PresencePolicy> {
+        self.presence.as_ref()
     }
 
     /// 登记可由可信世界解释器调用的动态实体创建规则。
@@ -370,6 +393,9 @@ impl SceneCatalog {
     /// 未登记场景为 not-found。
     pub fn scene(&self, id: &str) -> Result<&Scene, Fault> {
         self.scenes.get(id).ok_or_else(Fault::not_found)
+    }
+    pub(crate) fn scene_ids(&self) -> impl Iterator<Item = &str> {
+        self.scenes.keys().map(String::as_str)
     }
     /// # Errors
     /// 旧目录 revision / 未知场景拒绝，不猜测规则集合。

@@ -1,9 +1,9 @@
 # 045 — 实现：场景在场与可信获知事件
 
-- 状态：ready
+- 状态：done
 - 依赖：023、043、044
 - 优先级：P1
-- 创建 / 更新：2026-10-12 / 2026-10-12
+- 创建 / 更新：2026-10-12 / 2026-10-13
 
 ## 目标与背景
 
@@ -25,12 +25,12 @@
 
 ## 实施步骤
 
-1. 按 044 将可信 `SceneCatalog.initialPresenceIds` 与 `scriptRevision` 绑定到 session 起始基线；Scene entry rule 的成员快照随 `sceneAdvanced` mutation 建立。未配置初始成员时仅玩家在场；`actor_ids`、Markdown、`entities.json` 与 `entityCreated` 均不自动入场。其余加入 / 离场由 `SettlementPlanned` 中的登记 mutation 承载；presence 状态只按已 applied 且当前有效路径重建，即使后续 round 终态失败也不撤销已提交世界状态。
-2. 对 observed 事件绑定角色、显式可见范围、当时场景 revision、触发规则版本及来源记录；scope 必须按 scriptRevision 解析到登记的 SourceRef 范围。同一 settlement mutations 按数组顺序应用，并以发出事件时的临时 presence 状态验证；仅登记规则能发出事件，不从 narration / 同场自动推导。
-3. 对 rumor delivery 绑定当前 informant、原始主张来源、当前交付来源、接收角色、传播规则版本和 uncertainty；验证前一跳 recipient 与本跳 informant 相同、root source / scope 完全一致、父事件先于本事件且同 session、无循环，最多 8 跳；默认不自动转发。已登记源头仅证明“某人提出此主张”，不转换为世界事实。
-4. 为来源事件提供只读、有界、当前有效因果路径视图；回退排除外分支事件，重开依据 023 完成 applied 恢复。只有成功完整终态、当前有效路径且 mutation 已应用的获知事件能作为 030 证据；presence 重建只要求变更已应用。扫描最多 256 条记录 / 4 MiB；读取 presence snapshot 最多 128 人 / 64 KiB。缺失 / 未知版本失败关闭。
-5. 覆盖事务失败、重复应用、分支回退、重启、过期在场 revision、角色离场、观察范围不匹配和传闻链断裂；更新架构依赖图。
-6. 候选完成后由 subagent 独立评审，处理发现并复验。
+1. 已实现绑定 `scriptRevision` 的 `SceneCatalog` presence policy：配置初始成员、每个场景的 entry roster 及版本化变更规则。`actor_ids`、Markdown、`entities.json` 和 `entityCreated` 不会自动使角色在场；变更作为 `SettlementPlanned` 中的 mutation，按 applied / 当前有效路径重建。
+2. 已实现 observed 版本化 mutation。v1 规则只允许引用绑定场景内已完成的公开旁白；UTF-8 字节区间标出依据，并核验主体在来源时刻处于同一场景，不能从玩家输入、角色私语或其他场景正文推导获知。
+3. 已实现 rumor delivery，校验接收者与规则要求的告知者在场、交付正文作者及其来源时刻在场、原始来源、前一跳接收者 / informant 对应、root source 和 scope 一致、父事件先行、根告知者与接收者集合无环及最多 8 跳。规则不会将主张提升为世界事实。
+4. 已实现 Rust 只读快照及 evidence source：snapshot 限 512 人 / 256 KiB；evidence 查询每次最多读取最近有效路径的 4096 条记录 / 16 MiB，仅返回 applied、有效分支上的成功完整回合事件，来源正文和父链须在同一预算窗口并属于成功完整回合。恢复按原有序 mutation 组校验并只重放未应用 intent，支持组内已部分应用的父子事件；不从 partial 补事件，未知事件与不完整链失败关闭。
+5. 已接入内置 domain 对 presence / observed / rumor mutation 的登记校验和幂等 applied 回执；engine presence 模块不依赖 memory、Tauri 或 UI。`SourcePort::with_evidence_context` 接受显式有效目录、catalog 和共享数据库上下文；正式 `Storage::with_memory` 产品消费仍只使用 `told`，由 030 承接后续接线。
+6. 已覆盖策略完整性、初始快照、在场进入 / 过期 revision、跨场景观察来源拒绝、观察主体缺席、失败回合来源拒绝、传闻作者身份、部分应用恢复、持久化损坏链和成功终态。规则累计上限及跨调用身份冲突也有回归测试。
 
 ## 预计改动
 
@@ -38,20 +38,25 @@ engine 的 scene presence / trusted-evidence source、023 record facts、043 ent
 
 ## 验收标准
 
-- [ ] 初始在场与进入 / 离开只由可信规则提交；NPC 注册本身不构成在场，固定 / 动态身份使用同一稳定 ID 约束。
-- [ ] presence 仅按 applied / effective path 重建；observed / rumor 作为记忆证据还须来源回合成功完整、mutation 已 applied，恢复补写不会从 partial 创造事件。
-- [ ] observed 有可验证范围和触发记录；rumor 每跳保留 informant、原始主张、交付来源、规则版本及不确定性。
-- [ ] 缺少主体、场景 revision、规则、因果位置或恢复回执时只读端口失败关闭；presence 最多 128 人 / 64 KiB，来源扫描最多 256 记录 / 4 MiB，传闻最多 8 跳。
-- [ ] engine crate 不依赖 memory / Tauri / UI；架构、类型、注释和 044 一致，独立 review 通过。
+- [x] 初始在场与进入 / 离开只由可信规则提交；NPC 注册本身不构成在场，固定 / 动态身份使用同一稳定 ID 约束。
+- [x] presence 仅按 applied / effective path 重建；observed / rumor 作为记忆证据还须来源回合成功完整、mutation 已 applied，恢复补写不会从 partial 创造事件。
+- [x] observed 有可验证范围和触发记录；rumor 每跳保留 informant、原始主张、交付来源、规则版本及不确定性。
+- [x] 缺少主体、场景 revision、规则、因果位置或恢复回执时只读端口失败关闭；presence 最多 512 人 / 256 KiB，单次来源扫描最多 4096 记录 / 16 MiB，传闻最多 8 跳。
+- [x] engine crate 不依赖 memory / Tauri / UI；架构、类型、注释和 044 一致，独立 review 通过。
 
 ## 验证计划与结果
 
 覆盖 engine 因果路径和 SQLite 故障 / 恢复测试、有效分支过滤、事件源只读验证及全量 `bun run verify`。
 
-| 日期 | 环境 / 命令                        | 预期                         | 实际结果 |
-| ---- | ---------------------------------- | ---------------------------- | -------- |
-| —    | 场景 / 恢复 / evidence-source 测试 | 权限、恢复与因果来源边界一致 | 未执行   |
-| —    | `bun run verify`                   | 全项通过                     | 未执行   |
+| 日期       | 环境 / 命令                                                    | 预期                             | 实际结果                                                  |
+| ---------- | -------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------- |
+| 2026-10-13 | `cargo clippy -p aoidos-engine --all-targets -- -D warnings`   | engine lint 无警告               | 通过                                                      |
+| 2026-10-13 | `cargo test -p aoidos-engine --lib game::presence::tests`      | 在场 / 观察 / 传闻与恢复测试通过 | 52 项通过                                                 |
+| 2026-10-13 | `cargo test --workspace`                                       | workspace 单元与文档测试通过     | 通过                                                      |
+| 2026-10-13 | `bun run lint:rust:fix` / `bun run lint:rust`                  | 自动修复后 lint 无警告           | 两项通过                                                  |
+| 2026-10-13 | `cargo test --manifest-path Cargo.toml -p aoidos-engine --lib` | engine 全量库测试通过            | 402 项通过                                                |
+| 2026-10-13 | `bun run coverage:rust`                                        | Rust coverage 门禁通过           | 113 个库目标通过；报告 2 行 LLVM 映射未覆盖，未超配置预算 |
+| 2026-10-13 | `bun run verify`                                               | 所有门禁通过                     | 通过                                                      |
 
 ## 风险与回退
 
@@ -63,4 +68,4 @@ engine 的 scene presence / trusted-evidence source、023 record facts、043 ent
 
 ## 完成摘要
 
-可开始。023、043 与 044 前置均已完成；本任务交付后由 030 消费可信获知事件，046 接入在场快照 UI。
+实现与验证已完成；023、043 与 044 前置均已完成。当前分支提供引擎事件源，正式 030 消费与 046 快照 IPC / UI 接线仍由各自任务承接。独立 review 修复了知识规则跨调用累计上限 / ID 冲突问题，未发现未解决的 P0/P1/P2。完整 `bun run verify` 通过。

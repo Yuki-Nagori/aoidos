@@ -1,5 +1,8 @@
 use super::*;
-use crate::record::{facts::SceneNode, test_support::Fixture};
+use crate::{
+    game::presence::SceneEntryPresence,
+    record::{facts::SceneNode, test_support::Fixture},
+};
 fn catalog() -> SceneCatalog {
     let nodes = BTreeMap::from([(
         "room".into(),
@@ -128,6 +131,65 @@ fn world(fixture: &Fixture, value: Value) -> ConfirmedWorldView {
         )]),
     )
     .unwrap()
+}
+
+#[test]
+fn presence_policy_is_checked_against_an_attached_complete_entity_directory() {
+    let fixture = Fixture::new();
+    let directory = EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        1,
+        true,
+        vec![CanonicalEntity {
+            id: "player".into(),
+            kind: EntityKind::Character,
+            scope: "global".into(),
+            canonical_name: "玩家".into(),
+        }],
+    )
+    .unwrap();
+    let entry = SceneEntryPresence {
+        rule_id: "entry-v1".into(),
+        rule_version: 1,
+        character_ids: vec!["player".into()],
+    };
+    let policy = PresencePolicy::new(
+        "room".into(),
+        entry.clone(),
+        BTreeMap::from([("room".into(), entry)]),
+        vec![],
+    )
+    .unwrap();
+
+    let without_directory = catalog().with_presence_policy(policy.clone()).unwrap();
+    assert!(without_directory.entity_directory().is_none());
+
+    let configured = catalog()
+        .with_entity_directory(directory.clone())
+        .unwrap()
+        .with_presence_policy(policy.clone())
+        .unwrap();
+    assert_eq!(configured.entity_directory().unwrap().revision(), 1);
+    assert_eq!(
+        configured.presence_policy().unwrap().initial_scene_id(),
+        "room"
+    );
+
+    let incomplete = EntityDirectory::new(
+        directory.script_revision().into(),
+        1,
+        false,
+        directory.entries().cloned().collect(),
+    )
+    .unwrap();
+    assert!(
+        catalog()
+            .with_entity_directory(incomplete)
+            .unwrap()
+            .with_presence_policy(policy)
+            .is_err(),
+        "presence policy must not bind to an incomplete entity directory"
+    );
 }
 #[test]
 fn typed_boolean_composition_checks_all_sources_and_rejects_type_errors() {

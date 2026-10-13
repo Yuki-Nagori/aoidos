@@ -13,6 +13,17 @@ pub trait WorldPort {
     /// # Errors
     /// Unknown operation versions, missing rule authorization, or stale world state are rejected.
     fn validate(&self, session: &Session, mutations: &[WorldMutation]) -> Result<(), Fault>;
+    /// 在恢复时按原始因果组校验；实现可从 intent 之前重建组的基线。
+    /// # Errors
+    /// 已提交意图与当时规则或状态不匹配时拒绝恢复。
+    fn validate_recovery(
+        &self,
+        session: &Session,
+        _record_seq: u64,
+        mutations: &[WorldMutation],
+    ) -> Result<(), Fault> {
+        self.validate(session, mutations)
+    }
     /// # Errors
     /// applied 身份和 hash 失配必须返回 corrupt。
     fn applied(&self, id: &str, hash: &str) -> Result<bool, Fault>;
@@ -103,12 +114,13 @@ impl Session {
             {
                 continue;
             }
-            for mutation in mutations(&record.body)? {
+            let group = mutations(&record.body)?;
+            port.validate_recovery(self, seq, &group)?;
+            for mutation in group {
                 let hash = mutation_hash(&mutation)?;
                 if port.applied(&mutation.mutation_id, &hash)? {
                     continue;
                 }
-                port.validate(self, std::slice::from_ref(&mutation))?;
                 port.apply(self, seq, &mutation, &hash)?;
             }
         }

@@ -287,6 +287,34 @@ fn ids_are_rust_generated_persisted_and_recovered_without_changing_script_revisi
 }
 
 #[test]
+fn validation_snapshot_reads_applied_registry_and_rejects_revision_drift() {
+    let fixture = Fixture::new();
+    let mut domain = Domain::new();
+    let expected = domain.directory(&fixture.session).unwrap();
+    let mut connection = domain.connection.lock().unwrap();
+
+    let actual = EntityRegistry
+        .validation_snapshot(&mut connection, &fixture.session, &domain.seed)
+        .unwrap();
+    assert_eq!(actual.revision(), expected.revision());
+    assert_eq!(actual.entries().count(), expected.entries().count());
+
+    connection
+        .execute(
+            "UPDATE entity_registry_runs SET entity_revision = entity_revision + 1 WHERE session_id = ?1",
+            [&fixture.session.header().session_id],
+        )
+        .unwrap();
+    assert_eq!(
+        EntityRegistry
+            .validation_snapshot(&mut connection, &fixture.session, &domain.seed)
+            .unwrap_err()
+            .code,
+        "store.corrupt"
+    );
+}
+
+#[test]
 fn first_creation_does_not_require_a_previous_snapshot_read() {
     let mut fixture = Fixture::new();
     let mut domain = Domain::new();

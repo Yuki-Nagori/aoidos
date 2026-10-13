@@ -63,7 +63,8 @@ impl EntityCreationRule {
 }
 
 /// 一个由剧本登记的规范实体；名称仅用于展示和精确查找，不承担实体身份。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CanonicalEntity {
     pub id: String,
     pub kind: EntityKind,
@@ -198,6 +199,12 @@ impl EntityDirectory {
             return Err(super::super::invalid_phase());
         }
         Ok(self.by_id.get(id))
+    }
+
+    pub(crate) fn has_character_scope(&self, scope: &str) -> bool {
+        self.by_id
+            .values()
+            .any(|entity| entity.kind == EntityKind::Character && entity.scope == scope)
     }
 
     pub(crate) fn contains_character(&self, id: &str) -> bool {

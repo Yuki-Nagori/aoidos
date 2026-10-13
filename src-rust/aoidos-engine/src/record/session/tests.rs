@@ -414,6 +414,14 @@ fn future_control_opens_read_only_without_reinterpreting_its_branch() {
     let mut reopened = Session::open(path.clone(), events).unwrap();
     assert!(reopened.is_read_only());
     assert!(reopened.needs_recovery());
+    assert_eq!(
+        reopened
+            .bounded_records_before(8, 16 * 1024, None)
+            .unwrap_err()
+            .code,
+        "engine.invalid-phase",
+        "bounded reads must fail closed while the branch is read-only or pending recovery"
+    );
     assert_eq!(std::fs::read(&partial).unwrap(), before);
     assert_eq!(
         reopened.read(2).unwrap().raw,
