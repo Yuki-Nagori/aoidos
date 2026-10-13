@@ -51,9 +51,9 @@ GH Actions 的 PR #141 记录显示，Windows `coverage:rust` 为 238 秒（插�
 - [x] SQLite 持久性测试继续验证真实磁盘与同步要求；普通规则用例可使用更轻量夹具。
 - [x] 覆盖率最低线调整为聚合 90% 后，配置、脚本、规范和例外台账一致；高风险清单单独约束关键行为。
 - [x] Windows 与 macOS 仍运行普通 Rust 测试，Ubuntu 生成 Rust 覆盖率；三平台 native 验收继续运行。
-- [ ] HMR 原生测试能判定页面脚本和样式均已就绪，失败日志足以区分启动、连接与热更新阶段。
-- [ ] Windows Rust / native 步骤耗时相较基线有实测下降，行为验证范围无缩水。
-- [ ] 代码、注释、类型、文档与 task 同步；`bun run verify` 通过，CI 三平台通过。
+- [x] HMR 原生测试能判定页面脚本和样式均已就绪，失败日志足以区分启动、连接与热更新阶段。
+- [ ] Windows Rust 步骤耗时相较基线有实测下降，行为验证范围无缩水；native 步骤单独记录耗时。
+- [x] 代码、注释、类型、文档与 task 同步；`bun run verify` 通过，CI 三平台通过。
 - [x] subagent 独立 review 完成并处理发现。
 
 ## 验证计划与结果
@@ -66,7 +66,7 @@ GH Actions 的 PR #141 记录显示，Windows `coverage:rust` 为 238 秒（插�
 | 2026-10-13 | 本机 `bun run test:rust`                  | 验证普通 workspace 测试 | 全部通过；与 Windows / macOS CI 使用的非插桩路径一致                                 |
 | 2026-10-13 | 本机 HMR 目标 `--no-run`                  | 编译原生诊断测试        | 通过                                                                                 |
 | 2026-10-13 | 本机 HMR 目标实际运行                     | 观察桌面 WebView 阶段   | Tauri 启动返回 `BrokenPipe`，未进入 HMR 断言；需由托管桌面 CI 验证                   |
-| —          | 最新改动对应的 GitHub Actions 三平台      | 回归与 Windows 耗时对比 | 尚未运行；上一条 main CI 使用旧代码，不能作为本次验收                                |
+| 2026-10-13 | GitHub Actions run #38337852570 / PR #142 | 三平台回归与耗时对比    | 三个平台与 native 检查全部通过                                                       |
 
 ## 风险与回退
 
@@ -78,7 +78,8 @@ GH Actions 的 PR #141 记录显示，Windows `coverage:rust` 为 238 秒（插�
 - 2026-10-13：GitHub Actions 实测指出 Windows 主要成本在 memory / engine 的磁盘测试执行，而非覆盖报告生成或单纯缓存未命中。
 - 2026-10-13：保留三个平台的预编译 `cargo-llvm-cov` 安装；`bun install` 的 postinstall 会在工具缺失时源码安装它，若只在 Ubuntu 安装预编译版，Windows / macOS 可能新增源码编译成本。
 - 2026-10-13：`gpt-6.1-sol` / `medium` 独立评审发现并修复四项问题：保持深色默认主题合同、让 HMR 错误报告允许缺少样式值并识别更新期异常、保留预编译覆盖工具安装、校正 CI 文档口径。修复后复核未发现遗留问题。
+- 2026-10-13：PR #142 的三平台 CI 全部通过，Windows 原生验收成功，覆盖了本机 `BrokenPipe` 环境问题。该轮 Windows Rust workspace 测试为 273 秒，前一轮 Windows coverage 步骤为 238 秒；二者工作内容不同，但目前没有证据证明 Rust 测试墙钟时间已下降，因此不将 Windows 提速标记为完成。
 
 ## 完成摘要
 
-本地测试夹具与 CI 分工已调整，AGENTS、测试规范、工程文档和本 task 已同步；本地门禁通过，评审发现已处理并复核。PR 的 GitHub Actions 尚待运行，需确认 Windows / macOS 普通测试、三平台原生验收及 HMR 阶段诊断，再记录优化后的 Windows 实测耗时。
+测试质量、覆盖率分工、HMR 诊断和三平台原生验收均已调整；本地门禁、独立评审及 PR #142 三平台 CI 通过。Windows 原生测试通过，但 Rust 测试步骤耗时尚未证明优于基线；task 保持进行中，后续应基于分 crate / 测试执行计时继续定位热点，再决定是否接受当前耗时或追加优化。
