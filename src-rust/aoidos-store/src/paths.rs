@@ -235,8 +235,7 @@ mod tests {
     #[test]
     fn script_id_falls_back_for_cjk() {
         let id = script_id_from_name("黑塔");
-        assert!(id.starts_with("script-"));
-        assert_eq!(id.len(), 15);
+        assert_eq!(id, "script-ded47e76");
         assert_eq!(id, script_id_from_name("黑塔"), "same name same id");
         assert!(is_script_id(&id));
     }
@@ -281,17 +280,6 @@ mod tests {
                 "{name} must keep its script id as the directory name"
             );
         }
-    }
-
-    #[test]
-    fn short_hash_uses_low_32_bits() {
-        let hash = fnv1a(b"aoidos");
-        assert_ne!(
-            hash as u32,
-            (hash >> 32) as u32,
-            "fixture must distinguish the two halves"
-        );
-        assert_eq!(short_hash(b"aoidos"), format!("{:08x}", hash as u32));
     }
 
     #[test]

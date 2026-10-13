@@ -6,6 +6,14 @@
 
 前端测试在 `tests/web/`，目录镜像 `src-web`；组件行为用 `@vue/test-utils` + happy-dom，IPC mock 模式见[前端约定](frontend.md)。Rust 命令的单测贴近源码（`commands.rs` 的 `mod tests`），业务 crate 的公开 API 测试随 crate 走。异步断言用 `vi.waitFor`；Rust 侧失败路径与正常路径都要有断言。
 
+### 行为优先
+
+- 测试以外部可观察的结果、状态迁移与安全边界为断言对象；只有公开且持久的协议本身才固定精确表示。避免为触达覆盖行直接断言私有 helper、局部变量或格式布局。
+- 高风险路径必须有行为证据：授权与身份校验、持久提交 / 幂等 / 崩溃恢复、计费预留与未知结果、输入大小与损坏数据、事件丢失 / 重放 / 过期快照、原生凭据与 WebView IPC。删除或重写这些测试时，须指出替代测试及其覆盖的可观察行为。
+- 每个测试聚焦一条主要规则。共同前置条件可以参数化，但 case 名必须说明具体边界；失败日志应能指出哪条产品约束被破坏。
+- 按被验证的语义选择夹具：内存 SQLite 适合规则 / 查询 / 状态迁移；原子写入、同步、锁、迁移备份与崩溃恢复使用真实文件和 SQLite WAL。不要为了速度在所有夹具中关闭同步。
+- 覆盖率用于发现未审查的逻辑，不表示测试有价值，也不要求所有分支组合都单测。优先覆盖风险清单与公开行为，再查看覆盖缺口；不得为维持数字复制实现或增加无意义断言。
+
 ### Rust 集成测试的位置
 
 - 默认使用**内联单测**（源文件内 `#[cfg(test)] mod tests`，夹具用 `#[cfg(test)] pub(crate) mod` 放 src/ 内，如 aoidos-llm 的 testserver）：测试体较大时可拆成模块目录下的 `tests.rs`，由原模块的 `#[cfg(test)] mod tests` 加载，仍是单元测试，不因文件名成为 Cargo 集成 target。覆盖率门禁只统计 lib 目标与内联测试的执行，这一耦合是有意为之——夹具自身的行为路径也受门禁约束。
@@ -14,30 +22,26 @@
 - 原生 HMR 夹具将 Vite、就绪探测及 WebView2 固定到 `127.0.0.1`；Windows CI 出现 `localhost` 探测成功但 WebView 没有初始报告的超时后，数值回环地址用于消除主机名解析差异。CSP 仍由产品开发策略派生，并只替换夹具的本地来源地址。
 - 集成测试不进覆盖率口径（`--lib` 不统计独立测试目标）：行为断言归集成测试，行覆盖归内联单测，互不替代；给集成测试补覆盖率属门禁变更，按下方门槛变更流程先立项。
 
-## 覆盖率门槛（verify 两项）
+## 覆盖率门槛
 
-- 前端 `bun run test:coverage`：v8 provider，只统计逻辑层——`src-web/{utils,stores,composables}` 与组件旁 `use*.ts`；行 / 分支 / 函数 / 语句四项 100%。`main.ts` 是装配、api 是薄封装、`bench/` 是基准，均不入门槛。
-- Rust `bun run coverage:rust`：**逐文件行覆盖门禁**，规则集中在根目录 [`coverage-rust.config.mts`](../../coverage-rust.config.mts)，由 `scripts/coverage-rust.mts` 消费执行（跑 `cargo llvm-cov --workspace --lib --json` 后逐文件裁决）。规则只有三条：
-  1. 缺省每文件未覆盖行 = 0，即必须 100%。
-  2. 忽略清单（文件名正则）：`lib.rs`、`locale_commands/native.rs`，以及以平台模块路径匹配的 `platform/windows.rs`、`platform/macos.rs`、`platform/linux.rs`，理由见下方台账。
-  3. 逐文件预算：确属工具伪影的文件才在配置登记理由与额度；当前为 locale / theme 两个 set 命令各登记 1 行 Tauri 宏映射区域，其余非忽略文件要求 100%。
+- 前端 `bun run test:coverage`：v8 provider，只统计逻辑层——`src-web/{utils,stores,composables}` 与组件旁 `use*.ts`；行 / 分支 / 函数 / 语句各至少 90%。`main.ts` 是装配、api 是薄封装、`bench/` 是基准，均不入门槛。
+- Rust `bun run coverage:rust`：`cargo llvm-cov --workspace --lib --json` 统计纳入文件的**聚合行覆盖率至少 90%**，配置在根目录 [`coverage-rust.config.mts`](../../coverage-rust.config.mts)，由 `scripts/coverage-rust.mts` 执行。小文件不单独设 100% 预算，Tauri 宏映射的无源行也不再单独登记；平台适配 / 装配排除见下方台账。
+- CI 在 Ubuntu 生成一次 Rust 覆盖率；Windows / macOS 跑 `bun run test:rust` 的完整 workspace 普通测试，随后仍各自运行原生桌面验收。覆盖统计平台分工不替代平台行为测试。
 
 ### Rust 覆盖豁免台账
 
-| 豁免                                      | 理由                                                                                                                               | 仍受直测覆盖的行为                                                                                                                                                                                                            |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lib.rs`（所有 crate）                    | 装配入口只放模块声明 / 薄装配，不含业务逻辑                                                                                        | 无                                                                                                                                                                                                                            |
-| `platform/windows.rs`                     | Win32 安全 API 的失败分支——进程令牌 SID 提取中的内存分配 / CopySid 失败、合法 SID 的空值防御——无法在健康进程注入                   | 空进程 / 空令牌句柄、非法 SID（全零缓冲被 `SetEntriesInAclW` 拒绝）、不存在路径（`SetNamedSecurityInfoW` 拒绝）、降级文件 DACL 结构断言、CredUI 对话框取消路径（WM_CLOSE 关闭真实对话框 → `Ok(None)`）、CredUI 返回码纯映射表 |
-| `platform/macos.rs` / `platform/linux.rs` | 真实主线程 AppKit / GTK 适配，无业务存储逻辑                                                                                       | `test:native` 在真实桌面会话（Linux 可用 Xvfb + Secret Service）检查密码字段、确认 / 取消及 OS 服务；缺会话失败，不以 stub 标通过                                                                                             |
-| `locale_commands/native.rs`               | Wry 菜单 / 托盘需真实主线程与桌面服务，MockRuntime 不创建原生表面；仅隔离 Tauri 原生构造与更新适配                                 | `test:native` 计划在三平台真实桌面会话创建菜单 / 托盘，切换语言并断言应用菜单标签与标题；IPC WebView 夹具验证语言 bootstrap 首帧。托盘 tooltip 和凭据对话框的双语读取断言未覆盖；命令、存储和更新状态由内联单测覆盖           |
-| `locale_commands/mod.rs`（1 行）          | `locale_set_preference` 的 Tauri 命令宏为 `Request::from_command` 生成统一 `?`；该转换恒为 `Ok`，LLVM 将不可达错误区域映射到属性行 | 注册 IPC 测试覆盖成功保存、无效 / 缺失参数、存储失败、服务未就绪及原生更新 pending                                                                                                                                            |
-| `theme_commands/mod.rs`（1 行）           | `theme_set_preference` 的 Tauri 宏对 `Request` 生成统一 `?`；当前 `Request::from_command` 恒为 `Ok`，其不可达错误区域映射到属性行  | 注册 IPC 测试覆盖成功写入、无效请求、存储未就绪及缺少 `StorageService`；目录不可用分支另由单元测试覆盖                                                                                                                        |
+| 豁免                                      | 理由                                                                                                             | 仍受直测覆盖的行为                                                                                                                                                                                                            |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lib.rs`（所有 crate）                    | 装配入口只放模块声明 / 薄装配，不含业务逻辑                                                                      | 无                                                                                                                                                                                                                            |
+| `platform/windows.rs`                     | Win32 安全 API 的失败分支——进程令牌 SID 提取中的内存分配 / CopySid 失败、合法 SID 的空值防御——无法在健康进程注入 | 空进程 / 空令牌句柄、非法 SID（全零缓冲被 `SetEntriesInAclW` 拒绝）、不存在路径（`SetNamedSecurityInfoW` 拒绝）、降级文件 DACL 结构断言、CredUI 对话框取消路径（WM_CLOSE 关闭真实对话框 → `Ok(None)`）、CredUI 返回码纯映射表 |
+| `platform/macos.rs` / `platform/linux.rs` | 真实主线程 AppKit / GTK 适配，无业务存储逻辑                                                                     | `test:native` 在真实桌面会话（Linux 可用 Xvfb + Secret Service）检查密码字段、确认 / 取消及 OS 服务；缺会话失败，不以 stub 标通过                                                                                             |
+| `locale_commands/native.rs`               | Wry 菜单 / 托盘需真实主线程与桌面服务，MockRuntime 不创建原生表面；仅隔离 Tauri 原生构造与更新适配               | `test:native` 计划在三平台真实桌面会话创建菜单 / 托盘，切换语言并断言应用菜单标签与标题；IPC WebView 夹具验证语言 bootstrap 首帧。托盘 tooltip 和凭据对话框的双语读取断言未覆盖；命令、存储和更新状态由内联单测覆盖           |
 
-审计依据见 [037](../task/037-rust-coverage-audit.md)。LLVM 的函数实例组统计不求覆盖行并集；不同实例分别覆盖成功 / 失败时，segments 全绿仍可能存在 summary 缺口，须核实原始函数数据并补同一实例的边界测试。
+审计依据见 [037](../task/037-rust-coverage-audit.md)。覆盖率口径调整理由、行为风险清单和实测对比见 [048](../task/048-test-quality-ci.md)。
 
-src-tauri 的 commands / events / ipc 等非忽略文件及业务 crate 的逻辑文件均须足额覆盖。前置组件与安装见[构建与开发](../architecture/build-and-development.md)。
+src-tauri 的 commands / events / ipc 等非忽略文件及业务 crate 的逻辑都计入聚合门槛；关键行为还须满足上方风险清单，不能由整体百分比替代。前置组件与安装见[构建与开发](../architecture/build-and-development.md)。
 
-改门槛口径（忽略清单、逐文件预算）属于门禁变更：先在 task 里给出理由与新口径的验证结果，再动 `coverage-rust.config.mts`，并同步本节台账。
+忽略范围和聚合覆盖底线属于门禁配置；调整时先在 task 里给出理由、风险行为证据与验证结果，再同步脚本、配置和本节台账。
 
 ## 覆盖率缺口修复
 

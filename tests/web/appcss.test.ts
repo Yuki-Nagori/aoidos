@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
@@ -14,8 +14,6 @@ interface CatalogEntry {
   name: string;
   /** 进入 @theme inline 映射（如 --color-ink）；空串 = 组件直接消费不进映射 */
   mapping: string;
-  /** 主题间固定的 token，如间距与动效 token */
-  invariant?: boolean;
 }
 
 // theming.md「首版 token 目录」：C01–C15 / C19 / S01 / M01 / M02。
@@ -37,9 +35,9 @@ const CATALOG: CatalogEntry[] = [
   { name: "--diff-remove", mapping: "--color-diff-remove" },
   { name: "--warning", mapping: "--color-warning" },
   { name: "--danger", mapping: "--color-danger" },
-  { name: "--record-left", mapping: "--spacing-record-left", invariant: true },
-  { name: "--ease-signature", mapping: "", invariant: true },
-  { name: "--dur-micro", mapping: "", invariant: true },
+  { name: "--record-left", mapping: "--spacing-record-left" },
+  { name: "--ease-signature", mapping: "" },
+  { name: "--dur-micro", mapping: "" },
 ];
 
 const css = readFileSync(resolve(__dirname, "../../src-web/app.css"), "utf-8");
@@ -76,9 +74,14 @@ function varsOf(block: string): Map<string, string> {
   return vars;
 }
 
-const darkVars = varsOf(blockOf(':root[data-theme="dark"]'));
-const lightVars = varsOf(blockOf(':root[data-theme="light"]'));
-const lightPurpleVars = varsOf(blockOf(':root[data-theme="light-purple"]'));
+const themeDirectory = resolve(__dirname, "../../src-rust/aoidos-theme/assets/themes");
+const themeNames = readdirSync(themeDirectory)
+  .filter((name) => name.endsWith(".css"))
+  .map((name) => name.slice(0, -".css".length));
+const themes = new Map(
+  themeNames.map((name) => [name, varsOf(blockOf(`:root[data-theme="${name}"]`))]),
+);
+const defaultTheme = themeCss.match(/:root,\s*:root\[data-theme="([a-z0-9-]+)"\]\s*\{/)?.[1];
 
 function themeInlineBlock(): string {
   const start = css.indexOf("@theme inline {");
@@ -88,17 +91,15 @@ function themeInlineBlock(): string {
 
 describe("token 目录与 app.css 互校", () => {
   it("默认 CSS 为每个内置主题提供完整 token", () => {
-    for (const { name, invariant } of CATALOG) {
-      expect(darkVars.has(name), `${name} 不在深色主题块`).toBe(true);
-      if (!invariant) {
-        expect(lightVars.has(name), `${name} 不在浅色主题块`).toBe(true);
+    for (const [themeName, vars] of themes) {
+      for (const { name } of CATALOG) {
+        expect(vars.has(name), `${themeName} 缺少 ${name}`).toBe(true);
       }
     }
   });
 
-  it("主题切换真实生效：ink 深浅取值不同（防两块被改成同值）", () => {
-    expect(darkVars.get("--ink")).not.toBe(lightVars.get("--ink"));
-    expect(lightPurpleVars.get("--ink")).not.toBe(lightVars.get("--ink"));
+  it("主题选择会改变 ink 值", () => {
+    expect(new Set([...themes.values()].map((vars) => vars.get("--ink"))).size).toBeGreaterThan(1);
   });
 
   it("目录映射项与 @theme inline 一一对应", () => {
@@ -120,10 +121,13 @@ describe("token 目录与 app.css 互校", () => {
     expect(theme).not.toContain("--dur-micro");
   });
 
-  it("生成选择器覆盖每个内置主题，且深色是根属性默认值", () => {
-    expect(themeCss).toContain(':root,\n:root[data-theme="dark"]');
-    expect(themeCss).toContain(':root[data-theme="light"]');
-    expect(themeCss).toContain(':root[data-theme="light-purple"]');
+  it("生成选择器覆盖所有内置主题，并保持深色为默认主题", () => {
+    expect(defaultTheme).toBe("dark");
+    expect(themeNames).toContain(defaultTheme);
+    const selectors = [...themeCss.matchAll(/:root\[data-theme="([a-z0-9-]+)"\]\s*\{/g)].map(
+      (match) => match[1],
+    );
+    expect([...selectors].sort()).toEqual([...themeNames].sort());
   });
 
   it("清默认色板，且 white / black 原语经 @theme static 强制发射", () => {
