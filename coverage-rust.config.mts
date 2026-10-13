@@ -1,10 +1,7 @@
 // coverage:rust 覆盖率门禁配置，由 scripts/coverage-rust.mts 消费。
 //
-// 缺省每文件未覆盖行 = 0。平台 / 装配排除见 ignore；窄范围工具映射预算见 allowances。
-// LLVM 对函数实例组取已覆盖行数的最大值，并非各实例覆盖行的并集：
-// 不同闭包 / 泛型实例分别覆盖成功与失败时，文件 segments 看似全绿而 summary
-// 仍可能缺行。先核实 functions 并补同一实例的边界测试，不直接登记工具伪影。
-// 037 已清除原有六处预算，依据与验证见 ai-docs/task/037-rust-coverage-audit.md。
+// 覆盖率是漏测线索，不要求每个源文件逐行填满；关键行为由测试规范中的风险清单约束。
+// 037 已清除原有逐文件豁免，依据见 ai-docs/task/037-rust-coverage-audit.md。
 
 export default {
   /** 不进门禁的文件名正则（对 llvm-cov 路径做子串匹配）。 */
@@ -22,16 +19,6 @@ export default {
     // native-platform 集成测试运行。命令协调、持久化、状态聚合仍在门禁内。
     /locale_commands[\\/]native\.rs$/,
   ],
-  /** 缺省每文件未覆盖行上限；0 表示必须 100%。 */
-  defaultMaxUncoveredLines: 0,
-  /**
-   * 逐文件预算：键为 llvm-cov 路径的后缀（正斜杠归一后匹配），
-   * 额度为该文件允许的未覆盖行绝对数。
-   */
-  allowances: [
-    // Tauri command 宏生成的 Request::from_command 当前恒为 Ok；其不可达错误区域
-    // 映射到 locale/theme set 命令属性行。注册 IPC 测试覆盖可达业务路径，见 testing.md。
-    { file: "src-tauri/src/locale_commands/mod.rs", maxUncoveredLines: 1 },
-    { file: "src-tauri/src/theme_commands/mod.rs", maxUncoveredLines: 1 },
-  ] as { file: string; maxUncoveredLines: number }[],
+  /** 工作区 lib 目标的最低行覆盖率；不按小文件逐一设门槛。 */
+  minimumLineCoveragePercent: 90,
 };

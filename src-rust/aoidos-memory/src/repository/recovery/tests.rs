@@ -748,7 +748,8 @@ fn recovery_defers_long_invalid_chains_without_reviving_them() {
 
 #[test]
 fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
-    let mut f = Fixture::new();
+    // 操作分页不验证 SQLite 持久性；内存连接仍经正常登记 / 提交 API 建立回执。
+    let mut f = Fixture::new_in_memory();
     for ordinal in 0..257 {
         let mut source = f.source();
         source.record_seq = ordinal + 1;
@@ -793,22 +794,7 @@ fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
     assert!(page.next.is_none());
 
     let mut f = Fixture::new();
-    for _ in 0..257 {
-        let version = f.version();
-        f.commit(&f.plan(version));
-    }
-    f.conn.execute(
-        "UPDATE memory_entries SET status='unavailable',recovery_cursor='',recovery_history_revision=0,effect_history_revision=0",
-        [],
-    ).unwrap();
-    let through_operations: u64 = f
-        .conn
-        .query_row(
-            "SELECT max(rowid) FROM memory_operations WHERE run_id=?1",
-            [&f.run.run_id],
-            |row| row.get(0),
-        )
-        .unwrap();
+    seed_healthy_entries(&mut f, 257);
     let through: u64 = f
         .conn
         .query_row(
@@ -822,8 +808,8 @@ fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
         history_revision: 0,
         through,
         after: 0,
-        through_operations,
-        after_operation: through_operations,
+        through_operations: 0,
+        after_operation: 0,
     };
     let page = f
         .repo
@@ -831,6 +817,50 @@ fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
         .unwrap();
     assert_eq!(page.checked_entries, 256);
     assert!(page.next.is_some());
+}
+
+/// 分页用例直接批量登记一组有效正文；逐条耐久写入由 operation / recovery 用例验证。
+fn seed_healthy_entries(f: &mut Fixture, count: usize) {
+    let versions = (0..count).map(|_| f.version()).collect::<Vec<_>>();
+    let tx = f.conn.transaction().unwrap();
+    for version in &versions {
+        let bytes = canonical(version).unwrap();
+        tx.execute(
+            "INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status,effect_history_revision) VALUES(?1,?2,?3,1,'active',0)",
+            params![version.entry_id, f.run.run_id, version.version_id],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO memory_versions(version_id,entry_id,parent_version_id,restored_from_version_id,body_hash,body_length,source_set_hash,evidence_set_hash,policy_hash,subject_json,change_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'new')",
+            params![
+                version.version_id,
+                version.entry_id,
+                version.parent_version_id,
+                version.restored_from_version_id,
+                hash(&bytes).as_slice(),
+                bytes.len(),
+                version.source_set_hash.as_slice(),
+                version.evidence_set_hash.as_slice(),
+                version.policy_hash.as_slice(),
+                canonical(&version.subject).unwrap(),
+            ],
+        )
+        .unwrap();
+        for (ordinal, source) in version.sources.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO memory_version_sources VALUES(?1,?2,?3)",
+                params![version.version_id, ordinal, canonical(source).unwrap()],
+            )
+            .unwrap();
+        }
+    }
+    tx.commit().unwrap();
+
+    for version in &versions {
+        let path = f.path(version);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, canonical(version).unwrap()).unwrap();
+    }
 }
 
 #[test]

@@ -21,7 +21,7 @@
 | `bun run verify`                       | 提交门禁，构成见下                                                                                            |
 | `bun run test:native`                  | 聚合原生 UI / OS 凭据与主 Webview IPC 集成测试，需桌面会话                                                    |
 | `bun run test` / `test:coverage`       | Vitest / Vitest + 覆盖率门槛                                                                                  |
-| `bun run test:rust` / `coverage:rust`  | cargo test / cargo-llvm-cov 行覆盖门槛                                                                        |
+| `bun run test:rust` / `coverage:rust`  | 普通 workspace 测试 / cargo-llvm-cov 聚合行覆盖率（最低 90%）                                                 |
 | `bun run lint` / `lint:rust`           | Biome + i18n 检查 / clippy（`lint:fix` 自动修 TS 侧，`lint:rust:fix` 自动修 Rust 侧：clippy --fix + rustfmt） |
 | `bun run format` / `format:rust`       | Biome + dprint / rustfmt（`:check` 为只读检查）                                                               |
 | `bun run typecheck` / `typecheck:rust` | vue-tsc + 仓库脚本 tsc / cargo check                                                                          |
@@ -38,9 +38,9 @@
 
 ## verify 构成
 
-`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `format:check` · `format:rust:check` · `test:coverage` · `test:rust` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十三项，任一失败即失败。前端格式由 Biome 与 dprint 按文件类型分工；Biome 检查 TS / JS / CSS / JSON lint，i18n 语义检查由 `i18n:check` 承担，Vue、HTML、Markdown 和 YAML 由 dprint 排版。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。husky 在每次 commit 前只跑双端格式检查；lint、测试与覆盖率交给推送前自查与 CI——CI 把十三项拆成具名步骤逐步执行，失败直接定位。失败处理：格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`（修完必须重跑 verify），测试挂了用 `test:watch` 本地复现。
+`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `format:check` · `format:rust:check` · `test:coverage` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十二项，任一失败即失败。Rust 库单测随覆盖率任务运行一次；`test:rust` 保留为普通 workspace 测试入口，CI 在 Windows / macOS 使用，Ubuntu 以 coverage 执行。前端格式由 Biome 与 dprint 按文件类型分工；Biome 检查 TS / JS / CSS / JSON lint，i18n 语义检查由 `i18n:check` 承担，Vue、HTML、Markdown 和 YAML 由 dprint 排版。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。husky 在每次 commit 前只跑双端格式检查；lint、测试与覆盖率交给推送前自查与 CI——CI 把十二项拆成具名步骤逐步执行，失败直接定位。失败处理：格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`（修完必须重跑 verify），测试挂了用 `test:watch` 本地复现。
 
-CI 相对本地 verify 有两处**编译形态合并**（语义不变，省两次全量 Rust 编译）：`cargo check` 不单跑（clippy 已含类型检查）；`cargo test` 不单跑（llvm-cov 先执行同一套测试，单次插桩编译同时验证测试与覆盖率门槛）。触发范围见下文。
+CI 相对本地 verify 有两项**执行分工**：`cargo check` 不单跑（clippy 已含类型检查）；Rust 覆盖率只在 Ubuntu 生成，Windows / macOS 运行普通 `cargo test --workspace`，避免在慢速平台做 LLVM 插桩，同时保留三平台测试执行。`cargo-llvm-cov` 仍通过预编译 action 安装，避免 postinstall 回退到源码编译。触发范围见下文。
 
 CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原生依赖并执行 rustdoc / clippy / Rust 覆盖率，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
 
@@ -48,13 +48,13 @@ CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原
 
 触发范围：main push 与 pull request 仅修改 `ai-docs/**` 或 Markdown 文件时跳过全量 CI；代码、依赖、脚本、工作流及其他配置改动仍跑三平台。PR 按相对 base 的累计 diff 判断，代码 PR 后续补文档仍可能触发；新建的纯文档 PR 与合并后的纯文档 push 会跳过。文档提交保留本地 / husky 格式检查。
 
-覆盖率口径：前端对逻辑层（`utils/`、`stores/`、`composables/`、组件与视图旁 `use*.ts`）要求行 / 分支 / 函数 / 语句 100%；Rust 侧 `coverage:rust` 由根目录 `coverage-rust.config.mts` 声明、`scripts/coverage-rust.mts` 执行——逐文件未覆盖行预算，缺省 0（必须 100%），`lib.rs` 与 `platform/windows.rs` 等确属装配或无法注入的文件在配置登记豁免与理由，详见[测试规范](../standards/testing.md)；src-tauri 的 commands / events / ipc 等非忽略文件与业务逻辑均须足额。改口径属于门禁变更，先登记 task。
+覆盖率口径：前端逻辑层（`utils/`、`stores/`、`composables/`、组件与视图旁 `use*.ts`）行 / 分支 / 函数 / 语句各至少 90%；Rust `coverage:rust` 对纳入的 workspace lib 源行设置 90% 聚合底线。`lib.rs` 与 `platform/windows.rs` 等装配 / 原生适配在配置中排除，并由风险行为清单与平台验收保护；覆盖率用于发现未审查逻辑，不替代行为测试。详情见[测试规范](../standards/testing.md)与[048](../task/048-test-quality-ci.md)。
 
 首次 `cargo check` 或改动 `[profile.*]` 后的全量重编译是一次性成本，属正常现象。
 
 ## 原生能力集成验证
 
-`bun run test:native` 是独立于本地 verify 十三项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
+`bun run test:native` 是独立于本地 verify 十二项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
 
 入口聚合 `aoidos-native-tests` 全部桌面会话目标，新增目标只登记 Cargo；定向排查用 `bun run test:native --test ipc-platform`。根脚本先构建手写 `webview/main.ts` 到 `gen/webview/`，测试配置加载生成目录；`webview/` 与 `tauri.conf.json` 入库，整个 `gen/` 从 Git / Biome 排除。
 

@@ -94,13 +94,22 @@ impl Fixture {
     pub(super) fn new() -> Self {
         let root = std::env::temp_dir().join(format!("aoidos-memory-test-{}", new_id()));
         std::fs::create_dir_all(&root).unwrap();
-        let repo = Repository::new(&root);
-        let mut conn = Connection::open(root.join("memory.sqlite")).unwrap();
+        let conn = Connection::open(root.join("memory.sqlite")).unwrap();
         // 与产品使用同一 WAL 模式；保留同步要求，避免批量夹具反复创建 rollback journal。
         let mode: String = conn
             .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
+        Self::with_connection(root, conn)
+    }
+    /// 不涉及文件耐久性的用例使用内存数据库，避免把 SQLite WAL 刷盘成本算进规则测试。
+    pub(super) fn new_in_memory() -> Self {
+        let root = std::env::temp_dir().join(format!("aoidos-memory-test-{}", new_id()));
+        let conn = Connection::open_in_memory().unwrap();
+        Self::with_connection(root, conn)
+    }
+    fn with_connection(root: PathBuf, mut conn: Connection) -> Self {
+        let repo = Repository::new(&root);
         conn.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE store_applied(id TEXT PRIMARY KEY,content_hash TEXT NOT NULL);").unwrap();
         conn.execute_batch(crate::schema::SCHEMA).unwrap();
         conn.execute_batch(crate::schema::BATCH_RECEIPT_MIGRATION)
