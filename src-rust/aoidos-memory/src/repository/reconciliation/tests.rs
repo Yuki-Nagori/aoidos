@@ -335,7 +335,8 @@ fn recovery_audits_applied_receipts_before_consuming_entries() {
 
 #[test]
 fn full_recovery_continues_across_operation_and_entry_pages() {
-    let mut f = Fixture::new();
+    // 此用例验证操作 / 条目分页，不验证 SQLite WAL 耐久性；版本正文仍走正式文件路径。
+    let mut f = Fixture::new_in_memory();
     for _ in 0..140 {
         let plan = f.plan(f.version());
         f.commit(&plan);

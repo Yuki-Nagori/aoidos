@@ -350,7 +350,8 @@ fn recovery_promotes_a_prepared_body_and_propagates_uncertain_apply_errors() {
 
 #[test]
 fn recovery_pauses_when_clock_receipts_exceed_the_page_budget() {
-    let mut f = Fixture::new();
+    // 此用例验证回合回执扫描预算，不验证 WAL 耐久性。
+    let mut f = Fixture::new_in_memory();
     for seq in 1..=257 {
         let mut source = f.source();
         source.record_seq = seq;
@@ -799,7 +800,8 @@ fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
     assert_eq!(page.operations, 1);
     assert!(page.next.is_none());
 
-    let mut f = Fixture::new();
+    // 两段分页都只验证上限与游标；正文文件仍由夹具按正式路径写入。
+    let mut f = Fixture::new_in_memory();
     seed_healthy_entries(&mut f, 257);
     let through: u64 = f
         .conn
@@ -903,7 +905,8 @@ fn impossible_prepared_relation_size_is_corrupt_instead_of_yielding_forever() {
 
 #[test]
 fn effect_reconciliation_exhaustion_defers_entry_scan_and_resumes_without_double_revision() {
-    let mut f = Fixture::new();
+    // 此用例验证回退分页和幂等修订；不验证 SQLite WAL 耐久性。
+    let mut f = Fixture::new_in_memory();
     for _ in 0..33 {
         let mut plan = f.plan(f.version());
         for seq in 1..=6 {
