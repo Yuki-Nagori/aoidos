@@ -71,12 +71,14 @@ impl Storage {
             memory: aoidos_memory::repository::Repository::new(root),
         }
     }
-    /// 在会话锁 → 数据库锁内借用记忆仓储；回调不能递归取得这两个锁或 await。
+    /// 在会话锁 → 数据库锁内绑定活动场景目录和当前实体快照，再借用记忆仓储。
+    /// 回调不能递归取得这两个锁或 await。
     /// # Errors
-    /// 未登记会话、pending 世界 / 回退、策略不可用或持久化失败拒绝。
+    /// 未登记会话、待恢复状态、目录版本不符、证据策略不完整或持久化失败时拒绝。
     pub fn with_memory<T>(
         &self,
         session_id: &str,
+        scene_catalog: &crate::game::catalog::SceneCatalog,
         job: impl FnOnce(
             &aoidos_memory::repository::Repository,
             &mut rusqlite::Connection,
@@ -101,8 +103,11 @@ impl Storage {
         let entity_directory = crate::game::catalog::EntityRegistry
             .snapshot(connection, &session, &seed)
             .map_err(memory_context_error)?;
-        let port =
-            crate::record::memory::SourcePort::with_entity_directory(&session, &entity_directory)?;
+        let port = crate::record::memory::SourcePort::with_evidence_context(
+            &session,
+            &entity_directory,
+            scene_catalog,
+        )?;
         job(&self.memory, connection, &port)
     }
 

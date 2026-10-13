@@ -324,7 +324,31 @@ async fn open_context(
     revision: String,
     entity_directory: EntityDirectory,
 ) -> Result<Arc<Context>, Fault> {
-    let catalog = SceneCatalog::new(
+    let catalog = memory_scene_catalog(title, entity_directory.clone())?;
+    Context::open(
+        session,
+        Box::new(BuiltinDomain {
+            catalog,
+            storage,
+            revision,
+            entity_seed: entity_directory,
+        }),
+        "player".into(),
+        "player".into(),
+        coordinator,
+        events,
+        Arc::new(Completed),
+    )
+    .await
+}
+
+/// 活动内置领域与记忆证据读取共用同一目录构造，避免规则装配分叉。
+pub(crate) fn memory_scene_catalog(
+    title: String,
+    entity_directory: EntityDirectory,
+) -> Result<SceneCatalog, Fault> {
+    let revision = entity_directory.script_revision().to_owned();
+    SceneCatalog::new(
         "minimal-explore-v1".into(),
         revision.clone(),
         BTreeMap::from([(
@@ -363,23 +387,8 @@ async fn open_context(
         )]),
         BTreeMap::new(),
     )?
-    .with_entity_directory(entity_directory.clone())?
-    .with_presence_policy(entry_presence_policy())?;
-    Context::open(
-        session,
-        Box::new(BuiltinDomain {
-            catalog,
-            storage,
-            revision,
-            entity_seed: entity_directory,
-        }),
-        "player".into(),
-        "player".into(),
-        coordinator,
-        events,
-        Arc::new(Completed),
-    )
-    .await
+    .with_entity_directory(entity_directory)?
+    .with_presence_policy(entry_presence_policy())
 }
 
 // 此策略只含源码固定的内置规则；通用构造器的输入错误由 PresencePolicy 测试覆盖。
