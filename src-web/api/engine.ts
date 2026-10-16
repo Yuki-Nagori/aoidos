@@ -148,6 +148,7 @@ export interface ScriptInfo {
 }
 export interface OpenedSession {
   sessionId: string;
+  memoryRunId: string;
   profileId: string;
   scriptId: string;
   title: string;

@@ -43,17 +43,14 @@ impl Fixture {
     fn new(edit: impl FnOnce(&mut Header)) -> Self {
         let root = std::env::temp_dir().join(format!("aoidos-builtin-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let events = Arc::new(crate::record::test_support::Events::default());
         let storage = Arc::new(Storage::new(
             &root,
             Arc::new(MigrationEvents),
-            events.clone(),
+            Arc::new(crate::record::test_support::Events::default()),
         ));
         let mut header = header("mistbell").unwrap();
         edit(&mut header);
-        let session = Arc::new(Mutex::new(
-            Session::create(root.join("record.jsonl"), header, events).unwrap(),
-        ));
+        let session = storage.records.create(header).unwrap();
         Self {
             root,
             storage,
@@ -194,8 +191,20 @@ async fn registered_domain_freezes_rules_and_commits_only_supported_idempotent_i
     assert!(WorldPort::applied(domain.as_ref(), &id, &hash).is_err());
     assert!(WorldPort::apply(domain.as_mut(), &record, 1, &mutation, &hash).is_err());
     assert!(domain.rebuild(&record, &[], &rewind_id, &hash).is_err());
+    drop(domain);
+    drop(record);
     fixture.storage.close().unwrap();
-    assert_eq!(domain.confirmed(&record).unwrap_err().code, "app.not-ready");
+    let record = fixture.session.lock().unwrap();
+    assert_eq!(
+        context
+            .domain
+            .lock()
+            .unwrap()
+            .confirmed(&record)
+            .unwrap_err()
+            .code,
+        "app.not-ready"
+    );
 }
 #[tokio::test]
 async fn read_only_completion_does_not_create_world_consequences() {

@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-17。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复、030 门控 / 批次基础已交付；032 已增加轮回刻痕仓储和节点进度原语，产品触发 / UI / 记忆 IPC 尚未接入；候选构造、Prompt 与算法数值待完成**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
+更新日期：2026-10-17。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复、030 门控 / 批次基础及 031 高级设置 / 查询已交付；032 的轮回刻痕与节点进度原语已实现，产品触发 / UI 尚未接入；候选构造、Prompt 与算法数值待完成**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
 
 ## 阅读路径
 
@@ -69,7 +69,7 @@ recap 是记录投影摘要，不等于会话记忆；segment 是收束边界，
 
 同一条认知可以关联多个来源，每个来源分别保存获知方式、范围和因果引用，保留后续变化过程；不能只用最新获知方式覆盖旧来源。例如先听到传闻、后来亲眼观察，两种来源均保留各自限定，观察不追溯性地把此前传闻变成亲历。来源失效与混合来源正文继续遵守既有因果回退规则。
 
-因此“听说但怀疑”和“亲眼看到却误解”可以分别表达，不根据摘要里是否出现“听说”“相信”等关键词决定权限。Rust 模型与持久字段已由 029 建立；TS / IPC DTO 留待 031 接入。
+因此“听说但怀疑”和“亲眼看到却误解”可以分别表达，不根据摘要里是否出现“听说”“相信”等关键词决定权限。Rust 模型与持久字段已由 029 建立；031 已补齐相关 TS / IPC DTO 与查询入口，产品记忆候选构造和 Prompt 接入仍待后续任务。
 
 ### 默认认知状态（已确认）
 
@@ -243,7 +243,7 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 ### 待确认问题生命周期（已确认）
 
-问题由可信管线根据类别、稳定素材来源和事件槽位生成 questionKey；不使用问题文案或模型给出的候选 ID 作为身份。SQLite 持久保存类型化候选、来源和 history / entity / evidence revision。同一 questionKey 的候选变化递增 revision，来源无效或任一 revision 过期时拒绝回答。选择只接受当前候选；“新对象”保存为待登记提议，不创建权威实体。每周目 pending 问题最多 512 个，队列满时返回容量拒绝，保留素材由上层标记 localDeferred。仓储读取支持最多 32 项分页、单次最多扫描 256 项；SQLite 序号游标固定本次分页上界，翻页期间新问题由刷新读取。来源或可信版本失效的项目在扫描时转为 invalidated，历史修订过期的游标拒绝续读。生产目录证明由 engine `SourcePort` 提供；被明确选中的实体具备完整目录上下文、`mentionedName` 有原文支持且来源仍有效时，答案、别名来源和审计事件在同一 SQLite 事务提交，否则答案保持 pending。
+问题由可信管线根据类别、稳定素材来源和事件槽位生成 questionKey；不使用问题文案或模型给出的候选 ID 作为身份。SQLite 持久保存类型化候选、来源和 history / entity / evidence revision。同一 questionKey 的候选变化递增 revision，来源无效或任一 revision 过期时拒绝回答。选择只接受当前候选；“新对象”保存为待登记提议，不创建权威实体。每周目 pending 问题最多 512 个，队列满时返回容量拒绝，保留素材由上层标记 localDeferred。仓储读取支持最多 32 项分页、单次最多扫描 256 项；游标绑定 runId 与历史修订，并以 SQLite 序号固定本次分页上界，翻页期间新问题由刷新读取。来源或可信版本失效的项目在扫描时转为 invalidated，过期或跨周目的游标拒绝续读。生产目录证明由 engine `SourcePort` 提供；被明确选中的实体具备完整目录上下文、`mentionedName` 有原文支持且来源仍有效时，答案、别名来源和审计事件在同一 SQLite 事务提交，否则答案保持 pending。
 
 实体关联问题可保存 `mentionedName`，但仅当该字符串能在问题来源正文中逐字找到时接受；它是玩家确认的原始名称线索，不是规范名或已登记别名。它不改变 questionKey；同一问题的候选或提及名称变化均递增 revision，使旧回答失效。选中实体候选时，仓储在同一事务中重新核验来源、完整目录中的实体类别 / 范围、规范名冲突及 active 别名唯一性，再提交问题答案、只包含 `mentionedName` 的支持来源与审计事件；任一检查失败则全部回滚，问题保持 pending。精确别名仅在当前周目、类别和 scope 内解析，需至少一个仍处于当前因果路径的名称来源；撤销使用 alias revision 与 entity revision 做 CAS，不删除登记历史。回退使名称来源失效后，解析时排除该依据；其他有效但不包含该名称的上下文来源不能替代它。近似匹配不自动登记或解析别名。
 
@@ -604,9 +604,13 @@ prepared → ready → applied 是正常路径。文件落盘成功而 ready 回
 
 保存命令携带 expectedConfigVersion，剧本保存同时携带 expectedAppConfigVersion，事务 CAS、校验和版本递增同时完成，冲突保留草稿并要求重新读取当前确认值；应用默认与剧本覆盖按同一一致读取版本校验，默认变化导致旧预览过期时拒绝保存并重新读取，不偷偷提交另一套继承值；前端一配置作用域至多一个保存请求在飞，不自动覆盖更新。默认值 / 覆盖的读取与周目创建在同一数据库一致边界完成。恢复默认只清除覆盖草稿，点击保存后才提交；应用恢复默认取内置受版本管理的参数，而剧本恢复默认取继承。
 
-拟实施 DTO 使用 camelCase、可选字段省略、UUID 字符串、安全整数与有限数值；Rust enum / struct 定型后 TS 立即声明同型，invoke 仍透传。范围端口固定为 GetConfig(scope)、SaveConfig(scope,expectedVersion,params)、ListQuestions(run,cursor,limit)、ResolveQuestion(id,revision,answer)、ListEntries(run,cursor,limit)、GetEntry(entry,version)、ProcessBatch(run,expectedHistoryRevision)、GetBatchStatus(batchId)。具体 Tauri 命令注册与 DTO 展开由后续设置 / 查询任务同 commit 纳入通信契约，不把端口声明当现有 IPC。
+031 已接入应用 / 剧本配置读取与保存 IPC：参数 DTO 为 camelCase，剧本覆盖只发送显式字段，缺字段表示继承、显式 `null` 非法；命令和返回类型与 `src-web/api/memory.ts` 同型。应用配置同时返回内置开发默认参数，供恢复默认草稿使用；剧本配置在同一读取事务中返回与 `appConfigVersion` 一致的继承基值和合并结果，设置界面据此预览草稿。应用保存以 `expectedVersion` CAS，剧本保存同时比对 `expectedVersion` 与 `expectedAppVersion`。恢复默认先重置本地草稿，显式保存后才递增版本，不触碰既有周目快照。命令名、参数、错误和 `OpenedSession.memoryRunId` 见[通信契约](ipc-contract.md)。
 
-配置返回已确认值、继承来源与生效范围，保存返回新配置版本，不宣称当前周目已重算；问题答案支持指定已提供的稳定对象、新对象说明、都不是。新对象说明只提交登记提议，不让记忆命令直接创建权威实体；目录未登记前相关记忆保持待确认。ProcessBatch 在接纳前拒绝参数 / 租约错误；接纳后命令异步等待该有界批次结束并返回 BatchResult，结果含 batchId、runId、historyRevision、completed / partial / failed / cancelled 及逐项摘要 / 脱敏 error，不把接纳后的失败当“未执行”命令错误。响应丢失后主动 GetBatchStatus 可读持久结果，不自动重发命令；UI 换 run / historyRevision 后忽略旧响应。
+新会话记录经恢复后，engine 在存储单写者边界内读取应用默认与剧本覆盖、合并校验并创建不可变 `Run`；已有会话先按 session 读取原周目，不读取当前配置，也不按新设置重算。打开会话失败会关闭本次记录句柄，但不会伪造或删除记忆数据。当前应用默认是受版本管理的开发初值，不代表产品标定结论。
+
+031 已接入 `memory_list_questions`、`memory_resolve_question`、`memory_list_entries`、`memory_get_entry` 与 `memory_get_batch_status` 后端 IPC，使用 runId / historyRevision 绑定、固定 rowid 游标上界和不可变 versionId 校验；IPC 枚举 DTO 用 camelCase，持久 JSON 格式保持兼容。实体候选的展示名称从同一完整目录快照取得，回答只提交稳定 ID。UI 同时观察当前 run 与已确认的 `historyRevision`；同一周目发生回退后清空旧列表 / 正文，并丢弃在飞的旧修订响应。旧游标、迟到回答或已变化正文不能覆盖当前结果，历史版本仍须通过来源有效性检查。记忆详情显示来源记录和角色获知方式；待确认问题最多每页 32 项 / 单次扫描 256 项，条目索引每页最多 32 项。应用默认 / 剧本覆盖设置与记忆查询界面已接入，并以用户显式刷新 / 续读获取数据，不后台轮询。批次执行的产品授权入口仍待接入；指数算法使用整数 `decayRate`，分段算法使用 `halfLifeRounds`，两者是各算法独立参数，不要求彼此派生或保持数值对应。
+
+配置返回已确认值、继承来源与生效范围，保存返回新配置版本，不宣称当前周目已重算；问题答案支持指定已提供的稳定对象、新对象说明、都不是。新对象说明只提交登记提议，不让记忆命令直接创建权威实体；目录未登记前相关记忆保持待确认。030 的私有执行入口在授权及游戏 lease 边界内执行有界批次；031 的 `memory_get_batch_status` 主动恢复持久状态和完成摘要，不返回原始响应，也不自动重发。待接入产品授权入口前，不能从界面触发收费批次。UI 换 run / historyRevision 后忽略旧响应。
 
 查询使用绑定 run / historyRevision / 固定读边界的游标，回退或跨 run 的旧游标拒绝，按公共分页 / 载荷预算返回，不输出文件路径。
 

@@ -101,6 +101,19 @@ impl<'a> SourcePort<'a> {
             mode,
         })
     }
+
+    /// 按当前完整实体快照解析稳定 ID 的展示名称。
+    /// # Errors
+    /// 实体目录未绑定或快照不完整时拒绝读取名称。
+    pub fn canonical_entity_name(&self, entity_id: &str) -> Result<Option<String>> {
+        let directory = self
+            .entity_directory
+            .ok_or(Error::Rejected(Reason::StaleVersion))?;
+        Ok(directory
+            .entity(entity_id)
+            .map_err(|_| Error::Rejected(Reason::StaleVersion))?
+            .map(|entity| entity.canonical_name.clone()))
+    }
     fn text(&self, seq: u64) -> Result<Option<(String, Option<InputMode>)>> {
         self.boundary()?;
         let Some(index) = self.session.index.get(&seq) else {

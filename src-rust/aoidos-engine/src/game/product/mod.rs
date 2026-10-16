@@ -191,6 +191,7 @@ struct Selection {
 #[serde(rename_all = "camelCase")]
 pub struct OpenedSession {
     pub session_id: String,
+    pub memory_run_id: String,
     pub profile_id: String,
     pub script_id: String,
     pub title: String,
@@ -244,7 +245,10 @@ impl Product {
             && previous.script_id == script_id
         {
             match service.get_phase(&previous.session_id) {
-                Ok(_) => return opened(previous),
+                Ok(_) => {
+                    let run = self.storage.memory_run_for_session(&previous.session_id)?;
+                    return opened(previous, &run.run_id);
+                }
                 Err(error) if error.code == "app.not-found" => {}
                 Err(error) => return Err(error),
             }
@@ -295,6 +299,13 @@ impl Product {
                 return Err(error);
             }
         };
+        let memory_run = match self.storage.memory_run_for_session(&id) {
+            Ok(run) => run,
+            Err(error) => {
+                self.close_record(&id).await;
+                return Err(error);
+            }
+        };
         if let Err(error) = service.register(context) {
             self.close_record(&id).await;
             return Err(error);
@@ -313,7 +324,7 @@ impl Product {
             return Err(error);
         }
         self.factory.select(selection.profile_id.clone());
-        opened(&selection)
+        opened(&selection, &memory_run.run_id)
     }
     async fn close_record(&self, id: &str) {
         let records = self.storage.records.clone();
@@ -324,9 +335,10 @@ impl Product {
 fn open_busy(_: tokio::sync::TryLockError) -> Fault {
     Fault::new("app.busy", "会话正在打开")
 }
-fn opened(selection: &Selection) -> Result<OpenedSession, Fault> {
+fn opened(selection: &Selection, memory_run_id: &str) -> Result<OpenedSession, Fault> {
     Ok(OpenedSession {
         session_id: selection.session_id.clone(),
+        memory_run_id: memory_run_id.into(),
         profile_id: selection.profile_id.clone(),
         script_id: selection.script_id.clone(),
         title: super::assets::scenario(&selection.script_id)?.title,

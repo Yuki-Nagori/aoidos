@@ -107,7 +107,8 @@ pub enum QuestionStatus {
 }
 
 /// 从持久仓储读取的问题快照。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MemoryQuestion {
     /// 稳定 UUID。
     pub question_id: String,

@@ -85,6 +85,8 @@ impl StorageEvents {
             .take();
         loop {
             let notified = self.finished.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
                 break;
             }

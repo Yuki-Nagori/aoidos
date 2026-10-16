@@ -332,6 +332,27 @@ CREATE INDEX memory_cycle_scene_hints_page
  ON memory_cycle_scene_hints(run_id,scene_id,entry_history_revision,entry_record_seq,shown_at_round,hint_id);
 "#;
 
+/// 031 的配置版本保留历史，head 只指向每个作用域当前已确认版本。
+pub const CONFIG_MIGRATION: &str = r#"
+CREATE TABLE memory_config_versions (
+ scope_kind TEXT NOT NULL CHECK(scope_kind IN ('application','script')),
+ scope_id TEXT NOT NULL CHECK(length(scope_id) BETWEEN 1 AND 64),
+ config_version INTEGER NOT NULL CHECK(config_version BETWEEN 1 AND 9007199254740991),
+ algorithm_version INTEGER NOT NULL CHECK(algorithm_version BETWEEN 1 AND 9007199254740991),
+ payload_hash BLOB NOT NULL CHECK(length(payload_hash)=32),
+ payload_json BLOB NOT NULL CHECK(length(payload_json) BETWEEN 1 AND 32768),
+ PRIMARY KEY(scope_kind,scope_id,config_version)
+);
+CREATE TABLE memory_config_heads (
+ scope_kind TEXT NOT NULL,
+ scope_id TEXT NOT NULL,
+ config_version INTEGER NOT NULL CHECK(config_version BETWEEN 1 AND 9007199254740991),
+ PRIMARY KEY(scope_kind,scope_id),
+ FOREIGN KEY(scope_kind,scope_id,config_version)
+   REFERENCES memory_config_versions(scope_kind,scope_id,config_version)
+);
+"#;
+
 /// 核验迁移后的领域表 / 索引定义，不把同名但缺约束的旧库当合法 manifest。
 /// # Errors
 /// 缺少或改变已登记结构为 corrupt，SQL 读取错误保持存储类别。
@@ -345,6 +366,7 @@ pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
         CANDIDATE_OPERATION_MIGRATION,
         LEGACY_BATCH_COMPLETION_MIGRATION,
         CYCLE_MIGRATION,
+        CONFIG_MIGRATION,
     ] {
         for statement in migration
             .split(';')
@@ -409,6 +431,7 @@ mod tests {
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
+        conn.execute_batch(CONFIG_MIGRATION).unwrap();
         conn
     }
 
@@ -426,6 +449,7 @@ mod tests {
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
+        conn.execute_batch(CONFIG_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
             .unwrap();
@@ -456,6 +480,7 @@ mod tests {
             .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         missing_receipts.execute_batch(CYCLE_MIGRATION).unwrap();
+        missing_receipts.execute_batch(CONFIG_MIGRATION).unwrap();
         missing_receipts
             .execute_batch("DROP TABLE memory_batch_receipts")
             .unwrap();
@@ -478,6 +503,7 @@ mod tests {
             .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         missing_questions.execute_batch(CYCLE_MIGRATION).unwrap();
+        missing_questions.execute_batch(CONFIG_MIGRATION).unwrap();
         missing_questions
             .execute_batch("DROP TABLE memory_questions")
             .unwrap();
@@ -505,6 +531,9 @@ mod tests {
             .unwrap();
         missing_candidate_links
             .execute_batch(CYCLE_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(CONFIG_MIGRATION)
             .unwrap();
         missing_candidate_links
             .execute_batch("DROP TABLE memory_batch_candidate_operations")
@@ -543,6 +572,7 @@ mod tests {
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
+        conn.execute_batch(CONFIG_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=NULL WHERE name='memory_runs'",

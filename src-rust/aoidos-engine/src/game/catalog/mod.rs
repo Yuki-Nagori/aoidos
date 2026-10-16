@@ -210,6 +210,7 @@ pub struct Scene {
     pub dice_disabled: bool,
 }
 /// 只存可信登记；构造先验证所有路径、规则、预算，运行中不增补未知 ID。
+#[derive(Clone)]
 pub struct SceneCatalog {
     revision: String,
     script_revision: String,

@@ -138,6 +138,7 @@ impl Fixture {
         conn.execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         conn.execute_batch(crate::schema::CYCLE_MIGRATION).unwrap();
+        conn.execute_batch(crate::schema::CONFIG_MIGRATION).unwrap();
         let port = Port {
             view: Boundary {
                 script_id: "mistbell".into(),

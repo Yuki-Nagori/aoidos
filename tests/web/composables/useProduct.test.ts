@@ -30,6 +30,7 @@ const scripts = [
 ];
 const opened = {
   sessionId: "session",
+  memoryRunId: "memory-run",
   profileId: "default",
   scriptId: "mistbell",
   title: "雾钟地窖",

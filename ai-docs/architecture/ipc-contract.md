@@ -149,6 +149,7 @@ interface ScriptInfo {
 }
 interface OpenedSession {
   sessionId: string;
+  memoryRunId: string;
   profileId: string;
   scriptId: string;
   title: string;
@@ -409,7 +410,19 @@ else showGenericError(err);
 - 前端分支**反例**：`err.message.includes("rate")`（文案漂移即坏）；`switch (err.code)` 不写 default。
 - 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../standards/comments.md) 为映射器补直测（参照 `aoidos-store` 的 `err_*` + stage_mappers 模式）。
 
-007 的[拟实施记忆端口](memory.md#高级设置与跨端接口)尚未注册 Tauri 命令，不改变本目录现有 API。参数 / 过期版本使用 app.bad-request、未知查询身份 app.not-found、门禁 app.busy、持久损坏 store.corrupt，网络错误沿用 `llm.*`；内部候选拒绝 reason 不作为供应商 quota。所需旧策略不可用时，拟端口返回 app.not-ready，保留原数据并开放只读诊断，不用 store.corrupt 指代仅版本不受支持。具体 DTO / 命令由后续实施同 commit 展开到本目录，遵循 Rust / TS 同型，不新增 `memory:*` 事件流或持续轮询。
+031 已注册记忆配置、待确认问题与条目查询命令，DTO 与 TypeScript 同型；周目初始化随 `engine_open_session` 完成并在 `OpenedSession` 返回 `memoryRunId`。设置和记忆查询界面已接入显式读取 / 保存；批次状态只读恢复命令已接入，执行入口仍由 030 的私有批次调度边界承接，产品授权入口尚未接入。
+
+- `memory_get_app_config`：无参数；返回 `AppConfig`，包含当前确认的 `parameters` 和只读 `defaultParameters`。首次读取返回版本 1 的开发初值，不写库；损坏配置不回退。设置页恢复应用默认只重置草稿，仍须显式保存。
+- `memory_save_app_config`：接收 `{ expectedVersion, parameters }`；返回 `{ configVersion }`。完整参数 CAS；校验所有已保存剧本覆盖在新默认下仍合法；不改写已有周目。
+- `memory_get_script_config`：接收 `{ scriptId }`；返回 `ScriptConfig`，包含显式覆盖、与应用版本一致的继承基值及合并后的有效参数；未保存覆盖返回版本 0。编辑器按继承基值与本地草稿即时合并预览，避免旧覆盖影响恢复后的显示。
+- `memory_save_script_config`：接收 `{ scriptId, expectedVersion, expectedAppVersion, overrides }`；返回 `{ configVersion }`。双版本 CAS；空对象保存为继承默认；跨字段冲突拒绝，过期草稿不覆盖。
+- `memory_list_questions`：接收 `{ runId, cursor, limit }`；返回问题页、固定分页上界和 `historyRevision`。游标绑定 `runId` 与历史修订，不能跨周目复用；过期问题在查询中持久标记失效。实体候选附带当前完整目录中的展示名，回答仍只提交稳定 `entityId`。IPC 候选 / 答案枚举内部字段使用 camelCase DTO，不改变仓储持久化格式。
+- `memory_resolve_question`：接收 `{ runId, resolution }`，答案携带问题 revision 与 historyRevision；来源、目录或候选变化时拒绝，不直接创建权威实体。
+- `memory_list_entries`：接收 `{ runId, cursor, limit }`；游标绑定 runId、historyRevision、SQLite rowid 快照上界与上一页扫描位置，返回固定快照的有界条目页，最多 32 条。
+- `memory_get_entry`：接收 `{ runId, entryId, expectedVersionId }`；读取指定不可变版本并重新核验其策略、正文 hash 与当前有效来源；失效版本不会因历史查询绕过校验。
+- `memory_get_batch_status`：接收 `{ runId, batchId }`；只返回与周目匹配的持久状态、完成摘要和白名单诊断码，不返回 prompt 或供应商原始响应；调用只读状态，不重发请求、不后台轮询。
+
+版本冲突或参数非法为 `app.bad-request`，未登记 / 非法剧本身份为 `app.bad-request`，配置损坏为 `store.corrupt`，存储初始化不可用为 `app.not-ready`。配置历史按 scope/version 留存并校验规范 JSON 哈希；当前版本通过 head 指针读取。`PolicyParameters` 数值均限制为 JavaScript 安全整数范围，Rust 负责完整领域校验，TypeScript 只声明类型且 `invoke` 透传。
 
 ## 工程纪律（可检查版）
 
