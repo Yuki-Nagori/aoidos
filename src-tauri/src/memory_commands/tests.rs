@@ -7,6 +7,7 @@ use aoidos_engine::storage::QuestionDraft;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tauri::{
+    Manager,
     test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets},
     webview::InvokeRequest,
 };
@@ -264,6 +265,7 @@ async fn memory_configuration_commands_preserve_versions_and_return_effective_va
             assert_eq!(call(command, body).unwrap_err()["code"], "app.not-found");
         }
     }
+    app.state::<StorageService>().storage.close().unwrap();
     drop(window);
     drop(app);
     std::fs::remove_dir_all(root).unwrap();
