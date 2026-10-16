@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-16。
+更新日期：2026-10-17。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -15,7 +15,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | LLM 设计     | [LLM 接入与护栏](llm.md)               | Provider、护栏、配置与回合协调；实际能力及后续接线边界             |
 | 计价与额度   | [计价与费用预算](billing.md)           | 原币价格、单局预算、持久账本、周期报表；035 已实现，实机展示待验收 |
 | 记录与上下文 | [记录引擎](record-engine.md)           | 块语法、流式持久化、投影预算、恢复与迁移；022 已实现并验收         |
-| 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；029 存储 / 恢复已交付              |
+| 记忆设计     | [记忆系统](memory.md)                  | 三域边界、门控、回写与节点收束；029–030 已交付，032 原语实现中     |
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定     |
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收   |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；025 已实现，平台验收待完成   |
@@ -30,7 +30,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 已交付界面语言、持久偏好与本地化格式；后续补齐英文消息 schema 基准、主题名和剧本目录展示名本地化。[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 三平台 CI 与本机全量 verify 均通过。025 已实现舞台、四态面板、有界记录呈现、composer、偏好及窗口恢复；本机 `bun run verify` 全项通过。跨平台原生 WebView、DPI、IME 与辅助技术验收仍未完成，任务保持 implemented。证据见[任务索引](../task-index.md)。
 
-记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，030 已提供需显式调用的 private 批次执行器，但冻结 Prompt / 候选构造与产品触发仍未接入；[算法与标定](memory-algorithms.md)仍待实测，设计定稿不等于产品能力已上线。
+记忆、界面、主题、国际化与计费设计已定稿，实施按依赖推进。029 已交付记忆存储 / 恢复基础 crate，030 已提供需显式调用的 private 批次执行器；032 正在补齐轮回刻痕仓储、可信规则适配和节点进度原语。冻结 Prompt / 候选构造、产品触发、设置查询及 UI 尚未接入；[算法与标定](memory-algorithms.md)仍待实测，设计定稿或底层原语完成都不代表产品能力已上线。
 
 ## 设计与实施对应
 
@@ -54,9 +54,9 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022。[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作，可从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前的完成回执保持可读。030 的显式执行器复用 020 `Coordinator` private lease 与请求携带的 027 预算端口，发送前登记物理请求身份，成功响应进入 received，未知结果不重发；没有自动触发，也不增加 012 回合调用次数。
 
-043 提供 Rust 权威实体注册表：Mistbell `entities.json` 是只读种子，动态身份经 023 世界意图提交到共享 SQLite；恢复核验 applied 与因果记录，快照只包含当前有效分支身份。045 提供 Rust 权威场景在场及 observed / rumor 证据端口：观察 v1 只接受来源时同场、主体在场的已完成公开旁白区间；传闻逐跳核验来源作者和传播链。获知事件必须 applied、属于成功完整回合并位于当前有效路径。`Storage::with_memory` 接收活动目录，在会话 → SQLite 锁内装配实体快照并绑定到 `SourcePort`；仓储执行证据校验时将共享连接显式传入。缺少完整实体目录、场景修订或在场策略时失败关闭。这样存储入口已能校验 `told`、`observed` 与 `rumor`，但产品记忆候选 / Prompt 调用链尚未接入；046 已接入只读在场快照 IPC 与定向输入 UI，记忆专属 IPC 仍由后续任务承接。
+043 提供 Rust 权威实体注册表：Mistbell `entities.json` 是只读种子，动态身份经 023 世界意图提交到共享 SQLite；恢复核验 applied 与因果记录，快照只包含当前有效分支身份。045 提供 Rust 权威场景在场及 observed / rumor 证据端口：观察 v1 只接受来源时同场、主体在场的已完成公开旁白区间；传闻逐跳核验来源作者和传播链。获知事件必须 applied、属于成功完整回合并位于当前有效路径。`Storage::with_memory` 接收活动目录，在会话 → SQLite 锁内装配实体快照并绑定到 `SourcePort`；仓储执行证据校验时将共享连接显式传入。缺少完整实体目录、场景修订或在场策略时失败关闭。这样存储入口已能校验 `told`、`observed` 与 `rumor`，但产品记忆候选 / Prompt 调用链尚未接入；046 已接入只读在场快照 IPC 与定向输入 UI，记忆专属 IPC 仍由 031 承接。
 
-正式引擎 / Tauri 入口已支持显式指定当前场景内的固定登记角色，接收目标贯穿接纳、恢复、角色提示与持久回复。046 已将 `engine_get_scene_presence`、composer 角色选择和 revision 校验接入产品链路；场外输入保持旁白路由，接收者列表排除玩家自身，并使用 044 定义的稳定错误原因。记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。别名支持玩家确认后的登记、撤销及按当前有效来源重建，自动明确指向仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等前置，030 / 033 可使用 035 的费用端口开展本地联调；收费批次和真实费用实验仍须等待 035 完成三平台实机验收并获授权。
+正式引擎 / Tauri 入口已支持显式指定当前场景内的固定登记角色，接收目标贯穿接纳、恢复、角色提示与持久回复。046 已将 `engine_get_scene_presence`、composer 角色选择和 revision 校验接入产品链路；场外输入保持旁白路由，接收者列表排除玩家自身，并使用 044 定义的稳定错误原因。记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。别名支持玩家确认后的登记、撤销及按当前有效来源重建，自动明确指向仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)已提供 Rust 类型、仓储和规则适配器，产品调用链仍在实施，[033 标定联调](../task/033-memory-calibration-integration.md)后续审定生产参数。034 国际化已完成；031 仍等待 030、025 等前置，030 / 033 可使用 035 的费用端口开展本地联调；收费批次和真实费用实验仍须等待 035 完成三平台实机验收并获授权。
 
 027 已定稿[计价与费用预算](billing.md)。035 已接入精确金额、不可变价格登记、按 profile 选择计价币种、每局 CNY / USD 独立预算、物理请求预留 / 结算、双币种用量与月报、80% 提醒及分页明细；参考 Token 只生成同币种建议值。历史恢复限完整 usage 和原冻结价格，余额查询仅支持 DeepSeek 显式只读请求；三平台实机展示留证仍待补，验收状态见 [035](../task/035-llm-cost-control-impl.md)。全应用月报不设总额度。
 
@@ -82,7 +82,7 @@ src-rust/（独立业务 crate：engine 按单向依赖组合 billing / memory /
 src-tauri
   ├─→ aoidos-engine
   │     ├─→ aoidos-billing
-  │     ├─→ aoidos-memory（029 存储 / 恢复）
+  │     ├─→ aoidos-memory（029 存储 / 恢复，030 批次，032 轮回 / 节点原语）
   │     │     ├─→ aoidos-store
   │     │     └─→ aoidos-json
   │     ├─→ aoidos-llm

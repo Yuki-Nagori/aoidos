@@ -47,6 +47,20 @@ impl CausalPort for Port {
     fn completed_round(&self, _: &str, source: &SourceRef) -> Result<bool> {
         self.valid_source(source)
     }
+    fn valid_scene_entry(&self, _: &str, record_seq: u64) -> Result<bool> {
+        Ok(record_seq <= self.through_record.get() && !self.invalid.get())
+    }
+    fn valid_completed_round(
+        &self,
+        _: &str,
+        _: &str,
+        entry_record_seq: u64,
+        record_seq: u64,
+    ) -> Result<bool> {
+        Ok(record_seq > entry_record_seq
+            && record_seq <= self.through_record.get()
+            && !self.invalid.get())
+    }
     fn entity_alias_context(&self, entity_id: &str) -> Result<Option<EntityAliasContext>> {
         Ok(self.alias_entities.borrow().get(entity_id).cloned())
     }
@@ -123,6 +137,7 @@ impl Fixture {
             .unwrap();
         conn.execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
+        conn.execute_batch(crate::schema::CYCLE_MIGRATION).unwrap();
         let port = Port {
             view: Boundary {
                 script_id: "mistbell".into(),

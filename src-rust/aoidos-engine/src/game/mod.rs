@@ -2,6 +2,7 @@
 
 pub mod catalog;
 pub mod control;
+pub mod cycle;
 pub mod dice;
 pub mod domain;
 pub mod execution;

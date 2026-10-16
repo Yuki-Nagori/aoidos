@@ -250,6 +250,88 @@ INSERT OR IGNORE INTO memory_batch_legacy_completions(batch_id)
  WHERE b.status='completed' AND r.completion_json IS NOT NULL
 "#;
 
+/// 032 的周目刻痕与来源快照；历史正文不复制，归档仅改变派生域状态。
+pub const CYCLE_MIGRATION: &str = r#"
+CREATE TABLE memory_cycle_marks (
+ mark_id TEXT PRIMARY KEY CHECK(length(mark_id)=36),
+ script_id TEXT NOT NULL CHECK(length(script_id) BETWEEN 1 AND 64),
+ cycle_gen INTEGER NOT NULL CHECK(cycle_gen BETWEEN 1 AND 9007199254740991),
+ identity_hash BLOB NOT NULL CHECK(length(identity_hash)=32),
+ rule_id TEXT NOT NULL CHECK(length(rule_id) BETWEEN 1 AND 64),
+ rule_version INTEGER NOT NULL CHECK(rule_version BETWEEN 1 AND 9007199254740991),
+ subject_ids_json BLOB NOT NULL CHECK(length(subject_ids_json)<=2048),
+ imprint_key TEXT NOT NULL CHECK(length(imprint_key) BETWEEN 1 AND 64),
+ kind TEXT NOT NULL CHECK(kind IN ('familiarity','affinity','wariness','fragment')),
+ detail_policy TEXT NOT NULL CHECK(detail_policy IN ('vague','explicit')),
+ priority INTEGER NOT NULL CHECK(priority BETWEEN 0 AND 1000),
+ summary TEXT NOT NULL CHECK(length(summary) BETWEEN 1 AND 512),
+ payload_hash BLOB NOT NULL CHECK(length(payload_hash)=32),
+ payload_json BLOB NOT NULL CHECK(length(payload_json)<=32768),
+ status TEXT NOT NULL CHECK(status IN ('active','archived','unavailable')),
+ UNIQUE(script_id,cycle_gen,identity_hash)
+);
+CREATE INDEX memory_cycle_marks_selection
+ ON memory_cycle_marks(script_id,status,priority DESC,cycle_gen DESC,mark_id);
+CREATE TABLE memory_cycle_sources (
+ mark_id TEXT NOT NULL REFERENCES memory_cycle_marks(mark_id),
+ source_hash BLOB NOT NULL CHECK(length(source_hash)=32),
+ source_json BLOB NOT NULL CHECK(length(source_json)<=32768),
+ history_revision INTEGER NOT NULL CHECK(history_revision BETWEEN 0 AND 9007199254740991),
+ PRIMARY KEY(mark_id,source_hash)
+);
+CREATE TABLE memory_cycle_scene_progress (
+ run_id TEXT NOT NULL REFERENCES memory_runs(run_id),
+ scene_id TEXT NOT NULL CHECK(length(scene_id) BETWEEN 1 AND 64),
+ catalog_revision TEXT NOT NULL CHECK(length(catalog_revision) BETWEEN 1 AND 256),
+ entry_history_revision INTEGER NOT NULL CHECK(entry_history_revision BETWEEN 0 AND 9007199254740991),
+ entry_record_seq INTEGER NOT NULL CHECK(entry_record_seq BETWEEN 0 AND 9007199254740991),
+ revision INTEGER NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991),
+ progress_count INTEGER NOT NULL CHECK(progress_count BETWEEN 0 AND 9007199254740991),
+ stagnation_rounds INTEGER NOT NULL CHECK(stagnation_rounds BETWEEN 0 AND 9007199254740991),
+ completed_rounds INTEGER NOT NULL CHECK(completed_rounds BETWEEN 0 AND 9007199254740991),
+ last_completed_record_seq INTEGER NOT NULL CHECK(last_completed_record_seq BETWEEN entry_record_seq AND 9007199254740991),
+ last_round_id TEXT CHECK(last_round_id IS NULL OR length(last_round_id)=36),
+ last_evidence_hash BLOB CHECK(last_evidence_hash IS NULL OR length(last_evidence_hash)=32),
+ hints_shown INTEGER NOT NULL DEFAULT 0 CHECK(hints_shown BETWEEN 0 AND 3),
+ last_hint_round INTEGER CHECK(last_hint_round IS NULL OR last_hint_round BETWEEN 0 AND completed_rounds),
+ last_hint_id TEXT CHECK(last_hint_id IS NULL OR length(last_hint_id) BETWEEN 1 AND 64),
+ PRIMARY KEY(run_id,scene_id,entry_history_revision,entry_record_seq),
+ CHECK((hints_shown=0)=(last_hint_round IS NULL)),
+ CHECK((hints_shown=0)=(last_hint_id IS NULL)),
+ CHECK((revision=0)=(last_round_id IS NULL)),
+ CHECK((last_round_id IS NULL)=(last_evidence_hash IS NULL))
+);
+CREATE TABLE memory_cycle_scene_evidence (
+ run_id TEXT NOT NULL,
+ scene_id TEXT NOT NULL,
+ entry_history_revision INTEGER NOT NULL CHECK(entry_history_revision BETWEEN 0 AND 9007199254740991),
+ entry_record_seq INTEGER NOT NULL,
+ rule_id TEXT NOT NULL CHECK(length(rule_id) BETWEEN 1 AND 64),
+ evidence_hash BLOB NOT NULL CHECK(length(evidence_hash)=32),
+ evidence_json BLOB NOT NULL CHECK(length(evidence_json) BETWEEN 1 AND 8192),
+ first_seen_history_revision INTEGER NOT NULL CHECK(first_seen_history_revision BETWEEN 0 AND 9007199254740991),
+ baseline INTEGER NOT NULL CHECK(baseline IN (0,1)),
+ PRIMARY KEY(run_id,scene_id,entry_history_revision,entry_record_seq,rule_id,evidence_hash),
+ FOREIGN KEY(run_id,scene_id,entry_history_revision,entry_record_seq)
+   REFERENCES memory_cycle_scene_progress(run_id,scene_id,entry_history_revision,entry_record_seq)
+);
+CREATE INDEX memory_cycle_scene_evidence_page
+ ON memory_cycle_scene_evidence(run_id,scene_id,entry_history_revision,entry_record_seq,rule_id,evidence_hash);
+CREATE TABLE memory_cycle_scene_hints (
+ run_id TEXT NOT NULL,
+ scene_id TEXT NOT NULL,
+ entry_history_revision INTEGER NOT NULL CHECK(entry_history_revision BETWEEN 0 AND 9007199254740991),
+ entry_record_seq INTEGER NOT NULL,
+ hint_id TEXT NOT NULL CHECK(length(hint_id) BETWEEN 1 AND 64),
+ shown_at_round INTEGER NOT NULL CHECK(shown_at_round BETWEEN 1 AND 9007199254740991),
+ PRIMARY KEY(run_id,scene_id,entry_history_revision,entry_record_seq,hint_id),
+ FOREIGN KEY(run_id,scene_id,entry_history_revision,entry_record_seq)
+   REFERENCES memory_cycle_scene_progress(run_id,scene_id,entry_history_revision,entry_record_seq)
+);
+CREATE INDEX memory_cycle_scene_hints_page
+ ON memory_cycle_scene_hints(run_id,scene_id,entry_history_revision,entry_record_seq,shown_at_round,hint_id);
+"#;
+
 /// 核验迁移后的领域表 / 索引定义，不把同名但缺约束的旧库当合法 manifest。
 /// # Errors
 /// 缺少或改变已登记结构为 corrupt，SQL 读取错误保持存储类别。
@@ -262,6 +344,7 @@ pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
         ALIAS_MIGRATION,
         CANDIDATE_OPERATION_MIGRATION,
         LEGACY_BATCH_COMPLETION_MIGRATION,
+        CYCLE_MIGRATION,
     ] {
         for statement in migration
             .split(';')
@@ -325,6 +408,7 @@ mod tests {
             .unwrap();
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
+        conn.execute_batch(CYCLE_MIGRATION).unwrap();
         conn
     }
 
@@ -341,6 +425,7 @@ mod tests {
             .unwrap();
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
+        conn.execute_batch(CYCLE_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
             .unwrap();
@@ -370,6 +455,7 @@ mod tests {
         missing_receipts
             .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
+        missing_receipts.execute_batch(CYCLE_MIGRATION).unwrap();
         missing_receipts
             .execute_batch("DROP TABLE memory_batch_receipts")
             .unwrap();
@@ -391,6 +477,7 @@ mod tests {
         missing_questions
             .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
+        missing_questions.execute_batch(CYCLE_MIGRATION).unwrap();
         missing_questions
             .execute_batch("DROP TABLE memory_questions")
             .unwrap();
@@ -415,6 +502,9 @@ mod tests {
             .unwrap();
         missing_candidate_links
             .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(CYCLE_MIGRATION)
             .unwrap();
         missing_candidate_links
             .execute_batch("DROP TABLE memory_batch_candidate_operations")
@@ -452,6 +542,7 @@ mod tests {
             .unwrap();
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
+        conn.execute_batch(CYCLE_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=NULL WHERE name='memory_runs'",

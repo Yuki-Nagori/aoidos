@@ -262,6 +262,31 @@ fn accepted(fixture: &mut Fixture, round_id: &str, mode: RecordMode) -> u64 {
         )
         .unwrap()
 }
+fn advance_scene(fixture: &mut Fixture, previous_scene_id: &str, scene_id: &str) -> u64 {
+    use crate::record::facts::{SceneNode, ScenePosition};
+    fixture
+        .session
+        .commit_world(
+            Fact::SceneAdvanced {
+                identity: identity(&aoidos_memory::model::new_id()),
+                previous_scene_id: previous_scene_id.into(),
+                position: ScenePosition {
+                    scene_id: scene_id.into(),
+                    path: vec![SceneNode {
+                        kind: "scene".into(),
+                        id: scene_id.into(),
+                        title: scene_id.into(),
+                    }],
+                },
+                world_revision: "a".repeat(64),
+                mutation_id: aoidos_memory::model::new_id(),
+            }
+            .body("进入场景")
+            .unwrap(),
+            &mut NoopWorld,
+        )
+        .unwrap()
+}
 fn ended(fixture: &mut Fixture, round_id: &str, through_seq: u64, outcome: Outcome) -> u64 {
     fixture
         .session
@@ -729,6 +754,7 @@ fn told_evidence_rejects_incomplete_turn_recovery_and_withdrawn_path() {
 #[test]
 fn completed_round_requires_matching_effective_in_character_acceptance() {
     let mut fixture = Fixture::new();
+    let entry_seq = advance_scene(&mut fixture, "start", "mistbell");
     let round = aoidos_memory::model::new_id();
     let acceptance = accepted(&mut fixture, &round, RecordMode::InCharacter);
     let seq = ended(&mut fixture, &round, acceptance, Outcome::Completed);
@@ -739,6 +765,16 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
     assert!(
         SourcePort::new(&fixture.session)
             .completed_round(&round, &source)
+            .unwrap()
+    );
+    assert!(
+        SourcePort::new(&fixture.session)
+            .valid_completed_round(&round, "mistbell", entry_seq, seq)
+            .unwrap()
+    );
+    assert!(
+        !SourcePort::new(&fixture.session)
+            .valid_completed_round(&round, "other-scene", entry_seq, seq)
             .unwrap()
     );
     assert!(
@@ -775,6 +811,73 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
             .unwrap()
     );
 }
+
+#[test]
+fn cycle_scene_entry_requires_an_effective_scene_advance_fact() {
+    let mut fixture = Fixture::new();
+    let port = SourcePort::new(&fixture.session);
+    assert!(!port.valid_scene_entry("mistbell", 0).unwrap());
+
+    let entry_seq = advance_scene(&mut fixture, "start", "mistbell");
+    assert!(
+        SourcePort::new(&fixture.session)
+            .valid_scene_entry("mistbell", entry_seq)
+            .unwrap()
+    );
+    assert!(
+        !SourcePort::new(&fixture.session)
+            .valid_scene_entry("different-scene", entry_seq)
+            .unwrap()
+    );
+    assert!(
+        !SourcePort::new(&fixture.session)
+            .valid_scene_entry("mistbell", entry_seq + 1)
+            .unwrap()
+    );
+}
+
+#[test]
+fn completed_round_is_bound_to_the_latest_matching_scene_entry() {
+    let mut fixture = Fixture::new();
+    let original_entry = advance_scene(&mut fixture, "start", "mistbell");
+    advance_scene(&mut fixture, "mistbell", "harbor");
+    let current_entry = advance_scene(&mut fixture, "harbor", "mistbell");
+    let round = aoidos_memory::model::new_id();
+    let acceptance = accepted(&mut fixture, &round, RecordMode::InCharacter);
+    let completion = ended(&mut fixture, &round, acceptance, Outcome::Completed);
+    let port = SourcePort::new(&fixture.session);
+
+    assert!(
+        !port
+            .valid_completed_round(&round, "mistbell", original_entry, completion)
+            .unwrap()
+    );
+    assert!(
+        port.valid_completed_round(&round, "mistbell", current_entry, completion)
+            .unwrap()
+    );
+}
+
+#[test]
+fn completed_round_rejects_a_scene_entry_after_its_acceptance() {
+    let mut fixture = Fixture::new();
+    let round = aoidos_memory::model::new_id();
+    accepted(&mut fixture, &round, RecordMode::InCharacter);
+    let entry_after_acceptance = advance_scene(&mut fixture, "mistbell", "mistbell");
+    let completion = ended(
+        &mut fixture,
+        &round,
+        entry_after_acceptance,
+        Outcome::Completed,
+    );
+
+    assert!(
+        !SourcePort::new(&fixture.session)
+            .valid_completed_round(&round, "mistbell", entry_after_acceptance, completion)
+            .unwrap()
+    );
+}
+
 #[test]
 fn offstage_and_missing_acceptance_do_not_advance_memory_clock() {
     let mut fixture = Fixture::new();
