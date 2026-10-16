@@ -54,7 +54,8 @@ PR 在三平台构建 Web 产物及受影响 Tauri 应用，并运行受影响�
 - [x] PR 三平台构建 Web 产物及受影响 Tauri 应用并按影响范围运行测试，质量检查留在 Ubuntu；nightly 配置三平台完整 Vitest / Rust / 原生测试和 Ubuntu `bun run verify`，PR 原生桌面验收按相关变更触发。
 - [x] selector 行为测试覆盖依赖闭包、无关范围、资源与镜像映射、格式 / lint 选择及安全回退。
 - [x] 本地 `bun run verify` 全项通过。
-- [ ] PR / nightly 三平台构建与测试通过，Windows / macOS 选择范围有日志可审查。
+- [x] PR 三平台构建与受影响测试通过，Windows / macOS 选择范围有日志可审查。
+- [ ] Nightly 三平台全量构建与测试通过。
 - [x] subagent 独立评审完成，发现已处理并复验。
 
 ## 验证记录
@@ -63,7 +64,8 @@ PR 在三平台构建 Web 产物及受影响 Tauri 应用，并运行受影响�
 - **2026-10-16 · `lint:layers`**：11 个 workspace crate 边通过。
 - **2026-10-16 · `bun run verify`**：完整通过；Vitest 38 个文件 / 375 项，覆盖率 100%；Rust workspace 测试通过，覆盖率 31,693 / 31,806 行（99.64%，门槛 90%）；typecheck、lint、Clippy、分层检查、Biome / dprint / rustfmt、Knip、bench、Web build 与 rustdoc 均通过。
 - **2026-10-16 · 独立评审**：`/root/review_050_selector` 使用 `gpt-6.1-sol` / medium 检查完整实现及最终小幅修正；未发现可执行缺陷或回归。
-- **GitHub Actions PR / nightly**：三平台构建与测试、Ubuntu 质量门禁待执行。
+- **2026-10-16 · PR #151**：Actions run [38913067825](https://github.com/Yuki-Nagori/aoidos/actions/runs/38913067825) 全部通过；Ubuntu、macOS、Windows 三平台构建与受影响测试通过，Ubuntu 共享质量门禁通过。Windows/macOS 的受影响测试计划由 `detect affected checks` 生成并供各平台 job 消费。
+- **Nightly**：三平台全量构建与测试尚未执行，保留为唯一未验收项。
 
 ## 风险与回退
 
@@ -80,4 +82,4 @@ PR 在三平台构建 Web 产物及受影响 Tauri 应用，并运行受影响�
 
 ## 完成摘要
 
-分层规范、选择器、PR / nightly CI 拆分与本机完整验证已完成；PR 和 nightly Actions 的三平台构建 / 测试验收待执行。
+分层规范、选择器、PR / nightly CI 拆分与本机完整验证已完成；PR 三平台受影响构建 / 测试已通过。Nightly 三平台全量运行尚未验证，完成后再将任务标为 done。
