@@ -43,6 +43,6 @@ TypeScript 主版本升级前，先核对 Vue 类型检查、Vite、Bun 脚本�
 
 ## CI
 
-`.github/workflows/ci.yml` 在 push main 与 PR 时于 macOS / Windows / Ubuntu 执行具名门禁；`cargo check` 并入 clippy，Ubuntu 运行 `cargo-llvm-cov` 并生成 Rust 覆盖率，Windows / macOS 运行普通 `cargo test --workspace`，三平台均保留 Rust 测试。编译分工与触发范围见[构建与开发](build-and-development.md#verify-构成)；Linux 在 Rust 门禁前安装 Tauri / GTK 系统依赖；另执行真实原生输入、OS 凭据与主 Webview IPC 集成，环境及覆盖边界见[构建与开发](build-and-development.md#原生能力集成验证)。
+`.github/workflows/ci.yml` 在 push main 与 PR 时于 macOS / Windows / Ubuntu 执行门禁；PR 三平台构建 Web 产物及受影响 Tauri 应用，并按差异运行测试，格式、类型、lint、Clippy 等检查只在 Ubuntu 执行。原生输入、OS 凭据与主 Webview IPC 集成测试按相关输入变更在三平台执行。Nightly 三平台运行完整构建与 Vitest / Rust / 原生测试；完整覆盖率及其他静态检查仅在 Ubuntu 运行。编译分工与触发范围见[构建与开发](build-and-development.md#verify-构成)，Linux 原生会话依赖见[构建与开发](build-and-development.md#原生能力集成验证)。
 
 JSON 采用 [Serde](https://serde.rs/) 与 [serde_json](https://docs.rs/serde_json/) 的现有实现；项目层统一校验策略，消费方仍直接依赖 serde_json 的类型 / 宏，职责及兼容性见[架构总览](README.md#json-共用能力)。

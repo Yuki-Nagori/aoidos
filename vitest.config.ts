@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     environment: "happy-dom",
-    include: ["tests/web/**/*.test.ts"],
+    include: ["tests/web/**/*.test.ts", "tests/scripts/**/*.test.ts"],
     coverage: {
       provider: "v8",
       // 门槛只统计逻辑层，装配与 bench 不计（与 Rust 侧口径对齐）。

@@ -1,0 +1,59 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  full-tests:
+    name: full build and tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-aoidos
+        with:
+          rust-components: ""
+      - uses: ./.github/actions/linux-desktop-deps
+        if: matrix.os == 'ubuntu-latest'
+      - name: Build web assets
+        run: bun run build:web:assets
+      - name: Build full Rust workspace
+        run: cargo build --locked --workspace
+      - name: Run full Vitest suite
+        run: bun run test
+      - name: Run full workspace Rust tests
+        run: bun run test:rust
+      - name: Run native and IPC tests
+        if: matrix.os != 'ubuntu-latest'
+        timeout-minutes: 10
+        run: bun run test:native
+      - name: Run native and IPC tests (Linux session)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        uses: ./.github/actions/linux-native-session
+
+  full-verification:
+    name: full checks and coverage (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-aoidos
+        with:
+          rust-components: clippy,rustfmt,llvm-tools-preview
+      - uses: ./.github/actions/linux-desktop-deps
+      - name: Run complete local verification suite
+        run: bun run verify

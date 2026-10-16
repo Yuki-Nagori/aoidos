@@ -1,0 +1,11 @@
+name: Run native tests in Linux desktop session
+description: Start Secret Service and Xvfb before executing the native acceptance suite.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        dbus-run-session -- bash -c '
+          printf "aoidos-session-fixture" | gnome-keyring-daemon --unlock --components=secrets
+          xvfb-run -a bun run test:native
+        '
