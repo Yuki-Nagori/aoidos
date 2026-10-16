@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 type Reply<T> = oneshot::Sender<Result<T, Fault>>;
 enum Command {
-    Submit(String, Option<String>, Reply<AcceptedRound>),
+    Submit(String, Option<String>, Option<String>, Reply<AcceptedRound>),
     Resume(Reply<AcceptedRound>),
     Interrupt(String, String, Reply<AcceptedOperation>),
     Cancel(String, Reply<CancelledRound>),
@@ -49,7 +49,7 @@ impl Command {
     }
     fn reject(self, fault: Fault) {
         match self {
-            Self::Submit(_, _, reply) | Self::Resume(reply) | Self::Regenerate(_, reply) => {
+            Self::Submit(_, _, _, reply) | Self::Resume(reply) | Self::Regenerate(_, reply) => {
                 let _ = reply.send(Err(fault));
             }
             Self::Interrupt(_, _, reply) | Self::Rewind(_, reply) => {
@@ -215,28 +215,65 @@ impl Service {
         Ok(self.get(id)?.context.publisher.snapshot())
     }
     /// # Errors
+    /// 会话未登记、待恢复或快照来源不完整时失败关闭。
+    pub async fn get_scene_presence(
+        &self,
+        id: &str,
+    ) -> Result<crate::game::presence::ScenePresenceSnapshot, Fault> {
+        let context = self.get(id)?.context.clone();
+        crate::blocking::run(move || {
+            let session = lock(&context.session);
+            let domain = lock(&context.domain);
+            let mut snapshot = domain.scene_presence(&session)?;
+            // 玩家自身在场，但不是可以指定为对话接收者的 NPC。
+            snapshot
+                .characters
+                .retain(|character| character.id != context.actor_id);
+            Ok(snapshot)
+        })
+        .await
+    }
+    /// # Errors
     /// 参数、共享门禁、配置和当前阶段错误不追加输入。
     pub async fn submit_input(&self, id: &str, text: String) -> Result<AcceptedRound, Fault> {
-        self.submit_input_to_character(id, text, None).await
+        self.submit_input_with_presence_revision(id, text, None, None)
+            .await
     }
-    /// 将一轮明确路由给当前场景的已登记角色；不依据玩家文本推断对象。
+    /// 接收来自可信在场快照的目标选择；角色与 revision 必须成对出现。
     /// # Errors
-    /// 非法角色 ID、输入、场景成员或实体目录拒绝接纳。
-    pub async fn submit_input_to_character(
+    /// 输入、目标 / revision 组合不合法时在投递给 actor 前拒绝。
+    pub async fn submit_input_with_presence_revision(
         &self,
         id: &str,
         text: String,
         recipient_character_id: Option<String>,
+        expected_presence_revision: Option<String>,
     ) -> Result<AcceptedRound, Fault> {
         super::input::parse_input(&text)?;
+        if recipient_character_id.is_some() != expected_presence_revision.is_some() {
+            return Err(Fault::bad_request().with_detail(serde_json::json!({
+                "reason": "recipientRevisionPair"
+            })));
+        }
         if recipient_character_id
             .as_deref()
             .is_some_and(|character_id| !format::valid_id(character_id))
         {
-            return Err(Fault::bad_request());
+            return Err(Fault::bad_request()
+                .with_detail(serde_json::json!({ "reason": "targetUnavailable" })));
+        }
+        if expected_presence_revision
+            .as_deref()
+            .is_some_and(|revision| !format::valid_hash(revision))
+        {
+            return Err(Fault::bad_request()
+                .with_detail(serde_json::json!({ "reason": "stalePresenceRevision" })));
         }
         let (tx, rx) = oneshot::channel();
-        self.send(id, Command::Submit(text, recipient_character_id, tx))?;
+        self.send(
+            id,
+            Command::Submit(text, recipient_character_id, expected_presence_revision, tx),
+        )?;
         receive(rx).await
     }
     /// # Errors
@@ -499,14 +536,18 @@ impl Actor {
             return false;
         }
         match command {
-            Command::Submit(text, recipient_character_id, reply) => {
+            Command::Submit(text, recipient_character_id, expected_presence_revision, reply) => {
                 let result = self
-                    .start(Some(&text), recipient_character_id.as_deref())
+                    .start(
+                        Some(&text),
+                        recipient_character_id.as_deref(),
+                        expected_presence_revision,
+                    )
                     .await;
                 let _ = reply.send(result);
             }
             Command::Resume(reply) => {
-                let result = self.start(None, None).await;
+                let result = self.start(None, None, None).await;
                 let _ = reply.send(result);
             }
             Command::Rewind(target, reply) => {
@@ -569,6 +610,7 @@ impl Actor {
         &mut self,
         input: Option<&str>,
         recipient_character_id: Option<&str>,
+        expected_presence_revision: Option<String>,
     ) -> Result<AcceptedRound, Fault> {
         let phase = self.context.publisher.snapshot().state;
         if phase.needs_recovery || (input.is_none() && !phase.resume_required) {
@@ -589,12 +631,13 @@ impl Actor {
                     speaker_id: speaker_id.to_owned(),
                 },
             );
-            Runner::accept_targeted(
+            Runner::accept_targeted_with_presence_revision(
                 self.context.clone(),
                 lease,
                 frozen,
                 super::input::parse_input(text)?,
                 target,
+                expected_presence_revision,
             )
             .await?
         } else {

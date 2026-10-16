@@ -68,6 +68,85 @@ async fn directed_speech_requires_a_registered_character_and_in_character_input(
     assert_eq!(lock(&fixture.context.session).history_revision(), before);
 }
 
+#[tokio::test]
+async fn presence_revision_is_verified_before_input_and_persisted_with_the_target() {
+    let fixture = Fixture::new(false, "{}");
+    let script_revision = lock(&fixture.context.session)
+        .header()
+        .script_revision
+        .clone();
+    *lock(&fixture.context.domain) = Box::new(crate::game::test_support::character_domain(
+        &script_revision,
+        false,
+        fixture.consequences.clone(),
+        true,
+    ));
+    let revision = crate::record::format::hash(b"test-presence").to_owned();
+    let context = fixture.context.clone();
+    let lease = context.coordinator.acquire().unwrap();
+    let runner = Runner::accept_targeted_with_presence_revision(
+        context.clone(),
+        lease,
+        fixture.frozen(DiceMode::Manual),
+        crate::game::input::parse_input("你好").unwrap(),
+        GenerationTarget::CharacterSpeech {
+            speaker_id: "keeper".into(),
+        },
+        Some(revision.clone()),
+    )
+    .await
+    .unwrap();
+
+    let session = lock(&context.session);
+    let domain = lock(&context.domain);
+    let recovered = crate::game::recovery::derive(&session, domain.baseline_scene()).unwrap();
+    let round = recovered.round.unwrap();
+    assert_eq!(
+        round.target,
+        GenerationTarget::CharacterSpeech {
+            speaker_id: "keeper".into()
+        }
+    );
+    assert_eq!(round.presence_revision.as_deref(), Some(revision.as_str()));
+    drop(domain);
+    drop(session);
+    drop(runner);
+}
+
+#[tokio::test]
+async fn stale_presence_revision_rejects_before_appending_player_input() {
+    let fixture = Fixture::new(false, "{}");
+    let script_revision = lock(&fixture.context.session)
+        .header()
+        .script_revision
+        .clone();
+    *lock(&fixture.context.domain) = Box::new(crate::game::test_support::character_domain(
+        &script_revision,
+        false,
+        fixture.consequences.clone(),
+        true,
+    ));
+    let before = lock(&fixture.context.session).history_revision();
+    let context = fixture.context.clone();
+    let lease = context.coordinator.acquire().unwrap();
+    let result = Runner::accept_targeted_with_presence_revision(
+        context.clone(),
+        lease,
+        fixture.frozen(DiceMode::Manual),
+        crate::game::input::parse_input("你好").unwrap(),
+        GenerationTarget::CharacterSpeech {
+            speaker_id: "keeper".into(),
+        },
+        Some(crate::record::format::hash(b"stale-presence").to_owned()),
+    )
+    .await;
+
+    let error = result.err().unwrap();
+    assert_eq!(error.code, "app.bad-request");
+    assert_eq!(error.detail.unwrap()["reason"], "stalePresenceRevision");
+    assert_eq!(lock(&context.session).history_revision(), before);
+}
+
 #[test]
 fn directed_target_keeps_one_speaker_identity_in_prompt_and_record() {
     let target = GenerationTarget::CharacterSpeech {
@@ -1121,24 +1200,70 @@ async fn dice_disabled_scene_skips_proposal_and_sampling_but_completes_normal_se
 }
 
 #[test]
-fn directed_target_requires_a_complete_directory_and_a_non_player_scene_member() {
-    for complete in [false, true] {
-        let domain = crate::game::test_support::character_domain(
-            &crate::record::format::hash(b"script"),
-            false,
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            complete,
+fn directed_target_identity_rejects_malformed_ids_and_the_current_actor() {
+    for (speaker, expected_valid) in [("../keeper", false), ("player", false), ("keeper", true)] {
+        let target = GenerationTarget::CharacterSpeech {
+            speaker_id: speaker.into(),
+        };
+        assert_eq!(
+            validate_generation_target(&target, "player").is_ok(),
+            expected_valid,
+            "speaker={speaker}",
         );
-        let scene = domain.catalog.scene("room").unwrap();
-        for speaker in ["../keeper", "player", "outsider", "keeper"] {
-            let target = GenerationTarget::CharacterSpeech {
-                speaker_id: speaker.into(),
-            };
-            assert_eq!(
-                validate_generation_target(&target, scene, &domain.catalog, "player").is_ok(),
-                complete && speaker == "keeper",
-                "complete={complete}, speaker={speaker}",
-            );
-        }
     }
+}
+
+#[tokio::test]
+async fn dynamically_present_registered_character_can_receive_a_targeted_round() {
+    let fixture = Fixture::new(false, "{}");
+    let script_revision = lock(&fixture.context.session)
+        .header()
+        .script_revision
+        .clone();
+    let mut domain = crate::game::test_support::character_domain(
+        &script_revision,
+        false,
+        fixture.consequences.clone(),
+        true,
+    );
+    domain
+        .dynamic_presence
+        .push(crate::game::catalog::CanonicalEntity {
+            id: "traveler".into(),
+            kind: crate::game::catalog::EntityKind::Character,
+            scope: "global".into(),
+            canonical_name: "旅人".into(),
+        });
+    *lock(&fixture.context.domain) = Box::new(domain);
+
+    let revision = crate::record::format::hash(b"test-presence").to_owned();
+    let context = fixture.context.clone();
+    let lease = context.coordinator.acquire().unwrap();
+    let runner = Runner::accept_targeted_with_presence_revision(
+        context.clone(),
+        lease,
+        fixture.frozen(DiceMode::Manual),
+        crate::game::input::parse_input("你好").unwrap(),
+        GenerationTarget::CharacterSpeech {
+            speaker_id: "traveler".into(),
+        },
+        Some(revision.clone()),
+    )
+    .await
+    .unwrap();
+
+    let session = lock(&context.session);
+    let domain = lock(&context.domain);
+    let recovered = crate::game::recovery::derive(&session, domain.baseline_scene()).unwrap();
+    let round = recovered.round.unwrap();
+    assert_eq!(
+        round.target,
+        GenerationTarget::CharacterSpeech {
+            speaker_id: "traveler".into()
+        }
+    );
+    assert_eq!(round.presence_revision.as_deref(), Some(revision.as_str()));
+    drop(domain);
+    drop(session);
+    drop(runner);
 }

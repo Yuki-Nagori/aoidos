@@ -116,6 +116,9 @@ pub enum Fact {
         profile_revision: String,
         target: GenerationTarget,
         scene_id: String,
+        /// UI 选择目标时确认的在场版本；旧历史缺省表示尚无 revision 契约。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presence_revision: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         source_round_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -280,6 +283,15 @@ impl Fact {
                 if (*outcome == crate::ports::Outcome::Failed) != error.is_some() {
                     return Err(format::corrupt());
                 }
+            }
+            Self::RoundAccepted {
+                target,
+                presence_revision: Some(revision),
+                ..
+            } if !format::valid_hash(revision)
+                || !matches!(target, GenerationTarget::CharacterSpeech { .. }) =>
+            {
+                return Err(format::corrupt());
             }
             Self::RoundAccepted {
                 source_round_id,

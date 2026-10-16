@@ -166,6 +166,21 @@ impl Runner {
         parsed: super::input::ParsedInput<'_>,
         target: GenerationTarget,
     ) -> Result<Self, Fault> {
+        Self::accept_targeted_with_presence_revision(context, lease, frozen, parsed, target, None)
+            .await
+    }
+
+    /// 接收 UI 确认的在场版本；目标、版本与玩家输入在同一接纳事实中持久化。
+    /// # Errors
+    /// revision 已过期、角色已离场或快照不可用时，在追加输入前拒绝。
+    pub async fn accept_targeted_with_presence_revision(
+        context: Arc<Context>,
+        lease: Lease,
+        frozen: FrozenRound,
+        parsed: super::input::ParsedInput<'_>,
+        target: GenerationTarget,
+        expected_presence_revision: Option<String>,
+    ) -> Result<Self, Fault> {
         let raw = parsed.raw.to_owned();
         let mode = parsed.mode;
         let content_range = parsed.content_range;
@@ -184,7 +199,32 @@ impl Runner {
             {
                 return Err(Fault::bad_request());
             }
-            validate_generation_target(&target, scene, domain.catalog(), &context.actor_id)?;
+            validate_generation_target(&target, &context.actor_id)
+                .map_err(|_| target_unavailable())?;
+            match (&target, expected_presence_revision.as_deref()) {
+                (GenerationTarget::Narration, None) => {}
+                (GenerationTarget::CharacterSpeech { speaker_id }, Some(expected)) => {
+                    if !crate::record::format::valid_hash(expected) {
+                        return Err(Fault::bad_request());
+                    }
+                    let presence = domain.scene_presence(&session)?;
+                    if presence.session_id != session.header().session_id
+                        || presence.scene_id != position.scene_id
+                    {
+                        return Err(Fault::new("engine.invalid-phase", "在场快照不可用"));
+                    }
+                    if !presence.characters.iter().any(|character| {
+                        character.kind == crate::game::catalog::EntityKind::Character
+                            && character.id == speaker_id.as_str()
+                    }) {
+                        return Err(target_unavailable());
+                    }
+                    if presence.presence_revision != expected {
+                        return Err(stale_presence());
+                    }
+                }
+                _ => return Err(Fault::bad_request()),
+            }
             let view = domain.confirmed(&session)?;
             if !crate::record::format::valid_id(&context.player_id)
                 || !scene.actor_ids.contains(&context.actor_id)
@@ -259,6 +299,7 @@ impl Runner {
                 profile_revision: frozen.profile_revision.clone(),
                 target: target.clone(),
                 scene_id: position.scene_id.clone(),
+                presence_revision: expected_presence_revision,
                 source_round_id: None,
                 checkpoint_seq: None,
             };
@@ -343,6 +384,7 @@ impl Runner {
                 .ok_or_else(super::invalid_phase)?;
             let round = recovered.round.as_ref().ok_or_else(super::invalid_phase)?;
             let target = round.target.clone();
+            let presence_revision = round.presence_revision.clone();
             let state = State::resume(
                 context.publisher.snapshot().state.state_epoch,
                 identity.round_id.clone(),
@@ -361,6 +403,7 @@ impl Runner {
                 profile_revision: frozen.profile_revision.clone(),
                 target: target.clone(),
                 scene_id,
+                presence_revision,
                 source_round_id: Some(checkpoint.source_round_id),
                 checkpoint_seq: Some(checkpoint.through_seq),
             };
@@ -978,24 +1021,11 @@ impl Runner {
     }
 }
 
-fn validate_generation_target(
-    target: &GenerationTarget,
-    scene: &super::catalog::Scene,
-    catalog: &super::catalog::SceneCatalog,
-    actor_id: &str,
-) -> Result<(), Fault> {
+fn validate_generation_target(target: &GenerationTarget, actor_id: &str) -> Result<(), Fault> {
     let GenerationTarget::CharacterSpeech { speaker_id } = target else {
         return Ok(());
     };
-    let Some(directory) = catalog.entity_directory() else {
-        return Err(Fault::bad_request());
-    };
-    if !crate::record::format::valid_id(speaker_id)
-        || speaker_id == actor_id
-        || !scene.actor_ids.iter().any(|id| id == speaker_id)
-        || !directory.is_complete()
-        || !directory.contains_character(speaker_id)
-    {
+    if !crate::record::format::valid_id(speaker_id) || speaker_id == actor_id {
         return Err(Fault::bad_request());
     }
     Ok(())
@@ -1097,6 +1127,12 @@ fn summarize(plan: &CheckPlan, mode: DiceMode, status: CheckStatus) -> CheckSumm
 }
 fn no_scene() -> Fault {
     Fault::new("engine.no-scene", "当前会话没有可推进场景")
+}
+fn stale_presence() -> Fault {
+    Fault::bad_request().with_detail(serde_json::json!({ "reason": "stalePresenceRevision" }))
+}
+fn target_unavailable() -> Fault {
+    Fault::bad_request().with_detail(serde_json::json!({ "reason": "targetUnavailable" }))
 }
 fn ensure_running(cancel: &CancellationToken) -> Result<(), Fault> {
     if cancel.is_cancelled() {

@@ -120,6 +120,42 @@ async fn actor_manual_check_duplicate_and_shutdown_use_one_application_gate() {
 }
 
 #[tokio::test]
+async fn scene_presence_is_a_read_only_bounded_query_for_the_registered_session() {
+    use crate::game::execution::test_lock as lock;
+
+    let fixture = Fixture::new(false, "{}");
+    let script_revision = lock(&fixture.context.session)
+        .header()
+        .script_revision
+        .clone();
+    *lock(&fixture.context.domain) = Box::new(crate::game::test_support::character_domain(
+        &script_revision,
+        false,
+        fixture.consequences.clone(),
+        true,
+    ));
+    let service = service(&fixture, DiceMode::Manual);
+    let id = fixture.context.publisher.snapshot().state.session_id;
+    let before = lock(&fixture.context.session).history_revision();
+
+    let snapshot = service.get_scene_presence(&id).await.unwrap();
+
+    assert_eq!(snapshot.session_id, id);
+    assert_eq!(snapshot.scene_id, "room");
+    assert_eq!(
+        snapshot
+            .characters
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        ["keeper"]
+    );
+    assert_eq!(lock(&fixture.context.session).history_revision(), before);
+    assert!(service.get_scene_presence("not-a-session").await.is_err());
+    service.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancel_waiting_resume_and_regenerate_latest_resumed_round_preserve_original_dice() {
     let fixture = Fixture::new(true, "{}");
     let service = service(&fixture, DiceMode::Manual);
@@ -1240,7 +1276,7 @@ async fn owner_exit_drains_queued_responses_and_waiting_lease_even_if_senders_di
     let (close_tx, close_rx) = oneshot::channel();
     tx.send(Command::Close(close_tx)).await.ok().unwrap();
     let (submit_tx, submit_rx) = oneshot::channel();
-    tx.send(Command::Submit("排队输入".into(), None, submit_tx))
+    tx.send(Command::Submit("排队输入".into(), None, None, submit_tx))
         .await
         .ok()
         .unwrap();
@@ -1448,7 +1484,7 @@ async fn lifecycle_closure_rejects_queued_admission_before_factory_lookup() {
     let fixture = Fixture::new(false, "{}");
     let (tx, rx) = mpsc::channel(2);
     let (reply, result) = oneshot::channel();
-    tx.send(Command::Submit("排队输入".into(), None, reply))
+    tx.send(Command::Submit("排队输入".into(), None, None, reply))
         .await
         .ok()
         .unwrap();
@@ -1838,7 +1874,7 @@ async fn controls_queued_during_handoff_freeze_keep_identity_and_busy_priority()
         let (submit_tx, submit_rx) = oneshot::channel();
         handle
             .commands
-            .send(Command::Submit("重复行动".into(), None, submit_tx))
+            .send(Command::Submit("重复行动".into(), None, None, submit_tx))
             .await
             .ok()
             .unwrap();
@@ -1996,7 +2032,7 @@ async fn shutdown_with_a_full_handoff_queue_cannot_admit_the_replacement() {
             let (reply, _rx) = oneshot::channel();
             handle
                 .commands
-                .try_send(Command::Submit("排队输入".into(), None, reply))
+                .try_send(Command::Submit("排队输入".into(), None, None, reply))
                 .ok()
                 .unwrap();
         }
@@ -2090,20 +2126,39 @@ async fn directed_submit_rejects_bad_routes_before_writes_and_records_the_select
     let fixture = Fixture::with_characters(false, "{\"kind\":\"noCheck\"}");
     let service = service(&fixture, DiceMode::Auto);
     let id = fixture.context.publisher.snapshot().state.session_id;
+    let presence_revision = service
+        .get_scene_presence(&id)
+        .await
+        .unwrap()
+        .presence_revision;
     let before = lock(&fixture.context.session).path_at(0).unwrap();
+    let unpaired = service
+        .submit_input_with_presence_revision(&id, "你好".into(), Some("keeper".into()), None)
+        .await
+        .unwrap_err();
+    assert_eq!(unpaired.code, "app.bad-request");
+    assert_eq!(unpaired.detail.unwrap()["reason"], "recipientRevisionPair");
     for recipient in ["../keeper", "player", "outsider"] {
-        assert_eq!(
-            service
-                .submit_input_to_character(&id, "你好".into(), Some(recipient.into()))
-                .await
-                .unwrap_err()
-                .code,
-            "app.bad-request"
-        );
+        let error = service
+            .submit_input_with_presence_revision(
+                &id,
+                "你好".into(),
+                Some(recipient.into()),
+                Some(presence_revision.clone()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "app.bad-request");
+        assert_eq!(error.detail.unwrap()["reason"], "targetUnavailable");
         assert_eq!(lock(&fixture.context.session).path_at(0).unwrap(), before);
     }
     let accepted = service
-        .submit_input_to_character(&id, "你好".into(), Some("keeper".into()))
+        .submit_input_with_presence_revision(
+            &id,
+            "你好".into(),
+            Some("keeper".into()),
+            Some(presence_revision),
+        )
         .await
         .unwrap();
     let done = wait(&service, &id, |state| {
@@ -2159,8 +2214,18 @@ async fn directed_target_survives_a_closed_checkpoint_and_reopened_resume() {
     let fixture = Fixture::with_characters(true, "{}");
     let first_service = service(&fixture, DiceMode::Manual);
     let id = fixture.context.publisher.snapshot().state.session_id;
+    let presence_revision = first_service
+        .get_scene_presence(&id)
+        .await
+        .unwrap()
+        .presence_revision;
     first_service
-        .submit_input_to_character(&id, "搜索".into(), Some("keeper".into()))
+        .submit_input_with_presence_revision(
+            &id,
+            "搜索".into(),
+            Some("keeper".into()),
+            Some(presence_revision.clone()),
+        )
         .await
         .unwrap();
     wait(&first_service, &id, |state| state.check.is_some()).await;
@@ -2214,6 +2279,7 @@ async fn directed_target_survives_a_closed_checkpoint_and_reopened_resume() {
                 && code == "roundAccepted"
             {
                 assert_eq!(data["target"]["speakerId"], "keeper");
+                assert_eq!(data["presenceRevision"], presence_revision);
             }
         }
     }

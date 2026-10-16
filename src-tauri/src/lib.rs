@@ -149,6 +149,13 @@ pub mod game_ipc {
         game_commands::submit_input(&state, request).await
     }
     #[tauri::command]
+    pub async fn engine_get_scene_presence(
+        state: tauri::State<'_, Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<aoidos_engine::game::presence::ScenePresenceSnapshot, CmdError> {
+        game_commands::get_scene_presence(&state, request).await
+    }
+    #[tauri::command]
     pub async fn engine_interrupt(
         state: tauri::State<'_, Service>,
         request: tauri::ipc::Request<'_>,
@@ -201,7 +208,7 @@ pub mod game_ipc {
 
 macro_rules! command_handler {
     ($($extra:path),* $(,)?) => { tauri::generate_handler![
-        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase,
+        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_get_scene_presence, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase,
         commands::store_list_backups, store_ipc::store_get_migration,
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,

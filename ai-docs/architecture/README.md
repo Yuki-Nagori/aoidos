@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-13。
+更新日期：2026-10-16。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -36,17 +36,17 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 设计定稿表示协议和交互已评审，不表示功能已经上线。下表列出主责；任务范围、依赖及验收证据以链接中的 task 为准。
 
-| 设计文档                               | 设计任务                                        | 实施主责                                                                                     |
-| -------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| [LLM 接入与护栏](llm.md)               | [005](../task/005-llm-design.md)                | 018–021 接入 / 恢复，024 产品联调                                                            |
-| [计价与费用预算](billing.md)           | [027](../task/027-llm-cost-control-design.md)   | [035](../task/035-llm-cost-control-impl.md) 统一计费与展示，030 / 033 消费                   |
-| [记录引擎](record-engine.md)           | [006](../task/006-record-design.md)             | [022](../task/022-record-engine-impl.md) 持久化、投影与迁移                                  |
-| [记忆系统](memory.md)                  | [007](../task/007-memory-design.md)             | 设计已评审；029–033 承接实施，当前不接 006 投影热路径                                        |
-| [记忆算法与标定](memory-algorithms.md) | [007](../task/007-memory-design.md)             | 与记忆系统共同定稿；033 承接标定和运行期验证                                                 |
-| [回合与阶段机](turn-state-machine.md)  | [012](../task/012-turn-state-machine-design.md) | [023](../task/023-turn-state-machine-impl.md) 产品入口、判定与恢复                           |
-| [界面结构与交互](ui-shell.md)          | [008](../task/008-ui-shell-design.md)           | [004](../task/004-tailwind-v4.md) 样式底座，[025](../task/025-ui-shell-impl.md) 完整界面     |
-| [界面国际化](i18n.md)                  | [028](../task/028-i18n-design.md)               | [034](../task/034-i18n-impl.md) 底座 / 原生，025 / 031 消费                                  |
-| [主题与剧本皮肤](theming.md)           | [009](../task/009-theming-design.md)            | [004](../task/004-tailwind-v4.md) 默认样式 / 映射，[026](../task/026-theming-impl.md) 运行时 |
+| 设计文档                               | 设计任务                                        | 实施主责                                                                                                                                            |
+| -------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [LLM 接入与护栏](llm.md)               | [005](../task/005-llm-design.md)                | 018–021 接入 / 恢复，024 产品联调                                                                                                                   |
+| [计价与费用预算](billing.md)           | [027](../task/027-llm-cost-control-design.md)   | [035](../task/035-llm-cost-control-impl.md) 统一计费与展示，030 / 033 消费                                                                          |
+| [记录引擎](record-engine.md)           | [006](../task/006-record-design.md)             | [022](../task/022-record-engine-impl.md) 持久化、投影与迁移                                                                                         |
+| [记忆系统](memory.md)                  | [007](../task/007-memory-design.md)             | 设计已评审；029–033 承接实施，当前不接 006 投影热路径                                                                                               |
+| [记忆算法与标定](memory-algorithms.md) | [007](../task/007-memory-design.md)             | 与记忆系统共同定稿；033 承接标定和运行期验证                                                                                                        |
+| [回合与阶段机](turn-state-machine.md)  | [012](../task/012-turn-state-machine-design.md) | [023](../task/023-turn-state-machine-impl.md) 产品入口、判定与恢复                                                                                  |
+| [界面结构与交互](ui-shell.md)          | [008](../task/008-ui-shell-design.md)           | [004](../task/004-tailwind-v4.md) 样式底座；[025](../task/025-ui-shell-impl.md) 完整界面，[046](../task/046-scene-presence-ui-impl.md) 在场角色选择 |
+| [界面国际化](i18n.md)                  | [028](../task/028-i18n-design.md)               | [034](../task/034-i18n-impl.md) 底座 / 原生，025 / 031 消费                                                                                         |
+| [主题与剧本皮肤](theming.md)           | [009](../task/009-theming-design.md)            | [004](../task/004-tailwind-v4.md) 默认样式 / 映射，[026](../task/026-theming-impl.md) 运行时                                                        |
 
 LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护栏 → [019](../task/019-llm-profile-credentials-impl.md) 配置 / 凭据 → [020](../task/020-llm-turn-ipc-impl.md) 回合协调；[021](../task/021-llm-web-recovery-impl.md) 承接前端恢复，[024](../task/024-llm-engine-integration.md) 在记录与阶段机完成后验证产品链路。
 
@@ -54,9 +54,9 @@ LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护
 
 007 已完成设计评审。029 已交付独立存储 / 恢复 crate，依赖 007、013、022。[030 门控批次](../task/030-memory-gates-batches-impl.md)已持久绑定候选与操作，可从原响应本地恢复 deferred 候选，并以 applied / rejected 终态核验批次完成；升级前的完成回执保持可读。030 的显式执行器复用 020 `Coordinator` private lease 与请求携带的 027 预算端口，发送前登记物理请求身份，成功响应进入 received，未知结果不重发；没有自动触发，也不增加 012 回合调用次数。
 
-043 提供 Rust 权威实体注册表：Mistbell `entities.json` 是只读种子，动态身份经 023 世界意图提交到共享 SQLite；恢复核验 applied 与因果记录，快照只包含当前有效分支身份。045 提供 Rust 权威场景在场及 observed / rumor 证据端口：观察 v1 只接受来源时同场、主体在场的已完成公开旁白区间；传闻逐跳核验来源作者和传播链。获知事件必须 applied、属于成功完整回合并位于当前有效路径。`Storage::with_memory` 接收活动目录，在会话 → SQLite 锁内装配实体快照并绑定到 `SourcePort`；仓储执行证据校验时将共享连接显式传入。缺少完整实体目录、场景修订或在场策略时失败关闭。这样存储入口已能校验 `told`、`observed` 与 `rumor`，但产品记忆候选 / Prompt 调用链尚未接入；UI 选择和记忆专属 IPC 仍由后续任务承接。
+043 提供 Rust 权威实体注册表：Mistbell `entities.json` 是只读种子，动态身份经 023 世界意图提交到共享 SQLite；恢复核验 applied 与因果记录，快照只包含当前有效分支身份。045 提供 Rust 权威场景在场及 observed / rumor 证据端口：观察 v1 只接受来源时同场、主体在场的已完成公开旁白区间；传闻逐跳核验来源作者和传播链。获知事件必须 applied、属于成功完整回合并位于当前有效路径。`Storage::with_memory` 接收活动目录，在会话 → SQLite 锁内装配实体快照并绑定到 `SourcePort`；仓储执行证据校验时将共享连接显式传入。缺少完整实体目录、场景修订或在场策略时失败关闭。这样存储入口已能校验 `told`、`observed` 与 `rumor`，但产品记忆候选 / Prompt 调用链尚未接入；046 已接入只读在场快照 IPC 与定向输入 UI，记忆专属 IPC 仍由后续任务承接。
 
-正式引擎 / Tauri 入口已支持显式指定当前场景内的固定登记角色，接收目标贯穿接纳、恢复、角色提示与持久回复。046 接入在场选择 UI 和快照 IPC；记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。别名支持玩家确认后的登记、撤销及按当前有效来源重建，自动明确指向仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等前置，030 / 033 可使用 035 的费用端口开展本地联调；收费批次和真实费用实验仍须等待 035 完成三平台实机验收并获授权。
+正式引擎 / Tauri 入口已支持显式指定当前场景内的固定登记角色，接收目标贯穿接纳、恢复、角色提示与持久回复。046 已将 `engine_get_scene_presence`、composer 角色选择和 revision 校验接入产品链路；场外输入保持旁白路由，接收者列表排除玩家自身，并使用 044 定义的稳定错误原因。记忆专属命令 / 查询 IPC 归 [031](../task/031-memory-settings-queries-impl.md)。别名支持玩家确认后的登记、撤销及按当前有效来源重建，自动明确指向仍未接入；[032 轮回节点](../task/032-memory-cycle-nodes-impl.md)再接入产品面，[033 标定联调](../task/033-memory-calibration-integration.md)审定生产参数。034 国际化已完成；031 仍等待 030、025 等前置，030 / 033 可使用 035 的费用端口开展本地联调；收费批次和真实费用实验仍须等待 035 完成三平台实机验收并获授权。
 
 027 已定稿[计价与费用预算](billing.md)。035 已接入精确金额、不可变价格登记、按 profile 选择计价币种、每局 CNY / USD 独立预算、物理请求预留 / 结算、双币种用量与月报、80% 提醒及分页明细；参考 Token 只生成同币种建议值。历史恢复限完整 usage 和原冻结价格，余额查询仅支持 DeepSeek 显式只读请求；三平台实机展示留证仍待补，验收状态见 [035](../task/035-llm-cost-control-impl.md)。全应用月报不设总额度。
 

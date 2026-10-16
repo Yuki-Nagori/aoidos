@@ -108,6 +108,21 @@ export interface ComposerPreview {
   contentRequired: boolean;
 }
 
+export interface ComposerRecipient {
+  recipientCharacterId?: string;
+  expectedPresenceRevision?: string;
+}
+
+/** 只对带有当前完整快照的角色内输入定向；场外内容始终走旁白。 */
+export function composerRecipient(
+  mode: ComposerPreview["mode"],
+  characterId?: string,
+  presenceRevision?: string,
+): ComposerRecipient {
+  if (mode !== "inCharacter" || !characterId || !presenceRevision) return {};
+  return { recipientCharacterId: characterId, expectedPresenceRevision: presenceRevision };
+}
+
 export interface ComposerAvailability {
   phase: string;
   resumeRequired: boolean;

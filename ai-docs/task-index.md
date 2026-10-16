@@ -93,7 +93,7 @@ ai-docs/
 | 042  | [OpenCode Zen / Go 模型目录与多协议 Provider](task/042-opencode-provider-catalog.md) | **底层·LLM 链路** | 018、019、034                               | done        |
 | 043  | [实现：Rust 权威实体注册与动态 NPC 身份](task/043-rust-entity-registry-impl.md)      | **底层·记忆**     | 012、023、029                               | done        |
 | 045  | [实现：场景在场与可信获知事件](task/045-scene-presence-dialogue-impl.md)             | 底层·场景 / 引擎  | 023、043、044                               | done        |
-| 046  | [实现：在场角色选择界面](task/046-scene-presence-ui-impl.md)                         | 界面·交互         | 025、030、034、043、044、045                | planned     |
+| 046  | [实现：在场角色选择界面](task/046-scene-presence-ui-impl.md)                         | 界面·交互         | 025、030、034、043、044、045                | done        |
 | 047  | [Biome 与 dprint 工具链迁移](task/047-biome-dprint-tooling.md)                       | 底层·工程         | —                                           | done        |
 | 048  | [测试质量与 CI 用时优化](task/048-test-quality-ci.md)                                | 底层·工程         | 037、047                                    | done        |
 | 049  | [Windows 测试 I/O 与原生 HMR 超时](task/049-windows-test-io-hmr.md)                  | 底层·工程         | 048                                         | done        |

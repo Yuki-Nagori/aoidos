@@ -75,6 +75,31 @@ it("keeps failed drafts and sanitizes errors, discarding responses for another s
   expect(input.draft.value).toBe("two 的草稿");
   scope.stop();
 });
+it("preserves only stable fault reasons needed to recover a stale recipient", async () => {
+  const id = ref("session");
+  const submit = vi.fn().mockRejectedValue({
+    code: "app.bad-request",
+    message: "已脱敏",
+    detail: { reason: "stalePresenceRevision" },
+  });
+  const scope = effectScope();
+  const input = scope.run(() => useGameInput(id, submit))!;
+  input.draft.value = "和守门人说话";
+  await input.send();
+  expect(input.error.value).toMatchObject({
+    code: "app.bad-request",
+    detail: { reason: "stalePresenceRevision" },
+  });
+
+  submit.mockRejectedValueOnce({
+    code: "app.bad-request",
+    message: "已脱敏",
+    detail: { reason: "arbitrary-provider-data" },
+  });
+  await input.send();
+  expect(input.error.value).toEqual({ code: "app.bad-request", message: "已脱敏" });
+  scope.stop();
+});
 it("keeps only five bounded session drafts and blocks input beyond Rust's UTF-8 limit", async () => {
   const id = ref("session-0");
   const submit = vi.fn().mockResolvedValue(accepted);

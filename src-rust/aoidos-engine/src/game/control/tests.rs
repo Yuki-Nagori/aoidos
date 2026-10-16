@@ -52,6 +52,7 @@ fn regenerate_forks_to_confirmed_prebody_boundary_and_keeps_physical_history() {
             profile_revision: "1".into(),
             target: GenerationTarget::Narration,
             scene_id: "room".into(),
+            presence_revision: None,
             source_round_id: None,
             checkpoint_seq: None,
         },
