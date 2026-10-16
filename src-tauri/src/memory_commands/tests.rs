@@ -106,162 +106,165 @@ async fn memory_configuration_commands_preserve_versions_and_return_effective_va
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
-    let call = |name: &str, body: serde_json::Value| {
-        get_ipc_response(
-            &window,
-            InvokeRequest {
-                cmd: name.into(),
-                callback: tauri::ipc::CallbackFn(0),
-                error: tauri::ipc::CallbackFn(1),
-                url: window.url().unwrap(),
-                body: tauri::ipc::InvokeBody::Json(body),
-                headers: Default::default(),
-                invoke_key: INVOKE_KEY.into(),
-            },
-        )
-        .map(|body| body.deserialize::<serde_json::Value>().unwrap())
-    };
+    {
+        let call = |name: &str, body: serde_json::Value| {
+            get_ipc_response(
+                &window,
+                InvokeRequest {
+                    cmd: name.into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: window.url().unwrap(),
+                    body: tauri::ipc::InvokeBody::Json(body),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.into(),
+                },
+            )
+            .map(|body| body.deserialize::<serde_json::Value>().unwrap())
+        };
 
-    let app_config = call("memory_get_app_config", serde_json::json!({})).unwrap();
-    assert_eq!(app_config["configVersion"], 1);
-    let mut parameters = app_config["parameters"].clone();
-    parameters["algorithm"] = "none".into();
-    assert_eq!(
-        call(
-            "memory_save_app_config",
-            serde_json::json!({"expectedVersion":1,"parameters":parameters}),
-        )
-        .unwrap()["configVersion"],
-        2
-    );
+        let app_config = call("memory_get_app_config", serde_json::json!({})).unwrap();
+        assert_eq!(app_config["configVersion"], 1);
+        let mut parameters = app_config["parameters"].clone();
+        parameters["algorithm"] = "none".into();
+        assert_eq!(
+            call(
+                "memory_save_app_config",
+                serde_json::json!({"expectedVersion":1,"parameters":parameters}),
+            )
+            .unwrap()["configVersion"],
+            2
+        );
 
-    let initial = call(
-        "memory_get_script_config",
-        serde_json::json!({"scriptId":"mistbell"}),
-    )
-    .unwrap();
-    assert_eq!(initial["configVersion"], 0);
-    assert_eq!(initial["effective"]["algorithm"], "none");
-    assert_eq!(
-        call(
+        let initial = call(
             "memory_get_script_config",
-            serde_json::json!({"scriptId":"unregistered-script"}),
+            serde_json::json!({"scriptId":"mistbell"}),
         )
-        .unwrap_err()["code"],
-        "app.not-found"
-    );
-    let saved = call(
-        "memory_save_script_config",
-        serde_json::json!({
-            "scriptId":"mistbell",
-            "expectedVersion":0,
-            "expectedAppVersion":2,
-            "overrides":{"reinforcementGain":0}
-        }),
-    )
-    .unwrap();
-    assert_eq!(saved["configVersion"], 1);
-    let overridden = call(
-        "memory_get_script_config",
-        serde_json::json!({"scriptId":"mistbell"}),
-    )
-    .unwrap();
-    assert_eq!(overridden["effective"]["reinforcementGain"], 0);
-    assert_eq!(overridden["effective"]["algorithm"], "none");
-    assert_eq!(
-        call(
+        .unwrap();
+        assert_eq!(initial["configVersion"], 0);
+        assert_eq!(initial["effective"]["algorithm"], "none");
+        assert_eq!(
+            call(
+                "memory_get_script_config",
+                serde_json::json!({"scriptId":"unregistered-script"}),
+            )
+            .unwrap_err()["code"],
+            "app.not-found"
+        );
+        let saved = call(
             "memory_save_script_config",
             serde_json::json!({
                 "scriptId":"mistbell",
-                "expectedVersion":1,
+                "expectedVersion":0,
                 "expectedAppVersion":2,
-                "overrides":{}
+                "overrides":{"reinforcementGain":0}
             }),
         )
-        .unwrap()["configVersion"],
-        2
-    );
-    assert_eq!(
-        call(
-            "memory_save_script_config",
-            serde_json::json!({
-                "scriptId":"mistbell",
-                "expectedVersion":1,
-                "expectedAppVersion":2,
-                "overrides":{}
-            }),
+        .unwrap();
+        assert_eq!(saved["configVersion"], 1);
+        let overridden = call(
+            "memory_get_script_config",
+            serde_json::json!({"scriptId":"mistbell"}),
         )
-        .unwrap_err()["code"],
-        "app.bad-request"
-    );
-    assert_eq!(
-        call("memory_save_app_config", serde_json::json!({"extra":true})).unwrap_err()["code"],
-        "app.bad-request"
-    );
-    let unknown_run = "00000000-0000-4000-8000-000000000001";
-    for (command, body) in [
-        (
-            "memory_list_questions",
-            serde_json::json!({"runId":unknown_run,"cursor":null,"limit":1}),
-        ),
-        (
-            "memory_resolve_question",
-            serde_json::json!({
-                "runId":unknown_run,
-                "resolution":{
-                    "questionId":"00000000-0000-4000-8000-000000000002",
-                    "expectedRevision":1,
-                    "expectedHistoryRevision":0,
-                    "answer":{"kind":"none"}
-                }
-            }),
-        ),
-        (
-            "memory_resolve_question",
-            serde_json::json!({
-                "runId":unknown_run,
-                "resolution":{
-                    "questionId":"00000000-0000-4000-8000-000000000002",
-                    "expectedRevision":1,
-                    "expectedHistoryRevision":0,
-                    "answer":{
-                        "kind":"selectCandidate",
-                        "candidate":{"kind":"entity","entityId":"npc-1"}
+        .unwrap();
+        assert_eq!(overridden["effective"]["reinforcementGain"], 0);
+        assert_eq!(overridden["effective"]["algorithm"], "none");
+        assert_eq!(
+            call(
+                "memory_save_script_config",
+                serde_json::json!({
+                    "scriptId":"mistbell",
+                    "expectedVersion":1,
+                    "expectedAppVersion":2,
+                    "overrides":{}
+                }),
+            )
+            .unwrap()["configVersion"],
+            2
+        );
+        assert_eq!(
+            call(
+                "memory_save_script_config",
+                serde_json::json!({
+                    "scriptId":"mistbell",
+                    "expectedVersion":1,
+                    "expectedAppVersion":2,
+                    "overrides":{}
+                }),
+            )
+            .unwrap_err()["code"],
+            "app.bad-request"
+        );
+        assert_eq!(
+            call("memory_save_app_config", serde_json::json!({"extra":true})).unwrap_err()["code"],
+            "app.bad-request"
+        );
+        let unknown_run = "00000000-0000-4000-8000-000000000001";
+        for (command, body) in [
+            (
+                "memory_list_questions",
+                serde_json::json!({"runId":unknown_run,"cursor":null,"limit":1}),
+            ),
+            (
+                "memory_resolve_question",
+                serde_json::json!({
+                    "runId":unknown_run,
+                    "resolution":{
+                        "questionId":"00000000-0000-4000-8000-000000000002",
+                        "expectedRevision":1,
+                        "expectedHistoryRevision":0,
+                        "answer":{"kind":"none"}
                     }
-                }
-            }),
-        ),
-        (
-            "memory_resolve_question",
-            serde_json::json!({
-                "runId":unknown_run,
-                "resolution":{
-                    "questionId":"00000000-0000-4000-8000-000000000002",
-                    "expectedRevision":1,
-                    "expectedHistoryRevision":0,
-                    "answer":{"kind":"proposeEntity","displayName":"李雷"}
-                }
-            }),
-        ),
-        (
-            "memory_list_entries",
-            serde_json::json!({"runId":unknown_run,"cursor":null,"limit":1}),
-        ),
-        (
-            "memory_get_entry",
-            serde_json::json!({
-                "runId":unknown_run,
-                "entryId":"00000000-0000-4000-8000-000000000003",
-                "expectedVersionId":"00000000-0000-4000-8000-000000000004"
-            }),
-        ),
-        (
-            "memory_get_batch_status",
-            serde_json::json!({"runId":unknown_run,"batchId":unknown_run}),
-        ),
-    ] {
-        assert_eq!(call(command, body).unwrap_err()["code"], "app.not-found");
+                }),
+            ),
+            (
+                "memory_resolve_question",
+                serde_json::json!({
+                    "runId":unknown_run,
+                    "resolution":{
+                        "questionId":"00000000-0000-4000-8000-000000000002",
+                        "expectedRevision":1,
+                        "expectedHistoryRevision":0,
+                        "answer":{
+                            "kind":"selectCandidate",
+                            "candidate":{"kind":"entity","entityId":"npc-1"}
+                        }
+                    }
+                }),
+            ),
+            (
+                "memory_resolve_question",
+                serde_json::json!({
+                    "runId":unknown_run,
+                    "resolution":{
+                        "questionId":"00000000-0000-4000-8000-000000000002",
+                        "expectedRevision":1,
+                        "expectedHistoryRevision":0,
+                        "answer":{"kind":"proposeEntity","displayName":"李雷"}
+                    }
+                }),
+            ),
+            (
+                "memory_list_entries",
+                serde_json::json!({"runId":unknown_run,"cursor":null,"limit":1}),
+            ),
+            (
+                "memory_get_entry",
+                serde_json::json!({
+                    "runId":unknown_run,
+                    "entryId":"00000000-0000-4000-8000-000000000003",
+                    "expectedVersionId":"00000000-0000-4000-8000-000000000004"
+                }),
+            ),
+            (
+                "memory_get_batch_status",
+                serde_json::json!({"runId":unknown_run,"batchId":unknown_run}),
+            ),
+        ] {
+            assert_eq!(call(command, body).unwrap_err()["code"], "app.not-found");
+        }
     }
+    drop(window);
     drop(app);
     std::fs::remove_dir_all(root).unwrap();
 }
