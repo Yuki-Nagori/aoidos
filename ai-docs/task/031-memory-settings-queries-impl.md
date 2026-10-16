@@ -47,7 +47,7 @@
 - 2026-10-17：`test:rust:affected` 已通过（Tauri 61 项、engine 418 项、memory 242 项）；另对重开已冻结周目的配置损坏与剧本身份冲突执行定向回归测试。
 - 2026-10-17：Vitest 42 个文件 / 389 项、`typecheck`、Biome、i18n、依赖分层、Knip、Rust Clippy、rustfmt、dprint 与 `git diff --check` 已通过。
 - 2026-10-17：独立 review 发现并修复重开周目依赖当前配置、配置冻结先于记录恢复、未来配置版本误报损坏；相关回归测试已补并复验通过。
-- 2026-10-17：PR Windows CI 发现 IPC 测试删除临时存储目录时 Tauri managed state 仍持有 SQLite 句柄，且存储事件 worker 尚未停止；清理前显式关闭 `Storage`、等待 `StorageEvents::shutdown()`，再释放 window / app。其他 Tauri IPC 测试采用相同生命周期约定；本机定向测试和完整 `bun run verify` 已通过，等待 Windows CI 复验。
+- 2026-10-17：PR Windows CI 暴露 IPC 测试的临时资源清理缺口，并发现 `StorageEvents::shutdown()` 等待 worker 终态时存在通知竞态；测试现先显式关闭 `Storage`、等待事件队列退出，再释放 window / app，shutdown waiter 也会在检查终态前注册通知。本机定向测试和完整 `bun run verify` 已通过，等待 Windows CI 复验。
 - 2026-10-17：已接入应用默认 / 剧本覆盖配置、待确认问题与条目查询 / 回答 UI；显式分页刷新和游标续读不启动后台轮询，切换 run 后丢弃旧响应。批次状态恢复 IPC 已接入，但产品授权执行入口仍未接入。
 - 2026-10-17：查询协议复核发现并修复枚举字段跨端命名、跨周目复用游标、未知版本误报存储损坏；补上候选 / 回答输入输出 DTO、游标及版本查询回归测试。实体候选展示名来自有效目录快照，记忆详情显示来源记录和获知方式。指数 `decayRate` 与分段 `halfLifeRounds` 按算法独立生效，不互相推导。Tauri 61、engine 418、memory 242 项 Rust 测试，Vitest 42 文件 / 389 项、类型检查、i18n、Knip、格式检查和相关 Clippy 均通过。
 - 2026-10-17：配置 UI 复审发现并修复空数值被转成 0、跨剧本异步刷新污染草稿及 CAS 失败重试覆盖草稿；增加跨剧本并发保存隔离和 A→B→A 回归测试。批次完成摘要中的逐项诊断码现在与顶层错误码一样经过白名单映射，未知值统一收敛为 `memory.unknown`。
