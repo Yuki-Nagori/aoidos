@@ -12,6 +12,7 @@ use std::{
 };
 
 mod aliases;
+mod config;
 mod cycle;
 mod operations;
 mod reconciliation;
@@ -170,6 +171,25 @@ impl Repository {
             policy_hash: as_hash(policy_hash)?,
         })
     }
+
+    /// 按会话唯一映射读取已冻结周目策略，不使用当前设置重新计算。
+    /// # Errors
+    /// 会话 ID 非法或尚未建立记忆周目时返回 not-found。
+    pub fn run_for_session(&self, conn: &Connection, session_id: &str) -> Result<Run> {
+        if !valid_id(session_id) {
+            return Err(reject());
+        }
+        let run_id = conn
+            .query_row(
+                "SELECT run_id FROM memory_run_sessions WHERE session_id=?1",
+                [session_id],
+                read_string,
+            )
+            .optional()
+            .map_err(sql)?
+            .ok_or(Error::NotFound)?;
+        self.run(conn, &run_id)
+    }
     pub(super) fn boundary(
         &self,
         conn: &Connection,
@@ -261,6 +281,65 @@ impl Repository {
             .map_err(sql)?;
         ids.iter().map(|id| self.entry(conn, run_id, id)).collect()
     }
+
+    /// 返回准确的下一页标记，避免满页恰好是末页时制造空白页。
+    /// # Errors
+    /// 历史修订、身份或页大小不匹配时拒绝读取。
+    pub fn entries_page(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        history_revision: u64,
+        cursor: Option<(u64, u64)>,
+        limit: usize,
+    ) -> Result<(Vec<Entry>, u64, Option<u64>)> {
+        let (_, view) = self.boundary(conn, run_id, port)?;
+        if view.history_revision != history_revision {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        if limit == 0 || limit > 32 {
+            return Err(reject());
+        }
+        let (snapshot_max_sequence, after_sequence) = match cursor {
+            Some((snapshot, after)) => {
+                if snapshot > MAX_INTEGER || after > snapshot {
+                    return Err(reject());
+                }
+                (snapshot, after)
+            }
+            None => {
+                let snapshot: u64 = conn
+                    .query_row(
+                        "SELECT coalesce(max(rowid),0) FROM memory_entries WHERE run_id=?1 AND current_version_id IS NOT NULL",
+                        [run_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql)?;
+                if snapshot > MAX_INTEGER {
+                    return Err(Error::Corrupt);
+                }
+                (snapshot, 0)
+            }
+        };
+        let mut statement=conn.prepare("SELECT rowid,entry_id FROM memory_entries WHERE run_id=?1 AND current_version_id IS NOT NULL AND rowid>?2 AND rowid<=?3 ORDER BY rowid LIMIT ?4").map_err(sql)?;
+        let rows = statement
+            .query_map(
+                params![run_id, after_sequence, snapshot_max_sequence, limit + 1],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        let has_more = rows.len() > limit;
+        let entries = rows
+            .iter()
+            .take(limit)
+            .map(|(_, id)| self.entry(conn, run_id, id))
+            .collect::<Result<Vec<_>>>()?;
+        let next = has_more.then(|| rows[limit - 1].0);
+        Ok((entries, snapshot_max_sequence, next))
+    }
     pub(super) fn version_path(
         &self,
         run: &Run,
@@ -305,6 +384,42 @@ impl Repository {
         }
         Ok(version)
     }
+
+    /// 读取指定的不可变版本；有效性按该版本自己的策略和来源核验。
+    /// # Errors
+    /// 版本不存在、条目不可用、正文损坏或来源已失效时拒绝读取。
+    pub fn version(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        entry_id: &str,
+        version_id: &str,
+    ) -> Result<Version> {
+        let (run, _) = self.boundary(conn, run_id, port)?;
+        if !valid_id(entry_id) || !valid_id(version_id) {
+            return Err(reject());
+        }
+        if self.entry(conn, run_id, entry_id)?.state == EntryState::Unavailable {
+            return Err(Error::Rejected(Reason::RecoveryRequired));
+        }
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memory_versions WHERE entry_id=?1 AND version_id=?2)",
+                params![entry_id, version_id],
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        if !exists {
+            return Err(Error::NotFound);
+        }
+        let version = self.read_version(conn, &run, entry_id, version_id)?;
+        if !self.valid_version(conn, &run, &version, port)? {
+            return Err(Error::Rejected(Reason::InvalidSource));
+        }
+        Ok(version)
+    }
+
     pub(super) fn read_version(
         &self,
         conn: &Connection,

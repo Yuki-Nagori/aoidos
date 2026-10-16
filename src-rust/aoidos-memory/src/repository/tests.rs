@@ -70,6 +70,22 @@ fn pagination_is_bounded_and_returns_each_committed_entry_once() {
 }
 
 #[test]
+fn page_cursor_is_omitted_when_the_last_page_is_full() {
+    let mut f = Fixture::new();
+    for _ in 0..2 {
+        let version = f.version();
+        f.commit(&f.plan(version));
+    }
+    let (entries, snapshot_max_sequence, next) = f
+        .repo
+        .entries_page(&f.conn, &f.port, &f.run.run_id, 0, None, 2)
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(snapshot_max_sequence > 0);
+    assert_eq!(next, None);
+}
+
+#[test]
 fn source_and_evidence_checks_apply_to_character_versions() {
     let mut f = Fixture::new();
     let mut version = f.version();
@@ -93,6 +109,38 @@ fn source_and_evidence_checks_apply_to_character_versions() {
             .current(&f.conn, &f.port, &f.run.run_id, &version.entry_id)
             .unwrap(),
         version
+    );
+    assert_eq!(
+        f.repo
+            .version(
+                &f.conn,
+                &f.port,
+                &f.run.run_id,
+                &version.entry_id,
+                &version.version_id,
+            )
+            .unwrap(),
+        version
+    );
+    assert!(matches!(
+        f.repo.version(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            &version.entry_id,
+            &new_id(),
+        ),
+        Err(Error::NotFound)
+    ));
+    rejected(
+        f.repo.version(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            &version.entry_id,
+            "not-a-uuid",
+        ),
+        Reason::InvalidSchema,
     );
     f.conn
         .execute("DELETE FROM memory_version_evidence", [])

@@ -2,6 +2,8 @@
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import GameStage from "./components/GameStage.vue";
+import MemorySettingsPanel from "./components/MemorySettingsPanel.vue";
+import MemoryQueryPanel from "./components/MemoryQueryPanel.vue";
 import { useProduct } from "./composables/useProduct";
 import { useGameView } from "./composables/useGameView";
 import { useGameInput } from "./composables/useGameInput";
@@ -602,6 +604,7 @@ void preferences.load();
             {{ script.displayNames[locale.resolved.value] ?? script.title }}
           </option>
         </select></label>
+      <MemorySettingsPanel :script-id="product.scriptId.value" />
       <div class="flex gap-4">
         <button type="button" :disabled="product.busy.value" @click="product.open(false)">
           {{ t("game.restart") }}
@@ -1068,6 +1071,12 @@ void preferences.load();
       </details>
       <p v-if="errorMessage" role="alert">{{ errorMessage }}</p>
     </details>
+    <MemoryQueryPanel
+      v-if="product.session.value"
+      :key="product.session.value.memoryRunId"
+      :run-id="product.session.value.memoryRunId"
+      :history-revision="current?.historyRevision ?? 0"
+    />
     <GameStage
       v-if="product.session.value"
       :panel-state="panel.state.value"

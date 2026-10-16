@@ -14,6 +14,8 @@ const MAX_QUESTION_PAGE_SCAN: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QuestionCursor {
+    /// 游标所属周目，阻止在相同修订号的其他周目复用。
+    pub run_id: String,
     /// 读取上一页时观察到的世界历史版本。
     pub history_revision: u64,
     /// 快照读取时队列中最大的 SQLite 问题序号。
@@ -23,7 +25,8 @@ pub struct QuestionCursor {
 }
 
 /// 当前有效的待确认问题分页；失效项目在返回前转入持久 `invalidated` 状态。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QuestionPage {
     /// 当前仍有效且可供回答的问题。
     pub questions: Vec<MemoryQuestion>,
@@ -256,7 +259,8 @@ impl Repository {
         self.ensure_writable(conn, run_id)?;
         let (run, boundary) = self.boundary(conn, run_id, port)?;
         if let Some(cursor) = cursor {
-            if cursor.history_revision > MAX_INTEGER
+            if cursor.run_id != run_id
+                || cursor.history_revision > MAX_INTEGER
                 || cursor.snapshot_max_sequence > MAX_INTEGER
                 || cursor.after_sequence > cursor.snapshot_max_sequence
             {
@@ -346,6 +350,7 @@ impl Repository {
             .is_some_and(|last| ids.iter().any(|(sequence, _)| *sequence > last) || has_more);
         let next_cursor = if has_unscanned {
             last_scanned.map(|after_sequence| QuestionCursor {
+                run_id: run_id.into(),
                 history_revision: boundary.history_revision,
                 snapshot_max_sequence,
                 after_sequence,

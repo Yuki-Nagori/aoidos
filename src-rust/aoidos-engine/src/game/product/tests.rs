@@ -15,7 +15,9 @@ fn selection_preserves_script_identity_and_rejects_unsafe_metadata() {
     let restored = read_selection(&root).unwrap().unwrap();
     assert_eq!(restored.session_id, selected.session_id);
     assert_eq!(restored.script_id, selected.script_id);
-    assert_eq!(opened(&restored).unwrap().title, "雾钟地窖");
+    let opened = opened(&restored, "memory-run").unwrap();
+    assert_eq!(opened.title, "雾钟地窖");
+    assert_eq!(opened.memory_run_id, "memory-run");
     let invalid = Selection {
         script_id: "../mistbell".into(),
         ..selected
@@ -216,6 +218,11 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
         "app.not-ready"
     );
     let first = fixture.open(false).await.unwrap();
+    let first_run = fixture
+        .storage
+        .memory_run_for_session(&first.session_id)
+        .unwrap();
+    assert_eq!(first.memory_run_id, first_run.run_id);
     assert_eq!(
         fixture
             .service
@@ -231,11 +238,25 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
     assert_eq!(frozen.profile_id, "default");
     assert_eq!(frozen.dice_mode, DiceMode::Manual);
     let calls = fixture.source.calls.load(Ordering::SeqCst);
+    let mut next_parameters = fixture.storage.memory_app_config().unwrap().parameters;
+    next_parameters.algorithm = aoidos_memory::model::Algorithm::None;
+    fixture
+        .storage
+        .save_memory_app_config(1, next_parameters)
+        .unwrap();
     let lease = fixture.coordinator.acquire().unwrap();
     *fixture.source.error.lock().unwrap() = Some(Fault::new("llm.missing-key", "fixture"));
+    let reopened = fixture.open(false).await.unwrap();
+    assert_eq!(reopened.session_id, first.session_id);
+    assert_eq!(reopened.memory_run_id, first.memory_run_id);
     assert_eq!(
-        fixture.open(false).await.unwrap().session_id,
-        first.session_id
+        fixture
+            .storage
+            .memory_run_for_session(&first.session_id)
+            .unwrap()
+            .policy
+            .algorithm,
+        first_run.policy.algorithm
     );
     assert_eq!(fixture.source.calls.load(Ordering::SeqCst), calls);
     assert_eq!(fixture.open(true).await.unwrap_err().code, "app.busy");
@@ -255,6 +276,16 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
     assert_eq!(fixture.factory.freeze().unwrap().profile_id, "second");
     let next = fixture.open(true).await.unwrap();
     assert_ne!(first.session_id, next.session_id);
+    assert_ne!(first.memory_run_id, next.memory_run_id);
+    assert_eq!(
+        fixture
+            .storage
+            .memory_run_for_session(&next.session_id)
+            .unwrap()
+            .policy
+            .algorithm,
+        aoidos_memory::model::Algorithm::None
+    );
     assert_eq!(
         fixture
             .service
@@ -531,10 +562,13 @@ fn selection_rejects_malformed_versions_identities_and_bounded_input() {
             .starts_with("store.")
     );
     assert_eq!(
-        opened(&Selection {
-            script_id: "missing".into(),
-            ..selected
-        })
+        opened(
+            &Selection {
+                script_id: "missing".into(),
+                ..selected
+            },
+            "memory-run",
+        )
         .unwrap_err()
         .code,
         "app.not-found"

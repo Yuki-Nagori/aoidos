@@ -701,6 +701,19 @@ fn pending_question_page_rejects_stale_cursor_and_invalidates_old_sources() {
     assert_eq!(page.questions.len(), 1);
     let cursor = page.next_cursor.unwrap();
 
+    let mut foreign_cursor = cursor.clone();
+    foreign_cursor.run_id = "00000000-0000-4000-8000-000000000099".into();
+    rejected(
+        f.repo.pending_questions(
+            &mut f.conn,
+            &f.port,
+            &f.run.run_id,
+            Some(&foreign_cursor),
+            1,
+        ),
+        Reason::InvalidSchema,
+    );
+
     f.port.view.history_revision += 1;
     assert!(matches!(
         f.repo
@@ -869,6 +882,7 @@ fn pending_question_page_rejects_persisted_sequence_outside_cursor_integer_range
 fn pending_question_pages_reject_invalid_limits_and_cursors() {
     let mut f = Fixture::new();
     let invalid = QuestionCursor {
+        run_id: f.run.run_id.clone(),
         history_revision: 0,
         snapshot_max_sequence: 0,
         after_sequence: 1,

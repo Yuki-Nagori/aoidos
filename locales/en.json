@@ -48,6 +48,81 @@
     "script": "Scenario",
     "credits": "Scenario credits and license"
   },
+  "memorySettings": {
+    "title": "Memory policy",
+    "explanation": "These uncalibrated development defaults apply to new runs. Existing runs keep their frozen policy. Invalid combinations are rejected as a whole.",
+    "appDefaults": "Application defaults",
+    "scriptOverrides": "Scenario overrides · {script}",
+    "algorithm": "Algorithm",
+    "algorithms": {
+      "none": "No decay",
+      "exponential": "Exponential",
+      "segmented": "Segmented"
+    },
+    "fields": {
+      "algorithm": "Algorithm",
+      "baseStrength": "Base strength (1,000,000 = 1)",
+      "reinforcementGain": "Reinforcement gain",
+      "reinforcementCap": "Total reinforcement cap",
+      "strengthCap": "Strength cap",
+      "halfLifeRounds": "Half-life rounds",
+      "repeatWindowRounds": "Repeat window rounds",
+      "repeatLimit": "Maximum reinforcements in a window",
+      "revivalCooldownRounds": "Revival cooldown rounds",
+      "activeCapacity": "Active memory capacity",
+      "decayRate": "Exponential decay rate (1,000,000 = 1)"
+    },
+    "inherited": "Unset fields inherit application version {version}. Select a field to override it for this scenario.",
+    "algorithmHint": "Only parameters used by the selected algorithm are editable. Exponential uses decay rate; segmented uses half-life; no-decay uses neither.",
+    "invalidNumber": "Enter a whole number in every active parameter field.",
+    "restoreAppDefaults": "Restore built-in defaults",
+    "restoreScriptDefaults": "Restore application inheritance",
+    "save": "Save policy",
+    "saving": "Saving…",
+    "saved": "Policy saved. Existing runs were not recalculated.",
+    "error": "Could not load or save the policy. Your current edits are preserved; reload before resolving a version conflict."
+  },
+  "memoryQuery": {
+    "title": "Memory and confirmations",
+    "kinds": {
+      "entityAssociation": "Entity name clarification",
+      "memoryClassification": "Memory classification"
+    },
+    "questions": "Questions for you",
+    "entries": "Committed memories",
+    "refresh": "Refresh",
+    "next": "Load next page",
+    "noneQuestions": "No pending questions.",
+    "noneEntries": "No committed memories.",
+    "classifications": {
+      "repeat": "Repeated experience",
+      "supplement": "Add detail",
+      "new": "New memory",
+      "correction": "Correction",
+      "notWorthy": "Do not retain",
+      "uncertain": "Uncertain"
+    },
+    "none": "None of these",
+    "skip": "Decide later",
+    "propose": "Suggest a new name",
+    "name": "Name to suggest",
+    "details": "Read current memory",
+    "sources": "Original sources",
+    "sourceRecord": "Record {sequence}",
+    "noSources": "No source records.",
+    "evidence": "How the character knows",
+    "noEvidence": "No character-knowledge evidence.",
+    "evidenceKinds": {
+      "observed": "Observed",
+      "told": "Told directly",
+      "rumor": "Heard as a rumor"
+    },
+    "loading": "Loading memory data…",
+    "error": "Memory data could not be loaded or saved.",
+    "reload": "Retry",
+    "invalidated": "This question is no longer current; refresh to see valid questions.",
+    "resolved": "This answer has been recorded."
+  },
   "billing": {
     "title": "Run cost limits and model price",
     "explanation": "CNY and USD limits are independent. Costs stay in the provider's currency; no conversion or shared total is used. Manually entered prices are estimates, not a statement of your provider bill.",

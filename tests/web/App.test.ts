@@ -55,6 +55,61 @@ describe("App", () => {
           resolvedLocale: "zh-Hans",
           nativeStatus: "applied",
         };
+      if (command === "memory_get_app_config")
+        return {
+          configVersion: 1,
+          algorithmVersion: 1,
+          parameters: {
+            algorithm: "exponential",
+            baseStrength: 500_000,
+            reinforcementGain: 150_000,
+            reinforcementCap: 500_000,
+            strengthCap: 1_000_000,
+            halfLifeRounds: 100,
+            repeatWindowRounds: 20,
+            repeatLimit: 2,
+            revivalCooldownRounds: 20,
+            activeCapacity: 1_000,
+            rateTableVersion: 1,
+            decayRate: 993_092,
+          },
+        };
+      if (command === "memory_get_script_config")
+        return {
+          scriptId: "mistbell",
+          configVersion: 0,
+          appConfigVersion: 1,
+          algorithmVersion: 1,
+          overrides: {},
+          inherited: {
+            algorithm: "exponential",
+            baseStrength: 500_000,
+            reinforcementGain: 150_000,
+            reinforcementCap: 500_000,
+            strengthCap: 1_000_000,
+            halfLifeRounds: 100,
+            repeatWindowRounds: 20,
+            repeatLimit: 2,
+            revivalCooldownRounds: 20,
+            activeCapacity: 1_000,
+            rateTableVersion: 1,
+            decayRate: 993_092,
+          },
+          effective: {
+            algorithm: "exponential",
+            baseStrength: 500_000,
+            reinforcementGain: 150_000,
+            reinforcementCap: 500_000,
+            strengthCap: 1_000_000,
+            halfLifeRounds: 100,
+            repeatWindowRounds: 20,
+            repeatLimit: 2,
+            revivalCooldownRounds: 20,
+            activeCapacity: 1_000,
+            rateTableVersion: 1,
+            decayRate: 993_092,
+          },
+        };
       throw new Error("unexpected invocation");
     });
     const wrapper = mount(App, { global: { plugins: [i18n] } });
@@ -86,7 +141,7 @@ describe("App", () => {
       ]);
       expect(script.findAll("option").map((option) => option.text())).toEqual(["雾钟地窖"]);
     });
-    expect(wrapper.find("input").exists()).toBe(false);
+    expect(wrapper.find("textarea").exists()).toBe(false);
     expect(
       vi
         .mocked(invoke)
@@ -97,6 +152,8 @@ describe("App", () => {
       "llm_list_profiles",
       "locale_get_preference",
       "locale_set_preference",
+      "memory_get_app_config",
+      "memory_get_script_config",
       "store_get_ui_preferences",
       "theme_get_preference",
       "theme_list",
@@ -107,9 +164,7 @@ describe("App", () => {
   it("浏览器缺 IPC 明确展示恢复错误，不伪造本地生成结果", async () => {
     vi.mocked(invoke).mockRejectedValue({ code: "app.not-ready", message: "桌面 IPC 不可用" });
     const wrapper = mount(App, { global: { plugins: [i18n] } });
-    await vi.waitFor(() =>
-      expect(wrapper.get('[role="alert"]').text()).toContain("app is still starting"),
-    );
+    await vi.waitFor(() => expect(wrapper.text()).toContain("app is still starting"));
     wrapper.unmount();
   });
 

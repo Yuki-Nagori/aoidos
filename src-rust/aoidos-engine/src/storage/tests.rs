@@ -45,6 +45,20 @@ fn scene_catalog() -> crate::game::catalog::SceneCatalog {
     )
     .unwrap()
 }
+
+#[test]
+fn memory_batch_diagnostics_expose_only_registered_codes() {
+    assert_eq!(
+        memory_batch_diagnostic("policy.capacity_blocked"),
+        "policy.capacity_blocked"
+    );
+    assert_eq!(memory_batch_diagnostic("source.invalid"), "source.invalid");
+    assert_eq!(
+        memory_batch_diagnostic("provider.internal-secret"),
+        "memory.unknown"
+    );
+}
+
 #[test]
 fn memory_borrows_registered_session_and_shared_migrated_connection() {
     let root = std::env::temp_dir().join(format!("aoidos-memory-storage-{}", uuid::Uuid::new_v4()));
@@ -66,6 +80,22 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
         })
         .unwrap();
     assert_eq!(run.session_id, session_id);
+    assert_eq!(
+        storage
+            .memory_entries(
+                &run.run_id,
+                Some(MemoryEntryCursor {
+                    run_id: uuid::Uuid::new_v4().to_string(),
+                    history_revision: 0,
+                    snapshot_max_sequence: 0,
+                    after_sequence: 0,
+                }),
+                8,
+            )
+            .unwrap_err()
+            .code,
+        "app.bad-request"
+    );
     storage
         .with_database(|conn| {
             let count: i64 = conn
@@ -129,6 +159,50 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
         .unwrap();
     assert_eq!(recovered.run_id, run.run_id);
     assert_eq!(recovered.policy, run.policy);
+    reopened
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO memory_config_versions(scope_kind,scope_id,config_version,algorithm_version,payload_hash,payload_json) VALUES('application','default',1,1,zeroblob(32),x'696e76616c6964')",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO memory_config_heads(scope_kind,scope_id,config_version) VALUES('application','default',1)",
+                    [],
+                )
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        reopened
+            .initialize_memory_run(&session_id, &catalog)
+            .unwrap()
+            .run_id,
+        run.run_id,
+        "重开已有周目不读取当前配置，也不替换冻结策略"
+    );
+    reopened
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE memory_runs SET script_id='other-script' WHERE run_id=?1",
+                    [&run.run_id],
+                )
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        reopened
+            .memory_run_for_session(&session_id)
+            .unwrap_err()
+            .code,
+        "store.corrupt",
+        "损坏的周目剧本身份必须与已登记会话核对"
+    );
     reopened.close().unwrap();
     drop(reopened);
     std::fs::remove_dir_all(root).unwrap();

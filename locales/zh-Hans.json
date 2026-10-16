@@ -48,6 +48,81 @@
     "script": "剧本",
     "credits": "剧本署名与许可"
   },
+  "memorySettings": {
+    "title": "记忆策略",
+    "explanation": "这些尚未标定的开发默认参数只用于新周目；已有周目继续使用创建时冻结的策略。参数组合不合法时会整体拒绝保存。",
+    "appDefaults": "应用默认值",
+    "scriptOverrides": "剧本覆盖 · {script}",
+    "algorithm": "算法",
+    "algorithms": {
+      "none": "不衰减",
+      "exponential": "指数衰减",
+      "segmented": "分段衰减"
+    },
+    "fields": {
+      "algorithm": "算法",
+      "baseStrength": "基础强度（1,000,000 = 1）",
+      "reinforcementGain": "单次强化增量",
+      "reinforcementCap": "累计强化上限",
+      "strengthCap": "强度上限",
+      "halfLifeRounds": "半衰回合数",
+      "repeatWindowRounds": "重复强化窗口（回合）",
+      "repeatLimit": "窗口内最多强化次数",
+      "revivalCooldownRounds": "复活冷却回合数",
+      "activeCapacity": "活动记忆容量",
+      "decayRate": "指数衰减率（1,000,000 = 1）"
+    },
+    "inherited": "未勾选的字段继承应用版本 {version}。勾选后可为此剧本单独覆盖。",
+    "algorithmHint": "只有当前算法使用的参数可编辑：指数算法使用衰减率，分段算法使用半衰期，不衰减算法两者都不使用。",
+    "invalidNumber": "请为当前算法使用的每个参数填写整数。",
+    "restoreAppDefaults": "恢复内置默认值",
+    "restoreScriptDefaults": "恢复继承应用默认",
+    "save": "保存策略",
+    "saving": "正在保存…",
+    "saved": "策略已保存；已有周目未重新计算。",
+    "error": "策略读取或保存失败。当前编辑会保留；解决版本冲突前请重新读取。"
+  },
+  "memoryQuery": {
+    "title": "记忆与待确认事项",
+    "kinds": {
+      "entityAssociation": "名称指向确认",
+      "memoryClassification": "记忆分类确认"
+    },
+    "questions": "等待你确认的问题",
+    "entries": "已提交记忆",
+    "refresh": "刷新",
+    "next": "加载下一页",
+    "noneQuestions": "当前没有待确认问题。",
+    "noneEntries": "当前没有已提交记忆。",
+    "classifications": {
+      "repeat": "重复经历",
+      "supplement": "补充细节",
+      "new": "新记忆",
+      "correction": "纠正记忆",
+      "notWorthy": "不保留",
+      "uncertain": "不确定"
+    },
+    "none": "都不是",
+    "skip": "稍后再决定",
+    "propose": "提议新名称",
+    "name": "提议名称",
+    "details": "读取当前记忆",
+    "sources": "原始来源",
+    "sourceRecord": "记录 {sequence}",
+    "noSources": "没有来源记录。",
+    "evidence": "角色获知方式",
+    "noEvidence": "没有角色获知证据。",
+    "evidenceKinds": {
+      "observed": "亲眼观察",
+      "told": "直接告知",
+      "rumor": "听到传闻"
+    },
+    "loading": "正在读取记忆数据…",
+    "error": "记忆数据读取或保存失败。",
+    "reload": "重试",
+    "invalidated": "此问题已失效；请刷新查看当前有效问题。",
+    "resolved": "回答已记录。"
+  },
   "billing": {
     "title": "本局费用上限与模型价格",
     "explanation": "CNY 与 USD 上限相互独立。费用按服务商原币记录，不换算、不共用额度。手动登记的价格仅用于估算，不代表服务商账单。",

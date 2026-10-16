@@ -13,6 +13,8 @@ mod alias;
 pub use alias::*;
 mod cycle;
 pub use cycle::*;
+mod config;
+pub use config::*;
 
 pub type Hash = [u8; 32];
 pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;
@@ -450,7 +452,8 @@ pub enum OperationState {
     Rejected,
     Quarantined,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Entry {
     pub entry_id: String,
     pub current_version_id: String,

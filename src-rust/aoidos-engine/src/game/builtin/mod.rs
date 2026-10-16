@@ -325,11 +325,17 @@ async fn open_context(
     entity_directory: EntityDirectory,
 ) -> Result<Arc<Context>, Fault> {
     let catalog = memory_scene_catalog(title, entity_directory.clone())?;
-    Context::open(
+    let session_id = session
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .header()
+        .session_id
+        .clone();
+    let context = Context::open(
         session,
         Box::new(BuiltinDomain {
-            catalog,
-            storage,
+            catalog: catalog.clone(),
+            storage: storage.clone(),
             revision,
             entity_seed: entity_directory,
         }),
@@ -339,7 +345,9 @@ async fn open_context(
         events,
         Arc::new(Completed),
     )
-    .await
+    .await?;
+    storage.initialize_memory_run(&session_id, &catalog)?;
+    Ok(context)
 }
 
 /// 活动内置领域与记忆证据读取共用同一目录构造，避免规则装配分叉。

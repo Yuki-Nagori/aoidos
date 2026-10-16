@@ -88,6 +88,15 @@ fn source_port_freezes_only_a_complete_directory_matching_the_script_revision() 
     .unwrap();
     let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
     assert_eq!(port.boundary().unwrap().entity_revision, 7);
+    assert_eq!(
+        port.canonical_entity_name("npc").unwrap().as_deref(),
+        Some("NPC")
+    );
+    assert_eq!(port.canonical_entity_name("missing").unwrap(), None);
+    assert!(matches!(
+        SourcePort::new(&fixture.session).canonical_entity_name("npc"),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
 
     let stale = crate::game::catalog::EntityDirectory::new(
         crate::record::format::hash(b"different script"),
