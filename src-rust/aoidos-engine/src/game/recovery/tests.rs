@@ -59,6 +59,7 @@ fn accept(
             profile_revision: "1".into(),
             target: GenerationTarget::Narration,
             scene_id: "room".into(),
+            presence_revision: None,
             source_round_id: source.as_ref().map(|(id, _)| id.clone()),
             checkpoint_seq: source.map(|(_, seq)| seq),
         },
@@ -389,6 +390,7 @@ fn cancelled_directed_round_retains_its_recipient_for_recovery() {
                 speaker_id: "keeper".into(),
             },
             scene_id: "room".into(),
+            presence_revision: None,
             source_round_id: None,
             checkpoint_seq: None,
         },
@@ -607,6 +609,7 @@ fn corrupt_incremental_causality_never_produces_a_recovery_checkpoint() {
             profile_revision: "1".into(),
             target: GenerationTarget::Narration,
             scene_id: "room".into(),
+            presence_revision: None,
             source_round_id: Some(source),
             checkpoint_seq: Some(999),
         };
@@ -622,6 +625,7 @@ fn corrupt_incremental_causality_never_produces_a_recovery_checkpoint() {
         profile_revision: "1".into(),
         target: GenerationTarget::Narration,
         scene_id: "room".into(),
+        presence_revision: None,
         source_round_id: None,
         checkpoint_seq: None,
     };

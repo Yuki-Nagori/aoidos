@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ComposerPreview } from "../utils/ui-shell";
+import type { ScenePresenceSnapshot } from "../api/engine";
 
 const props = defineProps<{
   modelValue: string;
@@ -11,6 +12,12 @@ const props = defineProps<{
   tooLarge: boolean;
   slashMenuDismissed: boolean;
   rewindSelectorOpen: boolean;
+  presenceHasScene?: boolean;
+  presenceReady?: boolean;
+  presenceLoading?: boolean;
+  presenceUnavailable?: boolean;
+  presenceCharacters?: readonly ScenePresenceSnapshot["characters"][number][];
+  selectedCharacterId?: string;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [value: string];
@@ -19,6 +26,8 @@ const emit = defineEmits<{
   compositionStart: [];
   compositionEnd: [];
   chooseCommand: [command: string];
+  selectRecipient: [characterId: string];
+  refreshPresence: [];
 }>();
 const { t } = useI18n();
 const textarea = ref<HTMLTextAreaElement>();
@@ -31,6 +40,37 @@ defineExpose({ focus });
 </script>
 
 <template>
+  <div
+    v-if="props.presenceHasScene"
+    class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted"
+  >
+    <label class="flex items-center gap-2">
+      {{ t("game.replyTo") }}
+      <select
+        v-if="props.presenceReady"
+        :value="props.selectedCharacterId ?? ''"
+        :disabled="props.submitDisabled"
+        class="rounded-md border border-hairline bg-panel px-2 py-1 text-ink"
+        @change="emit('selectRecipient', ($event.target as HTMLSelectElement).value)"
+      >
+        <option value="">{{ t("game.replyToNarration") }}</option>
+        <option
+          v-for="character in props.presenceCharacters ?? []"
+          :key="character.id"
+          :value="character.id"
+        >
+          {{ character.canonicalName }}
+        </option>
+      </select>
+      <span v-else-if="props.presenceLoading" role="status">{{ t("game.presenceLoading") }}</span>
+      <span v-else-if="props.presenceUnavailable" role="status">
+        {{ t("game.presenceUnavailable") }}
+        <button type="button" class="underline" @click="emit('refreshPresence')">
+          {{ t("common.retry") }}
+        </button>
+      </span>
+    </label>
+  </div>
   <form class="flex items-end gap-2" @submit.prevent="emit('submit')">
     <textarea
       ref="textarea"

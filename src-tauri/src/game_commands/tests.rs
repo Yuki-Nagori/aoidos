@@ -32,6 +32,7 @@ async fn complete_product_request_bodies_reject_overrides_wrong_types_and_unknow
         .manage(Service::new(coordinator, factory))
         .invoke_handler(tauri::generate_handler![
             crate::game_ipc::engine_submit_input,
+            crate::game_ipc::engine_get_scene_presence,
             crate::game_ipc::engine_interrupt,
             crate::game_ipc::engine_cancel_round,
             crate::game_ipc::engine_resume,
@@ -64,6 +65,10 @@ async fn complete_product_request_bodies_reject_overrides_wrong_types_and_unknow
         (
             "engine_submit_input",
             serde_json::json!({"sessionId":id,"text":"输入"}),
+        ),
+        (
+            "engine_get_scene_presence",
+            serde_json::json!({"sessionId":id}),
         ),
         (
             "engine_interrupt",
@@ -103,6 +108,29 @@ async fn complete_product_request_bodies_reject_overrides_wrong_types_and_unknow
             "app.bad-request"
         );
     }
+    let unpaired = call(
+        "engine_submit_input",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({
+            "sessionId":id,
+            "text":"输入",
+            "recipientCharacterId":"keeper"
+        })),
+    )
+    .unwrap_err();
+    assert_eq!(unpaired["code"], "app.bad-request");
+    assert_eq!(unpaired["detail"]["reason"], "recipientRevisionPair");
+    assert_eq!(
+        call(
+            "engine_submit_input",
+            tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "sessionId":id,
+                "text":"输入",
+                "expectedPresenceRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }))
+        )
+        .unwrap_err()["code"],
+        "app.bad-request"
+    );
     for target in [
         serde_json::json!(-1),
         serde_json::json!(1.5),

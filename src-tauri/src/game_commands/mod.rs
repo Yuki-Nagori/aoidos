@@ -20,6 +20,8 @@ struct InputArgs {
     text: String,
     #[serde(default)]
     recipient_character_id: Option<String>,
+    #[serde(default)]
+    expected_presence_revision: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -61,7 +63,24 @@ pub async fn submit_input(
 ) -> Result<AcceptedRound, CmdError> {
     let args: InputArgs = decode(&request)?;
     service
-        .submit_input_to_character(&args.session_id, args.text, args.recipient_character_id)
+        .submit_input_with_presence_revision(
+            &args.session_id,
+            args.text,
+            args.recipient_character_id,
+            args.expected_presence_revision,
+        )
+        .await
+        .map_err(CmdError::from)
+}
+/// # Errors
+/// 会话未登记、待恢复、目录不完整或快照超过协议上限时失败关闭。
+pub async fn get_scene_presence(
+    service: &Service,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::game::presence::ScenePresenceSnapshot, CmdError> {
+    let args: SessionArgs = decode(&request)?;
+    service
+        .get_scene_presence(&args.session_id)
         .await
         .map_err(CmdError::from)
 }

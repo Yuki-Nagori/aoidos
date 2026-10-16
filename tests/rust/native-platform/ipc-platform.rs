@@ -337,6 +337,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             aoidos_lib::theme_commands::theme_set_preference,
             aoidos_lib::theme_commands::theme_skin_load,
             aoidos_lib::game_ipc::engine_submit_input,
+            aoidos_lib::game_ipc::engine_get_scene_presence,
             aoidos_lib::game_ipc::engine_interrupt,
             aoidos_lib::game_ipc::engine_cancel_round,
             aoidos_lib::game_ipc::engine_resume,

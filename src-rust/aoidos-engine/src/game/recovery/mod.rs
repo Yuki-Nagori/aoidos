@@ -20,6 +20,7 @@ pub struct RoundFacts {
     pub dice_mode: DiceMode,
     pub mode: InputMode,
     pub target: GenerationTarget,
+    pub presence_revision: Option<String>,
     pub scene_id: String,
     pub plan: Option<(u64, CheckPlan)>,
     pub skipped: Option<u64>,
@@ -287,6 +288,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
         dice_mode,
         mode,
         target,
+        presence_revision,
         source_round_id,
         checkpoint_seq,
         scene_id,
@@ -300,6 +302,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
                 || previous.input_seq != input_seq
                 || previous.mode != mode
                 || previous.target != target
+                || previous.presence_revision != presence_revision
             {
                 return Err(corrupt());
             }
@@ -320,6 +323,7 @@ fn apply_fact(result: &mut Recovery, seq: u64, fact: Fact) -> Result<(), Fault> 
                 dice_mode,
                 mode,
                 target,
+                presence_revision,
                 scene_id: scene_id.clone(),
                 plan: None,
                 skipped: None,

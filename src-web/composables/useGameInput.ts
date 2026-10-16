@@ -19,7 +19,11 @@ export function useGameInput(
   const draft = ref("");
   const composing = ref(false);
   const busy = ref(false);
-  const error = shallowRef<{ code: string; message: string }>();
+  const error = shallowRef<{
+    code: string;
+    message: string;
+    detail?: { reason?: string };
+  }>();
   const draftBytes = computed(() => new TextEncoder().encode(draft.value).byteLength);
   const tooLarge = computed(() => draftBytes.value > MAX_DRAFT_BYTES);
   let disposed = false;
@@ -66,8 +70,25 @@ export function useGameInput(
       if (!disposed && token === generation && id === toValue(sessionId) && draft.value === text)
         draft.value = "";
     } catch (failure) {
-      if (!disposed && token === generation && id === toValue(sessionId))
-        error.value = turnRecoveryError(failure);
+      if (!disposed && token === generation && id === toValue(sessionId)) {
+        const safe = turnRecoveryError(failure);
+        const detail =
+          typeof failure === "object" && failure !== null && "detail" in failure
+            ? (failure as { detail?: unknown }).detail
+            : undefined;
+        const reason =
+          typeof detail === "object" && detail !== null && "reason" in detail
+            ? (detail as { reason?: unknown }).reason
+            : undefined;
+        const knownReason =
+          reason === "stalePresenceRevision" ||
+          reason === "targetUnavailable" ||
+          reason === "recipientRevisionPair";
+        error.value = {
+          ...safe,
+          ...(knownReason ? { detail: { reason } } : {}),
+        };
+      }
     } finally {
       if (!disposed && token === generation) busy.value = false;
     }

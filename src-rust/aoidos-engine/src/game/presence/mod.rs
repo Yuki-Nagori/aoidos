@@ -304,7 +304,7 @@ fn valid_label(value: &str, max_bytes: usize) -> bool {
     !value.trim().is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control)
 }
 
-/// 供未来 IPC 和 030 只读消费的完整快照；成员必须来自完整实体目录。
+/// 供产品在场查询与 030 只读消费的完整快照；成员必须来自完整实体目录。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScenePresenceSnapshot {

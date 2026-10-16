@@ -54,6 +54,12 @@ export interface AcceptedRound {
   operationId: string;
   roundId: string;
 }
+export interface ScenePresenceSnapshot {
+  sessionId: string;
+  sceneId: string;
+  presenceRevision: string;
+  characters: { id: string; kind: "character"; scope: string; canonicalName: string }[];
+}
 type AcceptedOperation = { operationId: string };
 /** 四种事件均包含完整阶段状态；各自序号与跨事件修订分别消费。 */
 export type PhaseEventMap = {
@@ -75,8 +81,18 @@ export function submitInput(
   sessionId: string,
   text: string,
   recipientCharacterId?: string,
+  expectedPresenceRevision?: string,
 ): Promise<AcceptedRound> {
-  return invoke("engine_submit_input", { sessionId, text, recipientCharacterId });
+  return invoke("engine_submit_input", {
+    sessionId,
+    text,
+    recipientCharacterId,
+    expectedPresenceRevision,
+  });
+}
+/** 只读取当前完整、权威的在场快照；不从目录推测可交互角色。 */
+export function getScenePresence(sessionId: string): Promise<ScenePresenceSnapshot> {
+  return invoke("engine_get_scene_presence", { sessionId });
 }
 /** 取消当前子调用后由引擎保留父 lease，接纳插话。 */
 export function interruptRound(

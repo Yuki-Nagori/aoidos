@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PanelState } from "../../../src-web/utils/ui-shell";
 import {
+  composerRecipient,
   previewComposerInput,
   canSubmitComposer,
   transitionPanel,
@@ -53,6 +54,17 @@ describe("composer preview", () => {
     ["((我在门外低声说))", "outOfCharacter"],
   ] as const)("classifies %s", (text, mode) => {
     expect(previewComposerInput(text).mode).toBe(mode);
+  });
+
+  it("routes only in-character input through a selected presence snapshot", () => {
+    expect(composerRecipient("inCharacter", "keeper", "sha256:revision")).toEqual({
+      recipientCharacterId: "keeper",
+      expectedPresenceRevision: "sha256:revision",
+    });
+    expect(
+      composerRecipient(previewComposerInput("/ooc 我先离开").mode, "keeper", "sha256:revision"),
+    ).toEqual({});
+    expect(composerRecipient("inCharacter", "keeper")).toEqual({});
   });
 
   it("treats escaped, incomplete, and unknown slash input safely", () => {

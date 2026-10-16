@@ -1,6 +1,6 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-13。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
+更新日期：2026-10-16。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
 实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。下文分别标明已实现接口与设计接口。
 
@@ -165,20 +165,21 @@ scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-fo
 
 下列命令已由串行驱动实现，Rust / TS 同型；阶段发布、四事件消费与恢复的验证证据见 [023](../task/023-turn-state-machine-impl.md)。可信场景、世界解释器与配置由 Rust 域登记，实际产品接线由 024 / 025 承接。
 
-| 命令                | 参数                                         | 成功返回 / 接纳                                                                                                                                                                               |
-| ------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| engine_submit_input | `{ sessionId, text, recipientCharacterId? }` | `{ operationId, roundId }`；输入与接纳事实提交后返回；目标省略时为旁白，指定时当前仅接受场景 roster 中完整目录登记的 IC 角色；046 计划增加 `expectedPresenceRevision`，改为按可信在场快照校验 |
-| engine_interrupt    | `{ sessionId, roundId, text }`               | `{ operationId }`；接纳取消并换回合的请求，新 round 提交后从快照获取                                                                                                                          |
-| engine_cancel_round | `{ sessionId, roundId }`                     | `{ roundId, outcome }`；待已开始提交达到一致边界后返回胜出终态                                                                                                                                |
-| engine_resume       | `{ sessionId }`                              | `{ operationId, roundId }`；从暂停检查点显式恢复                                                                                                                                              |
-| engine_regenerate   | `{ sessionId, roundId }`                     | `{ operationId, roundId }`；返回新回合身份，始终复用已有骰值；无骰回合继续无骰                                                                                                                |
-| engine_rewind       | `{ sessionId, targetSeq }`                   | `{ operationId }`；后续控制提交 / 世界重放走事件                                                                                                                                              |
-| engine_submit_check | `{ sessionId, roundId, planId }`             | `{ roundId, planId, accepted: true }`；同一 plan 重复返回，不重复采样                                                                                                                         |
-| engine_get_phase    | `{ sessionId }`                              | 下方 PhaseSnapshot                                                                                                                                                                            |
+| 命令                      | 参数                                                                    | 成功返回 / 接纳                                                                                                                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| engine_submit_input       | `{ sessionId, text, recipientCharacterId?, expectedPresenceRevision? }` | `{ operationId, roundId }`；输入与接纳事实提交后返回；目标省略时为旁白。显式角色目标必须同时带快照 revision；Rust 在写入玩家输入前重新读取权威快照并校验目标 / revision，成功后将两者写入 `RoundAccepted` |
+| engine_get_scene_presence | `{ sessionId }`                                                         | `{ sessionId, sceneId, presenceRevision, characters }`；从当前有效路径返回完整在场快照，只读；最多 512 人 / 256 KiB，超限整体失败、不截断                                                                 |
+| engine_interrupt          | `{ sessionId, roundId, text }`                                          | `{ operationId }`；接纳取消并换回合的请求，新 round 提交后从快照获取                                                                                                                                      |
+| engine_cancel_round       | `{ sessionId, roundId }`                                                | `{ roundId, outcome }`；待已开始提交达到一致边界后返回胜出终态                                                                                                                                            |
+| engine_resume             | `{ sessionId }`                                                         | `{ operationId, roundId }`；从暂停检查点显式恢复                                                                                                                                                          |
+| engine_regenerate         | `{ sessionId, roundId }`                                                | `{ operationId, roundId }`；返回新回合身份，始终复用已有骰值；无骰回合继续无骰                                                                                                                            |
+| engine_rewind             | `{ sessionId, targetSeq }`                                              | `{ operationId }`；后续控制提交 / 世界重放走事件                                                                                                                                                          |
+| engine_submit_check       | `{ sessionId, roundId, planId }`                                        | `{ roundId, planId, accepted: true }`；同一 plan 重复返回，不重复采样                                                                                                                                     |
+| engine_get_phase          | `{ sessionId }`                                                         | 下方 PhaseSnapshot                                                                                                                                                                                        |
 
 text 为非空白字符串，最多 32 KiB UTF-8，保留原文；角色内 / 场外前缀及内容范围由 012 的 Rust 解析，不增加前端可覆盖身份 / 规则的参数，不接受模型 / 骰式 / 状态覆盖参数。所有身份由 Rust 分配，operationId 不是客户端重试幂等键；收到接纳后不自动重发命令。已在飞时新提交 busy；interrupt / cancel / submit_check 仅控制指定的本 round。其他合法性、错误优先级和 rewind 检查点见阶段机。cancel 的重复返回限于本进程有界缓存，旧 round 驱逐为 not-found；暂停恢复由持久检查点决定，不靠 ring 跨进程恢复。
 
-044 定义场景在场快照契约，045 提供 Rust 权威的内部只读快照；计划中的 046 将其接成 IPC 命令 `engine_get_scene_presence({ sessionId })`，返回 `{ sessionId, sceneId, presenceRevision, characters }`。快照最多 512 人、规范 JSON 总长最多 256 KiB，超限整体失败且不截断。待恢复 / 缺少可信基线映射 `engine.invalid-phase`，快照超限映射 `app.bad-request` + `detail.reason=presenceSnapshotLimit`。该 IPC 命令尚未实现；角色提交的 `expectedPresenceRevision` 也仍是 046 计划字段。
+044 定义场景在场快照契约，045 由 Rust 从当前有效路径构造只读快照，046 通过 `engine_get_scene_presence` 提供给 composer。UI 快照仅列完整目录登记、当前在场且可作为接收者的 Character，不含当前玩家自身；最多 512 人、规范 JSON 总长最多 256 KiB，超限整体失败且不截断。待恢复 / 缺少可信基线映射 `engine.invalid-phase`，快照超限映射 `app.bad-request` + `detail.reason=presenceSnapshotLimit`。角色内输入必须配对提供 `recipientCharacterId` 与 `expectedPresenceRevision`，场外输入按旁白提交；不配对、过期和当前不可用目标分别映射为 `app.bad-request` + `detail.reason=recipientRevisionPair`、`stalePresenceRevision`、`targetUnavailable`。Rust 在追加任何输入前复核同一 session、scene、revision 和角色身份。修订值持久化在接纳事实中，旧记录缺失此可选字段时仍可恢复。
 
 ```ts
 type EnginePhase = "idle" | "generating" | "awaitingCheck" | "settling" | "advancing";

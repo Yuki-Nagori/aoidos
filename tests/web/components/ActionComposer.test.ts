@@ -65,4 +65,36 @@ describe("ActionComposer", () => {
     expect(wrapper.find('[role="alert"]').exists()).toBe(true);
     wrapper.unmount();
   });
+
+  it("offers only the supplied in-scene recipients and defaults to narration", async () => {
+    const wrapper = mount(ActionComposer, {
+      props: {
+        modelValue: "",
+        preview: {
+          mode: "inCharacter",
+          slashActive: false,
+          candidates: [],
+          invalidSlash: false,
+          contentRequired: false,
+        },
+        submitDisabled: false,
+        submitLabel: "Submit action",
+        tooLarge: false,
+        slashMenuDismissed: false,
+        rewindSelectorOpen: false,
+        presenceHasScene: true,
+        presenceReady: true,
+        presenceCharacters: [
+          { id: "keeper", kind: "character", scope: "global", canonicalName: "Mira" },
+        ],
+      },
+      global: { plugins: [i18n] },
+    });
+
+    const select = wrapper.get("select");
+    expect(select.findAll("option").map((option) => option.text())).toEqual(["Narration", "Mira"]);
+    await select.setValue("keeper");
+    expect(wrapper.emitted("selectRecipient")).toEqual([["keeper"]]);
+    wrapper.unmount();
+  });
 });

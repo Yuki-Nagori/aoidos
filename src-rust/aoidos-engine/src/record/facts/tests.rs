@@ -68,6 +68,14 @@ fn registered_facts_keep_typed_values_and_reject_incomplete_identity() {
         if code == "roundAccepted" {
             data["sourceRoundId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
             assert!(Fact::decode(code, &data).is_err());
+            data.as_object_mut().unwrap().remove("sourceRoundId");
+            data["presenceRevision"] = serde_json::json!(format::hash(b"presence"));
+            assert!(Fact::decode(code, &data).is_ok());
+            data["presenceRevision"] = serde_json::json!("stale");
+            assert!(Fact::decode(code, &data).is_err());
+            data["presenceRevision"] = serde_json::json!(format::hash(b"presence"));
+            data["target"] = serde_json::json!({"kind":"narration"});
+            assert!(Fact::decode(code, &data).is_err());
         }
         if code == "roundEnded" {
             data["outcome"] = serde_json::json!("failed");

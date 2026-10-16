@@ -138,6 +138,7 @@ fn begin_round_for_target(session: &mut Session, target: GenerationTarget) -> Ro
                 profile_revision: "1".into(),
                 target,
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -504,6 +505,7 @@ fn append_failed_source_round(session: &mut Session, text: &str) -> u64 {
                 profile_revision: "1".into(),
                 target: GenerationTarget::Narration,
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -562,6 +564,7 @@ fn append_failed_character_source_round(
                     speaker_id: speaker_id.into(),
                 },
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -2360,6 +2363,7 @@ fn observed_evidence_without_a_matching_accepted_round_is_not_published() {
                 profile_revision: "1".into(),
                 target: GenerationTarget::Narration,
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -2436,6 +2440,7 @@ fn evidence_lookup_fails_closed_when_the_round_input_falls_out_of_the_shared_win
                 profile_revision: "1".into(),
                 target: GenerationTarget::Narration,
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -2616,6 +2621,7 @@ fn earlier_orphan_round_end_cannot_vouch_for_a_later_round_source() {
                 profile_revision: "1".into(),
                 target: GenerationTarget::Narration,
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -3343,6 +3349,7 @@ fn completed_rumor_round_returns_only_the_verified_delivery_metadata() {
                     speaker_id: "keeper".into(),
                 },
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -3516,6 +3523,7 @@ fn completed_rumor_round_returns_only_the_verified_delivery_metadata() {
                     speaker_id: "player".into(),
                 },
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -3691,6 +3699,7 @@ fn completed_rumor_round_returns_only_the_verified_delivery_metadata() {
                     speaker_id: "keeper".into(),
                 },
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -4304,6 +4313,7 @@ fn read_only_evidence_requires_an_applied_event_and_a_complete_successful_round(
                 profile_revision: "1".into(),
                 target: GenerationTarget::Narration,
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }

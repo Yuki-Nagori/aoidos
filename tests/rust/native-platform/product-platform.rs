@@ -336,6 +336,7 @@ fn run(dir: PathBuf, restarting: bool) -> Result<(), Box<dyn std::error::Error>>
             aoidos_lib::game_ipc::engine_list_scripts,
             aoidos_lib::game_ipc::engine_open_session,
             aoidos_lib::game_ipc::engine_submit_input,
+            aoidos_lib::game_ipc::engine_get_scene_presence,
             aoidos_lib::game_ipc::engine_get_phase,
             aoidos_lib::game_ipc::engine_cancel_round,
             aoidos_lib::game_ipc::engine_resume,

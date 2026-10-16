@@ -222,6 +222,7 @@ impl Generation for TestGeneration {
 }
 pub(crate) struct TestDomain {
     pub(crate) catalog: SceneCatalog,
+    pub(crate) dynamic_presence: Vec<CanonicalEntity>,
     consequences: Arc<AtomicUsize>,
 }
 impl WorldPort for TestDomain {
@@ -264,6 +265,32 @@ impl Domain for TestDomain {
     }
     fn baseline_scene(&self) -> Option<ScenePosition> {
         Some(self.catalog.scene("room").unwrap().position.clone())
+    }
+    fn scene_presence(
+        &self,
+        session: &Session,
+    ) -> Result<crate::game::presence::ScenePresenceSnapshot, Fault> {
+        let scene = self.catalog.scene("room")?;
+        let directory = self
+            .catalog
+            .entity_directory()
+            .filter(|directory| directory.is_complete())
+            .ok_or_else(crate::game::invalid_phase)?;
+        let mut characters = scene
+            .actor_ids
+            .iter()
+            .filter_map(|id| directory.entity(id).ok().flatten())
+            .filter(|entity| entity.kind == EntityKind::Character)
+            .cloned()
+            .collect::<Vec<_>>();
+        characters.extend(self.dynamic_presence.iter().cloned());
+        characters.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(crate::game::presence::ScenePresenceSnapshot {
+            session_id: session.header().session_id.clone(),
+            scene_id: scene.position.scene_id.clone(),
+            presence_revision: crate::record::format::hash(b"test-presence").to_owned(),
+            characters,
+        })
     }
     fn confirmed(&self, session: &Session) -> Result<ConfirmedWorldView, Fault> {
         ConfirmedWorldView::capture(session, "0", BTreeMap::new())
@@ -350,6 +377,7 @@ pub(crate) fn domain(
     .unwrap();
     TestDomain {
         catalog,
+        dynamic_presence: Vec::new(),
         consequences,
     }
 }
@@ -383,7 +411,7 @@ pub(crate) fn character_domain(
             script_revision.into(),
             1,
             complete,
-            ["player", "keeper", "outsider"]
+            ["player", "keeper", "outsider", "traveler"]
                 .into_iter()
                 .map(|id| CanonicalEntity {
                     id: id.into(),

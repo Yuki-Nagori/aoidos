@@ -253,6 +253,7 @@ fn accepted(fixture: &mut Fixture, round_id: &str, mode: RecordMode) -> u64 {
                 profile_revision: "a".repeat(64),
                 target: GenerationTarget::Narration,
                 scene_id: "mistbell".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -313,6 +314,7 @@ fn direct_character_dialogue(
                     speaker_id: target_speaker.into(),
                 },
                 scene_id: "mistbell".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -433,6 +435,7 @@ fn completed_recovered_character_dialogue(
                 profile_revision: "a".repeat(64),
                 target: target.clone(),
                 scene_id: "mistbell".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -484,6 +487,7 @@ fn completed_recovered_character_dialogue(
                 profile_revision: "b".repeat(64),
                 target,
                 scene_id: "mistbell".into(),
+                presence_revision: None,
                 source_round_id: Some(original_id),
                 checkpoint_seq: Some(checkpoint_seq),
             }
@@ -1457,6 +1461,7 @@ fn scene_evidence_requires_complete_context_and_exact_committed_source_metadata(
                 profile_revision: "a".repeat(64),
                 target: GenerationTarget::Narration,
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }
@@ -1736,6 +1741,7 @@ fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
                     speaker_id: "keeper".into(),
                 },
                 scene_id: "room".into(),
+                presence_revision: None,
                 source_round_id: None,
                 checkpoint_seq: None,
             }

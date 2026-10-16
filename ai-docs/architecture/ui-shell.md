@@ -1,6 +1,6 @@
 # 界面结构与交互
 
-更新日期：2026-10-13；官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
+更新日期：2026-10-16；官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
 
 ## 舞台与覆盖层
 
@@ -113,7 +113,7 @@ prefers-reduced-motion 时取消位移动画，使用 120ms 淡入淡出；LED �
 
 slash 菜单 v1 仅提供既有操作快捷入口：/ooc、/stop、/interrupt、/resume、/regenerate、/rewind、/pin、/latest。/stop 等控制命令不成为 playerSpeech；/interrupt 的后续文本作为新输入原文提交；/rewind 打开目标检查点与影响确认，不允许自由输入未经核验的 seq 直接执行。/regenerate 显示骰值复用和可能收费确认。未知 / 禁用候选不触发 invoke；绕过 UI 的非法参数由 Rust 返回 app.bad-request。
 
-composer 当前默认以旁白为接收目标；后端已允许显式提交 `recipientCharacterId`，但 UI 尚无角色选择器，且目录身份不代表当前场景在场。044 冻结在场 / 获知协议，045 提供可恢复的 Rust 权威事件源，030 承接可信记忆证据消费，046 再以 `expectedPresenceRevision` 接入选择 UI；新增交互不回扩 025。
+composer 默认以旁白为接收目标；角色选项仅来自 `engine_get_scene_presence` 返回的当前场景完整在场快照，不从实体目录或剧本文本推断，并排除玩家自身。选择与 `sessionId`、`sceneId` 和不透明 `presenceRevision` 绑定，场景 / 阶段 / 修订切换会清除未提交选择；快照只随阶段修订、场景及恢复状态变化刷新，不监听逐条历史修订；并发请求合并为单飞加至多一次后续读取，不做轮询。只有角色内输入才携带 `recipientCharacterId` 与 `expectedPresenceRevision`；场外输入始终按旁白提交。Rust 在追加玩家输入前重新读取权威快照并校验身份和修订，接纳事实保存修订供恢复沿用；配对错误、过期和不可用目标按 044 的 `app.bad-request` / `detail.reason` 分类。045 提供可信快照，046 完成选择 UI，不回扩 025。
 
 Enter 发送，Shift+Enter 换行；event.isComposing 或本地 compositionstart 到 compositionend 期间不发送、不关面板、不选择 slash 候选。发送按钮也遵循组字保护；compositionend 后等待用户下一次显式发送，不用 timeout 自动补发。
 

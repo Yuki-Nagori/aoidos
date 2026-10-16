@@ -5,6 +5,7 @@ import GameStage from "./components/GameStage.vue";
 import { useProduct } from "./composables/useProduct";
 import { useGameView } from "./composables/useGameView";
 import { useGameInput } from "./composables/useGameInput";
+import { useScenePresence } from "./composables/useScenePresence";
 import { useGameControls } from "./composables/useGameControls";
 import { useTheme } from "./composables/useTheme";
 import { useLocale } from "./composables/useLocale";
@@ -14,9 +15,10 @@ import { formatDate, formatExactCurrency } from "./utils/format";
 import { billingErrorDescriptor } from "./utils/billing-error";
 import { formatPeakSchedule } from "./utils/price-schedule";
 import { usePanelState } from "./composables/usePanelState";
-import { canSubmitComposer, previewComposerInput } from "./utils/ui-shell";
+import { canSubmitComposer, composerRecipient, previewComposerInput } from "./utils/ui-shell";
 import RecordFeed from "./components/RecordFeed.vue";
 import ActionComposer from "./components/ActionComposer.vue";
+import { submitInput } from "./api/engine";
 
 const { t } = useI18n();
 const product = useProduct();
@@ -57,7 +59,28 @@ function providerBalanceAmount(amount: string, currency: string): string {
 const game = useGameView(sessionId);
 const { phase, turn, records } = game;
 const current = computed(() => phase.state.value.snapshot);
-const input = useGameInput(sessionId);
+const presence = useScenePresence(sessionId, current);
+const input = useGameInput(sessionId, (id, text) => {
+  const recipient = composerRecipient(
+    previewComposerInput(text).mode,
+    presence.selectedCharacterId.value,
+    presence.snapshot.value?.presenceRevision,
+  );
+  return submitInput(
+    id,
+    text,
+    recipient.recipientCharacterId,
+    recipient.expectedPresenceRevision,
+  );
+});
+watch(input.error, (failure) => {
+  if (
+    failure?.detail?.reason === "stalePresenceRevision" ||
+    failure?.detail?.reason === "targetUnavailable"
+  ) {
+    presence.refresh();
+  }
+});
 const controls = useGameControls(current);
 const preferences = useUiPreferences();
 const composer = ref<InstanceType<typeof ActionComposer>>();
@@ -280,6 +303,12 @@ const error = computed(
     records.connectionError.value ??
     turn.connectionError.value,
 );
+function faultReason(failure: unknown): string | undefined {
+  if (typeof failure !== "object" || failure === null || !("detail" in failure)) return undefined;
+  const detail = failure.detail;
+  if (typeof detail !== "object" || detail === null || !("reason" in detail)) return undefined;
+  return typeof detail.reason === "string" ? detail.reason : undefined;
+}
 const generation = computed(() => {
   const record = game.latestPublicRecord.value;
   const body = record?.body;
@@ -305,14 +334,18 @@ const billingErrorMessage = computed(() => {
   return "values" in descriptor ? t(descriptor.key, descriptor.values) : t(descriptor.key);
 });
 const errorMessage = computed(() => {
-  if (!error.value) return undefined;
-  switch (error.value.code) {
+  const failure = error.value;
+  if (!failure) return undefined;
+  switch (failure.code) {
     case "app.not-ready":
       return t("errors.appNotReady");
     case "app.not-found":
       return t("errors.appNotFound");
     case "app.bad-request":
-      return t("errors.badRequest");
+      return faultReason(failure) === "stalePresenceRevision" ||
+        faultReason(failure) === "targetUnavailable"
+        ? t("game.presenceChanged")
+        : t("errors.badRequest");
     case "store.corrupt":
       return t("errors.storeCorrupt");
     case "store.io":
@@ -1184,11 +1217,19 @@ void preferences.load();
               :slash-menu-dismissed="slashMenuDismissed"
               :rewind-selector-open="rewindSelectorOpen"
               :submit-disabled="composerSubmitDisabled"
+              :presence-has-scene="Boolean(current?.scene) && !current?.needsRecovery"
+              :presence-ready="Boolean(presence.snapshot.value)"
+              :presence-loading="presence.loading.value"
+              :presence-unavailable="presence.unavailable.value"
+              :presence-characters="presence.snapshot.value?.characters ?? []"
+              :selected-character-id="presence.selectedCharacterId.value"
               @submit="submitComposer"
               @keydown="onComposerKeydown"
               @composition-start="input.composing.value = true"
               @composition-end="input.composing.value = false"
               @choose-command="chooseSlashCommand"
+              @select-recipient="presence.select"
+              @refresh-presence="presence.refresh"
             />
             <div class="mt-3 flex flex-wrap gap-2">
               <button
