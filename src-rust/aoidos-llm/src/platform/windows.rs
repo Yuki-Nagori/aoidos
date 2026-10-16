@@ -186,7 +186,7 @@ pub(crate) fn assert_owner_only(path: &Path) {
 // 选择 CredentialStore）。明文只存在于返回值中，不进日志 / Debug。
 
 /// Windows 原生取消测试用固定标题定位 `CredUI` 窗口。
-#[cfg(test)]
+#[cfg(any(test, feature = "native-smoke"))]
 const PROMPT_CAPTION: &str = "Aoidos API 密钥";
 
 /// 弹出 `CredUI` 密码对话框。
