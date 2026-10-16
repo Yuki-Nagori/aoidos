@@ -90,7 +90,7 @@ async fn memory_configuration_commands_preserve_versions_and_return_effective_va
         std::env::temp_dir().join(format!("aoidos-memory-config-ipc-{}", std::process::id()));
     let events = StorageEvents::new(Arc::new(WindowEvents::new(|_, _| Ok(()))));
     let app = mock_builder()
-        .manage(StorageService::new(&root, events))
+        .manage(StorageService::new(&root, events.clone()))
         .invoke_handler(tauri::generate_handler![
             memory_get_app_config,
             memory_save_app_config,
@@ -266,6 +266,7 @@ async fn memory_configuration_commands_preserve_versions_and_return_effective_va
         }
     }
     app.state::<StorageService>().storage.close().unwrap();
+    events.shutdown().await;
     drop(window);
     drop(app);
     std::fs::remove_dir_all(root).unwrap();
