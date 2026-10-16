@@ -1,0 +1,17 @@
+name: Run selected checks
+description: Execute one check using the plan produced by the changes job.
+inputs:
+  task:
+    description: One of test, format, web-lint, clippy, or layers.
+    required: true
+  plan:
+    description: JSON plan emitted by scripts/ci-scope.mts.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Run ${{ inputs.task }} scope
+      shell: bash
+      env:
+        AOIDOS_CI_PLAN: ${{ inputs.plan }}
+      run: bun scripts/ci-scope.mts "${{ inputs.task }}"

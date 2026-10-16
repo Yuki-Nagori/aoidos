@@ -12,6 +12,7 @@ Aoidos 是基于 Bun、Vue 3、TypeScript 和 Tauri 2 的 AI 剧情跑团桌面�
 | 技术选型、版本、IPC 通道与 CI            | [ai-docs/architecture/tech-stack.md](ai-docs/architecture/tech-stack.md)                       |
 | 目录结构、模块归属与命名                 | [ai-docs/architecture/repository-layout.md](ai-docs/architecture/repository-layout.md)         |
 | TypeScript / Rust 职责边界与工程纪律     | [ai-docs/architecture/ts-rust-boundary.md](ai-docs/architecture/ts-rust-boundary.md)           |
+| Rust / Web / 测试依赖方向                | [ai-docs/standards/layering.md](ai-docs/standards/layering.md)                                 |
 | 命令、事件与错误码契约                   | [ai-docs/architecture/ipc-contract.md](ai-docs/architecture/ipc-contract.md)                   |
 | 数据目录、SQLite、实例锁、原子写入与迁移 | [ai-docs/architecture/storage.md](ai-docs/architecture/storage.md)                             |
 | Provider、请求策略、护栏与凭据           | [ai-docs/architecture/llm.md](ai-docs/architecture/llm.md)                                     |
@@ -77,9 +78,10 @@ Aoidos 是基于 Bun、Vue 3、TypeScript 和 Tauri 2 的 AI 剧情跑团桌面�
 
 ## 日常工程约定
 
-- 命令通过根 `package.json` 中的 Bun scripts 执行；`bun run verify` 当前十二项全部通过才算本地验证完成。Husky 检查格式，CI 执行完整平台门禁。
+- 命令通过根 `package.json` 中的 Bun scripts 执行。常规本地提交前运行 `bun run test:affected`、`bun run format:affected` 和 `bun run lint:affected`，不要每个提交都运行全量 `bun run verify`；选择器遇到共享配置、未知输入或差异不可用时会自动扩展到全量。任务收尾仍运行一次 `bun run verify`；PR CI 在 Ubuntu 执行格式、lint、Clippy 等质量检查，并在三平台构建 Web 产物、受影响 Tauri 应用和运行受影响测试，相关原生验收在三平台执行。Nightly 在三平台构建并运行完整 Vitest、Rust / 原生测试，Ubuntu 运行完整 `verify` 与覆盖率。
 - `bun.lock` 与根目录唯一的 `Cargo.lock` 随依赖改动同步提交。
 - Rust 定型命令参数和返回值后，TypeScript 侧立即声明同型；`invoke` 不负责运行时校验。
 - 前端纯逻辑放在 `utils/` 并配行为测试；Rust 命令层保持薄，业务增长后拆为 workspace crate。
 - 非平凡改动先按[任务模板](ai-docs/task/_template.md)登记 task；提交消息包含 `Task: NNN`。CI 修复等平凡改动可不建 task，例外遵循[任务索引](ai-docs/task-index.md)和[提交规范](ai-docs/standards/commits.md)。
 - 技术行为变化同步更新受影响文档。目录结构使用文本代码块；Mermaid 图入库前渲染校验。
+- CI workflow 保留 job 编排与平台条件；重复的工具安装、选择计划执行和桌面会话步骤抽到 `.github/actions/` composite action。测试、格式与 lint 复用 `scripts/ci-scope.mts` 的变更计划；未知路径、共享配置或差异不可用时必须全量回退，不得静默跳过。CI 在 `bun install` 前通过 setup action 安装 `cargo-llvm-cov`，避免 postinstall 在冷 runner 上源码编译。

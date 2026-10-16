@@ -1,12 +1,12 @@
 # 构建与开发
 
-更新日期：2026-10-13。
+更新日期：2026-10-16。
 
 [架构总览](README.md)
 
 ## 环境
 
-预装 [Bun](https://bun.sh) 与 [rustup](https://rustup.rs) 后，`bun install` 一次完成其余一切：npm 依赖与 husky 钩子，加上 postinstall 钩子里的 Rust 侧配置（scripts/setup.mts）——按 `rust-toolchain.toml` 安装工具链（含 clippy / rustfmt / llvm-tools-preview）、对半截安装卸载重装自愈、补装覆盖率门禁用的 cargo-llvm-cov；全部就位时只是两次秒级探测。环境异常时 `bun run setup` 手动重跑同一逻辑。平台 WebView 依赖属系统层：Windows 需 WebView2（Win10/11 一般自带），macOS 需 Xcode Command Line Tools，Linux 需 webkit2gtk 等开发包（[Tauri 前置要求](https://tauri.app/start/prerequisites/)）。
+预装 [Bun](https://bun.sh) 与 [rustup](https://rustup.rs) 后，`bun install` 一次完成其余一切：npm 依赖与 husky 钩子，加上 postinstall 钩子里的 Rust 侧配置（scripts/setup.mts）——按 `rust-toolchain.toml` 安装工具链（含 clippy / rustfmt / llvm-tools-preview）、对半截安装卸载重装自愈、补装覆盖率门禁用的 cargo-llvm-cov；全部就位时只是两次秒级探测。CI 会先通过预编译 action 安装覆盖率工具，再运行 `bun install`，避免冷 runner 从源码构建。环境异常时 `bun run setup` 手动重跑同一逻辑。平台 WebView 依赖属系统层：Windows 需 WebView2（Win10/11 一般自带），macOS 需 Xcode Command Line Tools，Linux 需 webkit2gtk 等开发包（[Tauri 前置要求](https://tauri.app/start/prerequisites/)）。
 
 ## 常用命令
 
@@ -17,11 +17,14 @@
 | `bun install`                          | 安装依赖（同时启用 husky pre-commit）                                                                         |
 | `bun run tauri:dev`                    | 桌面窗口开发（Vite HMR + cargo 增量编译）                                                                     |
 | `bun run dev`                          | 浏览器纯前端预览（无 IPC，命令走前端回退）                                                                    |
-| `bun run build`                        | typecheck + Vite 生产构建 → `dist/`（`build:web` 为纯构建段，verify 复用）                                    |
-| `bun run verify`                       | 提交门禁，构成见下                                                                                            |
+| `bun run build`                        | typecheck + Vite 生产构建 → `dist/`（`build:web` 含 i18n 预检）                                               |
+| `bun run verify`                       | 任务收尾时运行的完整本地门禁，构成见下                                                                        |
 | `bun run test:native`                  | 聚合原生 UI / OS 凭据与主 Webview IPC 集成测试，需桌面会话                                                    |
 | `bun run test` / `test:coverage`       | Vitest / Vitest + 覆盖率门槛                                                                                  |
 | `bun run test:rust` / `coverage:rust`  | 普通 workspace 测试 / cargo-llvm-cov 聚合行覆盖率（最低 90%）                                                 |
+| `bun run test:affected`                | 按统一 Git 变更计划运行受影响 Rust packages 与 Vitest 镜像测试；未知范围回退全量                              |
+| `bun run format:affected`              | 按同一变更计划检查 rustfmt、Biome 与 dprint 的受影响文件                                                      |
+| `bun run lint:affected`                | 按同一变更计划运行 Biome、i18n、Rust 分层与受影响 crate Clippy                                                |
 | `bun run lint` / `lint:rust`           | Biome + i18n 检查 / clippy（`lint:fix` 自动修 TS 侧，`lint:rust:fix` 自动修 Rust 侧：clippy --fix + rustfmt） |
 | `bun run format` / `format:rust`       | Biome + dprint / rustfmt（`:check` 为只读检查）                                                               |
 | `bun run typecheck` / `typecheck:rust` | vue-tsc + 仓库脚本 tsc / cargo check                                                                          |
@@ -32,17 +35,19 @@
 | `bun run i18n:check`                   | 校验语言资源键、占位参数、静态引用及保留命名空间                                                              |
 | `bun run tauri:build`                  | 发布打包                                                                                                      |
 
+`build:web` 先运行 `i18n:check`；`build:web:assets` 只生成产物，供三平台 CI 与 `test:native` 复用。i18n 静态检查由 Ubuntu lint 负责。
+
 前端与夹具源代码按根 `tsconfig.json` 检查；仓库 `.mts` 脚本使用 `scripts/tsconfig.json`，继承严格检查并单独启用 Bun / Node 类型及 `allowImportingTsExtensions`，保持 `noEmit`。`typecheck` 聚合两项，前端配置不增加脚本运行环境类型。`@types/bun` / `@types/node` 作为直接开发依赖，版本由 `bun.lock` 固定。
 
 目录移动后若 Tauri 构建缓存仍引用旧绝对路径，先运行 `bun run clean:rust -- -p tauri`；仍存在其他旧缓存时用 `bun run clean:rust` 完整清理，再重跑门禁。
 
 ## verify 构成
 
-`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `format:check` · `format:rust:check` · `test:coverage` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十二项，任一失败即失败。Rust 库单测随覆盖率任务运行一次；`test:rust` 保留为普通 workspace 测试入口，CI 在 Windows / macOS 使用，Ubuntu 以 coverage 执行。前端格式由 Biome 与 dprint 按文件类型分工；Biome 检查 TS / JS / CSS / JSON lint，i18n 语义检查由 `i18n:check` 承担，Vue、HTML、Markdown 和 YAML 由 dprint 排版。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。husky 在每次 commit 前只跑双端格式检查；lint、测试与覆盖率交给推送前自查与 CI——CI 把十二项拆成具名步骤逐步执行，失败直接定位。失败处理：格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`（修完必须重跑 verify），测试挂了用 `test:watch` 本地复现。
+`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `lint:layers` · `format:check` · `format:rust:check` · `test:coverage` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十三项，任一失败即失败。Rust 库单测随覆盖率任务运行一次；`test:rust` 保留为本地普通 workspace 全量测试入口。PR CI 先由 `changes` job 生成共享变更计划，再并行运行 Ubuntu 质量门禁与三平台构建 / 受影响测试。类型检查、格式、lint 和 Clippy 在 Ubuntu 运行；Web 产物构建及受影响 Rust / Vitest 测试在三平台运行，原生验收在相关 Web 产物、原生测试输入或 Rust 消费闭包受影响时运行。Nightly 在三平台构建并运行完整 Vitest、workspace Rust 与原生测试；Ubuntu nightly 运行完整 `bun run verify`，覆盖率、knip、bench、rustdoc 也只在 Ubuntu 运行，并支持手动触发。共享配置、空 diff、未知路径或不可用 metadata / 基线回退全量。CI 的复用步骤位于 `.github/actions/`，workflow 负责可见的任务关系与平台条件。Biome / dprint 按文件类型选择，Biome 检查 TS / JS / CSS / JSON lint，i18n 语义检查由 `i18n:check` 承担，Vue、HTML、Markdown 和 YAML 由 dprint 排版。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。每个本地提交前运行 `test:affected`、`format:affected` 与 `lint:affected`；`bun run verify` 用于任务收尾完整验收，不要求对每个中间 commit 重复执行。失败时先复现受影响检查；格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`。
 
-CI 相对本地 verify 有两项**执行分工**：`cargo check` 不单跑（clippy 已含类型检查）；Rust 覆盖率只在 Ubuntu 生成，Windows / macOS 运行普通 `cargo test --workspace`，避免在慢速平台做 LLVM 插桩，同时保留三平台测试执行。`cargo-llvm-cov` 仍通过预编译 action 安装，避免 postinstall 回退到源码编译。触发范围见下文。
+PR CI 省略单独的 `cargo check`（Clippy 已含类型检查）；格式、lint 和 Clippy 在 Ubuntu 运行，Web 构建、受影响 Tauri 应用构建及受影响测试在三平台运行，相关原生验收才启动全平台会话。Nightly 在三平台构建并运行完整 Vitest、Rust workspace 与原生测试，完整 `verify` 和覆盖率仅在 Ubuntu 执行。测试、格式和 lint 选择器读取同一份计划：Cargo metadata 生成 workspace 反向依赖闭包；Vue / TS 源码映射到 `tests/web/` 镜像；格式按 Biome、dprint 与 rustfmt 的输入范围区分。本地比较 `origin/main...HEAD` 并合并暂存、未暂存和未跟踪文件，CI 使用事件 base / head SHA。差异缺失、共享配置或未知路径触发全量。`cargo-llvm-cov` 仍通过预编译 action 安装，避免 postinstall 回退到源码编译。依赖方向见[分层规范](../standards/layering.md)，触发范围见下文。
 
-CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原生依赖并执行 rustdoc / clippy / Rust 覆盖率，缩短这些错误的反馈时间；Rust 依赖缓存失败时也保存，工作区源码仍重新检查。三平台矩阵与门槛不变，每个 job 最多运行 30 分钟，工作流 token 只需读取仓库内容。
+CI 把变更规划、Ubuntu 质量门禁、三平台受影响测试和按需原生验收拆成独立 job；nightly 另在三平台运行完整 Rust / 原生测试。Linux GTK / WebKit / D-Bus 安装通过 composite action 复用。PR job 最多运行 30 分钟，nightly job 最多运行 90 分钟；工作流 token 只需读取仓库内容。
 
 验收分别记录 PR 与合并提交的 main push CI。PR 成功后仍须核验默认分支运行；main 失败时补记失败、继续修复并复验，不能只引用 PR 成功宣称交付通过。纯文档提交若按路径过滤不触发 CI，保留最近一次对应代码提交的默认分支证据。
 
@@ -54,13 +59,13 @@ CI 先完成格式、前端、knip、基准等快速门禁，再安装 Linux 原
 
 ## 原生能力集成验证
 
-`bun run test:native` 是独立于本地 verify 十二项的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
+`bun run test:native` 是独立于本地 `verify` 的真实会话测试，显式开启 `desktop-session`。Windows 使用 CredUI / Credential Manager，macOS 使用 AppKit / Keychain，Linux 使用 GTK / Secret Service。测试在进程主线程执行 UI，以合成值自动确认 / 取消并验证凭据读写清，不输出密钥；环境不满足时失败，不用模拟后端替代验收。
 
 入口聚合 `aoidos-native-tests` 全部桌面会话目标，新增目标只登记 Cargo；定向排查用 `bun run test:native --test ipc-platform`。根脚本先构建手写 `webview/main.ts` 到 `gen/webview/`，测试配置加载生成目录；`webview/` 与 `tauri.conf.json` 入库，整个 `gen/` 从 Git / Biome 排除。
 
 `ipc-platform` 使用真实主 Webview、产品命令及实际前端消费者，覆盖回合、记录、迁移、阶段 / 骰判、回退 / 重启和恢复 / 监听释放；`game-fixture.rs` 提供可信场景，不调用收费 API。具体断言与验证结果见 019–023 对应 task。
 
-CI 各平台运行聚合测试，单步超时 5 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。单平台结果不代替三平台 CI，原生实测不代替安装包验证；覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)。
+CI 各平台运行聚合测试，PR 单步超时 5 分钟、nightly 为 10 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。单平台结果不代替三平台 CI，原生实测不代替安装包验证；覆盖率边界见[测试规范](../standards/testing.md#rust-覆盖豁免台账)。
 
 ## 打包与版本
 
@@ -80,4 +85,4 @@ Windows / MSVC 的 Tauri 构建按 Cargo 目标平台判断，共用 `scripts/ru
 
 剧本原文 `resources/scripts/**` 是编译资源，修改正文或许可触发三平台 CI；普通 Markdown 与 `ai-docs/**` 仍跳过纯文档流水线。
 
-Rust lint / lint:rust:fix 启用测试 crate 的 `desktop-session`，以编译检查原生集成 target；两入口先调用 `build:native-fixture` 生成 Tauri 宏所需的 Webview 资源，不能依赖本地遗留 `gen/`。clippy 不执行原生窗口，实际会话验证由 `test:native` 执行；它复用同一夹具构建入口。
+Rust lint / lint:rust:fix 启用测试 crate 的 `desktop-session`，以编译检查原生集成 target；两入口先运行 `build:web:assets`，再调用 `build:native-fixture` 生成 Tauri 宏所需的 Webview 资源，不能依赖本地遗留 `gen/`。Clippy 不执行原生窗口，实际会话验证由 `test:native` 执行；它复用同一夹具构建入口。`build:web` 保留 i18n 预检，跨平台 CI / 原生测试调用 assets-only 构建，i18n 静态检查由 Ubuntu lint 负责。

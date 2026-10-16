@@ -1,8 +1,5 @@
-# CI：三平台各一条流水线；每个平台运行普通 Rust 测试，覆盖率只生成一次。
-# 与本地 verify 的差异：
-#   - cargo check 不单跑——clippy 已包含类型检查；
-#   - Ubuntu 的 coverage 步骤运行 library 测试并生成报告；Windows / macOS 使用普通
-#     cargo test，避免慢速 Windows 上支付 LLVM 插桩成本，三平台仍执行 workspace 测试。
+# PR CI 分为变更规划、Ubuntu 共享质量门禁与三平台构建 / 受影响验证；nightly 运行完整 verify。
+# PR 原生验收按变更范围触发；完整覆盖率、全量 lint 与静态审计移到 nightly。
 name: CI
 
 on:
@@ -12,14 +9,12 @@ on:
       - "**"
       - "!ai-docs/**"
       - "!**/*.md"
-      # 内嵌剧本改变编译产物与 prompt，必须复验；文档 Markdown 仍不触发。
       - "resources/scripts/**"
   pull_request:
     paths:
       - "**"
       - "!ai-docs/**"
       - "!**/*.md"
-      # 内嵌剧本改变编译产物与 prompt，必须复验；文档 Markdown 仍不触发。
       - "resources/scripts/**"
 
 concurrency:
@@ -30,8 +25,79 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: detect affected checks
+    runs-on: ubuntu-latest
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      full: ${{ steps.plan.outputs.full }}
+      has_rust_test: ${{ steps.plan.outputs.has_rust_test }}
+      has_vitest: ${{ steps.plan.outputs.has_vitest }}
+      has_format: ${{ steps.plan.outputs.has_format }}
+      has_lint: ${{ steps.plan.outputs.has_lint }}
+      has_layers: ${{ steps.plan.outputs.has_layers }}
+      has_desktop_clippy: ${{ steps.plan.outputs.has_desktop_clippy }}
+      has_app_build: ${{ steps.plan.outputs.has_app_build }}
+      has_native: ${{ steps.plan.outputs.has_native }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PR merge commit 与 push before SHA 都可见；基线不可信时 selector 回退全量。
+          fetch-depth: 2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - id: plan
+        name: Build shared test, format and lint plan
+        env:
+          AOIDOS_CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          AOIDOS_CI_HEAD_SHA: ${{ github.sha }}
+        run: bun scripts/ci-scope.mts output
+
+  quality:
+    name: shared quality gates (ubuntu)
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-aoidos
+        with:
+          rust-components: rustfmt,clippy
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Format affected files
+        if: needs.changes.outputs.has_format == 'true'
+        uses: ./.github/actions/run-scope
+        with:
+          task: format
+          plan: ${{ needs.changes.outputs.plan }}
+      - name: Lint affected files
+        if: needs.changes.outputs.has_lint == 'true'
+        uses: ./.github/actions/run-scope
+        with:
+          task: web-lint
+          plan: ${{ needs.changes.outputs.plan }}
+      - name: Check Rust dependency layers
+        if: needs.changes.outputs.has_layers == 'true'
+        uses: ./.github/actions/run-scope
+        with:
+          task: layers
+          plan: ${{ needs.changes.outputs.plan }}
+      - uses: ./.github/actions/linux-desktop-deps
+        if: needs.changes.outputs.has_desktop_clippy == 'true'
+      - name: Clippy affected workspace packages
+        if: needs.changes.outputs.has_lint == 'true'
+        uses: ./.github/actions/run-scope
+        with:
+          task: clippy
+          plan: ${{ needs.changes.outputs.plan }}
   verify:
     name: verify（${{ matrix.os }}）
+    needs: [changes]
     strategy:
       fail-fast: false
       matrix:
@@ -40,67 +106,29 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - uses: dtolnay/rust-toolchain@master
+          fetch-depth: 2
+      - uses: ./.github/actions/setup-aoidos
         with:
-          # 与 rust-toolchain.toml 保持一致
-          toolchain: "1.99.0"
-          components: clippy, rustfmt, llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # 失败也保留依赖编译缓存，修复格式或测试后无需重编依赖；工作区源码仍重新检查。
-          cache-on-failure: true
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
-      - name: 安装依赖（postinstall 做环境自检）
-        run: bun install --frozen-lockfile
-      - name: typecheck（前端 + 仓库脚本）
-        run: bun run typecheck
-      - name: lint（Biome + i18n）
-        run: bun run lint
-      - name: format（Biome + dprint）
-        run: bun run format:check
-      - name: format（rustfmt）
-        run: bun run format:rust:check
-      - name: test + coverage（vitest）
-        run: bun run test:coverage
-      - name: 死代码检查（knip）
-        run: bun run knip
-      - name: bench（tinybench 链路可用）
-        run: bun run bench
-      - name: build（vite 生产构建）
-        run: bun run build:web
-      # 前端快速门禁先完成；rustdoc / clippy 前先补齐 Linux 原生依赖。
-      - name: 安装 Tauri Linux 依赖
+          rust-components: ""
+      - uses: ./.github/actions/linux-desktop-deps
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
-            xvfb dbus-x11 gnome-keyring
-      - name: doc（rustdoc 拒绝警告）
-        run: bun run doc:rust
-      - name: lint（clippy + cargo check）
-        run: bun run lint:rust
-      - name: test（Rust workspace，Windows / macOS）
-        if: matrix.os != 'ubuntu-latest'
-        run: bun run test:rust
-      - name: test + coverage 门槛（cargo-llvm-cov）
-        if: matrix.os == 'ubuntu-latest'
-        run: bun run coverage:rust
-
-      - name: 原生 UI / 凭据与主 Webview IPC 验证（macOS / Windows）
-        if: matrix.os != 'ubuntu-latest'
+      - name: Build web assets
+        run: bun run build:web:assets
+      - name: Build affected Tauri application
+        if: needs.changes.outputs.has_app_build == 'true'
+        run: cargo build --locked --package aoidos
+      - name: Affected Rust and Vitest tests
+        if: needs.changes.outputs.has_rust_test == 'true' || needs.changes.outputs.has_vitest == 'true'
+        uses: ./.github/actions/run-scope
+        with:
+          task: test
+          plan: ${{ needs.changes.outputs.plan }}
+      - name: Native platform and IPC tests
+        if: matrix.os != 'ubuntu-latest' && needs.changes.outputs.has_native == 'true'
         timeout-minutes: 5
         run: bun run test:native
-      - name: 原生 UI / Secret Service 与主 Webview IPC 验证（Linux）
-        if: matrix.os == 'ubuntu-latest'
+      - name: Native platform and IPC tests (Linux session)
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.has_native == 'true'
         timeout-minutes: 5
-        run: |
-          dbus-run-session -- bash -c '
-            printf "aoidos-session-fixture" | gnome-keyring-daemon --unlock --components=secrets
-            xvfb-run -a bun run test:native
-          '
+        uses: ./.github/actions/linux-native-session

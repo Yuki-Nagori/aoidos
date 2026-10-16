@@ -247,18 +247,36 @@ fn wait_for_server() -> Result<(), Box<dyn std::error::Error>> {
     while Instant::now() < deadline {
         if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
             stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-            stream.write_all(
-                format!(
-                    "GET / HTTP/1.1\r\nHost: {HMR_HOST}:{HMR_PORT}\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
-            )?;
-            let mut response = String::new();
-            stream.read_to_string(&mut response)?;
-            if (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.1 304"))
-                && response.contains("Aoidos HMR fixture")
-            {
-                return Ok(());
+            let response = (|| -> std::io::Result<String> {
+                stream.write_all(
+                    format!(
+                        "GET / HTTP/1.1\r\nHost: {HMR_HOST}:{HMR_PORT}\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )?;
+                let mut response = String::new();
+                stream.read_to_string(&mut response)?;
+                Ok(response)
+            })();
+            match response {
+                Ok(response) => {
+                    if (response.starts_with("HTTP/1.1 200")
+                        || response.starts_with("HTTP/1.1 304"))
+                        && response.contains("Aoidos HMR fixture")
+                    {
+                        return Ok(());
+                    }
+                }
+                // A listener can accept while Vite is still starting and reset its first probe;
+                // keep polling within the startup deadline instead of failing on that race.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => return Err(error.into()),
             }
         }
         thread::sleep(Duration::from_millis(50));

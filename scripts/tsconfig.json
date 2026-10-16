@@ -5,5 +5,5 @@
     "types": ["bun", "node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["*.mts"]
+  "include": ["*.mts", "*.ts"]
 }

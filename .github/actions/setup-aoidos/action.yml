@@ -1,0 +1,37 @@
+name: Set up Aoidos toolchain
+description: Install the pinned Bun and Rust toolchains and optionally project dependencies.
+inputs:
+  rust-components:
+    description: Comma-separated Rust components to install.
+    required: false
+    default: "clippy, rustfmt, llvm-tools-preview"
+  install-coverage-tool:
+    description: Install cargo-llvm-cov.
+    required: false
+    # bun install runs postinstall, which otherwise builds this tool from source.
+    default: "true"
+  install-dependencies:
+    description: Install locked Bun dependencies.
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: "1.99.0"
+        components: ${{ inputs.rust-components }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+    - uses: taiki-e/install-action@v2
+      if: inputs.install-coverage-tool == 'true'
+      with:
+        tool: cargo-llvm-cov
+    - name: Install locked Bun dependencies
+      if: inputs.install-dependencies == 'true'
+      shell: bash
+      run: bun install --frozen-lockfile

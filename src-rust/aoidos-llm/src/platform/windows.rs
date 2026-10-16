@@ -185,7 +185,8 @@ pub(crate) fn assert_owner_only(path: &Path) {
 // `DO_NOT_PERSIST` 禁止 OS 把输入写入凭据管理器（保存路径由调用方显式
 // 选择 CredentialStore）。明文只存在于返回值中，不进日志 / Debug。
 
-/// `CredUI` 对话框标题；取消路径直测按它查找窗口。
+/// Windows 原生取消测试用固定标题定位 `CredUI` 窗口。
+#[cfg(any(test, feature = "native-smoke"))]
 const PROMPT_CAPTION: &str = "Aoidos API 密钥";
 
 /// 弹出 `CredUI` 密码对话框。
