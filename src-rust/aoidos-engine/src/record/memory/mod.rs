@@ -469,6 +469,108 @@ impl CausalPort for SourcePort<'_> {
         }
         Ok(false)
     }
+
+    fn valid_scene_entry(&self, scene_id: &str, record_seq: u64) -> Result<bool> {
+        if record_seq == 0 {
+            return Ok(self
+                .scene_catalog
+                .and_then(SceneCatalog::presence_policy)
+                .is_some_and(|policy| policy.initial_scene_id() == scene_id));
+        }
+        let Some(index) = self.session.index.get(&record_seq) else {
+            return Ok(false);
+        };
+        if !self.session.includes_record(record_seq, index) {
+            return Ok(false);
+        }
+        let record = self.session.known(record_seq)?;
+        let Body::System { code, data, .. } = record.body else {
+            return Ok(false);
+        };
+        Ok(matches!(
+            Fact::decode(&code, &data)?,
+            Fact::SceneAdvanced { position, .. } if position.scene_id == scene_id
+        ))
+    }
+
+    fn valid_completed_round(
+        &self,
+        round_id: &str,
+        scene_id: &str,
+        entry_record_seq: u64,
+        record_seq: u64,
+    ) -> Result<bool> {
+        if record_seq <= entry_record_seq || !self.valid_scene_entry(scene_id, entry_record_seq)? {
+            return Ok(false);
+        }
+        let Some(index) = self.session.index.get(&record_seq) else {
+            return Ok(false);
+        };
+        if !self.session.includes_record(record_seq, index) {
+            return Ok(false);
+        }
+        let record = self.session.known(record_seq)?;
+        let Body::System { code, data, .. } = record.body else {
+            return Ok(false);
+        };
+        let Fact::RoundEnded {
+            identity,
+            outcome: Outcome::Completed,
+            ..
+        } = Fact::decode(&code, &data)?
+        else {
+            return Ok(false);
+        };
+        if identity.round_id != round_id {
+            return Ok(false);
+        }
+
+        // 完成事实必须能对应到当前有效路径中同场景的场内接纳事实。
+        let mut bytes = 0_usize;
+        for (&seq, index) in self.session.index.range(..record_seq).rev().take(MAX_SCAN) {
+            bytes = bytes.saturating_add(index.len);
+            if bytes > MAX_SCAN_BYTES {
+                return Ok(false);
+            }
+            if !self.session.includes_record(seq, index) {
+                continue;
+            }
+            let accepted = self.session.known(seq)?;
+            if let Body::System { code, data, .. } = accepted.body
+                && let Fact::RoundAccepted {
+                    identity: accepted_identity,
+                    mode,
+                    scene_id: accepted_scene,
+                    ..
+                } = Fact::decode(&code, &data)?
+                && accepted_identity.round_id == round_id
+            {
+                if seq <= entry_record_seq
+                    || mode != RecordMode::InCharacter
+                    || accepted_scene != scene_id
+                {
+                    return Ok(false);
+                }
+                // 边界内再次发生场景切换，说明该回合不属于传入的进入实例。
+                for (&between_seq, between_index) in self.session.index.range((
+                    std::ops::Bound::Excluded(entry_record_seq),
+                    std::ops::Bound::Excluded(seq),
+                )) {
+                    if !self.session.includes_record(between_seq, between_index) {
+                        continue;
+                    }
+                    let between = self.session.known(between_seq)?;
+                    if let Body::System { code, data, .. } = between.body
+                        && matches!(Fact::decode(&code, &data)?, Fact::SceneAdvanced { .. })
+                    {
+                        return Ok(false);
+                    }
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 fn same_round(left: &RoundIdentity, right: &RoundIdentity) -> bool {
     left.version == right.version

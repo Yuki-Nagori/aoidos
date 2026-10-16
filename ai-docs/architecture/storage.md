@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-12。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-17。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；032 增加轮回刻痕来源与节点进度 / 提示迁移；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -72,11 +72,10 @@ CREATE TABLE point_allocations (
 ├── workspaces/<script-id>/       # 每剧本一个工作区
 │   ├── transcript/<session-id>.jsonl
 │   ├── transcript/<session-id>.<turn-id>.partial.jsonl  # 唯一活跃安全增量日志
-│   ├── memory/                   # 029：文件正文；manifest 在 storage.sqlite
-│   │   ├── runs/<run-id>/        # 029：会话记忆版本正文；030 接入批次结果文件
-│   │   │   ├── entries/<entry-id>/<version-id>.json
-│   │   │   └── batches/<batch-id>/result.json
-│   │   └── cycle/                # 轮回刻痕，独立生命周期（032 待实现）
+│   ├── memory/                   # 029：不可变记忆正文；manifest 在 storage.sqlite
+│   │   └── runs/<run-id>/        # 会话记忆版本正文与 030 批次结果文件
+│   │       ├── entries/<entry-id>/<version-id>.json
+│   │       └── batches/<batch-id>/result.json
 │   └── exports/                  # 导出物（唯一允许被 shell 打开的目录）
 └── backups/                      # 迁移 / 覆写前的自动备份
     └── storage-v<N>-<stamp>.sqlite  # SQLite 迁移备份；最近 3 份
@@ -120,7 +119,7 @@ CREATE TABLE point_allocations (
 
 ## 业务存储所有权
 
-`aoidos-engine::Storage` 统一打开 `storage.sqlite` 并核验共享 applied 表，保存真实迁移状态；后续主题 / 计费 / 记忆模块复用此所有者及迁移编号，不创建第二套业务连接生命周期。`aoidos-store::applied` 提供 operationId + contentHash 幂等提交原语，业务 schema 和解释器由消费模块所有。
+`aoidos-engine::Storage` 统一打开 `storage.sqlite` 并核验共享 applied 表，保存真实迁移状态；主题 / 计费 / 记忆模块复用此所有者及迁移编号，不创建第二套业务连接生命周期。记忆正文由文件承载；029 manifest、030 批次收据、032 `memory_cycle_*` 刻痕与节点派生状态均存 SQLite。`aoidos-store::applied` 提供 operationId + contentHash 幂等提交原语，业务 schema 和解释器由消费模块所有。
 
 043 的 `entity_registry_runs` / `entity_registry_entries` 由 engine 持有 schema 和迁移。周目身份、动态 entityRevision、源 mutation / hash / recordSeq 与 `store_applied` 回执在同一 SQLite 事务写入；JSONL 的 `settlementPlanned` 仍是意图事实源，SQLite 注册行是已应用状态。启动恢复只重放原 mutation；记忆入口在 session → 数据库锁顺序下审计源记录、应用回执及有效分支，再生成有界只读快照。分支回退不会删除身份审计行，但外分支身份不会进入当前快照。
 

@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-13。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复基础与 030 门控 / 批次基础已交付；候选构造、Prompt、调用触发、UI 与记忆 IPC 尚未接入，算法数值待标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
+更新日期：2026-10-17。状态：**产品规则与工程协议 v1 已评审；029 存储 / 恢复、030 门控 / 批次基础已交付；032 已增加轮回刻痕仓储和节点进度原语，产品触发 / UI / 记忆 IPC 尚未接入；候选构造、Prompt 与算法数值待完成**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
 
 ## 阅读路径
 
@@ -467,7 +467,7 @@ recordSeq / historyRevision 沿用 006 / 012 的安全整数范围；正文 hash
 
 获知证据由引擎根据明确的观察范围、对话接收对象、已登记传闻交付或规则事件建立，不因同场景自动建立。`observed` / `rumor` 的 `evidenceId` 对应引擎提交的证据事件，SourcePort 以它校验事件、来源和当前有效因果路径；现有 `told` 则由 SourcePort 直接核验完整的定向对话因果链。模型只能选择本批提供的证据 ID。没有对应角色的有效证据时，不提交该角色认知；玩家偏好使用独立 subject，不伪装成 NPC 证据。来源方式逐来源保存；inferred 是独立标记，不替换 observed / told / rumor。
 
-当前对话入口通过可选 `recipientCharacterId` 显式指定接收者；正式提交尚未校验动态在场。045 已提供 Rust 权威的在场 / 获知事件端口，但快照 IPC 和带 `expectedPresenceRevision` 的 UI 接线由 046 承接；030 读取可信 evidence 并继续校验来源。恢复只保留已写入 `RoundAccepted` 的目标及 revision，不因此产生新的知识事件。记忆专属命令 / 查询 IPC 由 031 接入；观察和传闻没有有效事件时失败关闭，实体存在或在场本身不授予知识。
+当前对话入口通过可选 `recipientCharacterId` 显式指定接收者；正式提交会基于 Rust 权威在场快照校验 `expectedPresenceRevision`，过期或不可用目标会在追加输入前拒绝。045 提供权威在场 / 获知事件端口，046 已接入快照 IPC、角色选择界面与 revision 校验；030 读取可信 evidence 并继续核验来源。恢复只保留已写入 `RoundAccepted` 的目标及在场 revision，不因此产生新的知识事件。记忆专属命令 / 查询 IPC 由 031 接入；观察和传闻没有有效事件时失败关闭，实体存在或在场本身不授予知识。
 
 `observed` 事件必须由登记的引擎规则从具体动作 / 结果显式产生，绑定知情角色、来源位置、当时在场 revision、可见范围和规则版本；v1 的可见范围限定为规则绑定场景内已完成的公开旁白，并用 UTF-8 字节区间标出依据，角色须在来源时刻处于该场景。同场、玩家输入、角色私语或其他场景正文不构成观察。`rumor` 每次交付都是独立事件，至少链接当前告知者、交付来源、原始主张来源 / 前一跳证据 ID、接收者、传播规则版本和不确定性；未登记的跳转不成立，默认不自动传播。`evidenceId` 即可信事件身份，030 解析并核验整条证明链；事件缺失、部分回合、未应用或已回退时不向候选暴露。这里的范围与证明字段由 044 协议冻结，045 负责权威事件，030 负责记忆消费，避免 memory 依赖反向进入游戏引擎。
 
@@ -636,17 +636,17 @@ prepared → ready → applied 是正常路径。文件落盘成功而 ready 回
 
 ### 轮回与节点的类型化接入
 
-刻痕拟使用 CycleMarkV1：markId、scriptId、cycleGen、ruleId / ruleVersion、subjectIds、源 run / session / 因果路径锚点、sourceRefs、kind、detailPolicy、priority、短摘要。kind 为 familiarity / affinity / wariness / fragment；detailPolicy 为 vague / explicit，explicit 必须有对应剧本规则授权。priority 为剧本登记的 0–1,000 整数，不由模型评分填写。刻痕稳定身份由规则 ID、对象和引擎登记的 imprintKey 决定，按来源幂等添加，不以摘要措辞生成新 ID。
+032 已在 `aoidos-memory` 实现 CycleMarkV1、稳定身份、来源快照和有界查询。字段包括 markId、scriptId、cycleGen、ruleId / ruleVersion、subjectIds、源 run / session / 因果路径锚点、sourceRefs、kind、detailPolicy、priority 和短摘要。kind 为 familiarity / affinity / wariness / fragment；detailPolicy 为 vague / explicit，explicit 必须有对应剧本规则授权。priority 为剧本登记的 0–1,000 整数，不由模型评分填写。刻痕稳定身份由规则 ID、对象和引擎登记的 imprintKey 决定；相同身份重放只幂等补充来源，不以摘要措辞生成新 ID。仓储负责形状、来源有效性和容量，不替代上游剧本规则授权。
 
 授权处理只有本地规则能产生刻痕，模型可在已授权范围内提出摘要。首轮开发活动刻痕上限每剧本合计 64，绝对 256；每条摘要 ≤512 字节、每次拟选最多 8 条且摘要总计 ≤2 KiB。超限独立归档，不删除来源；去重合并来源前重查每个分支锚点。同一规则的新一代实例保留 generation 和来源版本，不把旧 cycle strength 套入会话公式。
 
 新周目仅从当前选定且有效的来源分支建立授权快照；快照绑定原始因果锚点并保护被引用历史，不能因后来打开另一个分支偷换来源。来源损坏或授权撤销时相应刻痕不可使用。v1 保存 / 查询刻痕及准备投影端口；实际可选注入按后续独立投影设计实施，不以缓存已存储宣称角色已获得该知识。若以后进入 header 静态段，仍在创建 header 前冻结，不能热改现有前缀。
 
-节点接口只读取 012 定义、023 交付的可信 SceneRuleView：sceneId、advanceRuleIds、progressRuleIds、hintRules 和 exitRuleIds；条件计算复用[阶段机的只读求值端口](turn-state-machine.md#场景规则视图与只读求值端口)，返回 matched、确认 revision 与可信依据引用，不接收任意 SQL / 模型谓词。hintRule 有 hintId、whenRuleId、固定提示文本和目标范围；替代线索 / 出口也必须引用已有登记规则，不能直接补写事实。
+节点接口只读取 012 定义、023 交付的可信 SceneRuleView：sceneId、advanceRuleIds、progressRuleIds、hintRules 和 exitRuleIds；条件计算复用[阶段机的只读求值端口](turn-state-machine.md#场景规则视图与只读求值端口)，返回 matched、确认 revision 与可信依据引用，不接收任意 SQL / 模型谓词。hintRule 有 hintId、whenRuleId、固定提示文本和目标范围；替代线索 / 出口也必须引用已有登记规则，不能直接补写事实。032 的 engine 适配器只接受同一目录 / 历史修订且属于 progressRuleIds 的求值结果，并把依据规范化后计算哈希；不自行求值条件。
 
-scene.progress 是 032 维护的派生进度，不是新增世界属性或公开 phase；只有 progressRuleIds 匹配结果出现新的有效依据时改变，规则持续为 true 或重复返回相同引用不算新进展。进入场景时记录已有依据作为基线，不能把任意世界 revision 变化当有效进展。每个已完成场内回合至多更新一次停滞计数；可信进展 / 场景改变后重置，失败 / 取消 / OOC / 重放不计。开发起点为 8 个无进展回合后提供可用提示、提示冷却 5 回合、每场最多 3 个已登记提示，均需剧本配置和样本验证；这不是自动晋级阈值。
+scene.progress 是 032 维护的派生进度，不是新增世界属性或公开 phase；只有 progressRuleIds 匹配结果出现新的有效依据时改变，规则持续为 true 或重复返回相同引用不算新进展。场景节点实例由当前 `historyRevision` 与进入记录序号共同标识：初始场景使用序号 0，后续进入锚定已应用的 SceneAdvanced 记录；同场景离开再进入会建立独立进度，回退后即使保留同一进入记录，也会在新历史修订下重建状态。`historyRevision` 只用于分支有效性，不充当回合计数；完成回合以其有效 RoundEnded 记录序号单调推进，并核验接纳事实属于该次场景进入（中间没有新的 SceneAdvanced），且为同场景的场内 RoundAccepted。节点仓储为每个有效依据保存有界规范化快照和哈希，roundId 重放幂等，旧回合不能倒退或重复计数；只有已完成回合可增加停滞计数，失败 / 取消 / OOC 不调用完成更新。开发门槛为 8 个无进展回合后允许提示，提示冷却 5 回合、每场最多 3 个已登记提示；仓储以事务和 revision CAS 领取提示。数值仍需样本验证，这不是自动晋级阈值。
 
-提示选择纯函数按 rule priority / hintId 稳定排序，先核验条件，返回预置文本 / 合法操作，不追加模型调用；提示只读展示，不自动兑现替代线索或出口。没有可用出口时允许继续探索或结束游玩，后者保存 / 关闭当前对局，不伪造剧情胜利或结束条件。接入由 D 完成，复用阶段机提交结果与同型查询，不扩展世界事实权限。
+提示选择纯函数按 rule priority / hintId 稳定排序，先核验条件，返回预置文本 / 合法操作，不追加模型调用；提示只读展示，不自动兑现替代线索或出口。032 已实现适配与仓储原语，但尚无产品调用方 / IPC / UI，因此不能宣称运行期已经启用提示。后续接线复用阶段机提交结果，不扩展世界事实权限。没有可用出口时允许继续探索或结束游玩，后者保存 / 关闭当前对局，不伪造剧情胜利或结束条件。
 
 ### 与 005 / 006 / 012 的对齐
 

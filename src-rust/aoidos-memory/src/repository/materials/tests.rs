@@ -1458,7 +1458,6 @@ fn upgrade_preserves_completed_legacy_applied_results_without_inventing_links() 
     f.conn
         .execute_batch(crate::schema::LEGACY_BATCH_COMPLETION_BACKFILL)
         .unwrap();
-
     let receipt = f.repo.batch_receipt(&f.conn, &snapshot.batch_id).unwrap();
     assert_eq!(receipt.state, BatchState::Completed);
     assert_eq!(

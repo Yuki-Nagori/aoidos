@@ -29,6 +29,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     aoidos_memory::schema::LEGACY_BATCH_COMPLETION_BACKFILL,
     crate::game::catalog::ENTITY_REGISTRY_MIGRATION,
     aoidos_memory::schema::ALIAS_MIGRATION,
+    aoidos_memory::schema::CYCLE_MIGRATION,
 ];
 
 pub struct Storage {

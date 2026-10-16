@@ -11,6 +11,8 @@ mod question;
 pub use question::*;
 mod alias;
 pub use alias::*;
+mod cycle;
+pub use cycle::*;
 
 pub type Hash = [u8; 32];
 pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;
@@ -345,6 +347,24 @@ pub trait CausalPort {
     /// # Errors
     /// 必须匹配引擎已确认的场内完成事实及 roundId，不由任意来源推进时钟。
     fn completed_round(&self, round_id: &str, source: &SourceRef) -> Result<bool>;
+
+    /// 校验当前有效历史中的场景进入锚点；序号 0 表示剧本登记的初始场景。
+    /// 未实现此检查的端口默认拒绝，避免调用方伪造节点身份。
+    fn valid_scene_entry(&self, _scene_id: &str, _record_seq: u64) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// 校验指定场景中的场内完成回合及其终态记录位置。
+    /// 未实现此检查的端口默认拒绝，不允许用调用方声明推进节点计数。
+    fn valid_completed_round(
+        &self,
+        _round_id: &str,
+        _scene_id: &str,
+        _entry_record_seq: u64,
+        _record_seq: u64,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 
     /// 当前完整可信目录中的实体解析上下文；未登记实体返回 `None`。
     fn entity_alias_context(&self, _entity_id: &str) -> Result<Option<EntityAliasContext>> {
