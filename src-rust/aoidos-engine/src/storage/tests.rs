@@ -2,7 +2,8 @@ use super::*;
 use crate::{migration::MigrationEvent, record::test_support};
 use aoidos_memory::{
     error::{Error, Reason},
-    model::{Algorithm, CausalPort, Policy},
+    model::{Algorithm, CausalPort, CycleKind, DetailPolicy, Policy, ProposalContext},
+    repository::{BatchCompletion, BatchSnapshot, Span},
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -205,6 +206,153 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
     );
     reopened.close().unwrap();
     drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atomically() {
+    let root = std::env::temp_dir().join(format!(
+        "aoidos-cycle-mark-completion-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    let base_catalog = scene_catalog();
+    let catalog = base_catalog
+        .with_cycle_mark_rules(vec![
+            crate::game::catalog::CycleMarkRule::new(
+                "remember-rescue".into(),
+                1,
+                vec![
+                    crate::game::catalog::CycleSubjectScope::new(
+                        crate::game::catalog::EntityKind::Character,
+                        "mistbell".into(),
+                    )
+                    .unwrap(),
+                ],
+                "rescued-player".into(),
+                CycleKind::Familiarity,
+                DetailPolicy::Vague,
+                10,
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+    let run = storage
+        .initialize_memory_run(&session_id, &catalog)
+        .unwrap();
+    let session = storage.records.get(&session_id).unwrap();
+    let source_seq = session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我曾帮助洛苇逃出钟室。".into(),
+            mode: Some(crate::record::format::InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let batch_id = aoidos_memory::model::new_id();
+    let turn_id = aoidos_memory::model::new_id();
+    let request_id = aoidos_memory::model::new_id();
+    let response = r#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark-1","ruleId":"remember-rescue","sourceIds":["s1"],"subjectIds":["luo-wei"],"summary":"洛苇记得玩家曾帮助她逃离钟室。"}]}"#.as_bytes();
+
+    storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            let source = port.reference(&run.run_id, source_seq)?;
+            let material_id = repository.register_material(connection, port, &source, 0)?;
+            let boundary = port.boundary()?;
+            let snapshot = BatchSnapshot {
+                logical_clock: repository.clock(connection, port, &run.run_id)?,
+                version: 1,
+                batch_id: batch_id.clone(),
+                run_id: run.run_id.clone(),
+                history_revision: boundary.history_revision,
+                entity_revision: boundary.entity_revision,
+                evidence_revision: boundary.evidence_revision,
+                policy_hash: run.policy_hash,
+                spans: vec![Span {
+                    source_id: "s1".into(),
+                    material_id,
+                    source,
+                    text: "我曾帮助洛苇逃出钟室。".into(),
+                    context: false,
+                    continuation: false,
+                }],
+                input: serde_json::json!({"version": 1}),
+            };
+            repository.freeze_batch(connection, port, &snapshot)?;
+            Ok(())
+        })
+        .unwrap();
+
+    let mut context = ProposalContext::default();
+    crate::record::memory::processing::prepare_cycle_mark_context(
+        &storage,
+        &session_id,
+        &catalog,
+        &batch_id,
+        &mut context,
+    )
+    .unwrap();
+    storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            repository.dispatch_batch(connection, port, &batch_id, &turn_id, &request_id)?;
+            repository.receive_batch(connection, &batch_id, &turn_id, &request_id, response)?;
+            Ok(())
+        })
+        .unwrap();
+    let completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![],
+    };
+    assert!(
+        crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &batch_id,
+            &context,
+            &completion,
+        )
+        .unwrap()
+    );
+    assert!(
+        !crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &batch_id,
+            &context,
+            &completion,
+        )
+        .unwrap()
+    );
+    let (snapshot, state) = storage
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            let result = repository.batch(connection, &batch_id)?;
+            let receipt = repository.batch_receipt(connection, &batch_id)?;
+            assert_eq!(
+                receipt.state,
+                aoidos_memory::repository::BatchState::Completed
+            );
+            let marks = repository.cycle_marks(connection, &run.script_id, false)?;
+            assert_eq!(marks.len(), 1);
+            assert_eq!(marks[0].mark.subject_ids, ["luo-wei"]);
+            Ok(result)
+        })
+        .unwrap();
+    assert_eq!(state, aoidos_memory::repository::BatchState::Completed);
+    assert_eq!(snapshot.batch_id, batch_id);
+    storage.close().unwrap();
+    drop(storage);
     std::fs::remove_dir_all(root).unwrap();
 }
 
