@@ -8,6 +8,7 @@ import { useProduct } from "./composables/useProduct";
 import { useGameView } from "./composables/useGameView";
 import { useGameInput } from "./composables/useGameInput";
 import { useScenePresence } from "./composables/useScenePresence";
+import { useSceneHint } from "./composables/useSceneHint";
 import { useGameControls } from "./composables/useGameControls";
 import { useTheme } from "./composables/useTheme";
 import { useLocale } from "./composables/useLocale";
@@ -62,6 +63,7 @@ const game = useGameView(sessionId);
 const { phase, turn, records } = game;
 const current = computed(() => phase.state.value.snapshot);
 const presence = useScenePresence(sessionId, current);
+const sceneHint = useSceneHint(sessionId, current);
 const input = useGameInput(sessionId, (id, text) => {
   const recipient = composerRecipient(
     previewComposerInput(text).mode,
@@ -1110,6 +1112,28 @@ void preferences.load();
           <h2 class="text-2xl font-semibold">{{ product.session.value.title }}</h2>
           <p v-if="scenePath" class="mt-2 text-sm text-muted">{{ scenePath }}</p>
           <p class="mt-3 text-sm text-muted">{{ t("game.scenePrompt") }}</p>
+          <button
+            type="button"
+            class="mt-4"
+            :disabled="sceneHint.loading.value || !current?.scene || current.needsRecovery"
+            @click="sceneHint.request"
+          >
+            {{ sceneHint.loading.value ? t("game.hintLoading") : t("game.requestHint") }}
+          </button>
+          <p
+            v-for="hint in sceneHint.hints.value"
+            :key="hint.hintId"
+            class="mt-3 text-sm text-accent-violet"
+            role="status"
+          >
+            {{ hint.text }}
+          </p>
+          <p v-if="sceneHint.unavailable.value" class="mt-3 text-sm text-muted" role="status">
+            {{ t("game.hintUnavailable") }}
+          </p>
+          <p v-if="sceneHint.failed.value" class="mt-3 text-sm text-warning" role="alert">
+            {{ t("game.hintFailed") }}
+          </p>
           <p v-if="current?.resumeRequired" class="mt-4 text-sm text-warning">
             {{ t("game.paused") }}
           </p>

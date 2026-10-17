@@ -153,6 +153,39 @@ impl Storage {
         let session = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.with_memory_context_for_session(&session, scene_catalog, job)
+    }
+
+    /// 调用方已持有会话锁时复用同一会话快照，避免回调递归获取非重入锁。
+    ///
+    /// 锁顺序仍为会话 → 数据库；不得在回调中再次获取会话锁或跨越 `await`。
+    pub(crate) fn with_memory_context_locked<T>(
+        &self,
+        session: &crate::record::session::Session,
+        scene_catalog: &crate::game::catalog::SceneCatalog,
+        job: impl FnOnce(
+            &aoidos_memory::repository::Repository,
+            &mut rusqlite::Connection,
+            &crate::record::memory::SourcePort<'_>,
+            &crate::record::session::Session,
+            &crate::game::catalog::EntityDirectory,
+        ) -> aoidos_memory::error::Result<T>,
+    ) -> aoidos_memory::error::Result<T> {
+        self.with_memory_context_for_session(session, scene_catalog, job)
+    }
+
+    fn with_memory_context_for_session<T>(
+        &self,
+        session: &crate::record::session::Session,
+        scene_catalog: &crate::game::catalog::SceneCatalog,
+        job: impl FnOnce(
+            &aoidos_memory::repository::Repository,
+            &mut rusqlite::Connection,
+            &crate::record::memory::SourcePort<'_>,
+            &crate::record::session::Session,
+            &crate::game::catalog::EntityDirectory,
+        ) -> aoidos_memory::error::Result<T>,
+    ) -> aoidos_memory::error::Result<T> {
         let seed = crate::game::assets::entity_directory(&session.header().script_id)
             .map_err(memory_context_error)?;
         let mut database = self
@@ -165,14 +198,14 @@ impl Storage {
                 aoidos_memory::error::Reason::RecoveryRequired,
             ))?;
         let entity_directory = crate::game::catalog::EntityRegistry
-            .snapshot(connection, &session, &seed)
+            .snapshot(connection, session, &seed)
             .map_err(memory_context_error)?;
         let port = crate::record::memory::SourcePort::with_evidence_context(
-            &session,
+            session,
             &entity_directory,
             scene_catalog,
         )?;
-        job(&self.memory, connection, &port, &session, &entity_directory)
+        job(&self.memory, connection, &port, session, &entity_directory)
     }
 
     /// 在不取会话锁时借用记忆仓储；仅用于已有会话锁的执行路径预写待处理事件。

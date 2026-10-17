@@ -85,6 +85,18 @@ pub async fn get_scene_presence(
         .map_err(CmdError::from)
 }
 /// # Errors
+/// 会话未登记、当前世界待恢复或提示状态无法持久领取时失败关闭。
+pub async fn claim_scene_hint(
+    service: &Service,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Option<aoidos_engine::game::domain::SceneHint>, CmdError> {
+    let args: SessionArgs = decode(&request)?;
+    service
+        .claim_scene_hint(&args.session_id)
+        .await
+        .map_err(CmdError::from)
+}
+/// # Errors
 /// 身份、忙碌交接或非法阶段拒绝，响应等待旧调用的一致边界。
 pub async fn interrupt(
     service: &Service,

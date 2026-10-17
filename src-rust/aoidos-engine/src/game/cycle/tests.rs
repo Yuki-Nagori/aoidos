@@ -146,3 +146,37 @@ fn eligible_hints_rejects_an_incomplete_rule_result_set() {
         .is_err()
     );
 }
+
+#[test]
+fn eligible_hints_allow_multiple_hints_to_share_one_condition() {
+    let mut scene = scene();
+    scene.hint_rules[1].when_rule_id = "opened-gate".into();
+    let progress = SceneProgress {
+        run_id: "run".into(),
+        scene_id: "archive".into(),
+        catalog_revision: "catalog-v1".into(),
+        entry_history_revision: 0,
+        entry_record_seq: 0,
+        revision: 1,
+        progress_count: 0,
+        stagnation_rounds: aoidos_memory::model::NODE_HINT_AFTER_STAGNANT_ROUNDS,
+        completed_rounds: 8,
+        last_completed_record_seq: 8,
+        last_round_id: None,
+        last_evidence_hash: None,
+        hints_shown: 0,
+        last_hint_round: None,
+        last_hint_id: None,
+    };
+
+    let hints = eligible_hints(
+        &scene,
+        &[matched("opened-gate", "gate", 0, true)],
+        &progress,
+        0,
+        "world-v1",
+    )
+    .unwrap();
+
+    assert_eq!(hints.len(), 2);
+}

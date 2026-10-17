@@ -58,7 +58,8 @@ pub struct CompletedRound {
     pub through_seq: u64,
 }
 /// 已通过可信规则求值并成功持久化领取的固定场景提示。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SceneHint {
     pub hint_id: String,
     pub text: String,
@@ -107,6 +108,7 @@ pub trait CompletedRounds: Send + Sync {
     /// 周目未初始化、生命周期事件待恢复、历史修订不符、规则结果无效或存储失败时拒绝。
     fn claim_scene_hint(
         &self,
+        _session: &crate::record::session::Session,
         _scene_id: &str,
         _history_revision: u64,
         _world_revision: &str,

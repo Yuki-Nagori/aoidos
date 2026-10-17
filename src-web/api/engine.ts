@@ -60,6 +60,11 @@ export interface ScenePresenceSnapshot {
   presenceRevision: string;
   characters: { id: string; kind: "character"; scope: string; canonicalName: string }[];
 }
+export interface SceneHint {
+  hintId: string;
+  text: string;
+  targetScope: string;
+}
 type AcceptedOperation = { operationId: string };
 /** 四种事件均包含完整阶段状态；各自序号与跨事件修订分别消费。 */
 export type PhaseEventMap = {
@@ -93,6 +98,10 @@ export function submitInput(
 /** 只读取当前完整、权威的在场快照；不从目录推测可交互角色。 */
 export function getScenePresence(sessionId: string): Promise<ScenePresenceSnapshot> {
   return invoke("engine_get_scene_presence", { sessionId });
+}
+/** 由引擎在当前已应用世界上求值并领取固定提示；调用方不传规则匹配结果。 */
+export function claimSceneHint(sessionId: string): Promise<SceneHint | null> {
+  return invoke("engine_claim_scene_hint", { sessionId });
 }
 /** 取消当前子调用后由引擎保留父 lease，接纳插话。 */
 export function interruptRound(
