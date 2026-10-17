@@ -34,6 +34,107 @@ fn run_reopen_freezes_policy_and_rejects_changed_identity_or_corruption() {
 }
 
 #[test]
+fn cycle_generation_advances_per_script_only_for_a_new_session() {
+    let mut f = Fixture::new();
+    assert_eq!(f.run.cycle_gen, 1);
+    assert_eq!(
+        f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap(),
+        f.run,
+        "同一会话恢复不得增加周目代数"
+    );
+
+    let original_session = f.port.view.session_id.clone();
+    f.port.view.session_id = new_id();
+    let second = f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap();
+    assert_eq!(second.cycle_gen, 2);
+    assert_eq!(f.repo.run(&f.conn, &second.run_id).unwrap(), second);
+
+    f.port.view.session_id = new_id();
+    f.port.view.script_id = "other-script".into();
+    let other_script = f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap();
+    assert_eq!(other_script.cycle_gen, 1, "不同剧本使用独立代数");
+
+    f.port.view.script_id = f.run.script_id.clone();
+    f.port.view.session_id = original_session;
+    assert_eq!(
+        f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap(),
+        f.run
+    );
+    f.port.view.session_id = new_id();
+    let third = f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap();
+    assert_eq!(third.cycle_gen, 3, "恢复旧会话后新周目仍单调递增");
+}
+
+#[test]
+fn cycle_generation_counter_corruption_and_exhaustion_fail_closed() {
+    let mut f = Fixture::new();
+    f.port.view.session_id = new_id();
+    let second = f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap();
+    assert_eq!(second.cycle_gen, 2);
+    f.conn
+        .execute(
+            "UPDATE memory_script_cycle_generations SET cycle_gen=1 WHERE script_id=?1",
+            [&f.run.script_id],
+        )
+        .unwrap();
+    f.port.view.session_id = new_id();
+    assert!(matches!(
+        f.repo.create_run(&mut f.conn, &f.port, policy()),
+        Err(Error::Corrupt)
+    ));
+
+    f.conn
+        .execute(
+            "UPDATE memory_script_cycle_generations SET cycle_gen=?1 WHERE script_id=?2",
+            params![MAX_INTEGER, f.run.script_id],
+        )
+        .unwrap();
+    rejected(
+        f.repo.create_run(&mut f.conn, &f.port, policy()),
+        Reason::CapacityBlocked,
+    );
+}
+
+#[test]
+fn cycle_generation_migration_backfills_existing_runs_without_advancing_twice() {
+    let mut f = Fixture::new();
+    f.conn
+        .execute_batch(
+            "DROP TABLE memory_script_cycle_generations; DROP TABLE memory_run_cycle_generations;",
+        )
+        .unwrap();
+    f.conn
+        .execute_batch(crate::schema::CYCLE_GENERATION_MIGRATION)
+        .unwrap();
+    f.conn
+        .execute_batch(crate::schema::CYCLE_GENERATION_BACKFILL)
+        .unwrap();
+    f.conn
+        .execute_batch(crate::schema::CYCLE_GENERATION_BACKFILL)
+        .unwrap();
+
+    assert_eq!(f.repo.run(&f.conn, &f.run.run_id).unwrap(), f.run);
+    f.port.view.session_id = new_id();
+    let next = f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap();
+    assert_eq!(next.cycle_gen, 2);
+}
+
+#[test]
+fn run_without_persisted_cycle_generation_is_corrupt() {
+    let f = Fixture::new();
+    f.conn
+        .execute(
+            "DELETE FROM memory_run_cycle_generations WHERE run_id=?1",
+            [&f.run.run_id],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.run(&f.conn, &f.run.run_id),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
 fn pagination_is_bounded_and_returns_each_committed_entry_once() {
     let mut f = Fixture::new();
     let mut ids = BTreeSet::new();

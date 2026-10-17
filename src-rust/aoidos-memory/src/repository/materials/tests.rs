@@ -1341,6 +1341,44 @@ fn unauthorized_cycle_mark_source_rolls_back_batch_completion_and_mark_write() {
 }
 
 #[test]
+fn cycle_mark_from_another_generation_cannot_complete_the_batch() {
+    let (mut f, batch, turn, request) = dispatched_fixture();
+    let response = br#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"Guard remembers help"}]}"#;
+    f.repo
+        .receive_batch(&mut f.conn, &batch, &turn, &request, response)
+        .unwrap();
+    let mut commit = cycle_mark_commit(&f);
+    commit.mark.cycle_gen += 1;
+    commit.mark.mark_id = commit.mark.stable_mark_id().unwrap();
+    let completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![],
+    };
+
+    rejected(
+        f.repo.complete_batch_with_cycle_marks(
+            &mut f.conn,
+            &f.port,
+            &batch,
+            &completion,
+            &[commit],
+        ),
+        Reason::InvalidSource,
+    );
+    assert_eq!(
+        f.repo.batch_receipt(&f.conn, &batch).unwrap().state,
+        BatchState::Received
+    );
+    assert!(
+        f.repo
+            .cycle_marks(&f.conn, &f.run.script_id, true)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn completion_validation_failure_rolls_back_cycle_marks_already_inserted_in_transaction() {
     let (mut f, batch, turn, request) = dispatched_fixture();
     let response = br#"{"version":1,"candidates":[{"candidateId":"fact_1","classification":"notWorthy","sourceIds":["s1"],"subjectRef":{"kind":"playerPreference"},"reason":"No durable change"}],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"Guard remembers help"}]}"#;

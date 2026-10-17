@@ -574,6 +574,7 @@ pub(super) fn record_cycle_mark_in_transaction(
     let (run, boundary) = repository.boundary(tx, &mark.source_refs[0].source.run_id, port)?;
     repository.ensure_writable(tx, &run.run_id)?;
     if run.script_id != mark.script_id
+        || run.cycle_gen != mark.cycle_gen
         || mark.source_refs.iter().any(|source| {
             source.source.run_id != run.run_id
                 || source.history_revision > boundary.history_revision

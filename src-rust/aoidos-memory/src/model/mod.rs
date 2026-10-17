@@ -465,6 +465,8 @@ pub struct Run {
     pub run_id: String,
     pub script_id: String,
     pub session_id: String,
+    /// 同一剧本中每次新建会话时分配的单调周目代数；重开不递增。
+    pub cycle_gen: u64,
     pub policy: Policy,
     pub policy_hash: Hash,
 }

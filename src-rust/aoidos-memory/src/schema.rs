@@ -370,6 +370,32 @@ CREATE TABLE memory_config_heads (
 );
 "#;
 
+/// 按剧本分配周目代数；会话重开读取既有映射，不再增加代数。
+pub const CYCLE_GENERATION_MIGRATION: &str = r#"
+CREATE TABLE memory_run_cycle_generations (
+ run_id TEXT PRIMARY KEY REFERENCES memory_runs(run_id),
+ cycle_gen INTEGER NOT NULL CHECK(cycle_gen BETWEEN 1 AND 9007199254740991)
+);
+CREATE TABLE memory_script_cycle_generations (
+ script_id TEXT PRIMARY KEY CHECK(length(script_id) BETWEEN 1 AND 64),
+ cycle_gen INTEGER NOT NULL CHECK(cycle_gen BETWEEN 1 AND 9007199254740991)
+);
+"#;
+
+/// 为升级前已存在的周目补代数 1，并保留已有刻痕中的较大代数。
+pub const CYCLE_GENERATION_BACKFILL: &str = r#"
+INSERT OR IGNORE INTO memory_run_cycle_generations(run_id,cycle_gen)
+ SELECT run_id,1 FROM memory_runs;
+INSERT INTO memory_script_cycle_generations(script_id,cycle_gen)
+ SELECT r.script_id,MAX(g.cycle_gen)
+ FROM memory_runs r JOIN memory_run_cycle_generations g USING(run_id)
+ GROUP BY r.script_id
+ ON CONFLICT(script_id) DO UPDATE SET cycle_gen=MAX(cycle_gen,excluded.cycle_gen);
+INSERT INTO memory_script_cycle_generations(script_id,cycle_gen)
+ SELECT script_id,MAX(cycle_gen) FROM memory_cycle_marks GROUP BY script_id
+ ON CONFLICT(script_id) DO UPDATE SET cycle_gen=MAX(cycle_gen,excluded.cycle_gen);
+"#;
+
 /// 核验迁移后的领域表 / 索引定义，不把同名但缺约束的旧库当合法 manifest。
 /// # Errors
 /// 缺少或改变已登记结构为 corrupt，SQL 读取错误保持存储类别。
@@ -385,6 +411,7 @@ pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
         CYCLE_MIGRATION,
         CYCLE_EVENT_MIGRATION,
         CONFIG_MIGRATION,
+        CYCLE_GENERATION_MIGRATION,
     ] {
         for statement in migration
             .split(';')
@@ -451,6 +478,8 @@ mod tests {
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_EVENT_MIGRATION).unwrap();
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_GENERATION_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_GENERATION_BACKFILL).unwrap();
         conn
     }
 
@@ -470,6 +499,8 @@ mod tests {
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_EVENT_MIGRATION).unwrap();
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_GENERATION_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_GENERATION_BACKFILL).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
             .unwrap();
@@ -505,6 +536,12 @@ mod tests {
             .unwrap();
         missing_receipts.execute_batch(CONFIG_MIGRATION).unwrap();
         missing_receipts
+            .execute_batch(CYCLE_GENERATION_MIGRATION)
+            .unwrap();
+        missing_receipts
+            .execute_batch(CYCLE_GENERATION_BACKFILL)
+            .unwrap();
+        missing_receipts
             .execute_batch("DROP TABLE memory_batch_receipts")
             .unwrap();
         assert!(verify(&missing_receipts).is_err());
@@ -530,6 +567,12 @@ mod tests {
             .execute_batch(CYCLE_EVENT_MIGRATION)
             .unwrap();
         missing_questions.execute_batch(CONFIG_MIGRATION).unwrap();
+        missing_questions
+            .execute_batch(CYCLE_GENERATION_MIGRATION)
+            .unwrap();
+        missing_questions
+            .execute_batch(CYCLE_GENERATION_BACKFILL)
+            .unwrap();
         missing_questions
             .execute_batch("DROP TABLE memory_questions")
             .unwrap();
@@ -563,6 +606,12 @@ mod tests {
             .unwrap();
         missing_candidate_links
             .execute_batch(CONFIG_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(CYCLE_GENERATION_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(CYCLE_GENERATION_BACKFILL)
             .unwrap();
         missing_candidate_links
             .execute_batch("DROP TABLE memory_batch_candidate_operations")
@@ -603,6 +652,8 @@ mod tests {
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_EVENT_MIGRATION).unwrap();
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_GENERATION_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_GENERATION_BACKFILL).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=NULL WHERE name='memory_runs'",

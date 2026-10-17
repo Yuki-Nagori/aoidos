@@ -223,6 +223,35 @@ fn cycle_mark_rejects_stale_cross_run_or_invalid_sources_without_writing() {
 }
 
 #[test]
+fn direct_cycle_mark_rejects_another_generation_without_advancing_script_counter() {
+    let mut fixture = Fixture::new_in_memory();
+    let mut candidate = mark(&fixture, "first-rescue", 500);
+    candidate.cycle_gen += 1;
+    candidate.mark_id = candidate.stable_mark_id().unwrap();
+
+    assert!(matches!(
+        fixture
+            .repo
+            .record_cycle_mark(&mut fixture.conn, &fixture.port, &candidate),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+    assert!(
+        fixture
+            .repo
+            .cycle_marks(&fixture.conn, &fixture.run.script_id, true)
+            .unwrap()
+            .is_empty()
+    );
+
+    fixture.port.view.session_id = new_id();
+    let next = fixture
+        .repo
+        .create_run(&mut fixture.conn, &fixture.port, policy())
+        .unwrap();
+    assert_eq!(next.cycle_gen, 2);
+}
+
+#[test]
 fn cycle_event_prepare_is_idempotent_and_rejects_payload_conflicts() {
     let mut fixture = Fixture::new_in_memory();
     let event = lifecycle_event(&fixture, 8);

@@ -68,6 +68,8 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     aoidos_memory::schema::CYCLE_MIGRATION,
     aoidos_memory::schema::CYCLE_EVENT_MIGRATION,
     aoidos_memory::schema::CONFIG_MIGRATION,
+    aoidos_memory::schema::CYCLE_GENERATION_MIGRATION,
+    aoidos_memory::schema::CYCLE_GENERATION_BACKFILL,
 ];
 
 pub struct Storage {

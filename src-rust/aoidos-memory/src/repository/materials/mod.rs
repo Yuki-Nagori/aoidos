@@ -948,6 +948,7 @@ impl Repository {
             let mark = &commit.mark;
             mark.validate()?;
             if mark.script_id != run.script_id
+                || mark.cycle_gen != run.cycle_gen
                 || mark.rule_id != candidate.rule_id
                 || mark.summary != candidate.summary
             {
