@@ -1,6 +1,6 @@
 //! 可信剧本 / 世界解释器与冻结请求的接入边界；产品参数不包含规则、SQL 或 profile。
 
-use super::catalog::{ConfirmedWorldView, SceneCatalog};
+use super::catalog::{ConfirmedWorldView, SceneCatalog, SceneRuleMatch};
 use super::presence::ScenePresenceSnapshot;
 use crate::{
     fault::Fault,
@@ -57,6 +57,13 @@ pub struct CompletedRound {
     pub history_revision: u64,
     pub through_seq: u64,
 }
+/// 已通过可信规则求值并成功持久化领取的固定场景提示。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneHint {
+    pub hint_id: String,
+    pub text: String,
+    pub target_scope: String,
+}
 /// 只读完成通知的独立消费端；世界解释器不负责记忆调度，也不反向依赖消费者 crate。
 pub trait CompletedRounds: Send + Sync {
     /// `completed` 事实确认且记录 / 领域锁释放后通知；重放 / 回退不重复通知，不在回调发付费请求。
@@ -92,6 +99,20 @@ pub trait CompletedRounds: Send + Sync {
         _baseline: &[aoidos_memory::model::SceneRuleEvidence],
     ) -> Result<(), Fault> {
         Ok(())
+    }
+
+    /// 消费 023 当前目录产生的规则匹配并原子领取一条登记提示；仅在持久化成功后返回文案。
+    /// 调用方必须从最新 applied 世界生成匹配结果；该操作校验 revision 一致性，不改变世界事实。
+    /// # Errors
+    /// 周目未初始化、生命周期事件待恢复、历史修订不符、规则结果无效或存储失败时拒绝。
+    fn claim_scene_hint(
+        &self,
+        _scene_id: &str,
+        _history_revision: u64,
+        _world_revision: &str,
+        _matches: &[SceneRuleMatch],
+    ) -> Result<Option<SceneHint>, Fault> {
+        Err(super::invalid_phase())
     }
 }
 /// 每 session 的唯一世界所有者；条件核验、变更与 applied 必须共享 SQL 事务。

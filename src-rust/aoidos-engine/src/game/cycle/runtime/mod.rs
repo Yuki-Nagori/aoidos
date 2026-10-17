@@ -1,12 +1,18 @@
-//! 持久化并恢复场景进入和已完成回合的记忆生命周期事件。
+//! 持久化场景生命周期事件，并在当前节点上领取已登记提示。
 
-use super::super::domain::{CompletedRound, CompletedRounds};
+use super::super::{
+    catalog::SceneRuleMatch,
+    domain::{CompletedRound, CompletedRounds, SceneHint},
+};
 use crate::{fault::Fault, storage::Storage};
 use aoidos_memory::model::{
-    BeginSceneProgress, CausalPort, CompleteSceneProgress, CycleEventKind, CycleLifecycleEvent,
-    MAX_CYCLE_EVENT_PAGE, SceneNodeKey,
+    BeginSceneProgress, CausalPort, ClaimSceneHint, CompleteSceneProgress, CycleEventKind,
+    CycleLifecycleEvent, MAX_CYCLE_EVENT_PAGE, SceneNodeKey,
 };
 use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+mod tests;
 
 /// 只负责本地 SQLite 记忆消费；不创建 LLM 请求，也不持有回合 lease。
 pub(crate) struct CycleRuntime {
@@ -213,6 +219,97 @@ impl CompletedRounds for CycleRuntime {
                         )?;
                     }
                     Ok(())
+                },
+            )
+            .map_err(crate::storage::memory_config_error)
+    }
+
+    fn claim_scene_hint(
+        &self,
+        scene_id: &str,
+        history_revision: u64,
+        world_revision: &str,
+        matches: &[SceneRuleMatch],
+    ) -> Result<Option<SceneHint>, Fault> {
+        let run_id = self.run_id()?;
+        // 提示资格依赖派生进度；先重试提交过的生命周期事件，不能读旧停滞计数。
+        self.drain_cycle_events()?;
+        self.storage
+            .with_memory(
+                &self.session_id,
+                &self.catalog,
+                |repository, connection, port| {
+                    let boundary = port.boundary()?;
+                    if history_revision != boundary.history_revision {
+                        return Err(aoidos_memory::error::Error::Rejected(
+                            aoidos_memory::error::Reason::StaleVersion,
+                        ));
+                    }
+                    if !repository
+                        .pending_cycle_events(connection, &run_id, MAX_CYCLE_EVENT_PAGE)?
+                        .is_empty()
+                    {
+                        return Err(aoidos_memory::error::Error::Rejected(
+                            aoidos_memory::error::Reason::RecoveryRequired,
+                        ));
+                    }
+                    let scene = self
+                        .catalog
+                        .get_scene_rule_view(scene_id, self.catalog.revision())
+                        .map_err(|_| {
+                            aoidos_memory::error::Error::Rejected(
+                                aoidos_memory::error::Reason::InvalidSource,
+                            )
+                        })?;
+                    let entry_record_seq =
+                        port.scene_entry_seq_before(scene_id, port.next_sequence())?;
+                    if !port.valid_scene_entry(scene_id, entry_record_seq)? {
+                        return Err(aoidos_memory::error::Error::Rejected(
+                            aoidos_memory::error::Reason::InvalidSource,
+                        ));
+                    }
+                    let node = SceneNodeKey {
+                        scene_id,
+                        history_revision: boundary.history_revision,
+                        entry_record_seq,
+                    };
+                    let Some(progress) =
+                        repository.scene_progress(connection, port, &run_id, node)?
+                    else {
+                        return Ok(None);
+                    };
+                    let hints = super::eligible_hints(
+                        &scene,
+                        matches,
+                        &progress,
+                        history_revision,
+                        world_revision,
+                    )
+                    .map_err(|_| {
+                        aoidos_memory::error::Error::Rejected(
+                            aoidos_memory::error::Reason::InvalidSource,
+                        )
+                    })?;
+                    for hint in hints {
+                        let claimed = repository.claim_scene_hint(
+                            connection,
+                            port,
+                            ClaimSceneHint {
+                                run_id: &run_id,
+                                node,
+                                expected_revision: progress.revision,
+                                hint_id: &hint.hint_id,
+                            },
+                        )?;
+                        if claimed.is_some() {
+                            return Ok(Some(SceneHint {
+                                hint_id: hint.hint_id,
+                                text: hint.text,
+                                target_scope: hint.target_scope,
+                            }));
+                        }
+                    }
+                    Ok(None)
                 },
             )
             .map_err(crate::storage::memory_config_error)
