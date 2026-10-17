@@ -906,6 +906,70 @@ fn completed_round_clock_survives_a_fork_after_event_retirement_failure() {
 }
 
 #[test]
+fn completed_round_clock_is_restored_after_clock_receipt_failure_and_retained_fork() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.runtime();
+    let input_seq = fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我检查了石门的刻痕。".into(),
+            mode: Some(InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let completed_seq = prepare_completed_round(&fixture, &runtime, input_seq);
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER reject_cycle_clock_receipt BEFORE INSERT ON memory_clock_receipts BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(runtime.drain_cycle_events().is_err());
+
+    fork_at(&fixture, completed_seq, "时钟回执失败后保留已完成回合");
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch("DROP TRIGGER reject_cycle_clock_receipt")
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    runtime.drain_cycle_events().unwrap();
+
+    let (clock, pending) = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| {
+                Ok((
+                    repository.clock(connection, port, &fixture.run.run_id)?,
+                    repository.pending_cycle_events(
+                        connection,
+                        &fixture.run.run_id,
+                        MAX_CYCLE_EVENT_PAGE,
+                    )?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(clock, 1);
+    assert!(pending.is_empty());
+}
+
+#[test]
 fn recovery_retires_a_prewrite_event_when_its_source_was_never_committed() {
     let fixture = RuntimeFixture::new();
     let runtime = fixture.runtime();
