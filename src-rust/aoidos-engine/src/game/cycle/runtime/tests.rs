@@ -270,6 +270,36 @@ fn prepare_completed_round(
     source_record_seq
 }
 
+fn fork_at(fixture: &RuntimeFixture, target_seq: u64, reason: &str) {
+    let mut session = fixture.session.lock().unwrap();
+    let path = session
+        .path_at(session.history_revision())
+        .unwrap()
+        .into_iter()
+        .filter(|seq| *seq <= target_seq)
+        .collect::<Vec<_>>();
+    use sha2::Digest;
+    let mut digest = sha2::Sha256::new();
+    for seq in &path {
+        digest.update(session.read(*seq).unwrap().raw.as_bytes());
+    }
+    let fork = Fact::HistoryFork {
+        version: 1,
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        mode: ForkMode::Rewind,
+        parent_control_seq: session.history_revision(),
+        target_seq,
+        prefix_hash: format!("sha256:{:x}", digest.finalize()),
+        source_round_id: None,
+        reused_dice_seq: None,
+    }
+    .body(reason)
+    .unwrap();
+    session
+        .commit_history_fork(fork, &mut HistoryRebuildPort(fixture.storage.clone()))
+        .unwrap();
+}
+
 fn catalog(header: &Header) -> crate::game::catalog::SceneCatalog {
     let revision = "catalog-v1";
     let entry = SceneEntryPresence {
@@ -739,34 +769,7 @@ fn completed_round_clock_is_reconciled_when_history_is_forked() {
         .unwrap();
     assert_eq!(clock_before_fork, 1);
 
-    let mut session = fixture.session.lock().unwrap();
-    let path = session
-        .path_at(session.history_revision())
-        .unwrap()
-        .into_iter()
-        .filter(|seq| *seq <= input_seq)
-        .collect::<Vec<_>>();
-    use sha2::Digest;
-    let mut digest = sha2::Sha256::new();
-    for seq in &path {
-        digest.update(session.read(*seq).unwrap().raw.as_bytes());
-    }
-    let fork = Fact::HistoryFork {
-        version: 1,
-        operation_id: uuid::Uuid::new_v4().to_string(),
-        mode: ForkMode::Rewind,
-        parent_control_seq: session.history_revision(),
-        target_seq: input_seq,
-        prefix_hash: format!("sha256:{:x}", digest.finalize()),
-        source_round_id: None,
-        reused_dice_seq: None,
-    }
-    .body("回退到回合输入")
-    .unwrap();
-    session
-        .commit_history_fork(fork, &mut HistoryRebuildPort(fixture.storage.clone()))
-        .unwrap();
-    drop(session);
+    fork_at(&fixture, input_seq, "回退到回合输入");
 
     fixture.runtime().drain_cycle_events().unwrap();
     let clock_after_fork = fixture
@@ -814,36 +817,73 @@ fn pending_completed_round_survives_a_fork_that_keeps_its_source() {
         .unwrap();
     let completed_seq = prepare_completed_round(&fixture, &runtime, input_seq);
 
-    let mut session = fixture.session.lock().unwrap();
-    let path = session
-        .path_at(session.history_revision())
-        .unwrap()
-        .into_iter()
-        .filter(|seq| *seq <= completed_seq)
-        .collect::<Vec<_>>();
-    use sha2::Digest;
-    let mut digest = sha2::Sha256::new();
-    for seq in &path {
-        digest.update(session.read(*seq).unwrap().raw.as_bytes());
-    }
-    let fork = Fact::HistoryFork {
-        version: 1,
-        operation_id: uuid::Uuid::new_v4().to_string(),
-        mode: ForkMode::Rewind,
-        parent_control_seq: session.history_revision(),
-        target_seq: completed_seq,
-        prefix_hash: format!("sha256:{:x}", digest.finalize()),
-        source_round_id: None,
-        reused_dice_seq: None,
-    }
-    .body("保留已完成回合")
-    .unwrap();
-    session
-        .commit_history_fork(fork, &mut HistoryRebuildPort(fixture.storage.clone()))
-        .unwrap();
-    drop(session);
+    fork_at(&fixture, completed_seq, "保留已完成回合");
 
     fixture.runtime().drain_cycle_events().unwrap();
+    let (clock, pending) = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| {
+                Ok((
+                    repository.clock(connection, port, &fixture.run.run_id)?,
+                    repository.pending_cycle_events(
+                        connection,
+                        &fixture.run.run_id,
+                        MAX_CYCLE_EVENT_PAGE,
+                    )?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(clock, 1);
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn completed_round_clock_survives_a_fork_after_event_retirement_failure() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.runtime();
+    let input_seq = fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我检查了石门机关。".into(),
+            mode: Some(InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let completed_seq = prepare_completed_round(&fixture, &runtime, input_seq);
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER reject_cycle_event_delete BEFORE DELETE ON memory_cycle_events BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(runtime.drain_cycle_events().is_err());
+
+    fork_at(&fixture, completed_seq, "故障后保留已完成回合");
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch("DROP TRIGGER reject_cycle_event_delete")
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    fixture.runtime().drain_cycle_events().unwrap();
+
     let (clock, pending) = fixture
         .storage
         .with_memory(
