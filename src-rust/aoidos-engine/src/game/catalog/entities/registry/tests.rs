@@ -624,6 +624,8 @@ fn branch_rewind_hides_abandoned_entity_but_keeps_monotonic_revision_and_audit_r
         .session
         .commit_world(plan(1, vec![mutation]), &mut domain)
         .unwrap();
+    let old_snapshot = domain.directory(&fixture.session).unwrap();
+    assert!(old_snapshot.is_session_snapshot_for(&fixture.session));
     let path = fixture.session.path_at(0).unwrap();
     let prefix_hash = format::hash(fixture.session.read(path[0]).unwrap().raw.as_bytes());
     let fork = Body::System {
@@ -645,8 +647,10 @@ fn branch_rewind_hides_abandoned_entity_but_keeps_monotonic_revision_and_audit_r
         .commit_history_fork(fork, &mut domain)
         .unwrap();
 
+    assert!(!old_snapshot.is_session_snapshot_for(&fixture.session));
     let snapshot = domain.directory(&fixture.session).unwrap();
     assert_eq!(snapshot.revision(), 2);
+    assert!(snapshot.is_session_snapshot_for(&fixture.session));
     assert!(
         snapshot
             .resolve_exact(EntityKind::Character, "global", "渡鸦")
