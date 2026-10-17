@@ -4,7 +4,8 @@ use crate::{fault::Fault, request::PreparedGeneration, storage::Storage, turn::C
 use aoidos_llm::schedule::{AttemptIdentity, AttemptOutcome, BudgetDenial, BudgetPort};
 use aoidos_memory::{
     error::{Error, Reason},
-    repository::BatchState,
+    model::{CausalPort, Proposal, ProposalContext},
+    repository::{BatchCompletion, BatchState, CycleMarkCommit},
 };
 use std::sync::{Arc, Mutex};
 
@@ -207,6 +208,128 @@ pub async fn process_authorized_batch(
         batch_id,
     });
     execute_batch(coordinator, persistence, request).await
+}
+
+/// 将当前 queued 批次的可信刻痕授权并入普通提案上下文，供单次记忆请求使用。
+///
+/// `context` 中的普通候选字段必须由调用方从同一冻结批次构造；刻痕规则与来源只由
+/// 本函数从活动剧本、周目、实体目录和仓储快照生成。完成时会在同一锁边界重建并复核。
+/// # Errors
+/// 批次状态、历史 / 实体 / 证据修订或任一来源不再匹配时拒绝构造请求上下文。
+pub fn prepare_cycle_mark_context(
+    storage: &Storage,
+    session_id: &str,
+    catalog: &crate::game::catalog::SceneCatalog,
+    batch_id: &str,
+    context: &mut ProposalContext,
+) -> Result<(), Fault> {
+    storage
+        .with_memory_context(
+            session_id,
+            catalog,
+            |repository, connection, port, session, directory| {
+                let (snapshot, state) = repository.batch(connection, batch_id)?;
+                if state != BatchState::Queued {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+                let run = repository.run_for_session(connection, session_id)?;
+                let cycle_context = super::build_cycle_mark_context(super::CycleMarkContextInput {
+                    catalog,
+                    run: &run,
+                    session,
+                    directory,
+                    batch: &snapshot,
+                    source_port: port,
+                })
+                .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
+                cycle_context
+                    .apply_to(context)
+                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))
+            },
+        )
+        .map_err(memory_fault)
+}
+
+/// 按当前冻结授权校验已收回的提案，并将刻痕与普通候选摘要原子完成。
+///
+/// `context` 必须与发送请求时使用的冻结提案上下文一致；此函数不会重新发送请求，
+/// 也不会重新计算普通候选的操作结果。含刻痕时由仓储在同一事务写入刻痕和完成回执。
+/// # Errors
+/// 批次尚未收到响应、提案不符合冻结授权或当前来源已失效时拒绝完成；相同完成重放返回 `false`。
+pub fn complete_received_batch(
+    storage: &Storage,
+    session_id: &str,
+    catalog: &crate::game::catalog::SceneCatalog,
+    batch_id: &str,
+    context: &ProposalContext,
+    completion: &BatchCompletion,
+) -> Result<bool, Fault> {
+    storage
+        .with_memory_context(
+            session_id,
+            catalog,
+            |repository, connection, port, session, directory| {
+                let (snapshot, state) = repository.batch(connection, batch_id)?;
+                let run = repository.run_for_session(connection, session_id)?;
+                let boundary = port.boundary()?;
+                if snapshot.run_id != run.run_id
+                    || snapshot.history_revision != boundary.history_revision
+                    || snapshot.entity_revision != boundary.entity_revision
+                    || snapshot.evidence_revision != boundary.evidence_revision
+                    || snapshot.policy_hash != run.policy_hash
+                {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+                if !matches!(state, BatchState::Received | BatchState::Completed) {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+                let cycle_context = super::build_cycle_mark_context(super::CycleMarkContextInput {
+                    catalog,
+                    run: &run,
+                    session,
+                    directory,
+                    batch: &snapshot,
+                    source_port: port,
+                })
+                .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
+                let mut context = context.clone();
+                cycle_context
+                    .apply_to(&mut context)
+                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+                let receipt = repository.batch_receipt(connection, batch_id)?;
+                if receipt.state != state {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+                let response = receipt.response.as_deref().ok_or(Error::Corrupt)?;
+                let proposal = Proposal::parse(response, &context)?;
+                let cycle_marks = proposal
+                    .cycle_marks
+                    .iter()
+                    .map(|candidate| {
+                        Ok(CycleMarkCommit {
+                            candidate_id: candidate.candidate_id.clone(),
+                            mark: candidate.materialize(&context)?,
+                        })
+                    })
+                    .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
+
+                if cycle_marks.is_empty() {
+                    let bytes = aoidos_json::canonical_string(completion)
+                        .map_err(|_| Error::Rejected(Reason::InvalidSchema))?
+                        .into_bytes();
+                    repository.complete_batch(connection, batch_id, &bytes)
+                } else {
+                    repository.complete_batch_with_cycle_marks(
+                        connection,
+                        port,
+                        batch_id,
+                        completion,
+                        &cycle_marks,
+                    )
+                }
+            },
+        )
+        .map_err(memory_fault)
 }
 
 async fn execute_batch(

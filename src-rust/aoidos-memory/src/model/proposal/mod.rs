@@ -1,6 +1,11 @@
 //! 模型候选的有界协议与纯白名单校验；不查询存储、不提交记忆。
 
-use super::{Attitude, Dimension, MAX_INTEGER, Subject, reject, valid_id, valid_short_id};
+use super::{
+    Attitude, CycleKind, CycleMarkV1, CycleSourceRef, DetailPolicy, Dimension,
+    MAX_CYCLE_MARK_PROPOSALS, MAX_CYCLE_SOURCES, MAX_CYCLE_SUBJECTS, MAX_CYCLE_SUMMARIES_BYTES,
+    MAX_CYCLE_SUMMARY_BYTES, MAX_INTEGER, SourceRef, Subject, reject, valid_id, valid_name,
+    valid_script, valid_short_id,
+};
 use crate::error::{Error, Reason, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -81,6 +86,9 @@ pub struct Candidate {
 pub struct Proposal {
     pub version: u32,
     pub candidates: Vec<Candidate>,
+    /// 与普通记忆候选共用同一次请求；没有获授权规则时必须为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cycle_marks: Vec<CycleMarkCandidate>,
 }
 
 /// 只包含冻结批次中已经登记且可信的身份，不接收来自候选的目录或证据。
@@ -91,6 +99,36 @@ pub struct ProposalContext {
     pub subjects: BTreeSet<SubjectRef>,
     pub evidence: BTreeMap<String, EvidenceSnapshot>,
     pub targets: BTreeMap<String, TargetSnapshot>,
+    /// 只包含当前剧本、当前周目及当前记忆批次可使用的刻痕授权。
+    pub cycle_rules: BTreeMap<String, CycleMarkAuthorization>,
+    /// 批次短 ID 到已核验原始来源的映射。
+    pub cycle_sources: BTreeMap<String, CycleSourceRef>,
+}
+
+/// 模型只提供摘要和白名单引用；持久刻痕身份及权限字段由引擎生成。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CycleMarkCandidate {
+    pub candidate_id: String,
+    pub rule_id: String,
+    pub source_ids: Vec<String>,
+    pub subject_ids: Vec<String>,
+    pub summary: String,
+}
+
+/// 由可信剧本与当前周目构造的授权快照，绝不能直接由模型填充。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleMarkAuthorization {
+    pub rule_id: String,
+    pub script_id: String,
+    pub run_id: String,
+    pub cycle_gen: u64,
+    pub rule_version: u32,
+    pub allowed_subject_ids: BTreeSet<String>,
+    pub imprint_key: String,
+    pub kind: CycleKind,
+    pub detail_policy: DetailPolicy,
+    pub priority: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,18 +165,178 @@ impl Proposal {
         if self.version != 1 {
             return Err(Error::Rejected(Reason::PolicyUnavailable));
         }
-        if self.candidates.len() > MAX_CANDIDATES {
-            return Err(Error::Rejected(Reason::CapacityBlocked));
-        }
-        let mut candidate_ids = BTreeSet::new();
+        validate_proposal_identity(self)?;
         for candidate in &self.candidates {
             validate_candidate(candidate, context)?;
-            if !candidate_ids.insert(&candidate.candidate_id) {
+        }
+        let mut mark_identities = BTreeSet::new();
+        for candidate in &self.cycle_marks {
+            let rule = context
+                .cycle_rules
+                .get(&candidate.rule_id)
+                .ok_or_else(reject)?;
+            validate_cycle_mark_candidate(candidate, rule, context)?;
+            let mut subject_ids = candidate.subject_ids.clone();
+            subject_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+            if !mark_identities.insert((candidate.rule_id.as_str(), subject_ids)) {
                 return Err(reject());
             }
         }
         Ok(())
     }
+}
+
+/// 校验与本批白名单无关的基本协议结构，供回执写入前拒绝损坏候选。
+pub(crate) fn validate_proposal_identity(proposal: &Proposal) -> Result<()> {
+    if proposal.version != 1 {
+        return Err(Error::Rejected(Reason::PolicyUnavailable));
+    }
+    if proposal.candidates.len() + proposal.cycle_marks.len() > MAX_CANDIDATES
+        || proposal.cycle_marks.len() > MAX_CYCLE_MARK_PROPOSALS
+    {
+        return Err(Error::Rejected(Reason::CapacityBlocked));
+    }
+    if proposal.cycle_marks.iter().fold(0usize, |total, mark| {
+        total.saturating_add(mark.summary.len())
+    }) > MAX_CYCLE_SUMMARIES_BYTES
+    {
+        return Err(Error::Rejected(Reason::CapacityBlocked));
+    }
+    let mut candidate_ids = BTreeSet::new();
+    for id in proposal
+        .candidates
+        .iter()
+        .map(|candidate| candidate.candidate_id.as_str())
+        .chain(
+            proposal
+                .cycle_marks
+                .iter()
+                .map(|candidate| candidate.candidate_id.as_str()),
+        )
+    {
+        if !valid_short_id(id) || !candidate_ids.insert(id) {
+            return Err(reject());
+        }
+    }
+    for candidate in &proposal.cycle_marks {
+        validate_cycle_mark_shape(candidate)?;
+    }
+    Ok(())
+}
+
+impl CycleMarkCandidate {
+    /// 在完整授权白名单下生成持久刻痕；模型不能指定权重、类型或稳定身份。
+    /// # Errors
+    /// 规则、实体、来源无权或载荷超限时拒绝生成。
+    pub fn materialize(&self, context: &ProposalContext) -> Result<CycleMarkV1> {
+        let rule = context.cycle_rules.get(&self.rule_id).ok_or_else(reject)?;
+        validate_cycle_mark_candidate(self, rule, context)?;
+        let mut subject_ids = self.subject_ids.clone();
+        subject_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        let mut source_refs = self
+            .source_ids
+            .iter()
+            .map(|source_id| {
+                context
+                    .cycle_sources
+                    .get(source_id)
+                    .cloned()
+                    .ok_or_else(reject)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        source_refs.sort_by(|left, right| source_order(&left.source, &right.source));
+        let mut mark = CycleMarkV1 {
+            version: 1,
+            mark_id: String::new(),
+            script_id: rule.script_id.clone(),
+            cycle_gen: rule.cycle_gen,
+            rule_id: rule.rule_id.clone(),
+            rule_version: rule.rule_version,
+            subject_ids,
+            imprint_key: rule.imprint_key.clone(),
+            source_refs,
+            kind: rule.kind,
+            detail_policy: rule.detail_policy,
+            priority: rule.priority,
+            summary: self.summary.clone(),
+        };
+        mark.mark_id = mark.stable_mark_id()?;
+        mark.validate()?;
+        Ok(mark)
+    }
+}
+
+fn validate_cycle_mark_candidate(
+    candidate: &CycleMarkCandidate,
+    rule: &CycleMarkAuthorization,
+    context: &ProposalContext,
+) -> Result<()> {
+    validate_cycle_mark_shape(candidate)?;
+    if rule.rule_id != candidate.rule_id
+        || !valid_name(&rule.rule_id)
+        || !valid_script(&rule.script_id)
+        || !valid_id(&rule.run_id)
+        || rule.cycle_gen == 0
+        || rule.cycle_gen > MAX_INTEGER
+        || rule.rule_version == 0
+        || rule.rule_version as u64 > MAX_INTEGER
+        || !valid_name(&rule.imprint_key)
+        || rule.priority > 1_000
+        || rule.allowed_subject_ids.is_empty()
+        || rule.allowed_subject_ids.len() > MAX_CYCLE_SUBJECTS * MAX_CANDIDATES
+        || rule
+            .allowed_subject_ids
+            .iter()
+            .any(|id| !valid_name(id) || !context.entity_ids.contains(id))
+        || candidate
+            .subject_ids
+            .iter()
+            .any(|id| !rule.allowed_subject_ids.contains(id))
+        || candidate.source_ids.iter().any(|id| {
+            !context.source_ids.contains(id)
+                || context.cycle_sources.get(id).is_none_or(|source| {
+                    source.source.script_id != rule.script_id
+                        || source.source.run_id != rule.run_id
+                        || source.history_revision > MAX_INTEGER
+                        || source.source.validate().is_err()
+                })
+        })
+    {
+        return Err(reject());
+    }
+    Ok(())
+}
+
+fn validate_cycle_mark_shape(candidate: &CycleMarkCandidate) -> Result<()> {
+    if !valid_short_id(&candidate.candidate_id)
+        || !valid_name(&candidate.rule_id)
+        || candidate.source_ids.is_empty()
+        || candidate.source_ids.len() > MAX_CYCLE_SOURCES
+        || candidate.subject_ids.is_empty()
+        || candidate.subject_ids.len() > MAX_CYCLE_SUBJECTS
+        || candidate.source_ids.iter().any(|id| !valid_short_id(id))
+        || candidate.subject_ids.iter().any(|id| !valid_name(id))
+        || candidate.source_ids.iter().collect::<BTreeSet<_>>().len() != candidate.source_ids.len()
+        || candidate.subject_ids.iter().collect::<BTreeSet<_>>().len()
+            != candidate.subject_ids.len()
+        || candidate.summary.trim().is_empty()
+        || candidate.summary.len() > MAX_CYCLE_SUMMARY_BYTES
+        || candidate.summary.contains('\0')
+    {
+        return Err(reject());
+    }
+    Ok(())
+}
+
+fn source_order(left: &SourceRef, right: &SourceRef) -> std::cmp::Ordering {
+    left.run_id
+        .as_bytes()
+        .cmp(right.run_id.as_bytes())
+        .then_with(|| left.session_id.as_bytes().cmp(right.session_id.as_bytes()))
+        .then_with(|| left.record_seq.cmp(&right.record_seq))
+        .then_with(|| left.start_byte.cmp(&right.start_byte))
+        .then_with(|| left.end_byte.cmp(&right.end_byte))
+        .then_with(|| left.body_hash.cmp(&right.body_hash))
 }
 
 fn validate_candidate(candidate: &Candidate, context: &ProposalContext) -> Result<()> {

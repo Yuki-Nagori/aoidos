@@ -165,6 +165,10 @@ export interface MemoryBatchStatus {
       outcome: "applied" | "noOp" | "rejected" | "pending" | "deferred";
       reasonCode?: string;
     }[];
+    cycleMarks?: {
+      candidateId: string;
+      markId: string;
+    }[];
   } | null;
   diagnosticCode: string | null;
 }

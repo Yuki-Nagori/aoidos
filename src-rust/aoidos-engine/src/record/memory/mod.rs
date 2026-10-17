@@ -1,6 +1,9 @@
 //! 记忆来源适配：当前有效路径、原文 UTF-8 与角色获知证据均在会话锁内核验。
 
+mod cycle_context;
 pub mod processing;
+
+pub use cycle_context::{CycleMarkContext, CycleMarkContextInput, build_cycle_mark_context};
 
 use super::{
     facts::{Fact, GenerationTarget, RoundIdentity},
@@ -30,6 +33,51 @@ pub struct SourcePort<'a> {
     entity_directory: Option<&'a EntityDirectory>,
     scene_catalog: Option<&'a SceneCatalog>,
 }
+
+/// 按当前有效路径查找某场景在记录边界前最近一次进入。
+/// # Errors
+/// 扫描超限、历史待恢复或场景不属于该路径时失败关闭。
+pub(crate) fn scene_entry_seq_before(
+    session: &Session,
+    scene_catalog: &SceneCatalog,
+    scene_id: &str,
+    before_seq: u64,
+) -> Result<u64> {
+    let mut scanned = 0usize;
+    let mut bytes = 0usize;
+    for (&seq, index) in session.index.range(..before_seq).rev().take(MAX_SCAN) {
+        bytes = bytes.saturating_add(index.len);
+        if bytes > MAX_SCAN_BYTES {
+            return Err(Error::Rejected(Reason::RecoveryRequired));
+        }
+        if !session.includes_record(seq, index) {
+            continue;
+        }
+        scanned += 1;
+        let record = session.known(seq)?;
+        if let Body::System { code, data, .. } = record.body
+            && let Fact::SceneAdvanced { position, .. } = Fact::decode(&code, &data)?
+        {
+            return if position.scene_id == scene_id {
+                Ok(seq)
+            } else {
+                Err(Error::Rejected(Reason::InvalidSource))
+            };
+        }
+    }
+    if scanned == MAX_SCAN {
+        return Err(Error::Rejected(Reason::RecoveryRequired));
+    }
+    if scene_catalog
+        .presence_policy()
+        .is_some_and(|policy| policy.initial_scene_id() == scene_id)
+    {
+        Ok(0)
+    } else {
+        Err(Error::Rejected(Reason::InvalidSource))
+    }
+}
+
 impl<'a> SourcePort<'a> {
     pub fn new(session: &'a Session) -> Self {
         Self {
@@ -114,6 +162,31 @@ impl<'a> SourcePort<'a> {
             .map_err(|_| Error::Rejected(Reason::StaleVersion))?
             .map(|entity| entity.canonical_name.clone()))
     }
+
+    /// 返回目标场景在指定记录边界前最近一次有效进入序号。
+    /// # Errors
+    /// 历史待恢复、扫描超限或当前场景没有可信进入记录时失败关闭。
+    pub(crate) fn scene_entry_seq_before(&self, scene_id: &str, before_seq: u64) -> Result<u64> {
+        self.boundary()?;
+        let catalog = self
+            .scene_catalog
+            .ok_or(Error::Rejected(Reason::StaleVersion))?;
+        scene_entry_seq_before(self.session, catalog, scene_id, before_seq)
+    }
+
+    /// 判断来源序号是否仍在已确认的当前路径上。
+    pub(crate) fn has_current_record(&self, record_seq: u64) -> bool {
+        self.session
+            .index
+            .get(&record_seq)
+            .is_some_and(|index| self.session.includes_record(record_seq, index))
+    }
+
+    /// 当前下一个记录序号，用于清理预写后未能提交来源记录的孤立队列项。
+    pub(crate) fn next_sequence(&self) -> u64 {
+        self.session.next_sequence()
+    }
+
     fn text(&self, seq: u64) -> Result<Option<(String, Option<InputMode>)>> {
         self.boundary()?;
         let Some(index) = self.session.index.get(&seq) else {

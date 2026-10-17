@@ -23,7 +23,7 @@ pub use confirmations::{QuestionCursor, QuestionPage};
 mod materials;
 pub use materials::{
     BatchCompletion, BatchReceipt, BatchSnapshot, BatchState, CandidateOutcome, CandidateResult,
-    DeferredCandidate, Span,
+    CycleMarkCommit, CycleMarkResult, DeferredCandidate, Span,
 };
 #[cfg(test)]
 mod test_support;
@@ -86,7 +86,7 @@ impl Repository {
         Ok(())
     }
     /// # Errors
-    /// 周目创建须有已登记会话边界及完整合法策略；同会话不创建第二个周目。
+    /// 新会话须有已登记边界及合法策略；代数损坏或耗尽时拒绝创建，重开不递增。
     pub fn create_run(
         &self,
         conn: &mut Connection,
@@ -117,16 +117,18 @@ impl Repository {
             }
             return Ok(run);
         }
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        let cycle_gen = next_cycle_generation(&tx, &boundary.script_id)?;
         let run = Run {
             run_id: new_id(),
             script_id: boundary.script_id,
             session_id: boundary.session_id,
+            cycle_gen,
             policy_hash: hash(&canonical(&policy)?),
             policy,
         };
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sql)?;
         tx.execute(
             "INSERT INTO memory_runs(run_id,script_id,policy_json,policy_hash,clock_history_revision) VALUES(?1,?2,?3,?4,?5)",
             params![
@@ -143,6 +145,11 @@ impl Repository {
             params![run.run_id, run.session_id],
         )
         .map_err(sql)?;
+        tx.execute(
+            "INSERT INTO memory_run_cycle_generations(run_id,cycle_gen) VALUES(?1,?2)",
+            params![run.run_id, run.cycle_gen],
+        )
+        .map_err(sql)?;
         tx.commit().map_err(sql)?;
         Ok(run)
     }
@@ -152,21 +159,36 @@ impl Repository {
         if !valid_id(id) {
             return Err(reject());
         }
-        let row=conn.query_row("SELECT r.script_id,s.session_id,length(r.policy_json),r.policy_json,length(r.policy_hash),r.policy_hash FROM memory_runs r JOIN memory_run_sessions s USING(run_id) WHERE run_id=?1",[id],read_run).optional().map_err(sql)?.ok_or(Error::NotFound)?;
+        let row=conn.query_row("SELECT r.script_id,s.session_id,length(r.policy_json),r.policy_json,length(r.policy_hash),r.policy_hash,g.cycle_gen FROM memory_runs r JOIN memory_run_sessions s USING(run_id) LEFT JOIN memory_run_cycle_generations g USING(run_id) WHERE run_id=?1",[id],read_run).optional().map_err(sql)?.ok_or(Error::NotFound)?;
         let policy_bytes = row.2.into_result()?;
         let policy_hash = row.3.into_result()?;
+        let cycle_gen = row.4.ok_or(Error::Corrupt)?;
         let policy: Policy = decode_versioned(&policy_bytes, 32 * 1024)?;
         policy.validate()?;
         if hash(&policy_bytes).as_slice() != policy_hash
             || !valid_script(&row.0)
             || !valid_id(&row.1)
+            || cycle_gen == 0
+            || cycle_gen > MAX_INTEGER
         {
+            return Err(Error::Corrupt);
+        }
+        let latest_generation: Option<u64> = conn
+            .query_row(
+                "SELECT cycle_gen FROM memory_script_cycle_generations WHERE script_id=?1",
+                [&row.0],
+                |counter| counter.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        if latest_generation.is_none_or(|latest| latest < cycle_gen) {
             return Err(Error::Corrupt);
         }
         Ok(Run {
             run_id: id.into(),
             script_id: row.0,
             session_id: row.1,
+            cycle_gen,
             policy,
             policy_hash: as_hash(policy_hash)?,
         })
@@ -604,13 +626,60 @@ fn read_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<MetadataRow> {
 }
 fn read_run(
     row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<(String, String, BoundedBlob, BoundedBlob)> {
+) -> rusqlite::Result<(String, String, BoundedBlob, BoundedBlob, Option<u64>)> {
     Ok((
         row.get(0)?,
         row.get(1)?,
         read_bounded_blob(row, 2, 3, 32 * 1024)?,
         read_bounded_blob(row, 4, 5, 32)?,
+        row.get(6)?,
     ))
+}
+
+fn next_cycle_generation(conn: &Connection, script_id: &str) -> Result<u64> {
+    let current = conn
+        .query_row(
+            "SELECT cycle_gen FROM memory_script_cycle_generations WHERE script_id=?1",
+            [script_id],
+            |row| row.get::<_, u64>(0),
+        )
+        .optional()
+        .map_err(sql)?
+        .unwrap_or(0);
+    let latest_run: u64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(g.cycle_gen),0) FROM memory_runs r JOIN memory_run_cycle_generations g USING(run_id) WHERE r.script_id=?1",
+            [script_id],
+            |row| row.get(0),
+        )
+        .map_err(sql)?;
+    let latest_mark: u64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(cycle_gen),0) FROM memory_cycle_marks WHERE script_id=?1",
+            [script_id],
+            |row| row.get(0),
+        )
+        .map_err(sql)?;
+    let missing_run_mapping: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_runs r LEFT JOIN memory_run_cycle_generations g USING(run_id) WHERE r.script_id=?1 AND g.run_id IS NULL)",
+            [script_id],
+            |row| row.get(0),
+        )
+        .map_err(sql)?;
+    if missing_run_mapping || current < latest_run.max(latest_mark) || current > MAX_INTEGER {
+        return Err(Error::Corrupt);
+    }
+    let next = current
+        .checked_add(1)
+        .filter(|generation| *generation <= MAX_INTEGER)
+        .ok_or(Error::Rejected(Reason::CapacityBlocked))?;
+    conn.execute(
+        "INSERT INTO memory_script_cycle_generations(script_id,cycle_gen) VALUES(?1,?2) ON CONFLICT(script_id) DO UPDATE SET cycle_gen=excluded.cycle_gen",
+        params![script_id, next],
+    )
+    .map_err(sql)?;
+    Ok(next)
 }
 fn read_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, u64, String)> {
     Ok((row.get(0)?, row.get(1)?, row.get(2)?))

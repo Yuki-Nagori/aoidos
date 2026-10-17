@@ -175,7 +175,8 @@ impl EntityRegistry {
                 .into_iter()
                 .map(|stored| stored.entity)
                 .collect(),
-        )
+        )?
+        .bind_session_snapshot(session)
     }
 
     /// Reads the applied registry while a world intent is being recovered or validated.

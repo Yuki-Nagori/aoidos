@@ -2,6 +2,33 @@
 
 use super::super::test_support::*;
 use super::*;
+use crate::model::{CycleKind, CycleMarkV1, CycleSourceRef, DetailPolicy};
+
+fn cycle_mark_commit(f: &Fixture) -> CycleMarkCommit {
+    let mut mark = CycleMarkV1 {
+        version: 1,
+        mark_id: String::new(),
+        script_id: f.run.script_id.clone(),
+        cycle_gen: 1,
+        rule_id: "rescue".into(),
+        rule_version: 1,
+        subject_ids: vec!["guard".into()],
+        imprint_key: "rescue-imprint".into(),
+        source_refs: vec![CycleSourceRef {
+            source: f.source(),
+            history_revision: 0,
+        }],
+        kind: CycleKind::Fragment,
+        detail_policy: DetailPolicy::Vague,
+        priority: 10,
+        summary: "Guard remembers help".into(),
+    };
+    mark.mark_id = mark.stable_mark_id().unwrap();
+    CycleMarkCommit {
+        candidate_id: "mark_1".into(),
+        mark,
+    }
+}
 
 #[test]
 fn material_identity_and_frozen_batch_survive_replays() {
@@ -651,6 +678,7 @@ fn completion_must_resolve_exactly_each_persisted_candidate_once() {
             inferred: None,
             reason: "没有新的稳定信息".into(),
         }],
+        cycle_marks: vec![],
     };
     let response = serde_json::to_vec(&proposal).unwrap();
     f.repo
@@ -1073,10 +1101,14 @@ fn receipt_integrity_rejects_corrupt_hashes_payloads_and_state_combinations() {
 fn completion_and_response_protocols_validate_versions_identity_sets_and_reason_codes() {
     let candidate = serde_json::json!({"candidateId":"c1","classification":"notWorthy","sourceIds":["s1"],"subjectRef":{"kind":"playerPreference"},"reason":"skip"});
     let valid = serde_json::json!({"version":1,"candidates":[candidate.clone()]});
+    let cycle_mark = serde_json::json!({"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"守卫记得一次援助"});
+    let valid_with_cycle_mark =
+        serde_json::json!({"version":1,"candidates":[],"cycleMarks":[cycle_mark.clone()]});
     rejected(
         validate_proposal_identity(&crate::model::Proposal {
             version: 2,
             candidates: vec![],
+            cycle_marks: vec![],
         }),
         Reason::PolicyUnavailable,
     );
@@ -1093,12 +1125,21 @@ fn completion_and_response_protocols_validate_versions_identity_sets_and_reason_
             serde_json::json!({"version":1,"candidates":[candidate.clone(),candidate.clone()]}),
             Reason::InvalidSchema,
         ),
+        (
+            serde_json::json!({"version":1,"candidates":[],"cycleMarks":vec![cycle_mark.clone(); crate::model::MAX_CYCLE_MARK_PROPOSALS+1]}),
+            Reason::CapacityBlocked,
+        ),
+        (
+            serde_json::json!({"version":1,"candidates":[],"cycleMarks":[cycle_mark.clone(),cycle_mark.clone()]}),
+            Reason::InvalidSchema,
+        ),
     ] {
         rejected(
             decode_proposal_response(&serde_json::to_vec(&proposal).unwrap()),
             reason,
         );
     }
+    assert!(decode_proposal_response(&serde_json::to_vec(&valid_with_cycle_mark).unwrap()).is_ok());
     let (mut f, batch, turn, request) = dispatched_fixture();
     f.repo
         .receive_batch(
@@ -1153,12 +1194,224 @@ fn completion_and_response_protocols_validate_versions_identity_sets_and_reason_
                 &batch,
                 &BatchCompletion {
                     version: 1,
-                    outcomes: vec![]
+                    outcomes: vec![],
+                    cycle_marks: vec![],
                 }
             ),
             Err(Error::Corrupt)
         ));
     }
+}
+
+#[test]
+fn ordinary_completion_rejects_cycle_mark_response_without_mark_commits() {
+    let (mut f, batch, turn, request) = dispatched_fixture();
+    let response = br#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"Guard remembers help"}]}"#;
+    let commit = cycle_mark_commit(&f);
+    f.repo
+        .record_cycle_mark(&mut f.conn, &f.port, &commit.mark)
+        .unwrap();
+    f.repo
+        .receive_batch(&mut f.conn, &batch, &turn, &request, response)
+        .unwrap();
+
+    rejected(
+        f.repo.complete_batch(&mut f.conn, &batch, EMPTY_COMPLETION),
+        Reason::RecoveryRequired,
+    );
+    let forged_completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![CycleMarkResult {
+            candidate_id: "mark_1".into(),
+            mark_id: commit.mark.mark_id,
+        }],
+    };
+    rejected(
+        f.repo.complete_batch(
+            &mut f.conn,
+            &batch,
+            &serde_json::to_vec(&forged_completion).unwrap(),
+        ),
+        Reason::RecoveryRequired,
+    );
+    assert_eq!(
+        f.repo.batch_receipt(&f.conn, &batch).unwrap().state,
+        BatchState::Received,
+        "普通入口不能借用已有刻痕伪造批次提交记录"
+    );
+}
+
+#[test]
+fn authorized_cycle_mark_and_batch_completion_commit_atomically_and_replay_idempotently() {
+    let (mut f, batch, turn, request) = dispatched_fixture();
+    let response = br#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"Guard remembers help"}]}"#;
+    f.repo
+        .receive_batch(&mut f.conn, &batch, &turn, &request, response)
+        .unwrap();
+    let commit = cycle_mark_commit(&f);
+    let completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![],
+    };
+
+    assert!(
+        f.repo
+            .complete_batch_with_cycle_marks(
+                &mut f.conn,
+                &f.port,
+                &batch,
+                &completion,
+                std::slice::from_ref(&commit),
+            )
+            .unwrap()
+    );
+    let receipt = f.repo.batch_receipt(&f.conn, &batch).unwrap();
+    assert_eq!(receipt.state, BatchState::Completed);
+    let persisted: BatchCompletion =
+        aoidos_json::decode_bytes(receipt.completion.as_deref().unwrap(), MAX_PROPOSAL_BYTES)
+            .unwrap();
+    assert_eq!(
+        persisted.cycle_marks,
+        vec![CycleMarkResult {
+            candidate_id: "mark_1".into(),
+            mark_id: commit.mark.mark_id.clone(),
+        }]
+    );
+    assert_eq!(
+        f.repo
+            .cycle_marks(&f.conn, &f.run.script_id, false)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        !f.repo
+            .complete_batch_with_cycle_marks(&mut f.conn, &f.port, &batch, &completion, &[commit],)
+            .unwrap()
+    );
+    f.conn
+        .execute(
+            "UPDATE memory_cycle_marks SET priority=priority+1 WHERE mark_id=?1",
+            [persisted.cycle_marks[0].mark_id.as_str()],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.repo.batch_receipt(&f.conn, &batch),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn unauthorized_cycle_mark_source_rolls_back_batch_completion_and_mark_write() {
+    let (mut f, batch, turn, request) = dispatched_fixture();
+    let response = br#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"Guard remembers help"}]}"#;
+    f.repo
+        .receive_batch(&mut f.conn, &batch, &turn, &request, response)
+        .unwrap();
+    let mut commit = cycle_mark_commit(&f);
+    commit.mark.source_refs[0].source.record_seq = 2;
+    let completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![],
+    };
+
+    rejected(
+        f.repo.complete_batch_with_cycle_marks(
+            &mut f.conn,
+            &f.port,
+            &batch,
+            &completion,
+            &[commit],
+        ),
+        Reason::InvalidSource,
+    );
+    assert_eq!(
+        f.repo.batch_receipt(&f.conn, &batch).unwrap().state,
+        BatchState::Received
+    );
+    assert!(
+        f.repo
+            .cycle_marks(&f.conn, &f.run.script_id, true)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn cycle_mark_from_another_generation_cannot_complete_the_batch() {
+    let (mut f, batch, turn, request) = dispatched_fixture();
+    let response = br#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"Guard remembers help"}]}"#;
+    f.repo
+        .receive_batch(&mut f.conn, &batch, &turn, &request, response)
+        .unwrap();
+    let mut commit = cycle_mark_commit(&f);
+    commit.mark.cycle_gen += 1;
+    commit.mark.mark_id = commit.mark.stable_mark_id().unwrap();
+    let completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![],
+    };
+
+    rejected(
+        f.repo.complete_batch_with_cycle_marks(
+            &mut f.conn,
+            &f.port,
+            &batch,
+            &completion,
+            &[commit],
+        ),
+        Reason::InvalidSource,
+    );
+    assert_eq!(
+        f.repo.batch_receipt(&f.conn, &batch).unwrap().state,
+        BatchState::Received
+    );
+    assert!(
+        f.repo
+            .cycle_marks(&f.conn, &f.run.script_id, true)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn completion_validation_failure_rolls_back_cycle_marks_already_inserted_in_transaction() {
+    let (mut f, batch, turn, request) = dispatched_fixture();
+    let response = br#"{"version":1,"candidates":[{"candidateId":"fact_1","classification":"notWorthy","sourceIds":["s1"],"subjectRef":{"kind":"playerPreference"},"reason":"No durable change"}],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"Guard remembers help"}]}"#;
+    f.repo
+        .receive_batch(&mut f.conn, &batch, &turn, &request, response)
+        .unwrap();
+    let commit = cycle_mark_commit(&f);
+    let completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![],
+    };
+
+    rejected(
+        f.repo.complete_batch_with_cycle_marks(
+            &mut f.conn,
+            &f.port,
+            &batch,
+            &completion,
+            &[commit],
+        ),
+        Reason::InvalidSchema,
+    );
+    assert_eq!(
+        f.repo.batch_receipt(&f.conn, &batch).unwrap().state,
+        BatchState::Received
+    );
+    assert!(
+        f.repo
+            .cycle_marks(&f.conn, &f.run.script_id, true)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

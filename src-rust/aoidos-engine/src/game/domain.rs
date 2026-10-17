@@ -1,6 +1,6 @@
 //! 可信剧本 / 世界解释器与冻结请求的接入边界；产品参数不包含规则、SQL 或 profile。
 
-use super::catalog::{ConfirmedWorldView, SceneCatalog};
+use super::catalog::{ConfirmedWorldView, SceneCatalog, SceneRuleMatch};
 use super::presence::ScenePresenceSnapshot;
 use crate::{
     fault::Fault,
@@ -57,10 +57,63 @@ pub struct CompletedRound {
     pub history_revision: u64,
     pub through_seq: u64,
 }
+/// 已通过可信规则求值并成功持久化领取的固定场景提示。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneHint {
+    pub hint_id: String,
+    pub text: String,
+    pub target_scope: String,
+}
 /// 只读完成通知的独立消费端；世界解释器不负责记忆调度，也不反向依赖消费者 crate。
 pub trait CompletedRounds: Send + Sync {
-    /// completed 事实确认后通知一次；重放 / 回退不再次通知，不在回调发付费请求。
+    /// `completed` 事实确认且记录 / 领域锁释放后通知；重放 / 回退不重复通知，不在回调发付费请求。
     fn completed(&self, round: CompletedRound);
+
+    /// 已初始化的记忆周目；轻量测试消费者可不接入记忆运行时。
+    fn run_id(&self) -> Option<String> {
+        None
+    }
+
+    /// 在来源记录追加前持久化有界生命周期事件，关闭记录与记忆之间的崩溃窗口。
+    /// # Errors
+    /// 事件身份冲突、超限或存储不可用时拒绝提交来源记录。
+    fn prepare_cycle_event(
+        &self,
+        _event: aoidos_memory::model::CycleLifecycleEvent,
+    ) -> Result<(), Fault> {
+        Ok(())
+    }
+
+    /// 消费已提交且仍属于当前历史分支的生命周期事件；失败时保留队列供下次恢复。
+    fn drain_cycle_events(&self) -> Result<(), Fault> {
+        Ok(())
+    }
+
+    /// 为新周目或回退后的当前节点建立基线；已存在的节点保持原始基线不变。
+    /// # Errors
+    /// 历史修订、来源场景、证据或持久化状态不一致时失败关闭。
+    fn ensure_current_node(
+        &self,
+        _scene_id: &str,
+        _history_revision: u64,
+        _baseline: &[aoidos_memory::model::SceneRuleEvidence],
+    ) -> Result<(), Fault> {
+        Ok(())
+    }
+
+    /// 消费 023 当前目录产生的规则匹配并原子领取一条登记提示；仅在持久化成功后返回文案。
+    /// 调用方必须从最新 applied 世界生成匹配结果；该操作校验 revision 一致性，不改变世界事实。
+    /// # Errors
+    /// 周目未初始化、生命周期事件待恢复、历史修订不符、规则结果无效或存储失败时拒绝。
+    fn claim_scene_hint(
+        &self,
+        _scene_id: &str,
+        _history_revision: u64,
+        _world_revision: &str,
+        _matches: &[SceneRuleMatch],
+    ) -> Result<Option<SceneHint>, Fault> {
+        Err(super::invalid_phase())
+    }
 }
 /// 每 session 的唯一世界所有者；条件核验、变更与 applied 必须共享 SQL 事务。
 /// 没有注册实现的会话可读记录，不能猜测世界属性后继续推进。

@@ -66,7 +66,10 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     crate::game::catalog::ENTITY_REGISTRY_MIGRATION,
     aoidos_memory::schema::ALIAS_MIGRATION,
     aoidos_memory::schema::CYCLE_MIGRATION,
+    aoidos_memory::schema::CYCLE_EVENT_MIGRATION,
     aoidos_memory::schema::CONFIG_MIGRATION,
+    aoidos_memory::schema::CYCLE_GENERATION_MIGRATION,
+    aoidos_memory::schema::CYCLE_GENERATION_BACKFILL,
 ];
 
 pub struct Storage {
@@ -123,6 +126,29 @@ impl Storage {
             &crate::record::memory::SourcePort<'_>,
         ) -> aoidos_memory::error::Result<T>,
     ) -> aoidos_memory::error::Result<T> {
+        self.with_memory_context(
+            session_id,
+            scene_catalog,
+            |repository, connection, port, _, _| job(repository, connection, port),
+        )
+    }
+
+    /// 在同一锁区内向可信 engine 工作流提供活动会话和完整实体快照。
+    /// 壳层仍只使用 `with_memory`，避免把内部恢复与身份上下文暴露成 IPC。
+    /// # Errors
+    /// 会话、恢复状态、目录或存储无效时拒绝执行回调。
+    pub(crate) fn with_memory_context<T>(
+        &self,
+        session_id: &str,
+        scene_catalog: &crate::game::catalog::SceneCatalog,
+        job: impl FnOnce(
+            &aoidos_memory::repository::Repository,
+            &mut rusqlite::Connection,
+            &crate::record::memory::SourcePort<'_>,
+            &crate::record::session::Session,
+            &crate::game::catalog::EntityDirectory,
+        ) -> aoidos_memory::error::Result<T>,
+    ) -> aoidos_memory::error::Result<T> {
         let session = self.records.get(session_id).map_err(memory_context_error)?;
         let session = session
             .lock()
@@ -146,7 +172,20 @@ impl Storage {
             &entity_directory,
             scene_catalog,
         )?;
-        job(&self.memory, connection, &port)
+        job(&self.memory, connection, &port, &session, &entity_directory)
+    }
+
+    /// 在不取会话锁时借用记忆仓储；仅用于已有会话锁的执行路径预写待处理事件。
+    /// # Errors
+    /// 存储未开放、事件不合法或 SQLite 操作失败时返回稳定错误。
+    pub(crate) fn with_memory_repository<T>(
+        &self,
+        job: impl FnOnce(
+            &aoidos_memory::repository::Repository,
+            &mut rusqlite::Connection,
+        ) -> aoidos_memory::error::Result<T>,
+    ) -> Result<T, Fault> {
+        self.with_database(|connection| job(&self.memory, connection).map_err(memory_config_error))
     }
 
     /// 在会话持久化后冻结其已确认的记忆策略；重开时保留现有快照。
@@ -551,7 +590,7 @@ fn memory_context_error(error: Fault) -> aoidos_memory::error::Error {
     }
 }
 
-fn memory_config_error(error: aoidos_memory::error::Error) -> Fault {
+pub(crate) fn memory_config_error(error: aoidos_memory::error::Error) -> Fault {
     let code = error.code();
     let message = match code.as_str() {
         "app.bad-request" => "记忆参数不合法或配置已变化",

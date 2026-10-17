@@ -267,10 +267,7 @@ impl Domain for BuiltinDomain {
         Ok(None)
     }
 }
-struct Completed;
-impl CompletedRounds for Completed {
-    fn completed(&self, _: CompletedRound) {}
-}
+type Completed = super::cycle::CycleRuntime;
 /// 在原始 header 完整匹配时登记固定目录；未知旧版本保留磁盘事实，不猜测迁移。
 /// # Errors
 /// 不支持的剧本版本为 app.not-ready；解释器 / 场景或存储恢复错误原样返回。
@@ -331,6 +328,11 @@ async fn open_context(
         .header()
         .session_id
         .clone();
+    let completed = Arc::new(Completed::new(
+        storage.clone(),
+        Arc::new(catalog.clone()),
+        session_id.clone(),
+    ));
     let context = Context::open(
         session,
         Box::new(BuiltinDomain {
@@ -343,11 +345,47 @@ async fn open_context(
         "player".into(),
         coordinator,
         events,
-        Arc::new(Completed),
+        completed.clone(),
     )
     .await?;
-    storage.initialize_memory_run(&session_id, &catalog)?;
+    let run = storage.initialize_memory_run(&session_id, &catalog)?;
+    completed.set_run_id(run.run_id)?;
+    if !context.publisher.snapshot().state.needs_recovery {
+        completed.drain_cycle_events()?;
+        ensure_current_cycle_node(&context)?;
+    }
     Ok(context)
+}
+
+/// 周目初始化或重新打开时，只为尚无状态的当前节点建立一次基线。
+/// # Errors
+/// 当前世界、规则快照与记忆因果边界不一致时拒绝登记运行时。
+pub(crate) fn ensure_current_cycle_node(context: &Context) -> Result<(), Fault> {
+    let Some(scene) = context
+        .publisher
+        .snapshot()
+        .state
+        .scene
+        .map(|scene| scene.scene_id)
+    else {
+        return Ok(());
+    };
+    let session = context
+        .session
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let domain = context
+        .domain
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let world = domain.confirmed(&session)?;
+    let history_revision = world.history_revision();
+    let evidence = super::cycle::current_progress_evidence(domain.catalog(), &scene, &world)?;
+    drop(domain);
+    drop(session);
+    context
+        .completed
+        .ensure_current_node(&scene, history_revision, &evidence)
 }
 
 /// 活动内置领域与记忆证据读取共用同一目录构造，避免规则装配分叉。

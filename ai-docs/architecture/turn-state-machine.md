@@ -1,6 +1,6 @@
 # 回合与阶段状态机
 
-更新日期：2026-10-09。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/aoidos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
+更新日期：2026-10-17。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/aoidos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
 
 实现位于 `aoidos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](README.md#阶段机基础链路)，验证证据见 [023](../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
 
@@ -225,9 +225,9 @@ SceneCatalog 是可信剧本注册域；023 负责交付 SceneRuleView 及登记
 
 规则 ID 必须属于对应场景的已登记规则集合，条件由 023 实现的统一类型化条件求值层处理，场景晋级与 032 共用这一层；未知规则 / 解释器、过期 revision、缺失依据返回类型化拒绝，不能以 matched=false 掩盖无法求值。函数只读、不提交状态、不采随机、不调用 LLM。角色 / 原文相关引用仍需 022 核验有效路径；匹配结果不得直接当作世界补丁。
 
-内部端口同样有界：每类规则 ID 最多 64、hintRules 最多 32、单提示最多 512 字节，SceneRuleView 完整序列化最多 64 KiB；单次 SceneRuleMatch 的 evidenceRefs 最多 32。超过上限拒绝目录 / 求值结果，不截掉依据后宣称成功；这些限制已由登记与求值层验证，032 的消费接线仍待实施。
+内部端口同样有界：每类规则 ID 最多 64、hintRules 最多 32、单提示最多 512 字节，SceneRuleView 完整序列化最多 64 KiB；单次 SceneRuleMatch 的 evidenceRefs 最多 32。超过上限拒绝目录 / 求值结果，不截掉依据后宣称成功；这些限制已由登记与求值层验证，032 的引擎消费接口已实现，产品调用方尚未接入。
 
-023 验证规则目录与只读求值结果，032 使用其确认身份幂等消费 completed 钩子；032 不复制条件解释器、不扩展权威状态。无 progress / hint / exit 配置的场景返回空登记集合，不自动制造进展或出口。原有公开五阶段、每回合三个 LLM 调用、场景提议与提交顺序保持不变。
+023 验证规则目录与只读求值结果，032 使用其确认身份幂等消费 completed 钩子，并提供规则提示的候选校验和原子领取接口；032 不复制条件解释器、不扩展权威状态。无 progress / hint / exit 配置的场景返回空登记集合，不自动制造进展或出口。节点生命周期事件在来源记录提交前预写，重开或回退时校验来源、清理孤立 / 失效事件并幂等恢复节点状态。上述接口尚无产品调用方；显式用户入口与提示展示由 033 联调，不新增后台触发。原有公开五阶段、每回合三个 LLM 调用、场景提议与提交顺序保持不变。
 
 ## IPC、错误与消费
 

@@ -903,7 +903,14 @@ async fn fork(
         };
         let prepared = context.publisher.prepare(next, finished)?;
         session.commit_history_fork(body, domain.as_mut())?;
-        context.publisher.confirm(prepared)
+        context.publisher.confirm(prepared)?;
+        drop(domain);
+        drop(session);
+        // 回退后旧分支事件会被丢弃；新分支基线在同一无网络恢复边界建立。
+        // 失败不回滚已确认的历史分叉，后续打开会重试本地恢复。
+        let _ = context.completed.drain_cycle_events();
+        let _ = super::builtin::ensure_current_cycle_node(&context);
+        Ok(())
     })
     .await
 }

@@ -1,6 +1,9 @@
 //! 将可信场景规则结果转换为记忆轮回模块所需的数据。
 
-use super::catalog::{HintRule, SceneRuleMatch, SceneRuleView};
+mod runtime;
+pub(crate) use runtime::CycleRuntime;
+
+use super::catalog::{ConfirmedWorldView, HintRule, SceneCatalog, SceneRuleMatch, SceneRuleView};
 use crate::fault::Fault;
 use aoidos_memory::model::{MAX_SCENE_RULE_EVIDENCE, SceneProgress, SceneRuleEvidence, hash};
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,10 +59,42 @@ pub fn progress_evidence(
     Ok(evidence)
 }
 
+/// 从已确认世界快照中求值当前场景登记的进展规则。
+///
+/// 该函数只复用 SceneCatalog 的可信规则，不从正文、模型输出或未登记字段推断进展。
+/// # Errors
+/// 世界快照过期、规则未登记或任一依据无效时拒绝生成事件快照。
+pub fn current_progress_evidence(
+    catalog: &SceneCatalog,
+    scene_id: &str,
+    world: &ConfirmedWorldView,
+) -> Result<Vec<SceneRuleEvidence>, Fault> {
+    let scene = catalog.get_scene_rule_view(scene_id, catalog.revision())?;
+    let matches = scene
+        .progress_rule_ids
+        .iter()
+        .map(|rule_id| {
+            catalog.evaluate_scene_rule(
+                scene_id,
+                rule_id,
+                world,
+                world.world_revision(),
+                world.history_revision(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    progress_evidence(
+        &scene,
+        &matches,
+        world.history_revision(),
+        world.world_revision(),
+    )
+}
+
 /// 按稳定优先级返回登记条件已满足的固定提示。
 /// 提示领取及冷却校验由单独的仓储事务完成。
 /// # Errors
-/// 任何过期或重复的规则结果都会被拒绝，不会静默忽略。
+/// 进入候选计算后，过期、缺失或重复的规则结果都会被拒绝。
 pub fn eligible_hints(
     scene: &SceneRuleView,
     matches: &[SceneRuleMatch],
@@ -105,6 +140,13 @@ pub fn eligible_hints(
         {
             return Err(super::invalid_phase());
         }
+    }
+    if scene
+        .hint_rules
+        .iter()
+        .any(|hint| !matched_rules.contains_key(hint.when_rule_id.as_str()))
+    {
+        return Err(super::invalid_phase());
     }
     let mut hints = scene
         .hint_rules

@@ -1,6 +1,32 @@
 use super::super::test_support::*;
 use super::*;
-use crate::model::{BeginSceneProgress, ClaimSceneHint, CompleteSceneProgress, SceneNodeKey};
+use crate::model::{
+    BeginSceneProgress, ClaimSceneHint, CompleteSceneProgress, CycleEventKind, CycleLifecycleEvent,
+    SceneNodeKey, SceneRuleEvidence,
+};
+
+fn lifecycle_event(fixture: &Fixture, source_seq: u64) -> CycleLifecycleEvent {
+    CycleLifecycleEvent {
+        version: 1,
+        event_id: CycleLifecycleEvent::event_id_for(
+            &fixture.run.run_id,
+            CycleEventKind::RoundCompleted,
+            0,
+            source_seq,
+        ),
+        run_id: fixture.run.run_id.clone(),
+        session_id: fixture.run.session_id.clone(),
+        kind: CycleEventKind::RoundCompleted,
+        source_record_seq: source_seq,
+        history_revision: 0,
+        scene_id: "archive".into(),
+        entry_record_seq: 1,
+        catalog_revision: "catalog-v1".into(),
+        world_revision: "world-v1".into(),
+        round_id: Some(crate::model::new_id()),
+        evidence: Vec::new(),
+    }
+}
 
 fn mark(fixture: &Fixture, imprint_key: &str, priority: u16) -> CycleMarkV1 {
     let mut mark = CycleMarkV1 {
@@ -197,6 +223,282 @@ fn cycle_mark_rejects_stale_cross_run_or_invalid_sources_without_writing() {
 }
 
 #[test]
+fn direct_cycle_mark_rejects_another_generation_without_advancing_script_counter() {
+    let mut fixture = Fixture::new_in_memory();
+    let mut candidate = mark(&fixture, "first-rescue", 500);
+    candidate.cycle_gen += 1;
+    candidate.mark_id = candidate.stable_mark_id().unwrap();
+
+    assert!(matches!(
+        fixture
+            .repo
+            .record_cycle_mark(&mut fixture.conn, &fixture.port, &candidate),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+    assert!(
+        fixture
+            .repo
+            .cycle_marks(&fixture.conn, &fixture.run.script_id, true)
+            .unwrap()
+            .is_empty()
+    );
+
+    fixture.port.view.session_id = new_id();
+    let next = fixture
+        .repo
+        .create_run(&mut fixture.conn, &fixture.port, policy())
+        .unwrap();
+    assert_eq!(next.cycle_gen, 2);
+}
+
+#[test]
+fn cycle_event_prepare_is_idempotent_and_rejects_payload_conflicts() {
+    let mut fixture = Fixture::new_in_memory();
+    let event = lifecycle_event(&fixture, 8);
+    assert_eq!(
+        fixture
+            .repo
+            .prepare_cycle_event(&mut fixture.conn, event.clone())
+            .unwrap(),
+        event
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .prepare_cycle_event(&mut fixture.conn, event.clone())
+            .unwrap(),
+        event
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 10)
+            .unwrap(),
+        vec![event.clone()]
+    );
+
+    let mut conflict = event;
+    conflict.world_revision = "world-v2".into();
+    assert!(matches!(
+        fixture
+            .repo
+            .prepare_cycle_event(&mut fixture.conn, conflict),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+    assert_eq!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn frozen_run_rejects_cycle_event_enqueue_and_delete() {
+    let mut fixture = Fixture::new_in_memory();
+    let event = lifecycle_event(&fixture, 8);
+    fixture
+        .repo
+        .prepare_cycle_event(&mut fixture.conn, event.clone())
+        .unwrap();
+    fixture
+        .conn
+        .execute(
+            "INSERT INTO memory_run_faults(run_id,operation_id,reason) VALUES(?1,?2,'appliedAuditMismatch')",
+            params![fixture.run.run_id, "00000000-0000-4000-8000-000000000001"],
+        )
+        .unwrap();
+    let next_event = lifecycle_event(&fixture, 9);
+
+    assert!(matches!(
+        fixture
+            .repo
+            .prepare_cycle_event(&mut fixture.conn, next_event),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+    assert!(matches!(
+        fixture
+            .repo
+            .delete_cycle_event(&mut fixture.conn, &fixture.run.run_id, &event.event_id),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+    assert_eq!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 10)
+            .unwrap(),
+        [event]
+    );
+}
+
+#[test]
+fn pending_cycle_event_rejects_conflicting_sql_identity_columns() {
+    let mut fixture = Fixture::new_in_memory();
+    let event = lifecycle_event(&fixture, 8);
+    fixture
+        .repo
+        .prepare_cycle_event(&mut fixture.conn, event.clone())
+        .unwrap();
+    fixture
+        .conn
+        .execute(
+            "UPDATE memory_cycle_events SET history_revision=history_revision+1 WHERE event_id=?1",
+            [&event.event_id],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 10),
+        Err(Error::Corrupt)
+    ));
+    assert!(matches!(
+        fixture.repo.prepare_cycle_event(&mut fixture.conn, event),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn pending_cycle_events_are_ordered_and_deletion_is_idempotent() {
+    let mut fixture = Fixture::new_in_memory();
+    for sequence in [8, 3, 5] {
+        let event = lifecycle_event(&fixture, sequence);
+        fixture
+            .repo
+            .prepare_cycle_event(&mut fixture.conn, event)
+            .unwrap();
+    }
+    let pending = fixture
+        .repo
+        .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 2)
+        .unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|event| event.source_record_seq)
+            .collect::<Vec<_>>(),
+        [3, 5]
+    );
+    let first = pending.first().unwrap();
+    fixture
+        .repo
+        .delete_cycle_event(&mut fixture.conn, &fixture.run.run_id, &first.event_id)
+        .unwrap();
+    fixture
+        .repo
+        .delete_cycle_event(&mut fixture.conn, &fixture.run.run_id, &first.event_id)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 10)
+            .unwrap()
+            .iter()
+            .map(|event| event.source_record_seq)
+            .collect::<Vec<_>>(),
+        [5, 8]
+    );
+    assert!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        fixture.repo.pending_cycle_events(
+            &fixture.conn,
+            &fixture.run.run_id,
+            MAX_CYCLE_EVENT_PAGE + 1
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
+fn cycle_event_rejects_oversized_payload_and_invalid_event_shapes() {
+    let mut fixture = Fixture::new_in_memory();
+    let mut oversized = lifecycle_event(&fixture, 8);
+    oversized.evidence = (0..9)
+        .map(|index| {
+            let json = aoidos_json::canonical_string(&serde_json::json!({
+                "detail": format!("{index}{}", "x".repeat(7_980))
+            }))
+            .unwrap()
+            .into_bytes();
+            SceneRuleEvidence {
+                rule_id: format!("rule-{index}"),
+                evidence_hash: hash(&json),
+                evidence_json: json,
+            }
+        })
+        .collect();
+    assert!(matches!(
+        fixture
+            .repo
+            .prepare_cycle_event(&mut fixture.conn, oversized),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
+
+    let mut invalid = lifecycle_event(&fixture, 9);
+    invalid.kind = CycleEventKind::SceneEntered;
+    assert!(matches!(
+        fixture.repo.prepare_cycle_event(&mut fixture.conn, invalid),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    assert!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn pending_cycle_event_queue_has_a_fixed_per_run_capacity() {
+    let mut fixture = Fixture::new_in_memory();
+    for sequence in 2..=(MAX_CYCLE_EVENT_PAGE as u64 + 1) {
+        let event = lifecycle_event(&fixture, sequence);
+        fixture
+            .repo
+            .prepare_cycle_event(&mut fixture.conn, event)
+            .unwrap();
+    }
+    let extra = lifecycle_event(&fixture, 130);
+    assert!(matches!(
+        fixture.repo.prepare_cycle_event(&mut fixture.conn, extra),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
+
+    let first = fixture
+        .repo
+        .pending_cycle_events(&fixture.conn, &fixture.run.run_id, 1)
+        .unwrap()
+        .remove(0);
+    fixture
+        .repo
+        .delete_cycle_event(&mut fixture.conn, &fixture.run.run_id, &first.event_id)
+        .unwrap();
+    let replacement = lifecycle_event(&fixture, 130);
+    fixture
+        .repo
+        .prepare_cycle_event(&mut fixture.conn, replacement)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .pending_cycle_events(&fixture.conn, &fixture.run.run_id, MAX_CYCLE_EVENT_PAGE)
+            .unwrap()
+            .len(),
+        MAX_CYCLE_EVENT_PAGE
+    );
+}
+
+#[test]
 fn active_marks_are_bounded_and_archived_by_priority_generation_and_id() {
     let mut fixture = Fixture::new_in_memory();
     let mut results = Vec::new();
@@ -254,6 +556,69 @@ fn corrupt_payload_or_source_digest_fails_closed() {
             .cycle_marks(&fixture.conn, &fixture.run.script_id, true),
         Err(Error::Corrupt)
     ));
+}
+
+#[test]
+fn denormalized_cycle_mark_fields_must_match_the_hashed_payload() {
+    let mut fixture = Fixture::new_in_memory();
+    let candidate = mark(&fixture, "first-rescue", 500);
+    let stored = fixture
+        .repo
+        .record_cycle_mark(&mut fixture.conn, &fixture.port, &candidate)
+        .unwrap();
+    fixture
+        .conn
+        .execute(
+            "UPDATE memory_cycle_marks SET priority=999 WHERE mark_id=?1",
+            [&stored.mark.mark_id],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        fixture
+            .repo
+            .cycle_marks(&fixture.conn, &fixture.run.script_id, true),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn corrupt_priority_aborts_capacity_archiving_without_partial_changes() {
+    let mut fixture = Fixture::new_in_memory();
+    let mut marks = Vec::new();
+    for index in 0..ACTIVE_CYCLE_CAPACITY {
+        let candidate = mark(&fixture, &format!("imprint-{index}"), index as u16);
+        marks.push(
+            fixture
+                .repo
+                .record_cycle_mark(&mut fixture.conn, &fixture.port, &candidate)
+                .unwrap(),
+        );
+    }
+    fixture
+        .conn
+        .execute(
+            "UPDATE memory_cycle_marks SET priority=1000 WHERE mark_id=?1",
+            [&marks[0].mark.mark_id],
+        )
+        .unwrap();
+    let extra = mark(&fixture, "extra-imprint", 500);
+
+    assert!(matches!(
+        fixture
+            .repo
+            .record_cycle_mark(&mut fixture.conn, &fixture.port, &extra),
+        Err(Error::Corrupt)
+    ));
+    let count: usize = fixture
+        .conn
+        .query_row(
+            "SELECT count(*) FROM memory_cycle_marks WHERE script_id=?1",
+            [&fixture.run.script_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, ACTIVE_CYCLE_CAPACITY);
 }
 
 #[test]

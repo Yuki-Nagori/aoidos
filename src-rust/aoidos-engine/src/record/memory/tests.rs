@@ -828,6 +828,12 @@ fn cycle_scene_entry_requires_an_effective_scene_advance_fact() {
     assert!(!port.valid_scene_entry("mistbell", 0).unwrap());
 
     let entry_seq = advance_scene(&mut fixture, "start", "mistbell");
+    let entities = crate::game::assets::entity_directory("mistbell").unwrap();
+    let catalog = crate::game::builtin::memory_scene_catalog("雾钟地窖".into(), entities).unwrap();
+    assert_eq!(
+        scene_entry_seq_before(&fixture.session, &catalog, "mistbell", entry_seq + 1).unwrap(),
+        entry_seq
+    );
     assert!(
         SourcePort::new(&fixture.session)
             .valid_scene_entry("mistbell", entry_seq)

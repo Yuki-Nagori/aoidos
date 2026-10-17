@@ -113,3 +113,36 @@ fn eligible_hints_require_stagnation_and_sort_fixed_text_by_priority_then_id() {
             .is_empty()
     );
 }
+
+#[test]
+fn eligible_hints_rejects_an_incomplete_rule_result_set() {
+    let scene = scene();
+    let progress = SceneProgress {
+        run_id: "run".into(),
+        scene_id: "archive".into(),
+        catalog_revision: "catalog-v1".into(),
+        entry_history_revision: 0,
+        entry_record_seq: 0,
+        revision: 1,
+        progress_count: 0,
+        stagnation_rounds: aoidos_memory::model::NODE_HINT_AFTER_STAGNANT_ROUNDS,
+        completed_rounds: 8,
+        last_completed_record_seq: 8,
+        last_round_id: None,
+        last_evidence_hash: None,
+        hints_shown: 0,
+        last_hint_round: None,
+        last_hint_id: None,
+    };
+
+    assert!(
+        eligible_hints(
+            &scene,
+            &[matched("found-key", "a", 0, true)],
+            &progress,
+            0,
+            "world-v1",
+        )
+        .is_err()
+    );
+}
