@@ -94,7 +94,7 @@ pub fn current_progress_evidence(
 /// 按稳定优先级返回登记条件已满足的固定提示。
 /// 提示领取及冷却校验由单独的仓储事务完成。
 /// # Errors
-/// 任何过期或重复的规则结果都会被拒绝，不会静默忽略。
+/// 进入候选计算后，过期、缺失或重复的规则结果都会被拒绝。
 pub fn eligible_hints(
     scene: &SceneRuleView,
     matches: &[SceneRuleMatch],
@@ -140,6 +140,13 @@ pub fn eligible_hints(
         {
             return Err(super::invalid_phase());
         }
+    }
+    if scene
+        .hint_rules
+        .iter()
+        .any(|hint| !matched_rules.contains_key(hint.when_rule_id.as_str()))
+    {
+        return Err(super::invalid_phase());
     }
     let mut hints = scene
         .hint_rules
