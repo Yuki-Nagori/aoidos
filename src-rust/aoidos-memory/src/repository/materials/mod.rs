@@ -186,21 +186,25 @@ impl Repository {
         port: &dyn CausalPort,
         snapshot: &BatchSnapshot,
     ) -> Result<Hash> {
-        let (run, view) = self.boundary(conn, &snapshot.run_id, port)?;
-        self.ensure_writable(conn, &run.run_id)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        let (run, view) = self.boundary(&tx, &snapshot.run_id, port)?;
+        self.ensure_writable(&tx, &run.run_id)?;
         if snapshot.version != 1
             || !valid_id(&snapshot.batch_id)
             || snapshot.history_revision != view.history_revision
             || snapshot.entity_revision != view.entity_revision
             || snapshot.evidence_revision != view.evidence_revision
             || snapshot.policy_hash != run.policy_hash
-            || snapshot.logical_clock != self.clock(conn, port, &snapshot.run_id)?
+            || snapshot.logical_clock != self.clock(&tx, port, &snapshot.run_id)?
             || snapshot.spans.is_empty()
             || snapshot.spans.len() > 128
         {
             return Err(reject());
         }
         let mut names = BTreeSet::new();
+        let mut materials = BTreeSet::new();
         for span in &snapshot.spans {
             let number = span
                 .source_id
@@ -211,12 +215,13 @@ impl Repository {
                 || span.source_id != format!("s{number}")
                 || !names.insert(&span.source_id)
                 || !valid_id(&span.material_id)
+                || !materials.insert(&span.material_id)
                 || span.text.is_empty()
                 || span.text.len() > if span.context { 1024 } else { 2048 }
             {
                 return Err(reject());
             }
-            let source = self.material_source(conn, &run.run_id, &span.material_id)?;
+            let source = self.material_source(&tx, &run.run_id, &span.material_id)?;
             if source != span.source
                 || !self.valid_sources(&run, std::slice::from_ref(&source), port)?
                 || port.source_text(&source)?.as_deref() != Some(&span.text)
@@ -229,7 +234,7 @@ impl Repository {
             return Err(Error::Rejected(Reason::CapacityBlocked));
         }
         let digest = hash(&raw);
-        if let Some(previous) = conn
+        if let Some(previous) = tx
             .query_row(
                 "SELECT length(snapshot_json),snapshot_json FROM memory_batches WHERE batch_id=?1",
                 [&snapshot.batch_id],
@@ -243,9 +248,31 @@ impl Repository {
             }
             return Ok(digest);
         }
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sql)?;
+        for span in &snapshot.spans {
+            let status: Option<String> = tx
+                .query_row(
+                    "SELECT status FROM memory_materials WHERE run_id=?1 AND material_id=?2",
+                    params![run.run_id, span.material_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql)?;
+            let reserved: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM memory_processed WHERE material_id=?1)
+                     OR EXISTS(
+                         SELECT 1 FROM memory_spans AS s
+                         JOIN memory_batches AS b ON b.batch_id=s.batch_id
+                         WHERE s.material_id=?1 AND s.batch_id<>?2 AND b.status<>'rejected'
+                     )",
+                    params![span.material_id, snapshot.batch_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql)?;
+            if status.as_deref() != Some("eligible") || reserved {
+                return Err(Error::Rejected(Reason::InvalidSource));
+            }
+        }
         tx.execute("INSERT INTO memory_batches(batch_id,run_id,history_revision,input_digest,policy_hash,snapshot_json,status) VALUES(?1,?2,?3,?4,?5,?6,'queued')",params![snapshot.batch_id,snapshot.run_id,snapshot.history_revision,digest.as_slice(),snapshot.policy_hash.as_slice(),raw]).map_err(sql)?;
         for span in &snapshot.spans {
             tx.execute(

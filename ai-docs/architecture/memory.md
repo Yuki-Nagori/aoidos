@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-17。状态：**产品规则与工程协议 v1 已评审；029–031 已交付存储、批次、配置和查询；032 已交付轮回节点与刻痕引擎接口及持久恢复队列；普通候选 / Prompt 产品构造、显式用户触发、提示展示和算法数值由 033 联调 / 标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
+更新日期：2026-10-18。状态：**产品规则与工程协议 v1 已评审；029–031 已交付存储、批次、配置和查询；032 已交付轮回节点与刻痕引擎接口及持久恢复队列；033 正在接入显式素材收集 / 冻结、候选 / Prompt 构造和处理入口并开展算法标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
 
 ## 阅读路径
 
@@ -564,7 +564,9 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 当前实现将 turnId / 027 requestId、响应原文、响应 hash、逐项完成摘要及错误码存入共享 SQLite 的 `memory_batch_receipts`，并与 `memory_batches.status` 在同一事务提交；响应与摘要分别限制为 64 KiB，读取先检查长度再复制 BLOB。这样避免状态与结果文件的双写窗口。完成摘要使用 version=1、outcomes 数组；candidateId 必须与响应候选集合一一对应且不重复，rejected / pending / deferred 必须带稳定 reasonCode，applied / no-op 不带原因。候选与依赖操作的多对一映射存入 `memory_batch_candidate_operations`，与操作计划、目标和版本在同一事务登记；读取恢复计划时必须核对映射集合，完成摘要逐项读取关联操作并审计 applied 状态与提交回执；操作进入持久 `rejected` 时只能以候选 `rejected` 终结，未决或隔离操作不能被其他 outcome 绕过。未绑定操作的候选不能声明 applied。升级前已完成的批次由一次性 backfill 标记为历史回执，以保留可读性而不伪造缺失的候选关联；新批次始终执行严格映射校验。已完成结果为 `deferred` 的候选可从原响应 / 冻结输入重新做本地验证并绑定一个操作；候选标识、原因和关联操作可由 `deferred_candidates` 读取，操作提交不改写原批次回执，其他终态候选不能重开。该路径不重新发送请求，也不创建定时重试；无有效本地计划时继续保持 deferred。dispatched 缺完整响应只能转 unknown，不自动重发。重新发起模型判断须进入新的已授权批次并使用新的物理请求身份，已完成的同源操作仍幂等。
 
-engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造的 private 请求，在共享 `Coordinator` 空闲后取得独立 lease。其预算包装器先调用请求携带的 027 预算端口，再在共享 SQLite 登记唯一 turnId / requestId；登记成功后才进入 020 private 调度。记忆请求限制为一次物理发送，不启用自动传输重试或温度阶梯；完整输出在 lease 释放前写入 `received`，发送或回执结果不确定则记录 `unknown`，不重发。此入口没有自动触发器，冻结 Prompt / 候选构造、用户授权界面和记忆 IPC 尚未接入；035 的真实供应商授权门继续关闭。
+033 已确认产品触发语义：玩家显式发起处理时，系统自动汇集当前周目、当前因果分支中仍有效且未处理的素材；收集与冻结本身不发模型请求，发送必须来自玩家的显式操作。素材最多被一个尚未拒绝的批次占用；完成 / unknown 批次不会释放占用，避免重复处理及不确定请求的重复收费；模型明确拒绝的批次可由新的显式授权重新冻结。冻结操作在 SQLite `IMMEDIATE` 事务中校验素材仍为 eligible、来源仍有效且未被处理 / 占用，同 batchId 同快照重放保持幂等。原文分片身份必须按 run 持久稳定，不能通过重新切片绕过已处理标记；自动收集与界面接入仍在 033 实施中。
+
+engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造的 private 请求，在共享 `Coordinator` 空闲后取得独立 lease。其预算包装器先调用请求携带的 027 预算端口，再在共享 SQLite 登记唯一 turnId / requestId；登记成功后才进入 020 private 调度。记忆请求限制为一次物理发送，不启用自动传输重试或温度阶梯；完整输出在 lease 释放前写入 `received`，发送或回执结果不确定则记录 `unknown`，不重发。此入口没有自动触发器；冻结 Prompt / 候选构造、用户授权界面和记忆 IPC 尚未接入；035 的真实供应商授权门继续关闭。
 
 原始结果已经持久保存而因待确认容量 / 本地资源暂时不能提交的候选，保留 localDeferred 原因与计划；空间释放后只重新做本地核验，不再调用模型。输入切片不足时同样等新上下文，不对同一不足输入反复收费。网络 / 顶层 schema 失败的素材标 needsExplicitRetry，只有用户主动重试 / 恢复或新的有效输入改变判定前提时才能重新排收费批次，不能用定时重扫暗中修复 JSON。
 

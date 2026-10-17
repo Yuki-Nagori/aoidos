@@ -123,6 +123,66 @@ fn material_identity_and_frozen_batch_survive_replays() {
 }
 
 #[test]
+fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_be_frozen() {
+    let mut f = Fixture::new();
+    let source = f.source();
+    let material = f
+        .repo
+        .register_material(&f.conn, &f.port, &source, 0)
+        .unwrap();
+    let snapshot = |batch_id| BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id,
+        run_id: f.run.run_id.clone(),
+        history_revision: 0,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash: f.run.policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: material.clone(),
+            source: source.clone(),
+            text: "钟声".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: serde_json::json!({}),
+    };
+    let first = snapshot(new_id());
+    let digest = f.repo.freeze_batch(&mut f.conn, &f.port, &first).unwrap();
+    assert!(matches!(
+        f.repo
+            .freeze_batch(&mut f.conn, &f.port, &snapshot(new_id())),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+
+    f.conn
+        .execute(
+            "UPDATE memory_batches SET status='rejected' WHERE batch_id=?1",
+            [&first.batch_id],
+        )
+        .unwrap();
+    let retry = snapshot(new_id());
+    f.repo.freeze_batch(&mut f.conn, &f.port, &retry).unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_materials SET status='processed' WHERE material_id=?1",
+            [&material],
+        )
+        .unwrap();
+    assert_eq!(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &first).unwrap(),
+        digest
+    );
+    assert!(matches!(
+        f.repo
+            .freeze_batch(&mut f.conn, &f.port, &snapshot(new_id())),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+}
+
+#[test]
 fn deferred_candidates_are_unavailable_before_batch_completion() {
     let mut f = Fixture::new();
     let snapshot = f.received_batch("candidate_1");
@@ -555,6 +615,11 @@ fn unknown_and_rejected_batches_cannot_be_redispatched_or_overwritten() {
         f.repo.batch(&f.conn, &unknown.batch_id).unwrap().1,
         BatchState::Unknown
     );
+    assert!(matches!(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &make_snapshot()),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+    assert!(f.repo.freeze_batch(&mut f.conn, &f.port, &unknown).is_ok());
     assert!(
         !f.repo
             .dispatch_batch(
@@ -577,7 +642,16 @@ fn unknown_and_rejected_batches_cannot_be_redispatched_or_overwritten() {
         Reason::StaleVersion,
     );
 
-    let rejected_batch = make_snapshot();
+    let mut rejected_source = source.clone();
+    rejected_source.record_seq += 1;
+    let rejected_material = f
+        .repo
+        .register_material(&f.conn, &f.port, &rejected_source, 0)
+        .unwrap();
+    let mut rejected_batch = make_snapshot();
+    rejected_batch.batch_id = new_id();
+    rejected_batch.spans[0].source = rejected_source;
+    rejected_batch.spans[0].material_id = rejected_material;
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &rejected_batch)
         .unwrap();
