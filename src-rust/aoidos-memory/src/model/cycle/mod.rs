@@ -11,6 +11,7 @@ pub use outbox::*;
 pub const MAX_CYCLE_SUMMARY_BYTES: usize = 512;
 pub const MAX_CYCLE_SOURCES: usize = 128;
 pub const MAX_CYCLE_SUBJECTS: usize = 16;
+pub const MAX_CYCLE_MARK_PROPOSALS: usize = 8;
 pub const ACTIVE_CYCLE_CAPACITY: usize = 64;
 pub const ABSOLUTE_CYCLE_CAPACITY: usize = 256;
 pub const MAX_CYCLE_HINTS_PER_SCENE: u8 = 3;
@@ -20,7 +21,7 @@ pub const MAX_SCENE_PROGRESS_EVIDENCE: usize = 4_096;
 pub const MAX_SCENE_RULE_EVIDENCE: usize = 32;
 pub const MAX_SCENE_EVIDENCE_BYTES: usize = 8 * 1024;
 pub const MAX_PROJECTED_CYCLE_MARKS: usize = 8;
-pub const MAX_PROJECTED_CYCLE_SUMMARY_BYTES: usize = 2_048;
+pub const MAX_CYCLE_SUMMARIES_BYTES: usize = 2_048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,7 +149,7 @@ pub fn select_cycle_projection(marks: &[StoredCycleMark]) -> CycleProjection {
             break;
         }
         let next_bytes = summary_bytes.saturating_add(mark.summary.len());
-        if next_bytes > MAX_PROJECTED_CYCLE_SUMMARY_BYTES {
+        if next_bytes > MAX_CYCLE_SUMMARIES_BYTES {
             continue;
         }
         summary_bytes = next_bytes;

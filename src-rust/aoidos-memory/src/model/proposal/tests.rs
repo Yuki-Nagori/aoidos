@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::new_id;
+use crate::model::{InputMode, new_id};
 
 fn context() -> ProposalContext {
     let subject = SubjectRef::Character { id: "guard".into() };
@@ -28,6 +28,8 @@ fn context() -> ProposalContext {
             },
         )]
         .into(),
+        cycle_rules: BTreeMap::new(),
+        cycle_sources: BTreeMap::new(),
     }
 }
 
@@ -71,6 +73,56 @@ fn proposal(candidate: Candidate) -> Proposal {
     Proposal {
         version: 1,
         candidates: vec![candidate],
+        cycle_marks: vec![],
+    }
+}
+
+fn cycle_context() -> ProposalContext {
+    let mut context = context();
+    let run_id = new_id();
+    let session_id = new_id();
+    let source = SourceRef {
+        script_id: "mistbell".into(),
+        run_id: run_id.clone(),
+        session_id,
+        record_seq: 4,
+        body_hash: crate::model::hash(b"a trusted source"),
+        start_byte: 0,
+        end_byte: 16,
+        mode: Some(InputMode::InCharacter),
+    };
+    context.cycle_sources.insert(
+        "s1".into(),
+        CycleSourceRef {
+            source,
+            history_revision: 2,
+        },
+    );
+    context.cycle_rules.insert(
+        "rescue".into(),
+        CycleMarkAuthorization {
+            rule_id: "rescue".into(),
+            script_id: "mistbell".into(),
+            run_id,
+            cycle_gen: 3,
+            rule_version: 2,
+            allowed_subject_ids: ["guard".into()].into(),
+            imprint_key: "harbor-rescue".into(),
+            kind: CycleKind::Affinity,
+            detail_policy: DetailPolicy::Vague,
+            priority: 700,
+        },
+    );
+    context
+}
+
+fn cycle_mark_candidate() -> CycleMarkCandidate {
+    CycleMarkCandidate {
+        candidate_id: "mark_1".into(),
+        rule_id: "rescue".into(),
+        source_ids: vec!["s1".into()],
+        subject_ids: vec!["guard".into()],
+        summary: "守卫记得有人曾在港口伸出援手".into(),
     }
 }
 
@@ -115,6 +167,88 @@ fn parse_rejects_duplicate_keys_unknown_fields_and_oversize_documents() {
         unsupported.validate(&context),
         Err(crate::error::Error::Rejected(Reason::PolicyUnavailable))
     ));
+}
+
+#[test]
+fn cycle_mark_candidates_use_the_same_request_and_engine_owned_authorization() {
+    let context = cycle_context();
+    let mut proposal = proposal(preference_candidate());
+    proposal.cycle_marks.push(cycle_mark_candidate());
+    assert!(proposal.validate(&context).is_ok());
+
+    let mark = proposal.cycle_marks[0].materialize(&context).unwrap();
+    let authorization = context.cycle_rules.get("rescue").unwrap();
+    assert_eq!(mark.script_id, authorization.script_id);
+    assert_eq!(mark.cycle_gen, authorization.cycle_gen);
+    assert_eq!(mark.rule_version, authorization.rule_version);
+    assert_eq!(mark.imprint_key, authorization.imprint_key);
+    assert_eq!(mark.kind, authorization.kind);
+    assert_eq!(mark.detail_policy, authorization.detail_policy);
+    assert_eq!(mark.priority, authorization.priority);
+    assert_eq!(mark.summary, "守卫记得有人曾在港口伸出援手");
+    assert_eq!(mark.source_refs.len(), 1);
+    assert_eq!(mark.mark_id, mark.stable_mark_id().unwrap());
+
+    let mut revised_summary = proposal.cycle_marks[0].clone();
+    revised_summary.summary = "守卫对港口的援助仍有模糊印象".into();
+    assert_eq!(
+        revised_summary.materialize(&context).unwrap().mark_id,
+        mark.mark_id,
+        "改写摘要不能生成新的刻痕身份"
+    );
+}
+
+#[test]
+fn cycle_mark_candidates_reject_unregistered_rules_sources_subjects_and_duplicate_identity() {
+    let mut context = cycle_context();
+    let mut candidate = cycle_mark_candidate();
+    candidate.rule_id = "unregistered".into();
+    assert!(candidate.materialize(&context).is_err());
+
+    let mut candidate = cycle_mark_candidate();
+    candidate.source_ids = vec!["s2".into()];
+    assert!(candidate.materialize(&context).is_err());
+
+    let mut candidate = cycle_mark_candidate();
+    candidate.subject_ids = vec!["harbor".into()];
+    assert!(candidate.materialize(&context).is_err());
+
+    context
+        .cycle_rules
+        .get_mut("rescue")
+        .unwrap()
+        .allowed_subject_ids
+        .insert("harbor".into());
+    let mut first = cycle_mark_candidate();
+    first.subject_ids = vec!["guard".into(), "harbor".into()];
+    let mut second = first.clone();
+    second.candidate_id = "mark_2".into();
+    second.subject_ids.reverse();
+
+    let first_mark = first.materialize(&context).unwrap();
+    let second_mark = second.materialize(&context).unwrap();
+    assert_eq!(
+        first_mark.mark_id, second_mark.mark_id,
+        "主体顺序不应改变刻痕的稳定身份"
+    );
+
+    let mut proposal = proposal(preference_candidate());
+    proposal.cycle_marks = vec![first, second];
+    assert!(proposal.validate(&context).is_err());
+}
+
+#[test]
+fn old_memory_proposal_without_cycle_marks_remains_valid() {
+    let context = context();
+    let parsed = Proposal::parse(br#"{"version":1,"candidates":[]}"#, &context).unwrap();
+    assert!(parsed.cycle_marks.is_empty());
+}
+
+#[test]
+fn cycle_mark_wire_cannot_override_engine_owned_authorization_fields() {
+    let context = cycle_context();
+    let bytes = br#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark_1","ruleId":"rescue","sourceIds":["s1"],"subjectIds":["guard"],"summary":"A memory","priority":1000,"kind":"fragment"}]}"#;
+    assert!(Proposal::parse(bytes, &context).is_err());
 }
 
 #[test]
@@ -213,7 +347,8 @@ fn candidate_ids_and_dimensions_are_bounded_and_subject_scoped() {
     assert!(
         Proposal {
             version: 1,
-            candidates: vec![candidate, duplicate]
+            candidates: vec![candidate, duplicate],
+            cycle_marks: vec![],
         }
         .validate(&context)
         .is_err()
@@ -241,6 +376,56 @@ fn bounded_json_roundtrips_and_candidate_capacity_is_exact() {
     });
     assert!(matches!(
         value.validate(&context),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
+}
+
+#[test]
+fn cycle_marks_share_the_total_candidate_capacity() {
+    let proposal = Proposal {
+        version: 1,
+        candidates: (0..MAX_CANDIDATES - MAX_CYCLE_MARK_PROPOSALS)
+            .map(|index| Candidate {
+                candidate_id: format!("c{index}"),
+                ..preference_candidate()
+            })
+            .collect(),
+        cycle_marks: (0..MAX_CYCLE_MARK_PROPOSALS)
+            .map(|index| CycleMarkCandidate {
+                candidate_id: format!("m{index}"),
+                ..cycle_mark_candidate()
+            })
+            .collect(),
+    };
+    assert!(crate::model::validate_proposal_identity(&proposal).is_ok());
+
+    let mut over_capacity = proposal;
+    over_capacity.candidates.push(Candidate {
+        candidate_id: "overflow".into(),
+        ..preference_candidate()
+    });
+    assert!(matches!(
+        crate::model::validate_proposal_identity(&over_capacity),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
+}
+
+#[test]
+fn cycle_mark_summaries_share_the_projected_byte_budget() {
+    let proposal = |first_summary_len: usize| Proposal {
+        version: 1,
+        candidates: vec![],
+        cycle_marks: (0..MAX_CYCLE_MARK_PROPOSALS)
+            .map(|index| CycleMarkCandidate {
+                candidate_id: format!("m{index}"),
+                summary: "x".repeat(if index == 0 { first_summary_len } else { 256 }),
+                ..cycle_mark_candidate()
+            })
+            .collect(),
+    };
+    assert!(crate::model::validate_proposal_identity(&proposal(256)).is_ok());
+    assert!(matches!(
+        crate::model::validate_proposal_identity(&proposal(257)),
         Err(Error::Rejected(Reason::CapacityBlocked))
     ));
 }

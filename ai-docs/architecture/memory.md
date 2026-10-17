@@ -640,9 +640,9 @@ prepared → ready → applied 是正常路径。文件落盘成功而 ready 回
 
 ### 轮回与节点的类型化接入
 
-032 已在 `aoidos-memory` 实现 CycleMarkV1、稳定身份、来源快照和有界查询。字段包括 markId、scriptId、cycleGen、ruleId / ruleVersion、subjectIds、源 run / session / 因果路径锚点、sourceRefs、kind、detailPolicy、priority 和短摘要。kind 为 familiarity / affinity / wariness / fragment；detailPolicy 为 vague / explicit，explicit 必须有对应剧本规则授权。priority 为剧本登记的 0–1,000 整数，不由模型评分填写。刻痕稳定身份由规则 ID、对象和引擎登记的 imprintKey 决定；相同身份重放只幂等补充来源，不以摘要措辞生成新 ID。仓储负责形状、来源有效性和容量，不替代上游剧本规则授权。
+032 已在 `aoidos-memory` 实现 CycleMarkV1、稳定身份、来源快照和有界查询，并为现有 Proposal v1 增加可选 `cycleMarks` 字段，复用同一记忆请求，不增加模型调用。模型只提交登记规则 ID、白名单来源 / 对象引用和摘要；类型化授权上下文提供 scriptId、cycleGen、规则版本、对象白名单、imprintKey、kind、detailPolicy 与 priority，再由程序生成稳定 markId。摘要措辞变化不生成新刻痕身份。仓储新增 `complete_batch_with_cycle_marks`：引擎先按可信规则物化刻痕，仓储再核对候选、冻结来源和主体，并在一个事务中登记刻痕及完成回执；完成回执记录候选到 markId 的映射，读取时核验刻痕仍存在且身份一致。普通 `complete_batch` 不能提交刻痕回执；含刻痕候选的响应必须走可信引擎的原子入口，不能仅凭已有刻痕 ID 声称本批次已提交。剧本规则授权上下文构造及引擎调用该入口尚未接通，因此不能宣称运行期已生成刻痕。
 
-授权处理只有本地规则能产生刻痕，模型可在已授权范围内提出摘要。首轮开发活动刻痕上限每剧本合计 64，绝对 256；每条摘要 ≤512 字节、每次拟选最多 8 条且摘要总计 ≤2 KiB。超限独立归档，不删除来源；去重合并来源前重查每个分支锚点。同一规则的新一代实例保留 generation 和来源版本，不把旧 cycle strength 套入会话公式。
+授权处理只有本地规则能产生刻痕，模型可在已授权范围内提出摘要。首轮开发活动刻痕上限每剧本合计 64，绝对 256；每条摘要 ≤512 字节、每次拟选最多 8 条且摘要总计 ≤2 KiB。超限独立归档，不删除来源；去重合并来源前重查每个分支锚点。读取及容量归档前会将 SQL 排序字段与已校验载荷交叉核对，防止损坏优先级影响归档。同一规则的新一代实例保留 generation 和来源版本，不把旧 cycle strength 套入会话公式。
 
 新周目仅从当前选定且有效的来源分支建立授权快照；快照绑定原始因果锚点并保护被引用历史，不能因后来打开另一个分支偷换来源。来源损坏或授权撤销时相应刻痕不可使用。v1 保存 / 查询刻痕及准备投影端口；实际可选注入按后续独立投影设计实施，不以缓存已存储宣称角色已获得该知识。若以后进入 header 静态段，仍在创建 header 前冻结，不能热改现有前缀。
 

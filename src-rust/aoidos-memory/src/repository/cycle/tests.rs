@@ -530,6 +530,69 @@ fn corrupt_payload_or_source_digest_fails_closed() {
 }
 
 #[test]
+fn denormalized_cycle_mark_fields_must_match_the_hashed_payload() {
+    let mut fixture = Fixture::new_in_memory();
+    let candidate = mark(&fixture, "first-rescue", 500);
+    let stored = fixture
+        .repo
+        .record_cycle_mark(&mut fixture.conn, &fixture.port, &candidate)
+        .unwrap();
+    fixture
+        .conn
+        .execute(
+            "UPDATE memory_cycle_marks SET priority=999 WHERE mark_id=?1",
+            [&stored.mark.mark_id],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        fixture
+            .repo
+            .cycle_marks(&fixture.conn, &fixture.run.script_id, true),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn corrupt_priority_aborts_capacity_archiving_without_partial_changes() {
+    let mut fixture = Fixture::new_in_memory();
+    let mut marks = Vec::new();
+    for index in 0..ACTIVE_CYCLE_CAPACITY {
+        let candidate = mark(&fixture, &format!("imprint-{index}"), index as u16);
+        marks.push(
+            fixture
+                .repo
+                .record_cycle_mark(&mut fixture.conn, &fixture.port, &candidate)
+                .unwrap(),
+        );
+    }
+    fixture
+        .conn
+        .execute(
+            "UPDATE memory_cycle_marks SET priority=1000 WHERE mark_id=?1",
+            [&marks[0].mark.mark_id],
+        )
+        .unwrap();
+    let extra = mark(&fixture, "extra-imprint", 500);
+
+    assert!(matches!(
+        fixture
+            .repo
+            .record_cycle_mark(&mut fixture.conn, &fixture.port, &extra),
+        Err(Error::Corrupt)
+    ));
+    let count: usize = fixture
+        .conn
+        .query_row(
+            "SELECT count(*) FROM memory_cycle_marks WHERE script_id=?1",
+            [&fixture.run.script_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, ACTIVE_CYCLE_CAPACITY);
+}
+
+#[test]
 fn cycle_source_revision_column_must_match_its_snapshot() {
     let mut fixture = Fixture::new_in_memory();
     let candidate = mark(&fixture, "first-rescue", 500);

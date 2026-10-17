@@ -28,130 +28,10 @@ impl Repository {
         port: &dyn CausalPort,
         mark: &CycleMarkV1,
     ) -> Result<StoredCycleMark> {
-        mark.validate()?;
-        let (run, boundary) = self.boundary(conn, &mark.source_refs[0].source.run_id, port)?;
-        self.ensure_writable(conn, &run.run_id)?;
-        if run.script_id != mark.script_id
-            || mark.source_refs.iter().any(|source| {
-                source.source.run_id != run.run_id
-                    || source.history_revision > boundary.history_revision
-            })
-        {
-            return Err(Error::Rejected(Reason::InvalidSource));
-        }
-        for source in &mark.source_refs {
-            if !self.valid_sources(&run, std::slice::from_ref(&source.source), port)? {
-                return Err(Error::Rejected(Reason::InvalidSource));
-            }
-        }
-
-        let mut canonical_mark = mark.clone();
-        canonical_mark
-            .subject_ids
-            .sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-        canonical_mark.source_refs.sort_by(|left, right| {
-            left.source
-                .run_id
-                .as_bytes()
-                .cmp(right.source.run_id.as_bytes())
-                .then_with(|| {
-                    left.source
-                        .session_id
-                        .as_bytes()
-                        .cmp(right.source.session_id.as_bytes())
-                })
-                .then_with(|| left.source.record_seq.cmp(&right.source.record_seq))
-                .then_with(|| left.source.start_byte.cmp(&right.source.start_byte))
-                .then_with(|| left.source.end_byte.cmp(&right.source.end_byte))
-                .then_with(|| left.source.body_hash.cmp(&right.source.body_hash))
-        });
-        canonical_mark.validate()?;
-        let identity = canonical_mark.identity_hash()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql)?;
-
-        let existing = tx
-            .query_row(
-                "SELECT mark_id FROM memory_cycle_marks WHERE script_id=?1 AND cycle_gen=?2 AND identity_hash=?3",
-                params![canonical_mark.script_id, canonical_mark.cycle_gen, identity.as_slice()],
-                read_string,
-            )
-            .optional()
-            .map_err(sql)?;
-
-        let mark_id = if let Some(mark_id) = existing {
-            let stored = read_cycle_mark(&tx, &mark_id)?;
-            if !same_cycle_definition(&stored.mark, &canonical_mark) {
-                return Err(Error::Corrupt);
-            }
-            for source in &stored.mark.source_refs {
-                if source.history_revision > boundary.history_revision
-                    || !self.valid_sources(&run, std::slice::from_ref(&source.source), port)?
-                {
-                    return Err(Error::Rejected(Reason::InvalidSource));
-                }
-            }
-            mark_id
-        } else {
-            let count: usize = tx
-                .query_row(
-                    "SELECT count(*) FROM memory_cycle_marks WHERE script_id=?1",
-                    [&canonical_mark.script_id],
-                    |row| row.get(0),
-                )
-                .map_err(sql)?;
-            if count >= ABSOLUTE_CYCLE_CAPACITY {
-                return Err(Error::Rejected(Reason::CapacityBlocked));
-            }
-            let payload = canonical(&canonical_mark)?;
-            if payload.len() > MAX_CYCLE_MARK_BYTES {
-                return Err(Error::Rejected(Reason::CapacityBlocked));
-            }
-            let payload_hash = hash(&payload);
-            tx.execute(
-                "INSERT INTO memory_cycle_marks(mark_id,script_id,cycle_gen,identity_hash,rule_id,rule_version,subject_ids_json,imprint_key,kind,detail_policy,priority,summary,payload_hash,payload_json,status) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'active')",
-                params![
-                    canonical_mark.mark_id,
-                    canonical_mark.script_id,
-                    canonical_mark.cycle_gen,
-                    identity.as_slice(),
-                    canonical_mark.rule_id,
-                    canonical_mark.rule_version,
-                    canonical(&canonical_mark.subject_ids)?,
-                    canonical_mark.imprint_key,
-                    enum_text(canonical_mark.kind)?,
-                    enum_text(canonical_mark.detail_policy)?,
-                    canonical_mark.priority,
-                    canonical_mark.summary,
-                    payload_hash.as_slice(),
-                    payload,
-                ],
-            )
-            .map_err(sql)?;
-            canonical_mark.mark_id.clone()
-        };
-
-        for source in &canonical_mark.source_refs {
-            insert_cycle_source(&tx, &mark_id, source)?;
-        }
-        let source_count: usize = tx
-            .query_row(
-                "SELECT count(*) FROM memory_cycle_sources WHERE mark_id=?1",
-                [&mark_id],
-                |row| row.get(0),
-            )
-            .map_err(sql)?;
-        if source_count > MAX_CYCLE_SOURCES {
-            return Err(Error::Rejected(Reason::CapacityBlocked));
-        }
-        tx.execute(
-            "UPDATE memory_cycle_marks SET status='active' WHERE mark_id=?1 AND status='archived'",
-            [&mark_id],
-        )
-        .map_err(sql)?;
-        enforce_active_capacity(&tx, &canonical_mark.script_id)?;
-        let stored = read_cycle_mark(&tx, &mark_id)?;
+        let stored = record_cycle_mark_in_transaction(self, &tx, port, mark)?;
         tx.commit().map_err(sql)?;
         Ok(stored)
     }
@@ -683,6 +563,136 @@ fn write_scene_progress(
     Ok(())
 }
 
+/// 在上层已有写事务中登记刻痕，供批次回执和刻痕保持原子提交。
+pub(super) fn record_cycle_mark_in_transaction(
+    repository: &Repository,
+    tx: &rusqlite::Transaction<'_>,
+    port: &dyn CausalPort,
+    mark: &CycleMarkV1,
+) -> Result<StoredCycleMark> {
+    mark.validate()?;
+    let (run, boundary) = repository.boundary(tx, &mark.source_refs[0].source.run_id, port)?;
+    repository.ensure_writable(tx, &run.run_id)?;
+    if run.script_id != mark.script_id
+        || mark.source_refs.iter().any(|source| {
+            source.source.run_id != run.run_id
+                || source.history_revision > boundary.history_revision
+        })
+    {
+        return Err(Error::Rejected(Reason::InvalidSource));
+    }
+    for source in &mark.source_refs {
+        if !repository.valid_sources(&run, std::slice::from_ref(&source.source), port)? {
+            return Err(Error::Rejected(Reason::InvalidSource));
+        }
+    }
+
+    let mut canonical_mark = mark.clone();
+    canonical_mark
+        .subject_ids
+        .sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    canonical_mark.source_refs.sort_by(|left, right| {
+        left.source
+            .run_id
+            .as_bytes()
+            .cmp(right.source.run_id.as_bytes())
+            .then_with(|| {
+                left.source
+                    .session_id
+                    .as_bytes()
+                    .cmp(right.source.session_id.as_bytes())
+            })
+            .then_with(|| left.source.record_seq.cmp(&right.source.record_seq))
+            .then_with(|| left.source.start_byte.cmp(&right.source.start_byte))
+            .then_with(|| left.source.end_byte.cmp(&right.source.end_byte))
+            .then_with(|| left.source.body_hash.cmp(&right.source.body_hash))
+    });
+    canonical_mark.validate()?;
+    let identity = canonical_mark.identity_hash()?;
+
+    let existing = tx
+        .query_row(
+            "SELECT mark_id FROM memory_cycle_marks WHERE script_id=?1 AND cycle_gen=?2 AND identity_hash=?3",
+            params![canonical_mark.script_id, canonical_mark.cycle_gen, identity.as_slice()],
+            read_string,
+        )
+        .optional()
+        .map_err(sql)?;
+
+    let mark_id = if let Some(mark_id) = existing {
+        let stored = read_cycle_mark(tx, &mark_id)?;
+        if !same_cycle_definition(&stored.mark, &canonical_mark) {
+            return Err(Error::Corrupt);
+        }
+        for source in &stored.mark.source_refs {
+            if source.history_revision > boundary.history_revision
+                || !repository.valid_sources(&run, std::slice::from_ref(&source.source), port)?
+            {
+                return Err(Error::Rejected(Reason::InvalidSource));
+            }
+        }
+        mark_id
+    } else {
+        let count: usize = tx
+            .query_row(
+                "SELECT count(*) FROM memory_cycle_marks WHERE script_id=?1",
+                [&canonical_mark.script_id],
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        if count >= ABSOLUTE_CYCLE_CAPACITY {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        let payload = canonical(&canonical_mark)?;
+        if payload.len() > MAX_CYCLE_MARK_BYTES {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        let payload_hash = hash(&payload);
+        tx.execute(
+            "INSERT INTO memory_cycle_marks(mark_id,script_id,cycle_gen,identity_hash,rule_id,rule_version,subject_ids_json,imprint_key,kind,detail_policy,priority,summary,payload_hash,payload_json,status) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'active')",
+            params![
+                canonical_mark.mark_id,
+                canonical_mark.script_id,
+                canonical_mark.cycle_gen,
+                identity.as_slice(),
+                canonical_mark.rule_id,
+                canonical_mark.rule_version,
+                canonical(&canonical_mark.subject_ids)?,
+                canonical_mark.imprint_key,
+                enum_text(canonical_mark.kind)?,
+                enum_text(canonical_mark.detail_policy)?,
+                canonical_mark.priority,
+                canonical_mark.summary,
+                payload_hash.as_slice(),
+                payload,
+            ],
+        )
+        .map_err(sql)?;
+        canonical_mark.mark_id.clone()
+    };
+
+    for source in &canonical_mark.source_refs {
+        insert_cycle_source(tx, &mark_id, source)?;
+    }
+    let source_count: usize = tx
+        .query_row(
+            "SELECT count(*) FROM memory_cycle_sources WHERE mark_id=?1",
+            [&mark_id],
+            |row| row.get(0),
+        )
+        .map_err(sql)?;
+    if source_count > MAX_CYCLE_SOURCES {
+        return Err(Error::Rejected(Reason::CapacityBlocked));
+    }
+    tx.execute(
+        "UPDATE memory_cycle_marks SET status='active' WHERE mark_id=?1 AND status='archived'",
+        [&mark_id],
+    )
+    .map_err(sql)?;
+    enforce_active_capacity(tx, &canonical_mark.script_id)?;
+    read_cycle_mark(tx, &mark_id)
+}
+
 fn same_cycle_definition(left: &CycleMarkV1, right: &CycleMarkV1) -> bool {
     left.mark_id == right.mark_id
         && left.script_id == right.script_id
@@ -746,6 +756,10 @@ fn enforce_active_capacity(conn: &Connection, script_id: &str) -> Result<()> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(sql)?;
     drop(statement);
+    // 归档排序依赖冗余 SQL 字段；先核对每条载荷，避免损坏优先级影响淘汰决定。
+    for id in &ids {
+        read_cycle_mark(conn, id)?;
+    }
     for id in ids.into_iter().skip(ACTIVE_CYCLE_CAPACITY) {
         conn.execute(
             "UPDATE memory_cycle_marks SET status='archived' WHERE mark_id=?1 AND status='active'",
@@ -756,10 +770,25 @@ fn enforce_active_capacity(conn: &Connection, script_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_cycle_mark(conn: &Connection, mark_id: &str) -> Result<StoredCycleMark> {
-    let (payload, payload_hash, status, script_id, cycle_gen, identity_hash) = conn
+pub(super) fn read_cycle_mark(conn: &Connection, mark_id: &str) -> Result<StoredCycleMark> {
+    let (
+        payload,
+        payload_hash,
+        status,
+        script_id,
+        cycle_gen,
+        identity_hash,
+        rule_id,
+        rule_version,
+        subject_ids,
+        imprint_key,
+        kind,
+        detail_policy,
+        priority,
+        summary,
+    ) = conn
         .query_row(
-            "SELECT length(payload_json),payload_json,length(payload_hash),payload_hash,status,script_id,cycle_gen,length(identity_hash),identity_hash FROM memory_cycle_marks WHERE mark_id=?1",
+            "SELECT length(payload_json),payload_json,length(payload_hash),payload_hash,status,script_id,cycle_gen,length(identity_hash),identity_hash,rule_id,rule_version,length(subject_ids_json),subject_ids_json,imprint_key,kind,detail_policy,priority,summary FROM memory_cycle_marks WHERE mark_id=?1",
             [mark_id],
             |row| {
                 Ok((
@@ -767,8 +796,16 @@ fn read_cycle_mark(conn: &Connection, mark_id: &str) -> Result<StoredCycleMark> 
                     read_bounded_blob(row, 2, 3, 32)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
-                    row.get::<_, u64>(6)?,
+                    row.get::<_, i64>(6)?,
                     read_bounded_blob(row, 7, 8, 32)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                    read_bounded_blob(row, 11, 12, 2_048)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, String>(14)?,
+                    row.get::<_, String>(15)?,
+                    row.get::<_, i64>(16)?,
+                    row.get::<_, String>(17)?,
                 ))
             },
         )
@@ -778,6 +815,7 @@ fn read_cycle_mark(conn: &Connection, mark_id: &str) -> Result<StoredCycleMark> 
     let payload = payload.into_result()?;
     let payload_hash = payload_hash.into_result()?;
     let identity_hash = identity_hash.into_result()?;
+    let subject_ids = subject_ids.into_result()?;
     if hash(&payload) != payload_hash.as_slice() {
         return Err(Error::Corrupt);
     }
@@ -785,8 +823,16 @@ fn read_cycle_mark(conn: &Connection, mark_id: &str) -> Result<StoredCycleMark> 
     let expected_identity = mark.identity_hash()?;
     if mark.mark_id != mark_id
         || mark.script_id != script_id
-        || mark.cycle_gen != cycle_gen
+        || i64::try_from(mark.cycle_gen).ok() != Some(cycle_gen)
         || expected_identity.as_slice() != identity_hash.as_slice()
+        || mark.rule_id != rule_id
+        || i64::from(mark.rule_version) != rule_version
+        || canonical(&mark.subject_ids)? != subject_ids
+        || mark.imprint_key != imprint_key
+        || enum_text(mark.kind)? != kind
+        || enum_text(mark.detail_policy)? != detail_policy
+        || i64::from(mark.priority) != priority
+        || mark.summary != summary
     {
         return Err(Error::Corrupt);
     }

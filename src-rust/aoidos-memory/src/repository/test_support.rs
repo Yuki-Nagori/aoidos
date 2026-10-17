@@ -287,6 +287,7 @@ impl Fixture {
                 inferred: Some(false),
                 reason: "稳定偏好".into(),
             }],
+            cycle_marks: vec![],
         };
         self.repo
             .receive_batch(

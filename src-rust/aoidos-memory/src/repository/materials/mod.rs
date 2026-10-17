@@ -70,7 +70,7 @@ pub struct CandidateResult {
     pub reason_code: Option<String>,
 }
 
-/// A candidate whose original model result is retained for a local-only retry.
+/// 保留原始模型结果、只允许本地重试的候选项。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredCandidate {
     pub candidate_id: String,
@@ -84,7 +84,36 @@ pub struct DeferredCandidate {
 pub struct BatchCompletion {
     pub version: u32,
     pub outcomes: Vec<CandidateResult>,
+    /// 与批次响应中的刻痕候选逐项对应的已提交身份。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cycle_marks: Vec<CycleMarkResult>,
 }
+
+/// 批次完成回执中记录的刻痕候选与仓储身份映射。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CycleMarkResult {
+    pub candidate_id: String,
+    pub mark_id: String,
+}
+
+/// 由引擎根据可信刻痕授权上下文物化后交给仓储原子提交的刻痕。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleMarkCommit {
+    pub candidate_id: String,
+    pub mark: crate::model::CycleMarkV1,
+}
+
+struct CompletionTransaction<'a> {
+    conn: &'a mut Connection,
+    port: Option<&'a dyn CausalPort>,
+    batch_id: &'a str,
+    bytes: &'a [u8],
+    digest: &'a Hash,
+    result: &'a BatchCompletion,
+    cycle_marks: &'a [CycleMarkCommit],
+}
+
 impl Repository {
     /// # Errors
     /// 同原记录 / ordinal 不同区间为身份冲突，不能通过重新切片制造新素材。
@@ -431,28 +460,86 @@ impl Repository {
         }
         let result: BatchCompletion =
             aoidos_json::decode_bytes(completion, MAX_PROPOSAL_BYTES).map_err(|_| reject())?;
+        if !result.cycle_marks.is_empty() {
+            return Err(Error::Rejected(Reason::RecoveryRequired));
+        }
         let completion_hash = hash(completion);
-        let outcome =
-            self.complete_batch_transaction(conn, batch_id, completion, &completion_hash, &result);
+        let outcome = self.complete_batch_transaction(CompletionTransaction {
+            conn,
+            port: None,
+            batch_id,
+            bytes: completion,
+            digest: &completion_hash,
+            result: &result,
+            cycle_marks: &[],
+        });
         if matches!(
             &outcome,
             Err(Error::Corrupt | Error::Rejected(Reason::RecoveryRequired))
         ) {
-            // Operation reads inside the completion transaction may detect corrupt applied
-            // receipts and freeze the run. Re-audit after rollback so that freeze persists.
             self.persist_completion_operation_faults(conn, batch_id, &result);
         }
         outcome
     }
 
-    fn complete_batch_transaction(
+    /// 在同一事务登记已获引擎授权的刻痕并完成对应批次。
+    ///
+    /// `completion` 只描述普通记忆候选；刻痕回执由仓储根据响应候选和已物化的刻痕生成，
+    /// 不接受调用方自行填写的 markId。规则权限仍须由引擎在调用前核验。
+    /// # Errors
+    /// 刻痕、来源映射、批次响应与授权候选不完全对应时回滚整个完成事务。
+    pub fn complete_batch_with_cycle_marks(
         &self,
         conn: &mut Connection,
+        port: &dyn CausalPort,
         batch_id: &str,
-        completion: &[u8],
-        completion_hash: &Hash,
-        result: &BatchCompletion,
+        completion: &BatchCompletion,
+        cycle_marks: &[CycleMarkCommit],
     ) -> Result<bool> {
+        if !completion.cycle_marks.is_empty() {
+            return Err(reject());
+        }
+        let mut result = completion.clone();
+        result.cycle_marks = cycle_marks
+            .iter()
+            .map(|commit| CycleMarkResult {
+                candidate_id: commit.candidate_id.clone(),
+                mark_id: commit.mark.mark_id.clone(),
+            })
+            .collect();
+        let bytes = canonical(&result)?;
+        if bytes.len() > MAX_PROPOSAL_BYTES {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        let digest = hash(&bytes);
+        let outcome = self.complete_batch_transaction(CompletionTransaction {
+            conn,
+            port: Some(port),
+            batch_id,
+            bytes: &bytes,
+            digest: &digest,
+            result: &result,
+            cycle_marks,
+        });
+        if matches!(
+            &outcome,
+            Err(Error::Corrupt | Error::Rejected(Reason::RecoveryRequired))
+        ) {
+            self.persist_completion_operation_faults(conn, batch_id, &result);
+        }
+        outcome
+    }
+
+    fn complete_batch_transaction(&self, input: CompletionTransaction<'_>) -> Result<bool> {
+        let CompletionTransaction {
+            conn,
+            port,
+            batch_id,
+            bytes,
+            digest,
+            result,
+            cycle_marks,
+        } = input;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql)?;
@@ -476,7 +563,7 @@ impl Repository {
                 .map_err(sql)?
                 .ok_or(Error::Corrupt)?
                 .into_result()?;
-            if previous == completion {
+            if previous == bytes {
                 self.batch_receipt(&tx, batch_id)?;
                 return Ok(false);
             }
@@ -487,11 +574,25 @@ impl Repository {
         }
         let receipt = self.batch_receipt(&tx, batch_id)?;
         validate_received_receipt(&receipt)?;
+        if !cycle_marks.is_empty() {
+            let port = port.ok_or_else(|| Error::Rejected(Reason::RecoveryRequired))?;
+            let response = receipt.response.as_deref().ok_or(Error::Corrupt)?;
+            let proposal = decode_proposal_response(response).map_err(|_| Error::Corrupt)?;
+            self.validate_cycle_mark_commits(&tx, batch_id, &proposal, cycle_marks)?;
+            for commit in cycle_marks {
+                crate::repository::cycle::record_cycle_mark_in_transaction(
+                    self,
+                    &tx,
+                    port,
+                    &commit.mark,
+                )?;
+            }
+        }
         self.validate_completion(&tx, batch_id, result)?;
         let changed = tx
             .execute(
                 "UPDATE memory_batch_receipts SET completion_json=?1,completion_hash=?2 WHERE batch_id=?3 AND response_json IS NOT NULL AND completion_json IS NULL",
-                params![completion, completion_hash.as_slice(), batch_id],
+                params![bytes, digest.as_slice(), batch_id],
             )
             .map_err(sql)?;
         if changed != 1 {
@@ -813,6 +914,81 @@ impl Repository {
     }
 }
 impl Repository {
+    fn validate_cycle_mark_commits(
+        &self,
+        conn: &Connection,
+        batch_id: &str,
+        proposal: &crate::model::Proposal,
+        commits: &[CycleMarkCommit],
+    ) -> Result<()> {
+        if proposal.cycle_marks.len() != commits.len() {
+            return Err(Error::Rejected(Reason::RecoveryRequired));
+        }
+        let (snapshot, _) = self.batch(conn, batch_id)?;
+        let run = self.run(conn, &snapshot.run_id)?;
+        let candidates = proposal
+            .cycle_marks
+            .iter()
+            .map(|candidate| (candidate.candidate_id.as_str(), candidate))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let spans = snapshot
+            .spans
+            .iter()
+            .map(|span| (span.source_id.as_str(), span))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut committed = std::collections::BTreeSet::new();
+
+        for commit in commits {
+            if !committed.insert(commit.candidate_id.as_str()) {
+                return Err(reject());
+            }
+            let candidate = candidates
+                .get(commit.candidate_id.as_str())
+                .ok_or_else(reject)?;
+            let mark = &commit.mark;
+            mark.validate()?;
+            if mark.script_id != run.script_id
+                || mark.rule_id != candidate.rule_id
+                || mark.summary != candidate.summary
+            {
+                return Err(Error::Rejected(Reason::InvalidSource));
+            }
+
+            let mut expected_subjects = candidate.subject_ids.clone();
+            expected_subjects.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+            if mark.subject_ids != expected_subjects {
+                return Err(Error::Rejected(Reason::InvalidSource));
+            }
+
+            let mut expected_sources = std::collections::BTreeSet::new();
+            for source_id in &candidate.source_ids {
+                let span = spans.get(source_id.as_str()).ok_or_else(reject)?;
+                expected_sources.insert(canonical(&CycleSourceRef {
+                    source: span.source.clone(),
+                    history_revision: snapshot.history_revision,
+                })?);
+            }
+            let actual_sources = mark
+                .source_refs
+                .iter()
+                .map(canonical)
+                .collect::<Result<std::collections::BTreeSet<_>>>()?;
+            if expected_sources.len() != candidate.source_ids.len()
+                || actual_sources != expected_sources
+                || mark.source_refs.iter().any(|source| {
+                    source.source.run_id != snapshot.run_id
+                        || source.history_revision != snapshot.history_revision
+                })
+            {
+                return Err(Error::Rejected(Reason::InvalidSource));
+            }
+        }
+        if committed.len() != candidates.len() {
+            return Err(Error::Rejected(Reason::RecoveryRequired));
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_completion(
         &self,
         conn: &Connection,
@@ -954,7 +1130,10 @@ fn validate_completion_shape(
     batch_id: &str,
     completion: &BatchCompletion,
 ) -> Result<()> {
-    if completion.version != 1 || completion.outcomes.len() > MAX_CANDIDATES {
+    if completion.version != 1
+        || completion.outcomes.len() > MAX_CANDIDATES
+        || completion.cycle_marks.len() > MAX_CYCLE_MARK_PROPOSALS
+    {
         return Err(reject());
     }
     let raw = conn
@@ -999,6 +1178,37 @@ fn validate_completion_shape(
     if actual != expected {
         return Err(reject());
     }
+
+    let expected_marks = proposal
+        .cycle_marks
+        .iter()
+        .map(|candidate| (candidate.candidate_id.as_str(), candidate))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut actual_marks = std::collections::BTreeSet::new();
+    for result in &completion.cycle_marks {
+        if !valid_short_id(&result.candidate_id)
+            || !valid_id(&result.mark_id)
+            || !actual_marks.insert(result.candidate_id.as_str())
+        {
+            return Err(reject());
+        }
+        let candidate = expected_marks
+            .get(result.candidate_id.as_str())
+            .ok_or_else(reject)?;
+        let stored = crate::repository::cycle::read_cycle_mark(conn, &result.mark_id)
+            .map_err(|_| Error::Corrupt)?;
+        let mut subjects = candidate.subject_ids.clone();
+        subjects.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        if stored.mark.mark_id != result.mark_id
+            || stored.mark.rule_id != candidate.rule_id
+            || stored.mark.subject_ids != subjects
+        {
+            return Err(Error::Corrupt);
+        }
+    }
+    if actual_marks != expected_marks.keys().copied().collect() {
+        return Err(Error::Rejected(Reason::RecoveryRequired));
+    }
     Ok(())
 }
 pub(super) fn decode_proposal_response(bytes: &[u8]) -> Result<crate::model::Proposal> {
@@ -1007,23 +1217,11 @@ pub(super) fn decode_proposal_response(bytes: &[u8]) -> Result<crate::model::Pro
     if proposal.version != 1 {
         return Err(Error::Rejected(Reason::PolicyUnavailable));
     }
-    if proposal.candidates.len() > MAX_CANDIDATES {
-        return Err(Error::Rejected(Reason::CapacityBlocked));
-    }
     validate_proposal_identity(&proposal)?;
     Ok(proposal)
 }
 fn validate_proposal_identity(proposal: &crate::model::Proposal) -> Result<()> {
-    if proposal.version != 1 {
-        return Err(Error::Rejected(Reason::PolicyUnavailable));
-    }
-    let mut seen = BTreeSet::new();
-    if proposal.candidates.iter().any(|candidate| {
-        !valid_short_id(&candidate.candidate_id) || !seen.insert(candidate.candidate_id.as_str())
-    }) {
-        return Err(reject());
-    }
-    Ok(())
+    crate::model::validate_proposal_identity(proposal)
 }
 fn validate_received_receipt(receipt: &BatchReceipt) -> Result<()> {
     if receipt.state != BatchState::Received || receipt.response.is_none() {
