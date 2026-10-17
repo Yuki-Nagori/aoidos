@@ -6,10 +6,13 @@ use crate::model::{
     ClaimSceneHint, CompleteSceneProgress, CycleMarkV1, CycleSourceRef, MAX_SCENE_EVIDENCE_BYTES,
     MAX_SCENE_PROGRESS_EVIDENCE, MAX_SCENE_RULE_EVIDENCE, NODE_HINT_AFTER_STAGNANT_ROUNDS,
     SceneNodeKey, SceneProgress, SceneProgressUpdate, SceneRuleEvidence, StoredCycleMark,
+    is_canonical_scene_evidence_json,
 };
 
 const MAX_CYCLE_MARK_BYTES: usize = 32 * 1024;
 const MAX_CYCLE_SOURCE_BYTES: usize = 32 * 1024;
+
+mod outbox;
 
 impl Repository {
     /// 仅登记当前有效来源锚定的刻痕；同一身份重复提交只补来源，不改写摘要。
@@ -499,16 +502,11 @@ fn validate_scene_progress_input(
         .iter()
         .map(|item| (item.rule_id.as_str(), item.evidence_hash))
         .collect::<BTreeSet<_>>();
-    if unique.len() != evidence.len() || evidence.iter().any(|item| !valid_name(&item.rule_id)) {
+    if unique.len() != evidence.len() {
         return Err(reject());
     }
-    if evidence.iter().any(|item| {
-        item.evidence_json.is_empty()
-            || item.evidence_json.len() > MAX_SCENE_EVIDENCE_BYTES
-            || hash(&item.evidence_json) != item.evidence_hash
-            || !is_canonical_evidence_json(&item.evidence_json)
-    }) {
-        return Err(reject());
+    for item in evidence {
+        item.validate()?;
     }
     Ok(())
 }
@@ -533,15 +531,6 @@ fn canonical_evidence(
             .then_with(|| left.1.cmp(&right.1))
     });
     canonical
-}
-
-fn is_canonical_evidence_json(bytes: &[u8]) -> bool {
-    let value: serde_json::Value = match aoidos_json::decode_bytes(bytes, MAX_SCENE_EVIDENCE_BYTES)
-    {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    aoidos_json::canonical_string(&value).is_ok_and(|canonical| canonical.as_bytes() == bytes)
 }
 
 fn read_scene_progress(
@@ -617,7 +606,7 @@ fn read_scene_evidence(
         let (rule_id, hash, raw) = row.map_err(sql)?;
         let hash = hash.try_into().map_err(|_| Error::Corrupt)?;
         let raw = raw.into_result().map_err(|_| Error::Corrupt)?;
-        if crate::model::hash(&raw) != hash || !is_canonical_evidence_json(&raw) {
+        if crate::model::hash(&raw) != hash || !is_canonical_scene_evidence_json(&raw) {
             return Err(Error::Corrupt);
         }
         evidence.push((rule_id, hash, raw));

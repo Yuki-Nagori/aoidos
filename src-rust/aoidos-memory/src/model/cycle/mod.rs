@@ -5,6 +5,9 @@ use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod outbox;
+pub use outbox::*;
+
 pub const MAX_CYCLE_SUMMARY_BYTES: usize = 512;
 pub const MAX_CYCLE_SOURCES: usize = 128;
 pub const MAX_CYCLE_SUBJECTS: usize = 16;
@@ -55,6 +58,32 @@ pub struct SceneRuleEvidence {
     pub rule_id: String,
     pub evidence_hash: Hash,
     pub evidence_json: Vec<u8>,
+}
+
+impl SceneRuleEvidence {
+    /// 校验规则证据身份、大小、摘要与规范 JSON 编码。
+    /// # Errors
+    /// 字段不合法、摘要不匹配或 JSON 非规范编码时拒绝。
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !valid_name(&self.rule_id)
+            || self.evidence_json.is_empty()
+            || self.evidence_json.len() > MAX_SCENE_EVIDENCE_BYTES
+            || hash(&self.evidence_json) != self.evidence_hash
+            || !is_canonical_scene_evidence_json(&self.evidence_json)
+        {
+            return Err(reject());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn is_canonical_scene_evidence_json(bytes: &[u8]) -> bool {
+    let Ok(value): std::result::Result<serde_json::Value, _> =
+        aoidos_json::decode_bytes(bytes, MAX_SCENE_EVIDENCE_BYTES)
+    else {
+        return false;
+    };
+    aoidos_json::canonical_string(&value).is_ok_and(|text| text.as_bytes() == bytes)
 }
 
 /// 同一场景在某一有效历史分支中的一次进入实例。

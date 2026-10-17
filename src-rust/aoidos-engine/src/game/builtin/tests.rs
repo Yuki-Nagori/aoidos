@@ -73,6 +73,99 @@ impl Drop for Fixture {
         std::fs::remove_dir_all(&self.root).unwrap();
     }
 }
+
+#[tokio::test]
+async fn opening_a_run_establishes_one_initial_cycle_node_baseline() {
+    let fixture = Fixture::new(|_| {});
+    let session_id = fixture.session.lock().unwrap().header().session_id.clone();
+
+    for _ in 0..2 {
+        drop(fixture.open().await.unwrap());
+        fixture
+            .storage
+            .with_database(|connection| {
+                let run_id: String = connection.query_row(
+                    "SELECT run_id FROM memory_run_sessions WHERE session_id=?1",
+                    [&session_id],
+                    |row| row.get(0),
+                ).unwrap();
+                let baseline_count: u64 = connection.query_row(
+                    "SELECT count(*) FROM memory_cycle_scene_progress WHERE run_id=?1 AND scene_id='entry' AND entry_history_revision=0 AND entry_record_seq=0",
+                    [&run_id],
+                    |row| row.get(0),
+                ).unwrap();
+                let pending_count: u64 = connection.query_row(
+                    "SELECT count(*) FROM memory_cycle_events WHERE run_id=?1",
+                    [&run_id],
+                    |row| row.get(0),
+                ).unwrap();
+                assert_eq!(baseline_count, 1);
+                assert_eq!(pending_count, 0);
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn reopening_applies_and_retires_a_prepared_initial_scene_event() {
+    let fixture = Fixture::new(|_| {});
+    let context = fixture.open().await.unwrap();
+    let run_id = context.completed.run_id().unwrap();
+    let (session_id, catalog_revision, world_revision) = {
+        let session = fixture.session.lock().unwrap();
+        let domain = context.domain.lock().unwrap();
+        let world = domain.confirmed(&session).unwrap();
+        (
+            session.header().session_id.clone(),
+            domain.catalog().revision().to_owned(),
+            world.world_revision().to_owned(),
+        )
+    };
+    let event = aoidos_memory::model::CycleLifecycleEvent {
+        version: 1,
+        event_id: aoidos_memory::model::CycleLifecycleEvent::event_id_for(
+            &run_id,
+            aoidos_memory::model::CycleEventKind::SceneEntered,
+            0,
+            0,
+        ),
+        run_id: run_id.clone(),
+        session_id,
+        kind: aoidos_memory::model::CycleEventKind::SceneEntered,
+        source_record_seq: 0,
+        history_revision: 0,
+        scene_id: "entry".into(),
+        entry_record_seq: 0,
+        catalog_revision,
+        world_revision,
+        round_id: None,
+        evidence: vec![],
+    };
+    context.completed.prepare_cycle_event(event).unwrap();
+    drop(context);
+
+    let _reopened = fixture.open().await.unwrap();
+    fixture
+        .storage
+        .with_database(|connection| {
+            let progress_count: u64 = connection.query_row(
+                "SELECT count(*) FROM memory_cycle_scene_progress WHERE run_id=?1 AND scene_id='entry' AND entry_history_revision=0 AND entry_record_seq=0",
+                [&run_id],
+                |row| row.get(0),
+            ).unwrap();
+            let pending_count: u64 = connection.query_row(
+                "SELECT count(*) FROM memory_cycle_events WHERE run_id=?1",
+                [&run_id],
+                |row| row.get(0),
+            ).unwrap();
+            assert_eq!(progress_count, 1);
+            assert_eq!(pending_count, 0);
+            Ok(())
+        })
+        .unwrap();
+}
+
 #[tokio::test]
 async fn original_revision_and_framed_prefix_are_both_required_on_reopen() {
     for change in 0..3 {
@@ -219,7 +312,7 @@ async fn read_only_completion_does_not_create_world_consequences() {
     .unwrap()
     .round
     .unwrap();
-    {
+    let completed = {
         let record = fixture.session.lock().unwrap();
         let domain = context.domain.lock().unwrap();
         let view = domain.confirmed(&record).unwrap();
@@ -229,12 +322,16 @@ async fn read_only_completion_does_not_create_world_consequences() {
                 .unwrap()
                 .is_empty()
         );
-        context.completed.completed(CompletedRound {
+        CompletedRound {
             session_id: record.header().session_id.clone(),
             round_id: round.identity.round_id,
             history_revision: 0,
             through_seq: 0,
-        });
+        }
+    };
+    context.completed.completed(completed);
+    {
+        let record = fixture.session.lock().unwrap();
         assert_eq!(record.last_event_seq(), 0);
     }
     runner

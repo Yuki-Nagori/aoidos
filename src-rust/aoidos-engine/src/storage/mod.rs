@@ -66,6 +66,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     crate::game::catalog::ENTITY_REGISTRY_MIGRATION,
     aoidos_memory::schema::ALIAS_MIGRATION,
     aoidos_memory::schema::CYCLE_MIGRATION,
+    aoidos_memory::schema::CYCLE_EVENT_MIGRATION,
     aoidos_memory::schema::CONFIG_MIGRATION,
 ];
 
@@ -147,6 +148,19 @@ impl Storage {
             scene_catalog,
         )?;
         job(&self.memory, connection, &port)
+    }
+
+    /// 在不取会话锁时借用记忆仓储；仅用于已有会话锁的执行路径预写待处理事件。
+    /// # Errors
+    /// 存储未开放、事件不合法或 SQLite 操作失败时返回稳定错误。
+    pub(crate) fn with_memory_repository<T>(
+        &self,
+        job: impl FnOnce(
+            &aoidos_memory::repository::Repository,
+            &mut rusqlite::Connection,
+        ) -> aoidos_memory::error::Result<T>,
+    ) -> Result<T, Fault> {
+        self.with_database(|connection| job(&self.memory, connection).map_err(memory_config_error))
     }
 
     /// 在会话持久化后冻结其已确认的记忆策略；重开时保留现有快照。
@@ -551,7 +565,7 @@ fn memory_context_error(error: Fault) -> aoidos_memory::error::Error {
     }
 }
 
-fn memory_config_error(error: aoidos_memory::error::Error) -> Fault {
+pub(crate) fn memory_config_error(error: aoidos_memory::error::Error) -> Fault {
     let code = error.code();
     let message = match code.as_str() {
         "app.bad-request" => "记忆参数不合法或配置已变化",

@@ -59,8 +59,40 @@ pub struct CompletedRound {
 }
 /// 只读完成通知的独立消费端；世界解释器不负责记忆调度，也不反向依赖消费者 crate。
 pub trait CompletedRounds: Send + Sync {
-    /// completed 事实确认后通知一次；重放 / 回退不再次通知，不在回调发付费请求。
+    /// `completed` 事实确认且记录 / 领域锁释放后通知；重放 / 回退不重复通知，不在回调发付费请求。
     fn completed(&self, round: CompletedRound);
+
+    /// 已初始化的记忆周目；轻量测试消费者可不接入记忆运行时。
+    fn run_id(&self) -> Option<String> {
+        None
+    }
+
+    /// 在来源记录追加前持久化有界生命周期事件，关闭记录与记忆之间的崩溃窗口。
+    /// # Errors
+    /// 事件身份冲突、超限或存储不可用时拒绝提交来源记录。
+    fn prepare_cycle_event(
+        &self,
+        _event: aoidos_memory::model::CycleLifecycleEvent,
+    ) -> Result<(), Fault> {
+        Ok(())
+    }
+
+    /// 消费已提交且仍属于当前历史分支的生命周期事件；失败时保留队列供下次恢复。
+    fn drain_cycle_events(&self) -> Result<(), Fault> {
+        Ok(())
+    }
+
+    /// 为新周目或回退后的当前节点建立基线；已存在的节点保持原始基线不变。
+    /// # Errors
+    /// 历史修订、来源场景、证据或持久化状态不一致时失败关闭。
+    fn ensure_current_node(
+        &self,
+        _scene_id: &str,
+        _history_revision: u64,
+        _baseline: &[aoidos_memory::model::SceneRuleEvidence],
+    ) -> Result<(), Fault> {
+        Ok(())
+    }
 }
 /// 每 session 的唯一世界所有者；条件核验、变更与 applied 必须共享 SQL 事务。
 /// 没有注册实现的会话可读记录，不能猜测世界属性后继续推进。

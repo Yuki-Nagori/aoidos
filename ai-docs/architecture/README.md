@@ -159,9 +159,16 @@ engine_open_session → 正式记录登记 → 合并并校验配置 → 冻结 
 授权记忆批次：冻结输入 + 显式授权 → process_authorized_batch
   → Coordinator 空闲检查 / private lease → 027 预算预留 → SQLite dispatch(turnId, requestId)
   → 一次 Provider 请求 → SQLite received(response)；不确定结果 → unknown（不重发）
+
+Runner 确认 SceneAdvanced / 场内 RoundEnded
+  → 先写有界 memory_cycle_events 待处理快照 → 再提交来源记录
+  → 释放 Session / Domain 锁 → CycleRuntime 按来源序号消费
+  → Storage::with_memory / SourcePort 校验当前分支与记录事实
+  → aoidos-memory 原子建立节点基线或推进完成回合
+Context 打开 / 历史回退 → 核验并清理失效队列 → 幂等补建当前节点基线
 ```
 
-记忆执行器只负责单次模型调用与批次收据，不负责构造产品 Prompt、解析并应用候选或自动排队；这些接入由后续记忆产品任务承接。真实供应商授权门仍关闭。
+032 已接入本地节点生命周期和崩溃恢复队列；它只消费可信规则快照，不新增 LLM 请求或 lease。记忆执行器仍不负责构造产品 Prompt、解析并应用候选或自动排队；这些接入由后续记忆产品任务承接。提示展示、刻痕生成和真实供应商授权门仍未接入。
 
 记录事实、估算与压缩属于 engine；存储原语属于 store，供应商 / 传输仍属于 llm。生产依赖保持单向，测试夹具不进入生产链路；023 接领域决策，024 接最小产品联调，025 接完整界面。
 

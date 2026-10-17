@@ -332,6 +332,23 @@ CREATE INDEX memory_cycle_scene_hints_page
  ON memory_cycle_scene_hints(run_id,scene_id,entry_history_revision,entry_record_seq,shown_at_round,hint_id);
 "#;
 
+/// 032 轮回运行时待处理队列；完成应用后删除事件，避免重复保存历史正文。
+/// 迁移顺序由存储引擎注册，队列仅保存有限的规范化快照。
+pub const CYCLE_EVENT_MIGRATION: &str = r#"
+CREATE TABLE memory_cycle_events (
+ event_id TEXT PRIMARY KEY CHECK(length(event_id)=64),
+ run_id TEXT NOT NULL REFERENCES memory_runs(run_id),
+ history_revision INTEGER NOT NULL CHECK(history_revision BETWEEN 0 AND 9007199254740991),
+ kind TEXT NOT NULL CHECK(kind IN ('sceneEntered','roundCompleted')),
+ source_record_seq INTEGER NOT NULL CHECK(source_record_seq BETWEEN 0 AND 9007199254740991),
+ payload_hash BLOB NOT NULL CHECK(length(payload_hash)=32),
+ payload_json BLOB NOT NULL CHECK(length(payload_json) BETWEEN 1 AND 65536),
+ UNIQUE(run_id,history_revision,kind,source_record_seq)
+);
+CREATE INDEX memory_cycle_events_pending
+ ON memory_cycle_events(run_id,source_record_seq,history_revision,kind,event_id);
+"#;
+
 /// 031 的配置版本保留历史，head 只指向每个作用域当前已确认版本。
 pub const CONFIG_MIGRATION: &str = r#"
 CREATE TABLE memory_config_versions (
@@ -366,6 +383,7 @@ pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
         CANDIDATE_OPERATION_MIGRATION,
         LEGACY_BATCH_COMPLETION_MIGRATION,
         CYCLE_MIGRATION,
+        CYCLE_EVENT_MIGRATION,
         CONFIG_MIGRATION,
     ] {
         for statement in migration
@@ -431,6 +449,7 @@ mod tests {
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_EVENT_MIGRATION).unwrap();
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
         conn
     }
@@ -449,6 +468,7 @@ mod tests {
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_EVENT_MIGRATION).unwrap();
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
@@ -480,6 +500,9 @@ mod tests {
             .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         missing_receipts.execute_batch(CYCLE_MIGRATION).unwrap();
+        missing_receipts
+            .execute_batch(CYCLE_EVENT_MIGRATION)
+            .unwrap();
         missing_receipts.execute_batch(CONFIG_MIGRATION).unwrap();
         missing_receipts
             .execute_batch("DROP TABLE memory_batch_receipts")
@@ -503,6 +526,9 @@ mod tests {
             .execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         missing_questions.execute_batch(CYCLE_MIGRATION).unwrap();
+        missing_questions
+            .execute_batch(CYCLE_EVENT_MIGRATION)
+            .unwrap();
         missing_questions.execute_batch(CONFIG_MIGRATION).unwrap();
         missing_questions
             .execute_batch("DROP TABLE memory_questions")
@@ -531,6 +557,9 @@ mod tests {
             .unwrap();
         missing_candidate_links
             .execute_batch(CYCLE_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(CYCLE_EVENT_MIGRATION)
             .unwrap();
         missing_candidate_links
             .execute_batch(CONFIG_MIGRATION)
@@ -572,6 +601,7 @@ mod tests {
         conn.execute_batch(LEGACY_BATCH_COMPLETION_BACKFILL)
             .unwrap();
         conn.execute_batch(CYCLE_MIGRATION).unwrap();
+        conn.execute_batch(CYCLE_EVENT_MIGRATION).unwrap();
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(

@@ -20,6 +20,7 @@ use crate::{
     request::PreparedGeneration,
     turn::{Coordinator, Lease},
 };
+use aoidos_memory::model::{CycleEventKind, CycleLifecycleEvent};
 use futures::future::BoxFuture;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -979,6 +980,82 @@ impl Runner {
                 None
             };
             let prepared = context.publisher.prepare(phase, finished)?;
+            let cycle_event = if let Some(run_id) = context.completed.run_id() {
+                let session_id = session.header().session_id.clone();
+                let history_revision = session.history_revision();
+                match action {
+                    Action::CommitAdvance => match selected.as_ref() {
+                        Some(Fact::SceneAdvanced { position, .. }) => {
+                            let evidence = super::cycle::current_progress_evidence(
+                                domain.catalog(),
+                                &position.scene_id,
+                                &view,
+                            )?;
+                            Some(CycleLifecycleEvent {
+                                version: 1,
+                                event_id: CycleLifecycleEvent::event_id_for(
+                                    &run_id,
+                                    CycleEventKind::SceneEntered,
+                                    history_revision,
+                                    seq,
+                                ),
+                                run_id,
+                                session_id,
+                                kind: CycleEventKind::SceneEntered,
+                                source_record_seq: seq,
+                                history_revision,
+                                scene_id: position.scene_id.clone(),
+                                entry_record_seq: seq,
+                                catalog_revision: domain.catalog().revision().to_owned(),
+                                world_revision: view.world_revision().to_owned(),
+                                round_id: None,
+                                evidence,
+                            })
+                        }
+                        _ => None,
+                    },
+                    Action::EndRound if round.mode == InputMode::InCharacter => {
+                        let entry_record_seq = crate::record::memory::scene_entry_seq_before(
+                            &session,
+                            domain.catalog(),
+                            &round.scene_id,
+                            round.accepted_seq,
+                        )
+                        .map_err(|error| Fault::new(error.code(), "记忆场景来源不可用"))?;
+                        let evidence = super::cycle::current_progress_evidence(
+                            domain.catalog(),
+                            &round.scene_id,
+                            &view,
+                        )?;
+                        Some(CycleLifecycleEvent {
+                            version: 1,
+                            event_id: CycleLifecycleEvent::event_id_for(
+                                &run_id,
+                                CycleEventKind::RoundCompleted,
+                                history_revision,
+                                seq,
+                            ),
+                            run_id,
+                            session_id,
+                            kind: CycleEventKind::RoundCompleted,
+                            source_record_seq: seq,
+                            history_revision,
+                            scene_id: round.scene_id.clone(),
+                            entry_record_seq,
+                            catalog_revision: domain.catalog().revision().to_owned(),
+                            world_revision: view.world_revision().to_owned(),
+                            round_id: Some(round.identity.round_id.clone()),
+                            evidence,
+                        })
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(event) = cycle_event {
+                context.completed.prepare_cycle_event(event)?;
+            }
             if !matches!(mode, CommitMode::Record) {
                 session.commit_world(body.clone(), domain.as_mut())?;
             } else {
@@ -1011,6 +1088,15 @@ impl Runner {
                 drop(domain);
                 drop(session);
                 context.completed.completed(completed);
+            } else if matches!(action, Action::CommitAdvance)
+                && selected
+                    .as_ref()
+                    .is_some_and(|fact| matches!(fact, Fact::SceneAdvanced { .. }))
+            {
+                drop(domain);
+                drop(session);
+                // 已提交的场景事实不能因派生记忆暂不可写而回报为失败。
+                let _ = context.completed.drain_cycle_events();
             }
             Ok((next, recovered, delivered))
         })
