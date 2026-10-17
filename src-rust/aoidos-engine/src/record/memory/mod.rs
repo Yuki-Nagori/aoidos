@@ -1,6 +1,9 @@
 //! 记忆来源适配：当前有效路径、原文 UTF-8 与角色获知证据均在会话锁内核验。
 
+mod cycle_context;
 pub mod processing;
+
+pub use cycle_context::{CycleMarkContext, CycleMarkContextInput, build_cycle_mark_context};
 
 use super::{
     facts::{Fact, GenerationTarget, RoundIdentity},

@@ -252,6 +252,159 @@ fn cycle_mark_rules_reject_invalid_scopes_and_stale_or_incomplete_directories() 
 }
 
 #[test]
+fn cycle_mark_context_uses_only_current_batch_sources_and_matching_rule_scope() {
+    use crate::{
+        ports::Terminal,
+        record::{
+            format::Body,
+            memory::{CycleMarkContextInput, SourcePort, build_cycle_mark_context},
+        },
+    };
+    use aoidos_memory::{
+        model::CausalPort,
+        repository::{BatchSnapshot, Span},
+    };
+
+    let mut fixture = Fixture::new();
+    let source_seq = fixture
+        .session
+        .append(Body::Narration {
+            text: "守卫记得玩家救过他。".into(),
+            turn_id: aoidos_memory::model::new_id(),
+            terminal: Terminal::Completed {
+                finish_reason: aoidos_llm::schedule::FinishReason::Stop,
+            },
+        })
+        .unwrap();
+    let run = cycle_run(&fixture.session);
+    let catalog = catalog()
+        .with_cycle_mark_rules(vec![
+            CycleMarkRule::new(
+                "guard-recognition".into(),
+                2,
+                vec![
+                    CycleSubjectScope::new(EntityKind::Character, "harbor/guards".into()).unwrap(),
+                ],
+                "rescue-memory".into(),
+                CycleKind::Familiarity,
+                DetailPolicy::Vague,
+                20,
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+    let directory = EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        3,
+        true,
+        vec![
+            CanonicalEntity {
+                id: "dynamic-guard".into(),
+                kind: EntityKind::Character,
+                scope: "harbor/guards".into(),
+                canonical_name: "临时守卫".into(),
+            },
+            CanonicalEntity {
+                id: "harbor-statue".into(),
+                kind: EntityKind::Item,
+                scope: "harbor/guards".into(),
+                canonical_name: "石像".into(),
+            },
+        ],
+    )
+    .unwrap()
+    .bind_session_snapshot(&fixture.session)
+    .unwrap();
+    let source_port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+    let source = source_port.reference(&run.run_id, source_seq).unwrap();
+    let boundary = source_port.boundary().unwrap();
+    let snapshot = BatchSnapshot {
+        logical_clock: 1,
+        version: 1,
+        batch_id: aoidos_memory::model::new_id(),
+        run_id: run.run_id.clone(),
+        history_revision: boundary.history_revision,
+        entity_revision: boundary.entity_revision,
+        evidence_revision: boundary.evidence_revision,
+        policy_hash: run.policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: aoidos_memory::model::new_id(),
+            source,
+            text: "守卫记得玩家救过他。".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: serde_json::Value::Null,
+    };
+
+    let mut context = aoidos_memory::model::ProposalContext::default();
+    build_cycle_mark_context(CycleMarkContextInput {
+        catalog: &catalog,
+        run: &run,
+        session: &fixture.session,
+        directory: &directory,
+        batch: &snapshot,
+        source_port: &source_port,
+    })
+    .unwrap()
+    .apply_to(&mut context)
+    .unwrap();
+    assert_eq!(context.source_ids, BTreeSet::from(["s1".into()]));
+    assert_eq!(context.entity_ids, BTreeSet::from(["dynamic-guard".into()]));
+    assert_eq!(context.cycle_rules.len(), 1);
+    assert_eq!(context.cycle_sources["s1"].source.record_seq, source_seq);
+
+    let newer_directory = EntityDirectory::new(
+        fixture.session.header().script_revision.clone(),
+        4,
+        true,
+        vec![
+            CanonicalEntity {
+                id: "dynamic-guard".into(),
+                kind: EntityKind::Character,
+                scope: "harbor/guards".into(),
+                canonical_name: "临时守卫".into(),
+            },
+            CanonicalEntity {
+                id: "late-guard".into(),
+                kind: EntityKind::Character,
+                scope: "harbor/guards".into(),
+                canonical_name: "后来加入的守卫".into(),
+            },
+        ],
+    )
+    .unwrap()
+    .bind_session_snapshot(&fixture.session)
+    .unwrap();
+    assert!(
+        build_cycle_mark_context(CycleMarkContextInput {
+            catalog: &catalog,
+            run: &run,
+            session: &fixture.session,
+            directory: &newer_directory,
+            batch: &snapshot,
+            source_port: &source_port,
+        })
+        .is_err()
+    );
+
+    let mut stale = snapshot;
+    stale.history_revision += 1;
+    assert!(
+        build_cycle_mark_context(CycleMarkContextInput {
+            catalog: &catalog,
+            run: &run,
+            session: &fixture.session,
+            directory: &directory,
+            batch: &stale,
+            source_port: &source_port,
+        })
+        .is_err()
+    );
+}
+
+#[test]
 fn rule_queries_are_read_only_and_unknown_or_missing_evidence_is_not_false() {
     let fixture = Fixture::new();
     let catalog = catalog();
