@@ -28,28 +28,38 @@ pub struct CycleMarkContextInput<'a> {
 /// 可合并进完整提案上下文的刻痕授权与来源白名单。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CycleMarkContext {
-    pub source_ids: BTreeSet<String>,
-    pub entity_ids: BTreeSet<String>,
-    pub rules: BTreeMap<String, CycleMarkAuthorization>,
-    pub sources: BTreeMap<String, CycleSourceRef>,
+    source_ids: BTreeSet<String>,
+    entity_ids: BTreeSet<String>,
+    rules: BTreeMap<String, CycleMarkAuthorization>,
+    sources: BTreeMap<String, CycleSourceRef>,
 }
 
 impl CycleMarkContext {
     /// 只补充刻痕所需白名单；已有同名映射必须完全一致。
     /// # Errors
-    /// 已有上下文对相同 ID 指向不同规则或来源时拒绝合并。
+    /// 已有规则 / 来源不属于当前批次，或同名映射指向不同值时拒绝合并。
     pub fn apply_to(self, context: &mut ProposalContext) -> Result<(), Fault> {
-        if self.rules.iter().any(|(id, rule)| {
-            context
-                .cycle_rules
-                .get(id)
-                .is_some_and(|existing| existing != rule)
-        }) || self.sources.iter().any(|(id, source)| {
-            context
+        if context
+            .cycle_rules
+            .keys()
+            .any(|id| !self.rules.contains_key(id))
+            || context
                 .cycle_sources
-                .get(id)
-                .is_some_and(|existing| existing != source)
-        }) {
+                .keys()
+                .any(|id| !self.sources.contains_key(id))
+            || self.rules.iter().any(|(id, rule)| {
+                context
+                    .cycle_rules
+                    .get(id)
+                    .is_some_and(|existing| existing != rule)
+            })
+            || self.sources.iter().any(|(id, source)| {
+                context
+                    .cycle_sources
+                    .get(id)
+                    .is_some_and(|existing| existing != source)
+            })
+        {
             return Err(Fault::bad_request());
         }
         context.cycle_rules.extend(self.rules);

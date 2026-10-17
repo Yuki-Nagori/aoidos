@@ -355,6 +355,25 @@ fn cycle_mark_context_uses_only_current_batch_sources_and_matching_rule_scope() 
     assert_eq!(context.cycle_rules.len(), 1);
     assert_eq!(context.cycle_sources["s1"].source.record_seq, source_seq);
 
+    let mut inconsistent_context = aoidos_memory::model::ProposalContext::default();
+    inconsistent_context
+        .cycle_sources
+        .insert("stale-source".into(), context.cycle_sources["s1"].clone());
+    assert!(
+        build_cycle_mark_context(CycleMarkContextInput {
+            catalog: &catalog,
+            run: &run,
+            session: &fixture.session,
+            directory: &directory,
+            batch: &snapshot,
+            source_port: &source_port,
+        })
+        .unwrap()
+        .apply_to(&mut inconsistent_context)
+        .is_err()
+    );
+    assert!(inconsistent_context.cycle_rules.is_empty());
+
     let newer_directory = EntityDirectory::new(
         fixture.session.header().script_revision.clone(),
         4,
