@@ -190,6 +190,8 @@ fn encoded_length_stops_at_the_first_over_limit_entity() {
         script_revision: revision(),
         revision: 1,
         complete: true,
+        snapshot_session_id: None,
+        snapshot_history_revision: None,
         by_id,
         by_name: BTreeMap::new(),
     };

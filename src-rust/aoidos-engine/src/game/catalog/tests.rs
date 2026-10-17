@@ -53,6 +53,204 @@ fn catalog() -> SceneCatalog {
     )
     .unwrap()
 }
+
+fn cycle_run(session: &crate::record::session::Session) -> aoidos_memory::model::Run {
+    use aoidos_memory::model::{Algorithm, Policy};
+    aoidos_memory::model::Run {
+        run_id: "00000000-0000-4000-8000-000000000001".into(),
+        script_id: session.header().script_id.clone(),
+        session_id: session.header().session_id.clone(),
+        cycle_gen: 7,
+        policy: Policy {
+            version: 1,
+            algorithm_version: 1,
+            config_version: 1,
+            app_config_version: 1,
+            algorithm: Algorithm::None,
+            base_strength: 100_000,
+            reinforcement_gain: 0,
+            reinforcement_cap: 0,
+            strength_cap: 100_000,
+            half_life_rounds: 10,
+            repeat_window_rounds: 1,
+            repeat_limit: 1,
+            revival_cooldown_rounds: 1,
+            active_capacity: 100,
+            rate_table_version: 1,
+            decay_rate: 1,
+        },
+        policy_hash: [0; 32],
+    }
+}
+
+#[test]
+fn cycle_mark_authorization_expands_only_registered_entities_matching_kind_and_scope() {
+    let fixture = Fixture::new();
+    let mut catalog = catalog();
+    let script_revision = catalog.script_revision.clone();
+    let directory = EntityDirectory::new(
+        script_revision,
+        3,
+        true,
+        vec![
+            CanonicalEntity {
+                id: "player".into(),
+                kind: EntityKind::Character,
+                scope: "harbor/players".into(),
+                canonical_name: "玩家".into(),
+            },
+            CanonicalEntity {
+                id: "fixed-guard".into(),
+                kind: EntityKind::Character,
+                scope: "harbor/guards".into(),
+                canonical_name: "守门人".into(),
+            },
+            CanonicalEntity {
+                id: "dynamic-guard".into(),
+                kind: EntityKind::Character,
+                scope: "harbor/guards".into(),
+                canonical_name: "新来的守卫".into(),
+            },
+            CanonicalEntity {
+                id: "harbor-statue".into(),
+                kind: EntityKind::Item,
+                scope: "harbor/guards".into(),
+                canonical_name: "石像".into(),
+            },
+            CanonicalEntity {
+                id: "city-guard".into(),
+                kind: EntityKind::Character,
+                scope: "city/guards".into(),
+                canonical_name: "城门卫兵".into(),
+            },
+        ],
+    )
+    .unwrap();
+    let unbound_directory = directory.clone();
+    let directory = directory.bind_session_snapshot(&fixture.session).unwrap();
+    catalog = catalog.with_entity_directory(directory.clone()).unwrap();
+    catalog = catalog
+        .with_cycle_mark_rules(vec![
+            CycleMarkRule::new(
+                "guard-recognition".into(),
+                2,
+                vec![
+                    CycleSubjectScope::new(EntityKind::Character, "harbor/guards".into()).unwrap(),
+                ],
+                "rescue-memory".into(),
+                CycleKind::Familiarity,
+                DetailPolicy::Vague,
+                20,
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+
+    let authorizations = catalog
+        .cycle_mark_authorizations(&cycle_run(&fixture.session), &fixture.session, &directory)
+        .unwrap();
+    let authorization = &authorizations["guard-recognition"];
+    assert_eq!(authorization.script_id, fixture.session.header().script_id);
+    assert_eq!(authorization.run_id, "00000000-0000-4000-8000-000000000001");
+    assert_eq!(authorization.cycle_gen, 7);
+    assert_eq!(authorization.rule_version, 2);
+    assert_eq!(authorization.imprint_key, "rescue-memory");
+    assert_eq!(
+        authorization.allowed_subject_ids,
+        BTreeSet::from(["dynamic-guard".into(), "fixed-guard".into()])
+    );
+    assert!(
+        catalog
+            .cycle_mark_authorizations(
+                &cycle_run(&fixture.session),
+                &fixture.session,
+                &unbound_directory
+            )
+            .is_err()
+    );
+
+    let other_fixture = Fixture::new();
+    assert!(
+        catalog
+            .cycle_mark_authorizations(
+                &cycle_run(&other_fixture.session),
+                &other_fixture.session,
+                &directory,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn cycle_mark_rules_reject_invalid_scopes_and_stale_or_incomplete_directories() {
+    assert!(CycleSubjectScope::new(EntityKind::Character, " ".into()).is_err());
+    assert!(
+        CycleMarkRule::new(
+            "rule".into(),
+            1,
+            vec![
+                CycleSubjectScope::new(EntityKind::Character, "harbor".into()).unwrap(),
+                CycleSubjectScope::new(EntityKind::Character, "harbor".into()).unwrap(),
+            ],
+            "imprint".into(),
+            CycleKind::Familiarity,
+            DetailPolicy::Vague,
+            0,
+        )
+        .is_err()
+    );
+
+    let fixture = Fixture::new();
+    let catalog = catalog()
+        .with_cycle_mark_rules(vec![
+            CycleMarkRule::new(
+                "rule".into(),
+                1,
+                vec![CycleSubjectScope::new(EntityKind::Character, "harbor".into()).unwrap()],
+                "imprint".into(),
+                CycleKind::Familiarity,
+                DetailPolicy::Vague,
+                0,
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+    let stale = EntityDirectory::new(
+        format::hash(b"another script revision"),
+        1,
+        true,
+        vec![CanonicalEntity {
+            id: "guard".into(),
+            kind: EntityKind::Character,
+            scope: "harbor".into(),
+            canonical_name: "守卫".into(),
+        }],
+    )
+    .unwrap();
+    assert!(
+        catalog
+            .cycle_mark_authorizations(&cycle_run(&fixture.session), &fixture.session, &stale)
+            .is_err()
+    );
+    let incomplete = EntityDirectory::new(
+        catalog.script_revision.clone(),
+        1,
+        false,
+        vec![CanonicalEntity {
+            id: "guard".into(),
+            kind: EntityKind::Character,
+            scope: "harbor".into(),
+            canonical_name: "守卫".into(),
+        }],
+    )
+    .unwrap();
+    assert!(
+        catalog
+            .cycle_mark_authorizations(&cycle_run(&fixture.session), &fixture.session, &incomplete)
+            .is_err()
+    );
+}
+
 #[test]
 fn rule_queries_are_read_only_and_unknown_or_missing_evidence_is_not_false() {
     let fixture = Fixture::new();

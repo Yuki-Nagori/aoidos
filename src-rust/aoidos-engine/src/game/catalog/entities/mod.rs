@@ -1,6 +1,9 @@
 //! 完整、版本化的规范实体目录；名称解析只允许精确命中，不推断近似名称。
 
-use crate::{fault::Fault, record::format};
+use crate::{
+    fault::Fault,
+    record::{format, session::Session},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -14,7 +17,7 @@ pub use registry::{
 
 const MAX_ENTITIES: usize = 4096;
 const MAX_NAME_BYTES: usize = 256;
-const MAX_SCOPE_BYTES: usize = 128;
+pub(super) const MAX_SCOPE_BYTES: usize = 128;
 const MAX_DIRECTORY_BYTES: usize = 1024 * 1024;
 const MAX_DIRECTORY_REVISION: u64 = (1 << 53) - 1;
 
@@ -79,6 +82,8 @@ pub struct EntityDirectory {
     script_revision: String,
     revision: u64,
     complete: bool,
+    snapshot_session_id: Option<String>,
+    snapshot_history_revision: Option<u64>,
     by_id: BTreeMap<String, CanonicalEntity>,
     by_name: BTreeMap<(EntityKind, String, String), String>,
 }
@@ -124,6 +129,8 @@ impl EntityDirectory {
             script_revision,
             revision,
             complete,
+            snapshot_session_id: None,
+            snapshot_history_revision: None,
             by_id,
             by_name,
         };
@@ -143,6 +150,30 @@ impl EntityDirectory {
 
     pub fn is_complete(&self) -> bool {
         self.complete
+    }
+
+    /// 标记由注册表按当前 session 与有效历史读取的完整目录快照。
+    /// # Errors
+    /// session 身份非法或历史修订超出安全整数范围时拒绝绑定。
+    pub(super) fn bind_session_snapshot(mut self, session: &Session) -> Result<Self, Fault> {
+        let session_id = &session.header().session_id;
+        let history_revision = session.history_revision();
+        if session.needs_recovery()
+            || !format::valid_uuid(session_id)
+            || history_revision > MAX_DIRECTORY_REVISION
+            || !self.complete
+            || self.script_revision != session.header().script_revision
+        {
+            return Err(Fault::bad_request());
+        }
+        self.snapshot_session_id = Some(session_id.clone());
+        self.snapshot_history_revision = Some(history_revision);
+        Ok(self)
+    }
+
+    pub(super) fn is_session_snapshot_for(&self, session: &Session) -> bool {
+        self.snapshot_session_id.as_deref() == Some(session.header().session_id.as_str())
+            && self.snapshot_history_revision == Some(session.history_revision())
     }
 
     /// 合并已验证的动态身份，保留静态 completeness 声明并使用调用方的单调修订。
@@ -230,7 +261,7 @@ impl EntityDirectory {
     }
 }
 
-fn valid_label(value: &str, max_bytes: usize) -> bool {
+pub(super) fn valid_label(value: &str, max_bytes: usize) -> bool {
     !value.trim().is_empty()
         && value.trim() == value
         && value.len() <= max_bytes

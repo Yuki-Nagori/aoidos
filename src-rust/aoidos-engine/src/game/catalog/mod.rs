@@ -4,6 +4,7 @@ use crate::{
     fault::Fault,
     record::{facts::ScenePosition, format, session::Session},
 };
+use aoidos_memory::model::{CycleKind, CycleMarkAuthorization, DetailPolicy, Run};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,6 +15,7 @@ pub use entities::{
     CanonicalEntity, ENTITY_REGISTRY_MIGRATION, EntityCreationCommit, EntityCreationIntent,
     EntityCreationRule, EntityDirectory, EntityKind, EntityRegistry, verify_entity_registry_schema,
 };
+use entities::{MAX_SCOPE_BYTES, valid_label};
 
 /// 最小类型化条件；数值 / 键由可信剧本登记，不解释模型自由文本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +168,70 @@ pub struct HintRule {
     pub priority: i32,
     pub target_scope: String,
 }
+
+/// 允许记忆刻痕作用到某类、某个可信目录范围内的实体。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CycleSubjectScope {
+    kind: EntityKind,
+    scope: String,
+}
+
+impl CycleSubjectScope {
+    /// # Errors
+    /// 类别范围名称为空、过长或不合法时拒绝。
+    pub fn new(kind: EntityKind, scope: String) -> Result<Self, Fault> {
+        if !valid_label(&scope, MAX_SCOPE_BYTES) {
+            return Err(Fault::bad_request());
+        }
+        Ok(Self { kind, scope })
+    }
+}
+
+/// 剧本可授权的刻痕规则；规则属性不来自模型提案。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleMarkRule {
+    rule_id: String,
+    rule_version: u32,
+    subject_scopes: Vec<CycleSubjectScope>,
+    imprint_key: String,
+    kind: CycleKind,
+    detail_policy: DetailPolicy,
+    priority: u16,
+}
+
+impl CycleMarkRule {
+    /// # Errors
+    /// 规则 ID、版本、对象范围或优先级超出硬限制时拒绝。
+    pub fn new(
+        rule_id: String,
+        rule_version: u32,
+        subject_scopes: Vec<CycleSubjectScope>,
+        imprint_key: String,
+        kind: CycleKind,
+        detail_policy: DetailPolicy,
+        priority: u16,
+    ) -> Result<Self, Fault> {
+        if !format::valid_id(&rule_id)
+            || rule_version == 0
+            || subject_scopes.is_empty()
+            || subject_scopes.len() > 32
+            || subject_scopes.iter().collect::<BTreeSet<_>>().len() != subject_scopes.len()
+            || !format::valid_id(&imprint_key)
+            || priority > 1_000
+        {
+            return Err(Fault::bad_request());
+        }
+        Ok(Self {
+            rule_id,
+            rule_version,
+            subject_scopes,
+            imprint_key,
+            kind,
+            detail_policy,
+            priority,
+        })
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneRuleView {
@@ -219,6 +285,7 @@ pub struct SceneCatalog {
     conditions: BTreeMap<String, Condition>,
     entities: Option<EntityDirectory>,
     entity_creation_rules: BTreeMap<String, EntityCreationRule>,
+    cycle_mark_rules: BTreeMap<String, CycleMarkRule>,
     presence: Option<PresencePolicy>,
 }
 impl SceneCatalog {
@@ -275,6 +342,7 @@ impl SceneCatalog {
             conditions,
             entities: None,
             entity_creation_rules: BTreeMap::new(),
+            cycle_mark_rules: BTreeMap::new(),
             presence: None,
         };
         for (id, scene) in &catalog.scenes {
@@ -379,6 +447,85 @@ impl SceneCatalog {
         }
         self.entity_creation_rules = registered;
         Ok(self)
+    }
+
+    /// 登记与当前 catalog revision 绑定的跨周目刻痕授权规则。
+    ///
+    /// 规则只声明实体类别与 scope；实际主体 ID 在每次构造授权上下文时，
+    /// 从对应 session 的完整实体快照展开，因而可包含已提交的动态实体。
+    /// # Errors
+    /// 规则集为空、超限或包含重复身份时拒绝。
+    pub fn with_cycle_mark_rules(mut self, rules: Vec<CycleMarkRule>) -> Result<Self, Fault> {
+        if rules.is_empty() || rules.len() > 64 {
+            return Err(Fault::bad_request());
+        }
+        let mut registered = BTreeMap::new();
+        for rule in rules {
+            if registered.insert(rule.rule_id.clone(), rule).is_some() {
+                return Err(Fault::bad_request());
+            }
+        }
+        self.cycle_mark_rules = registered;
+        Ok(self)
+    }
+
+    /// 以可信规则、当前 run 和完整实体目录生成提案可用的主体白名单。
+    /// # Errors
+    /// run 或实体快照无效、目录修订不匹配、展开集合超过硬上限时拒绝。
+    pub fn cycle_mark_authorizations(
+        &self,
+        run: &Run,
+        session: &Session,
+        directory: &EntityDirectory,
+    ) -> Result<BTreeMap<String, CycleMarkAuthorization>, Fault> {
+        if session.needs_recovery()
+            || run.script_id != session.header().script_id
+            || run.session_id != session.header().session_id
+            || !directory.is_complete()
+            || !directory.is_session_snapshot_for(session)
+            || session.header().script_revision != self.script_revision
+            || directory.script_revision() != self.script_revision
+            || !format::valid_uuid(&run.run_id)
+            || run.cycle_gen == 0
+            || run.cycle_gen > aoidos_memory::model::MAX_INTEGER
+            || run.policy.validate().is_err()
+        {
+            return Err(Fault::bad_request());
+        }
+        let mut authorizations = BTreeMap::new();
+        for rule in self.cycle_mark_rules.values() {
+            let allowed_subject_ids = directory
+                .entries()
+                .filter(|entity| {
+                    rule.subject_scopes
+                        .iter()
+                        .any(|scope| entity.kind == scope.kind && entity.scope == scope.scope)
+                })
+                .map(|entity| entity.id.clone())
+                .collect::<BTreeSet<_>>();
+            if allowed_subject_ids.is_empty() {
+                continue;
+            }
+            if allowed_subject_ids.len() > 2_048 {
+                return Err(Fault::bad_request());
+            }
+            authorizations.insert(
+                rule.rule_id.clone(),
+                CycleMarkAuthorization {
+                    rule_id: rule.rule_id.clone(),
+                    script_id: run.script_id.clone(),
+                    run_id: run.run_id.clone(),
+                    cycle_gen: run.cycle_gen,
+                    rule_version: rule.rule_version,
+                    allowed_subject_ids,
+                    imprint_key: rule.imprint_key.clone(),
+                    kind: rule.kind,
+                    detail_policy: rule.detail_policy,
+                    priority: rule.priority,
+                },
+            );
+        }
+        Ok(authorizations)
     }
 
     pub(crate) fn entity_creation_rule(&self, id: &str) -> Option<&EntityCreationRule> {
