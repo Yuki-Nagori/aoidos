@@ -1,8 +1,8 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-16。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
+更新日期：2026-10-18。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。033 已新增本地素材扫描命令，冻结输入、显式发送命令仍待实现。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -421,6 +421,7 @@ else showGenericError(err);
 - `memory_list_entries`：接收 `{ runId, cursor, limit }`；游标绑定 runId、historyRevision、SQLite rowid 快照上界与上一页扫描位置，返回固定快照的有界条目页，最多 32 条。
 - `memory_get_entry`：接收 `{ runId, entryId, expectedVersionId }`；读取指定不可变版本并重新核验其策略、正文 hash 与当前有效来源；失效版本不会因历史查询绕过校验。
 - `memory_get_batch_status`：接收 `{ runId, batchId }`；只返回与周目匹配的持久状态、完成摘要和白名单诊断码，不返回 prompt 或供应商原始响应；调用只读状态，不重发请求、不后台轮询。
+- `memory_collect_materials`：接收 `{ runId, cursor }`，`cursor` 可为 `null`；仅在本地扫描当前有效分支并登记素材，返回 `{ runId, historyRevision, eligibleCount, nextCursor }`，不返回正文、不冻结批次、不发送模型请求。游标固定 run、历史修订和首次扫描记录上界；每页最多扫描 256 条 / 4 MiB，超预算前停在上一条完整记录并返回续页位置。
 
 版本冲突或参数非法为 `app.bad-request`，未登记 / 非法剧本身份为 `app.bad-request`，配置损坏为 `store.corrupt`，存储初始化不可用为 `app.not-ready`。配置历史按 scope/version 留存并校验规范 JSON 哈希；当前版本通过 head 指针读取。`PolicyParameters` 数值均限制为 JavaScript 安全整数范围，Rust 负责完整领域校验，TypeScript 只声明类型且 `invoke` 透传。
 

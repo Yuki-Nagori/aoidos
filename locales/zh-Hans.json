@@ -92,6 +92,13 @@
     "entries": "已提交记忆",
     "refresh": "刷新",
     "next": "加载下一页",
+    "collect": "收集记忆素材",
+    "collectNext": "继续扫描素材",
+    "collecting": "正在扫描…",
+    "collected": "已收集 {count} 个有效素材单元。",
+    "localOnly": "此步骤仅在本地执行，不会发送模型请求。",
+    "collectMore": "仍有后续历史；继续扫描后才能全部纳入。",
+    "collectError": "记忆素材收集失败，请刷新会话后重试。",
     "noneQuestions": "当前没有待确认问题。",
     "noneEntries": "当前没有已提交记忆。",
     "classifications": {

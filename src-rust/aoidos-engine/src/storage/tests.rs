@@ -210,6 +210,44 @@ fn memory_borrows_registered_session_and_shared_migrated_connection() {
 }
 
 #[test]
+fn memory_collection_registers_stable_utf8_units_without_exposing_source_text() {
+    let root = std::env::temp_dir().join(format!("aoidos-memory-collect-{}", uuid::Uuid::new_v4()));
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    let catalog = scene_catalog();
+    let run = storage
+        .initialize_memory_run(&session_id, &catalog)
+        .unwrap();
+    let session = storage.records.get(&session_id).unwrap();
+    session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "🦊".repeat(600),
+            mode: Some(crate::record::format::InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+
+    let page = storage.collect_memory_materials(&run.run_id, None).unwrap();
+    assert_eq!(page.eligible_count, 2);
+    assert_eq!(page.run_id, run.run_id);
+    assert_eq!(page.next_cursor, None);
+    let repeated = storage
+        .collect_memory_materials(&page.run_id, None)
+        .unwrap();
+    assert_eq!(repeated.eligible_count, 2);
+    storage.close().unwrap();
+}
+
+#[test]
 fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atomically() {
     let root = std::env::temp_dir().join(format!(
         "aoidos-cycle-mark-completion-{}",

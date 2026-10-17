@@ -92,6 +92,13 @@
     "entries": "Committed memories",
     "refresh": "Refresh",
     "next": "Load next page",
+    "collect": "Collect memory sources",
+    "collectNext": "Continue source scan",
+    "collecting": "Scanning…",
+    "collected": "{count} eligible source units collected.",
+    "localOnly": "This step stays local and does not send a model request.",
+    "collectMore": "More history remains; continue scanning to include it.",
+    "collectError": "Memory sources could not be collected. Refresh the session and retry.",
     "noneQuestions": "No pending questions.",
     "noneEntries": "No committed memories.",
     "classifications": {

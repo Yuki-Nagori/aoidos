@@ -150,7 +150,17 @@ fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_b
         input: serde_json::json!({}),
     };
     let first = snapshot(new_id());
+    assert!(
+        f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
     let digest = f.repo.freeze_batch(&mut f.conn, &f.port, &first).unwrap();
+    assert!(
+        !f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
     assert!(matches!(
         f.repo
             .freeze_batch(&mut f.conn, &f.port, &snapshot(new_id())),
@@ -163,6 +173,11 @@ fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_b
             [&first.batch_id],
         )
         .unwrap();
+    assert!(
+        f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
     let retry = snapshot(new_id());
     f.repo.freeze_batch(&mut f.conn, &f.port, &retry).unwrap();
     f.conn
@@ -171,6 +186,11 @@ fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_b
             [&material],
         )
         .unwrap();
+    assert!(
+        !f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
     assert_eq!(
         f.repo.freeze_batch(&mut f.conn, &f.port, &first).unwrap(),
         digest

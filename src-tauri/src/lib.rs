@@ -235,7 +235,7 @@ macro_rules! command_handler {
         memory_commands::memory_get_script_config, memory_commands::memory_save_script_config,
         memory_commands::memory_list_questions, memory_commands::memory_resolve_question,
         memory_commands::memory_list_entries, memory_commands::memory_get_entry,
-        memory_commands::memory_get_batch_status,
+        memory_commands::memory_get_batch_status, memory_commands::memory_collect_materials,
         $($extra),*
     ] };
 }

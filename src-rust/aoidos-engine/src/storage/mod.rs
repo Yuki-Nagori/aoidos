@@ -48,6 +48,26 @@ pub struct MemoryEntryDetails {
     pub version: aoidos_memory::model::Version,
 }
 
+/// 素材扫描游标固定周目、历史修订和首次扫描的记录上界。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryMaterialCursor {
+    pub run_id: String,
+    pub history_revision: u64,
+    pub snapshot_max_record_seq: u64,
+    pub after_record_seq: u64,
+}
+
+/// 一页素材登记结果；正文留在本地记录，不通过 IPC 返回。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMaterialPage {
+    pub run_id: String,
+    pub history_revision: u64,
+    pub eligible_count: usize,
+    pub next_cursor: Option<MemoryMaterialCursor>,
+}
+
 /// Migration position is persisted in SQLite `user_version`; only append entries.
 const STORAGE_MIGRATIONS: &[&str] = &[
     aoidos_store::applied::SCHEMA,
@@ -324,6 +344,73 @@ impl Storage {
                     state,
                     completion,
                     diagnostic_code: error_code,
+                })
+            },
+        )
+        .map_err(memory_config_error)
+    }
+
+    /// 按固定历史上界扫描当前分支，将有效原文登记为稳定素材；不冻结批次或发送请求。
+    /// 每页最多扫描 `MAX_SCAN` 条 / `MAX_SCAN_BYTES`，后续页游标绑定 run 和 historyRevision。
+    /// # Errors
+    /// 旧游标、来源恢复状态、超出扫描预算或记忆存储失败时拒绝。
+    pub fn collect_memory_materials(
+        &self,
+        run_id: &str,
+        cursor: Option<MemoryMaterialCursor>,
+    ) -> Result<MemoryMaterialPage, Fault> {
+        use aoidos_memory::model::{CausalPort, MAX_INTEGER};
+
+        let (run, catalog) = self.memory_catalog_for_run(run_id)?;
+        self.with_memory_context(
+            &run.session_id,
+            &catalog,
+            |repository, connection, port, session, _directory| {
+                let boundary = port.boundary()?;
+                if let Some(cursor) = &cursor
+                    && (cursor.run_id != run_id
+                        || cursor.history_revision != boundary.history_revision
+                        || cursor.after_record_seq > cursor.snapshot_max_record_seq
+                        || cursor.snapshot_max_record_seq > MAX_INTEGER)
+                {
+                    return Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::StaleVersion,
+                    ));
+                }
+                let snapshot_max_record_seq = cursor.as_ref().map_or_else(
+                    || session.next_sequence().saturating_sub(1),
+                    |cursor| cursor.snapshot_max_record_seq,
+                );
+                let page = port.material_source_page(
+                    run_id,
+                    cursor.as_ref().map(|cursor| cursor.after_record_seq),
+                    snapshot_max_record_seq,
+                )?;
+                let mut eligible_count = 0;
+                for source in page.sources {
+                    let material_id = repository.register_material(
+                        connection,
+                        port,
+                        &source.source,
+                        source.ordinal,
+                    )?;
+                    if repository.material_is_collectible(connection, port, run_id, &material_id)? {
+                        eligible_count += 1;
+                    }
+                }
+                let next_cursor =
+                    page.next_record_seq
+                        .map(|after_record_seq| MemoryMaterialCursor {
+                            run_id: run_id.into(),
+                            history_revision: boundary.history_revision,
+                            snapshot_max_record_seq,
+                            after_record_seq,
+                        });
+                Ok(MemoryMaterialPage {
+                    run_id: run_id.into(),
+                    history_revision: boundary.history_revision,
+                    eligible_count,
+                    next_cursor,
                 })
             },
         )

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   MemoryEntry,
   MemoryEntryCursor,
   MemoryEntryDetails,
   MemoryKnowledgeEvidence,
+  MemoryMaterialCursor,
   MemoryQuestion,
   MemoryQuestionCandidate,
   MemoryQuestionCursor,
@@ -13,6 +14,7 @@ import type {
 } from "../api/memory";
 import {
   getMemoryEntry,
+  collectMemoryMaterials,
   listMemoryEntries,
   listMemoryQuestions,
   resolveMemoryQuestion,
@@ -43,6 +45,10 @@ const questions = ref<MemoryQuestion[]>([]);
 const entries = ref<MemoryEntry[]>([]);
 const questionCursor = ref<MemoryQuestionCursor | null>(null);
 const entryCursor = ref<MemoryEntryCursor | null>(null);
+const materialCursor = ref<MemoryMaterialCursor | null>(null);
+const materialCount = ref<number | null>(null);
+const materialBusy = ref(false);
+const materialError = ref(false);
 const questionBusy = ref(false);
 const entryBusy = ref(false);
 const detailBusy = ref(false);
@@ -51,6 +57,39 @@ const answering = ref(new Set<string>());
 const proposalNames = ref<Record<string, string>>({});
 const details = ref<MemoryEntryDetails | null>(null);
 let generation = 0;
+
+async function collectMaterials(next = false): Promise<void> {
+  const currentRun = props.runId;
+  const currentHistoryRevision = props.historyRevision;
+  const currentGeneration = generation;
+  if (materialBusy.value || !currentRun) return;
+  materialBusy.value = true;
+  materialError.value = false;
+  let cursor = next ? materialCursor.value : null;
+  let count = next ? (materialCount.value ?? 0) : 0;
+  try {
+    for (let pageNumber = 0; pageNumber < 16; pageNumber += 1) {
+      const page = await collectMemoryMaterials(currentRun, cursor);
+      if (
+        currentGeneration !== generation ||
+        currentRun !== props.runId ||
+        currentHistoryRevision !== props.historyRevision ||
+        page.historyRevision !== currentHistoryRevision
+      )
+        return;
+      count += page.eligibleCount;
+      cursor = page.nextCursor;
+      if (!cursor) break;
+    }
+    if (currentGeneration !== generation) return;
+    materialCount.value = count;
+    materialCursor.value = cursor;
+  } catch {
+    if (currentGeneration === generation) materialError.value = true;
+  } finally {
+    if (currentGeneration === generation) materialBusy.value = false;
+  }
+}
 
 function candidateName(candidate: MemoryQuestionCandidate): string {
   if (candidate.kind === "entity") return candidate.displayName ?? candidate.entityId;
@@ -192,6 +231,10 @@ watch(
     entries.value = [];
     questionCursor.value = null;
     entryCursor.value = null;
+    materialCursor.value = null;
+    materialCount.value = null;
+    materialBusy.value = false;
+    materialError.value = false;
     details.value = null;
     questionBusy.value = false;
     entryBusy.value = false;
@@ -204,11 +247,42 @@ watch(
   },
   { immediate: true },
 );
+
+onBeforeUnmount(() => {
+  generation += 1;
+});
 </script>
 
 <template>
   <details class="glass-panel">
     <summary>{{ t("memoryQuery.title") }}</summary>
+    <section class="grid gap-2 p-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          :disabled="materialBusy"
+          @click="collectMaterials(Boolean(materialCursor))"
+        >
+          {{
+            materialBusy
+            ? t("memoryQuery.collecting")
+            : materialCursor
+              ? t("memoryQuery.collectNext")
+              : t("memoryQuery.collect")
+          }}
+        </button>
+        <p v-if="materialCount !== null" role="status" class="text-sm text-muted">
+          {{ t("memoryQuery.collected", { count: materialCount }) }}
+          {{ t("memoryQuery.localOnly") }}
+        </p>
+      </div>
+      <p v-if="materialError" role="alert" class="text-sm text-danger">
+        {{ t("memoryQuery.collectError") }}
+      </p>
+      <p v-if="materialCursor" class="text-sm text-muted">
+        {{ t("memoryQuery.collectMore") }}
+      </p>
+    </section>
     <p v-if="error" role="alert">
       {{ t("memoryQuery.error") }}
       <button type="button" class="underline" @click="retry">

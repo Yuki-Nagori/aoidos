@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   MemoryEntry,
   MemoryEntryDetails,
+  MemoryMaterialPage,
   MemoryQuestion,
   MemoryQuestionPage,
 } from "../../../src-web/api/memory";
@@ -10,6 +11,7 @@ import MemoryQueryPanel from "../../../src-web/components/MemoryQueryPanel.vue";
 import { i18n } from "../../../src-web/i18n";
 import {
   getMemoryEntry,
+  collectMemoryMaterials,
   listMemoryEntries,
   listMemoryQuestions,
   resolveMemoryQuestion,
@@ -17,6 +19,7 @@ import {
 
 vi.mock("../../../src-web/api/memory", () => ({
   getMemoryEntry: vi.fn(),
+  collectMemoryMaterials: vi.fn(),
   listMemoryEntries: vi.fn(),
   listMemoryQuestions: vi.fn(),
   resolveMemoryQuestion: vi.fn(),
@@ -112,6 +115,56 @@ describe("MemoryQueryPanel", () => {
       answer: { kind: "selectCandidate", candidate: question.draft.candidates[0]! },
     });
     vi.mocked(getMemoryEntry).mockResolvedValue(entryDetails);
+    vi.mocked(collectMemoryMaterials).mockResolvedValue({
+      runId: "run-1",
+      historyRevision: 5,
+      eligibleCount: 0,
+      nextCursor: null,
+    });
+  });
+
+  it("collects current-run sources without exposing their text or sending a model request", async () => {
+    const cursor: MemoryMaterialPage["nextCursor"] = {
+      runId: "run-1",
+      historyRevision: 5,
+      snapshotMaxRecordSeq: 90,
+      afterRecordSeq: 32,
+    };
+    let pages = 0;
+    vi.mocked(collectMemoryMaterials).mockImplementation(async () => {
+      pages += 1;
+      return {
+        runId: "run-1",
+        historyRevision: 5,
+        eligibleCount: 1,
+        nextCursor: pages === 32 ? null : cursor,
+      };
+    });
+    const wrapper = mount(MemoryQueryPanel, {
+      props: { runId: "run-1", historyRevision: 5 },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "收集记忆素材")!
+      .trigger("click");
+    await flushPromises();
+    expect(collectMemoryMaterials).toHaveBeenCalledWith("run-1", null);
+    expect(collectMemoryMaterials).toHaveBeenCalledTimes(16);
+    expect(wrapper.text()).toContain("已收集 16 个有效素材单元");
+    expect(wrapper.text()).toContain("此步骤仅在本地执行，不会发送模型请求");
+
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "继续扫描素材")!
+      .trigger("click");
+    await flushPromises();
+    expect(collectMemoryMaterials).toHaveBeenLastCalledWith("run-1", cursor);
+    expect(collectMemoryMaterials).toHaveBeenCalledTimes(32);
+    expect(wrapper.text()).toContain("已收集 32 个有效素材单元");
+    wrapper.unmount();
   });
 
   it("answers with the displayed candidate and reads the selected committed version", async () => {

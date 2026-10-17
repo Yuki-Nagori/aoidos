@@ -3,6 +3,117 @@ use crate::ports::Terminal;
 use crate::record::test_support::Fixture;
 use aoidos_llm::schedule::FinishReason;
 
+#[test]
+fn material_source_pages_split_long_text_at_stable_utf8_boundaries() {
+    let mut fixture = Fixture::new();
+    let text = "🦊".repeat(600);
+    let seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: text.clone(),
+            mode: Some(RecordMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let run_id = aoidos_memory::model::new_id();
+    let port = SourcePort::new(&fixture.session);
+    let page = port.material_source_page(&run_id, None, seq).unwrap();
+    let parts = page
+        .sources
+        .iter()
+        .filter(|part| part.source.record_seq == seq)
+        .collect::<Vec<_>>();
+
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0].ordinal, 0);
+    assert_eq!(parts[1].ordinal, 1);
+    assert!(parts.iter().all(
+        |part| part.source.end_byte - part.source.start_byte <= MAX_MATERIAL_SPAN_BYTES as u64
+    ));
+    assert_eq!(parts[0].source.end_byte, parts[1].source.start_byte);
+    assert_eq!(
+        parts
+            .iter()
+            .map(|part| port.source_text(&part.source).unwrap().unwrap())
+            .collect::<String>(),
+        text
+    );
+}
+
+#[test]
+fn material_source_page_cursor_advances_without_scanning_past_its_snapshot() {
+    let mut fixture = Fixture::new();
+    let mut last_seq = 0;
+    for index in 0..(MAX_SCAN + 1) {
+        last_seq = fixture
+            .session
+            .append(Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: format!("素材 {index}"),
+                mode: Some(RecordMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let run_id = aoidos_memory::model::new_id();
+    let port = SourcePort::new(&fixture.session);
+    let first = port.material_source_page(&run_id, None, last_seq).unwrap();
+    let next = first.next_record_seq.unwrap();
+    assert_eq!(first.sources.len(), MAX_SCAN);
+    assert!(next < last_seq);
+
+    let second = port
+        .material_source_page(&run_id, Some(next), last_seq)
+        .unwrap();
+    assert_eq!(second.sources.len(), 1);
+    assert_eq!(second.sources[0].source.record_seq, last_seq);
+    assert_eq!(second.next_record_seq, None);
+}
+
+#[test]
+fn material_source_page_returns_a_cursor_before_reaching_its_byte_limit() {
+    let mut fixture = Fixture::new();
+    let mut last_seq = 0;
+    for _ in 0..20 {
+        last_seq = fixture
+            .session
+            .append(Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "x".repeat(crate::record::format::MAX_TEXT),
+                mode: Some(RecordMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let run_id = aoidos_memory::model::new_id();
+    let port = SourcePort::new(&fixture.session);
+    let first = port.material_source_page(&run_id, None, last_seq).unwrap();
+    let next = first.next_record_seq.unwrap();
+    assert!(!first.sources.is_empty());
+    assert!(
+        first
+            .sources
+            .iter()
+            .all(|source| source.source.record_seq <= next)
+    );
+    assert!(next < last_seq);
+
+    let mut total = first.sources.len();
+    let mut cursor = Some(next);
+    while let Some(after) = cursor {
+        let page = port
+            .material_source_page(&run_id, Some(after), last_seq)
+            .unwrap();
+        total += page.sources.len();
+        cursor = page.next_record_seq;
+    }
+    assert_eq!(
+        total,
+        20 * crate::record::format::MAX_TEXT.div_ceil(MAX_MATERIAL_SPAN_BYTES)
+    );
+}
+
 struct NoopWorld;
 impl crate::record::world::WorldPort for NoopWorld {
     fn validate(
@@ -1363,6 +1474,7 @@ fn alias_context_does_not_trust_an_incomplete_directory() {
         session: &fixture.session,
         entity_directory: Some(&incomplete),
         scene_catalog: None,
+        text_cache: RefCell::default(),
     };
     assert!(matches!(
         port.entity_alias_context("missing"),

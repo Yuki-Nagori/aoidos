@@ -156,8 +156,9 @@ memory_get/save_*_config（Tauri IPC）→ engine::Storage → aoidos-memory 配
 engine_open_session → 正式记录登记 → 合并并校验配置 → 冻结 memory_runs.policy + hash
   → OpenedSession { sessionId, memoryRunId, ... }
 
-033 显式处理入口（实施中）：玩家发起 → 当前周目有效未处理素材收集 → queued 批次冻结
-  → 玩家确认发送 → Prompt / 候选上下文 → process_authorized_batch（复用 020 lease 与 027 预算）
+033 显式处理入口（实施中）：玩家发起 → `memory_collect_materials` 本地分页扫描并登记当前周目有效未处理素材
+  → queued 批次冻结（待接入）→ 玩家确认发送（待接入）→ Prompt / 候选上下文（待接入）
+  → process_authorized_batch（复用 020 lease 与 027 预算）
 
 授权记忆批次：冻结输入 + 显式授权 → process_authorized_batch
   → Coordinator 空闲检查 / private lease → 027 预算预留 → SQLite dispatch(turnId, requestId)

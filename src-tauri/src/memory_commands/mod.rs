@@ -225,6 +225,13 @@ struct BatchStatusArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CollectMaterialsArgs {
+    run_id: String,
+    cursor: Option<aoidos_engine::storage::MemoryMaterialCursor>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SaveAppConfig {
     expected_version: u64,
     parameters: PolicyParameters,
@@ -405,6 +412,20 @@ pub async fn memory_get_batch_status(
     state.ready()?;
     let storage = state.storage.clone();
     memory_job(move || storage.memory_batch_status(&run_id, &batch_id)).await
+}
+
+/// 本地扫描并登记当前因果分支的有效素材；此命令不冻结批次、不访问模型。
+/// # Errors
+/// 周目游标过期、记录待恢复或素材 / SQLite 校验失败时返回稳定错误。
+#[tauri::command]
+pub async fn memory_collect_materials(
+    state: tauri::State<'_, StorageService>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::storage::MemoryMaterialPage, CmdError> {
+    let CollectMaterialsArgs { run_id, cursor } = decode(&request)?;
+    state.ready()?;
+    let storage = state.storage.clone();
+    memory_job(move || storage.collect_memory_materials(&run_id, cursor)).await
 }
 
 async fn memory_job<T: Send + 'static>(

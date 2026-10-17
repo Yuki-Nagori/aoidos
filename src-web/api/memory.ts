@@ -125,6 +125,22 @@ export interface MemoryEntryCursor {
   afterSequence: number;
 }
 
+/** 记忆素材扫描游标绑定周目、历史修订与首次扫描的记录上界。 */
+export interface MemoryMaterialCursor {
+  runId: string;
+  historyRevision: number;
+  snapshotMaxRecordSeq: number;
+  afterRecordSeq: number;
+}
+
+/** 本地素材扫描结果；原文只保存在 Rust / SQLite，不经 IPC 返回。 */
+export interface MemoryMaterialPage {
+  runId: string;
+  historyRevision: number;
+  eligibleCount: number;
+  nextCursor: MemoryMaterialCursor | null;
+}
+
 export interface MemoryEntryPage {
   entries: MemoryEntry[];
   nextCursor: MemoryEntryCursor | null;
@@ -244,6 +260,14 @@ export function getMemoryEntry(
   expectedVersionId: string,
 ): Promise<MemoryEntryDetails> {
   return invoke("memory_get_entry", { runId, entryId, expectedVersionId });
+}
+
+/** 本地分页收集当前有效且未处理的素材，不冻结批次或发送模型请求。 */
+export function collectMemoryMaterials(
+  runId: string,
+  cursor: MemoryMaterialCursor | null,
+): Promise<MemoryMaterialPage> {
+  return invoke("memory_collect_materials", { runId, cursor });
 }
 
 /** 主动恢复持久批次结果，不会重发供应商请求。 */

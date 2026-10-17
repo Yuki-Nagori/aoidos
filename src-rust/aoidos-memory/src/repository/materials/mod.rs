@@ -115,6 +115,52 @@ struct CompletionTransaction<'a> {
 }
 
 impl Repository {
+    /// 判断已登记素材是否仍可进入新批次；未完成或结果不明的既有批次会占用来源。
+    /// # Errors
+    /// run / 历史边界不可用、来源记录损坏或 SQLite 读取失败时返回错误。
+    pub fn material_is_collectible(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        material_id: &str,
+    ) -> Result<bool> {
+        let (run, _) = self.boundary(conn, run_id, port)?;
+        if !valid_id(material_id) {
+            return Err(reject());
+        }
+        let source = self.material_source(conn, &run.run_id, material_id)?;
+        if !self.valid_sources(&run, std::slice::from_ref(&source), port)?
+            || port.source_text(&source)?.is_none()
+        {
+            return Ok(false);
+        }
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM memory_materials WHERE run_id=?1 AND material_id=?2",
+                params![run_id, material_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        if status.as_deref() != Some("eligible") {
+            return Ok(false);
+        }
+        let reserved: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memory_processed WHERE material_id=?1)
+                 OR EXISTS(
+                     SELECT 1 FROM memory_spans AS s
+                     JOIN memory_batches AS b ON b.batch_id=s.batch_id
+                     WHERE s.material_id=?1 AND b.status<>'rejected'
+                 )",
+                [material_id],
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        Ok(!reserved)
+    }
+
     /// # Errors
     /// 同原记录 / ordinal 不同区间为身份冲突，不能通过重新切片制造新素材。
     pub fn register_material(
@@ -217,7 +263,12 @@ impl Repository {
                 || !valid_id(&span.material_id)
                 || !materials.insert(&span.material_id)
                 || span.text.is_empty()
-                || span.text.len() > if span.context { 1024 } else { 2048 }
+                || span.text.len()
+                    > if span.context {
+                        1024
+                    } else {
+                        MAX_MATERIAL_SPAN_BYTES
+                    }
             {
                 return Err(reject());
             }

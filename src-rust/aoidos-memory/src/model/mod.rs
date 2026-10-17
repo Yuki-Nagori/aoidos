@@ -20,6 +20,8 @@ pub type Hash = [u8; 32];
 pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;
 pub const MAX_VERSION_BYTES: usize = 32 * 1024;
 pub const MAX_PLAN_BYTES: usize = 1024 * 1024;
+/// 单个记忆来源片段的正文上限；引擎按 UTF-8 边界稳定切分较长记录。
+pub const MAX_MATERIAL_SPAN_BYTES: usize = 2048;
 pub const MAX_SCAN: usize = 256;
 pub const MAX_SCAN_BYTES: usize = 4 * 1024 * 1024;
 
