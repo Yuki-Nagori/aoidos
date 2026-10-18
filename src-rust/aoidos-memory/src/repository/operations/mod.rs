@@ -584,7 +584,6 @@ impl Repository {
         let (plan, state) = self.operation(conn, operation_id)?;
         self.ensure_writable(conn, &plan.run_id)?;
         if state == OperationState::Applied {
-            self.verify_applied(conn, &plan)?;
             return Ok(state);
         }
         if state != OperationState::Ready {

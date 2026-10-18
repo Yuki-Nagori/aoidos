@@ -103,9 +103,7 @@ impl Repository {
                 return Ok(page);
             }
             let (plan, state) = self.operation(conn, &id)?;
-            if state == OperationState::Applied {
-                self.verify_applied(conn, &plan)?;
-            } else {
+            if state != OperationState::Applied {
                 let mut complete = true;
                 for target in &plan.targets {
                     if let Some(version) = &target.next {
