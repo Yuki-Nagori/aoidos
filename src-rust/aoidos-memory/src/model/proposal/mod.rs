@@ -485,6 +485,8 @@ fn validate_shape(candidate: &Candidate, context: &ProposalContext) -> Result<()
         .as_ref()
         .is_some_and(|summary| valid_summary(summary));
     let is_character = matches!(candidate.subject_ref, SubjectRef::Character { .. });
+    let invalid_inferred_preference = matches!(candidate.subject_ref, SubjectRef::PlayerPreference)
+        && candidate.inferred != Some(false);
     let previous_attitude = candidate
         .target_ref
         .as_ref()
@@ -503,6 +505,7 @@ fn validate_shape(candidate: &Candidate, context: &ProposalContext) -> Result<()
                 || !has_body
                 || candidate.dimension.is_none()
                 || candidate.inferred.is_none()
+                || invalid_inferred_preference
                 || (is_character && candidate.attitude.is_none())
                 || !valid_dimension_for_subject(&candidate.subject_ref, candidate.dimension)
             {
@@ -514,6 +517,7 @@ fn validate_shape(candidate: &Candidate, context: &ProposalContext) -> Result<()
                 || !has_body
                 || candidate.dimension.is_none()
                 || candidate.inferred.is_none()
+                || invalid_inferred_preference
                 || (is_character && candidate.attitude.is_none())
                 || !valid_dimension_for_subject(&candidate.subject_ref, candidate.dimension)
             {

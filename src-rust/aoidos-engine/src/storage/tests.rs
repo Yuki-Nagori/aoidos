@@ -7,7 +7,7 @@ use aoidos_memory::{
         EntryState, Expected, Plan, Policy, ProposalContext, Subject, Target, Version,
         new_id as new_memory_id, set_hash,
     },
-    repository::{BatchCompletion, BatchSnapshot, Span},
+    repository::{BatchSnapshot, Span},
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -58,6 +58,22 @@ fn memory_batch_diagnostics_expose_only_registered_codes() {
         "policy.capacity_blocked"
     );
     assert_eq!(memory_batch_diagnostic("source.invalid"), "source.invalid");
+    assert_eq!(
+        memory_batch_diagnostic("memory.candidate.review"),
+        "memory.candidate.review"
+    );
+    assert_eq!(
+        memory_batch_diagnostic("memory.candidate.shared_target"),
+        "memory.candidate.shared_target"
+    );
+    assert_eq!(
+        memory_batch_diagnostic("memory.candidate.duplicate_anchor"),
+        "memory.candidate.duplicate_anchor"
+    );
+    assert_eq!(
+        memory_batch_diagnostic("memory.operation.rejected"),
+        "memory.operation.rejected"
+    );
     assert_eq!(
         memory_batch_diagnostic("provider.internal-secret"),
         "memory.unknown"
@@ -248,6 +264,38 @@ fn memory_collection_registers_stable_utf8_units_without_exposing_source_text() 
         .collect_memory_materials(&page.run_id, None)
         .unwrap();
     assert_eq!(repeated.eligible_count, 2);
+    let snapshot = storage
+        .prepare_collectible_memory_batch(&run.run_id)
+        .unwrap();
+    assert!(!snapshot.spans.is_empty());
+    assert!(snapshot.spans.len() <= 16);
+    let batch_id = snapshot.batch_id.clone();
+    storage.freeze_memory_batch(&catalog, snapshot).unwrap();
+    assert_eq!(
+        storage
+            .memory_batch_status(&run.run_id, &batch_id)
+            .unwrap()
+            .state,
+        aoidos_memory::repository::BatchState::Queued,
+        "准备只冻结批次；发送仍须由显式命令完成"
+    );
+    assert_eq!(
+        storage
+            .prepare_collectible_memory_batch(&run.run_id)
+            .unwrap_err()
+            .code,
+        "app.bad-request",
+        "未终结批次必须先恢复，不能再冻结第二批"
+    );
+    let recovered = storage
+        .active_memory_batch_status(&run.run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.batch_id, batch_id);
+    assert_eq!(
+        recovered.state,
+        aoidos_memory::repository::BatchState::Queued
+    );
     storage.close().unwrap();
 }
 
@@ -410,13 +458,13 @@ fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
         inferred: Some(false),
         reason: "与既有偏好一致".into(),
     };
-    aoidos_memory::model::Proposal {
+    let proposal = aoidos_memory::model::Proposal {
         version: 1,
         candidates: vec![candidate],
         cycle_marks: vec![],
-    }
-    .validate(&context)
-    .unwrap();
+    };
+    proposal.validate(&context).unwrap();
+    let response = aoidos_json::canonical_string(&proposal).unwrap();
 
     let turn_id = new_memory_id();
     let request_id = new_memory_id();
@@ -429,7 +477,7 @@ fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
                 &batch_id,
                 &turn_id,
                 &request_id,
-                br#"{"version":1,"candidates":[]}"#,
+                response.as_bytes(),
             )?;
 
             let entry = repository.entry(connection, &run.run_id, &entry_id)?;
@@ -465,18 +513,12 @@ fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
         })
         .unwrap();
 
-    let completion = BatchCompletion {
-        version: 1,
-        outcomes: vec![],
-        cycle_marks: vec![],
-    };
     assert!(
         crate::record::memory::processing::complete_received_batch(
             &storage,
             &session_id,
             &catalog,
             &batch_id,
-            &completion,
         )
         .unwrap()
     );
@@ -486,12 +528,194 @@ fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
             &session_id,
             &catalog,
             &batch_id,
-            &completion,
         )
         .unwrap()
     );
+    storage
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            let receipt = repository.batch_receipt(connection, &batch_id)?;
+            let completion: aoidos_memory::repository::BatchCompletion = aoidos_json::decode_bytes(
+                receipt
+                    .completion
+                    .as_deref()
+                    .ok_or(aoidos_memory::error::Error::Corrupt)?,
+                aoidos_memory::model::MAX_PLAN_BYTES,
+            )
+            .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+            assert_eq!(completion.outcomes.len(), 1);
+            assert_eq!(completion.outcomes[0].candidate_id, "update-1");
+            assert_eq!(
+                completion.outcomes[0].outcome,
+                aoidos_memory::repository::CandidateOutcome::Rejected
+            );
+            Ok(())
+        })
+        .unwrap();
 
     storage.close().unwrap();
+}
+
+#[test]
+fn received_memory_candidate_is_applied_once_from_the_frozen_proposal() {
+    let root = std::env::temp_dir().join(format!(
+        "aoidos-memory-candidate-apply-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    let catalog = scene_catalog();
+    let run = storage
+        .initialize_memory_run(&session_id, &catalog)
+        .unwrap();
+    let session = storage.records.get(&session_id).unwrap();
+    let record_seq = session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我喜欢钟声。".into(),
+            mode: Some(crate::record::format::InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let batch_id = new_memory_id();
+    let snapshot = storage
+        .with_memory_context(
+            &session_id,
+            &catalog,
+            |repository, connection, port, _, _| {
+                let source = port.reference(&run.run_id, record_seq)?;
+                let material_id = repository.register_material(connection, port, &source, 0)?;
+                let boundary = port.boundary()?;
+                Ok(BatchSnapshot {
+                    logical_clock: repository.clock(connection, port, &run.run_id)?,
+                    version: 1,
+                    batch_id: batch_id.clone(),
+                    run_id: run.run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    spans: vec![Span {
+                        source_id: "s1".into(),
+                        material_id,
+                        source,
+                        text: "我喜欢钟声。".into(),
+                        context: false,
+                        continuation: false,
+                    }],
+                    input: serde_json::json!({}),
+                })
+            },
+        )
+        .unwrap();
+    storage.freeze_memory_batch(&catalog, snapshot).unwrap();
+    let frozen = storage
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            repository
+                .batch(connection, &batch_id)
+                .map(|(snapshot, _)| snapshot)
+        })
+        .unwrap();
+    let context: ProposalContext =
+        aoidos_json::from_value(frozen.input["proposalContext"].clone()).unwrap();
+    let candidate = aoidos_memory::model::Candidate {
+        candidate_id: "new-pref".into(),
+        classification: aoidos_memory::model::Classification::New,
+        source_ids: vec!["s1".into()],
+        subject_ref: aoidos_memory::model::SubjectRef::PlayerPreference,
+        entity_ids: vec![],
+        evidence_ids: vec![],
+        target_ref: None,
+        dimension: Some(Dimension::PlayerPreference),
+        summary: Some("玩家明确表示喜欢钟声".into()),
+        attitude: None,
+        attitude_evidence_ids: vec![],
+        inferred: Some(false),
+        reason: "玩家明确表达".into(),
+    };
+    let not_worthy = aoidos_memory::model::Candidate {
+        candidate_id: "skip-1".into(),
+        classification: aoidos_memory::model::Classification::NotWorthy,
+        source_ids: vec!["s1".into()],
+        dimension: None,
+        summary: None,
+        inferred: None,
+        ..candidate.clone()
+    };
+    let proposal = aoidos_memory::model::Proposal {
+        version: 1,
+        candidates: vec![candidate, not_worthy],
+        cycle_marks: vec![],
+    };
+    proposal.validate(&context).unwrap();
+    let response = aoidos_json::canonical_string(&proposal).unwrap();
+    let turn_id = new_memory_id();
+    let request_id = new_memory_id();
+    storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            repository.dispatch_batch(connection, port, &batch_id, &turn_id, &request_id)?;
+            repository.receive_batch(
+                connection,
+                &batch_id,
+                &turn_id,
+                &request_id,
+                response.as_bytes(),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    assert!(
+        crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &batch_id,
+        )
+        .unwrap()
+    );
+    assert!(
+        !crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &batch_id,
+        )
+        .unwrap()
+    );
+    assert!(
+        storage
+            .active_memory_batch_status(&run.run_id)
+            .unwrap()
+            .is_none()
+    );
+
+    let status = storage.memory_batch_status(&run.run_id, &batch_id).unwrap();
+    let outcomes = status.completion.unwrap().outcomes;
+    assert_eq!(outcomes.len(), 2);
+    assert_eq!(outcomes[0].candidate_id, "new-pref");
+    assert_eq!(
+        outcomes[0].outcome,
+        aoidos_memory::repository::CandidateOutcome::Applied
+    );
+    assert_eq!(outcomes[1].candidate_id, "skip-1");
+    assert_eq!(
+        outcomes[1].outcome,
+        aoidos_memory::repository::CandidateOutcome::NoOp
+    );
+    let entries = storage.memory_entries(&run.run_id, None, 10).unwrap();
+    assert_eq!(entries.entries.len(), 1);
+
+    storage.close().unwrap();
+    drop(storage);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -665,18 +889,12 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
             Ok(())
         })
         .unwrap();
-    let completion = BatchCompletion {
-        version: 1,
-        outcomes: vec![],
-        cycle_marks: vec![],
-    };
     assert!(
         crate::record::memory::processing::complete_received_batch(
             &storage,
             &session_id,
             &catalog,
             &batch_id,
-            &completion,
         )
         .unwrap()
     );
@@ -686,7 +904,6 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
             &session_id,
             &catalog,
             &batch_id,
-            &completion,
         )
         .unwrap()
     );

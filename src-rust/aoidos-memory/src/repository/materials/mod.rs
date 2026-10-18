@@ -538,6 +538,24 @@ impl Repository {
         Ok((snapshot, decode_enum(&state)?))
     }
 
+    /// 返回本周目最新的未终结批次身份，供应用重开后恢复显式处理状态。
+    /// # Errors
+    /// 周目身份非法或索引中的批次快照损坏时拒绝返回。
+    pub fn latest_pending_batch(&self, conn: &Connection, run_id: &str) -> Result<Option<String>> {
+        if !valid_id(run_id) {
+            return Err(reject());
+        }
+        conn.query_row(
+            "SELECT batch_id FROM memory_batches
+             WHERE run_id=?1 AND status IN ('queued','dispatched','received','unknown')
+             ORDER BY rowid DESC LIMIT 1",
+            [run_id],
+            read_string,
+        )
+        .optional()
+        .map_err(sql)
+    }
+
     /// 在任何网络发送前登记唯一 turn / 计费请求身份。仅首次返回 `true`，调用方才可发送。
     /// 重复调用只允许恢复原身份，并返回 `false`，防止命令重放造成二次收费。
     /// # Errors
@@ -1287,6 +1305,7 @@ impl Repository {
                     let (_, state) = self.operation(conn, &operation_id)?;
                     match (state, outcome.outcome) {
                         (OperationState::Applied, CandidateOutcome::Applied)
+                        | (OperationState::Applied, CandidateOutcome::NoOp)
                         | (OperationState::Rejected, CandidateOutcome::Rejected) => {}
                         (_, CandidateOutcome::Deferred) if batch_completed => {}
                         (OperationState::Prepared | OperationState::Ready, _) => {

@@ -189,6 +189,10 @@ export interface MemoryBatchStatus {
   diagnosticCode: string | null;
 }
 
+export interface PreparedMemoryBatch {
+  batchId: string;
+}
+
 /** 读取已确认的应用级默认参数。 */
 export function getMemoryAppConfig(): Promise<MemoryAppConfig> {
   return invoke("memory_get_app_config");
@@ -273,4 +277,24 @@ export function collectMemoryMaterials(
 /** 主动恢复持久批次结果，不会重发供应商请求。 */
 export function getMemoryBatchStatus(runId: string, batchId: string): Promise<MemoryBatchStatus> {
   return invoke("memory_get_batch_status", { runId, batchId });
+}
+
+/** 恢复最近的 queued / dispatched / received / unknown 批次，无后台轮询。 */
+export function getActiveMemoryBatch(runId: string): Promise<MemoryBatchStatus | null> {
+  return invoke("memory_get_active_batch", { runId });
+}
+
+/** 冻结本地素材并创建待发送批次；不会调用模型。 */
+export function prepareMemoryBatch(runId: string): Promise<PreparedMemoryBatch> {
+  return invoke("memory_prepare_batch", { runId });
+}
+
+/** 仅在玩家明确点击后发送已冻结批次。 */
+export function sendMemoryBatch(runId: string, batchId: string): Promise<MemoryBatchStatus> {
+  return invoke("memory_send_batch", { runId, batchId });
+}
+
+/** 对已收到的响应重试本地提交；不会再次发送模型请求。 */
+export function completeMemoryBatch(runId: string, batchId: string): Promise<MemoryBatchStatus> {
+  return invoke("memory_complete_batch", { runId, batchId });
 }

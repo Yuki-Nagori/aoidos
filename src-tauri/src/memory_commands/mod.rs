@@ -8,6 +8,7 @@ use aoidos_engine::storage::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -22,6 +23,25 @@ struct MemoryPageArgs<T> {
 struct AnswerQuestionArgs {
     run_id: String,
     resolution: QuestionResolutionDto,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunIdArgs {
+    run_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BatchArgs {
+    run_id: String,
+    batch_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMemoryBatch {
+    pub batch_id: String,
 }
 
 /// Tauri 边界使用 camelCase；不改变仓储持久化的既有枚举字段名。
@@ -414,6 +434,33 @@ pub async fn memory_get_batch_status(
     memory_job(move || storage.memory_batch_status(&run_id, &batch_id)).await
 }
 
+/// 恢复周目中最近的未终结批次，允许窗口重载后查看结果并显式继续本地提交。
+/// # Errors
+/// 当前活动会话与记忆周目不匹配或持久状态损坏时拒绝返回。
+#[tauri::command]
+pub async fn memory_get_active_batch(
+    state: tauri::State<'_, StorageService>,
+    product: tauri::State<'_, aoidos_engine::game::product::Product>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Option<aoidos_engine::storage::MemoryBatchStatus>, CmdError> {
+    let RunIdArgs { run_id } = decode(&request)?;
+    state.ready()?;
+    let (active_session, _) = product.active_profile().map_err(CmdError::from)?;
+    let storage = state.storage.clone();
+    let status = memory_job(move || {
+        let (run, _) = storage.memory_catalog_for_run(&run_id)?;
+        if run.session_id != active_session {
+            return Err(aoidos_engine::fault::Fault::new(
+                "app.not-found",
+                "记忆周目不存在",
+            ));
+        }
+        storage.active_memory_batch_status(&run_id)
+    })
+    .await?;
+    Ok(status)
+}
+
 /// 本地扫描并登记当前因果分支的有效素材；此命令不冻结批次、不访问模型。
 /// # Errors
 /// 周目游标过期、记录待恢复或素材 / SQLite 校验失败时返回稳定错误。
@@ -426,6 +473,159 @@ pub async fn memory_collect_materials(
     state.ready()?;
     let storage = state.storage.clone();
     memory_job(move || storage.collect_memory_materials(&run_id, cursor)).await
+}
+
+/// 准备一个有界提案批次；这里只冻结来源，不访问模型或占用费用。
+/// 由玩家再次明确选择“发送”后才会调用供应商。
+/// # Errors
+/// 当前会话 / 周目不匹配、没有可处理素材或冻结核验失败时拒绝。
+#[tauri::command]
+pub async fn memory_prepare_batch(
+    state: tauri::State<'_, StorageService>,
+    product: tauri::State<'_, aoidos_engine::game::product::Product>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<PreparedMemoryBatch, CmdError> {
+    let RunIdArgs { run_id } = decode(&request)?;
+    state.ready()?;
+    let (session_id, _) = product.active_profile().map_err(CmdError::from)?;
+    let storage = state.storage.clone();
+    memory_job(move || {
+        let (run, catalog) = storage.memory_catalog_for_run(&run_id)?;
+        if run.session_id != session_id {
+            return Err(aoidos_engine::fault::Fault::new(
+                "app.not-found",
+                "记忆周目不存在",
+            ));
+        }
+        let snapshot = storage.prepare_collectible_memory_batch(&run_id)?;
+        let batch_id = snapshot.batch_id.clone();
+        storage.freeze_memory_batch(&catalog, snapshot)?;
+        Ok(PreparedMemoryBatch { batch_id })
+    })
+    .await
+}
+
+/// 只发送指定的 queued 批次，并在本地提交返回的候选；不自动重试不确定请求。
+/// 收到响应但本地完成失败时，批次保持 received，可显式恢复完成而不再调用模型。
+/// # Errors
+/// 活动 profile / 周目不匹配、批次非 queued、共享 lease 忙或请求不能安全接纳时拒绝。
+#[tauri::command]
+pub async fn memory_send_batch(
+    state: tauri::State<'_, StorageService>,
+    product: tauri::State<'_, aoidos_engine::game::product::Product>,
+    turns: tauri::State<'_, crate::turn_commands::TurnService>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::storage::MemoryBatchStatus, CmdError> {
+    let BatchArgs { run_id, batch_id } = decode(&request)?;
+    state.ready()?;
+    let (active_session, profile_id) = product.active_profile().map_err(CmdError::from)?;
+    let storage = state.storage.clone();
+    let status_storage = storage.clone();
+    let (run, catalog, snapshot) = {
+        let storage = storage.clone();
+        let run_id = run_id.clone();
+        let batch_id = batch_id.clone();
+        aoidos_engine::blocking::run(move || storage.queued_memory_batch(&run_id, &batch_id))
+            .await
+            .map_err(CmdError::from)?
+    };
+    if run.session_id != active_session {
+        return Err(CmdError::new("app.not-found", "记忆批次不存在", None));
+    }
+
+    let factory = product.factory.clone();
+    let profile_for_request = profile_id.clone();
+    let request_run_id = run_id.clone();
+    let prepared = aoidos_engine::blocking::run(move || {
+        factory.prepare_private_for_run(&profile_for_request, &request_run_id, |mode| {
+            let prompt =
+                aoidos_engine::record::memory::prompt::build_memory_prompt(&snapshot, mode)
+                    .map_err(|error| {
+                        aoidos_engine::fault::Fault::new(error.code(), "记忆提案输入无效")
+                    })?;
+            Ok((prompt.input, prompt.guard))
+        })
+    })
+    .await
+    .map_err(CmdError::from)?;
+
+    let batch_catalog = Arc::new(catalog);
+    let result = aoidos_engine::record::memory::processing::process_authorized_batch(
+        &turns.coordinator,
+        storage.clone(),
+        run.session_id,
+        batch_catalog.clone(),
+        batch_id.clone(),
+        prepared,
+        || {
+            let (current_session, current_profile) = product.active_profile()?;
+            if current_session == active_session && current_profile == profile_id {
+                Ok(())
+            } else {
+                Err(aoidos_engine::fault::Fault::new(
+                    "app.bad-request",
+                    "当前会话或模型配置已变化",
+                ))
+            }
+        },
+    )
+    .await
+    .map_err(CmdError::from)?;
+    if result.outcome == aoidos_engine::ports::Outcome::Completed {
+        let complete_storage = storage.clone();
+        let complete_session = active_session;
+        let complete_batch = batch_id.clone();
+        aoidos_engine::blocking::run(move || {
+            aoidos_engine::record::memory::processing::complete_received_batch(
+                &complete_storage,
+                &complete_session,
+                &batch_catalog,
+                &complete_batch,
+            )
+        })
+        .await
+        .map_err(CmdError::from)?;
+    }
+    memory_job(move || status_storage.memory_batch_status(&run_id, &batch_id)).await
+}
+
+/// 对 received 回执重试本地候选提交；不会重新发送供应商请求。
+/// # Errors
+/// 周目不匹配、当前活动会话不匹配或批次仍未收到完整响应时拒绝。
+#[tauri::command]
+pub async fn memory_complete_batch(
+    state: tauri::State<'_, StorageService>,
+    product: tauri::State<'_, aoidos_engine::game::product::Product>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::storage::MemoryBatchStatus, CmdError> {
+    let BatchArgs { run_id, batch_id } = decode(&request)?;
+    state.ready()?;
+    let (active_session, _) = product.active_profile().map_err(CmdError::from)?;
+    let storage = state.storage.clone();
+    let (run, catalog) = {
+        let storage = storage.clone();
+        let run_id = run_id.clone();
+        aoidos_engine::blocking::run(move || storage.memory_catalog_for_run(&run_id))
+            .await
+            .map_err(CmdError::from)?
+    };
+    if run.session_id != active_session {
+        return Err(CmdError::new("app.not-found", "记忆批次不存在", None));
+    }
+    let complete_storage = storage.clone();
+    let complete_session = active_session;
+    let complete_batch = batch_id.clone();
+    aoidos_engine::blocking::run(move || {
+        aoidos_engine::record::memory::processing::complete_received_batch(
+            &complete_storage,
+            &complete_session,
+            &catalog,
+            &complete_batch,
+        )
+    })
+    .await
+    .map_err(CmdError::from)?;
+    memory_job(move || storage.memory_batch_status(&run_id, &batch_id)).await
 }
 
 async fn memory_job<T: Send + 'static>(

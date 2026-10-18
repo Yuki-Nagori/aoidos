@@ -463,7 +463,7 @@ fn prompt_accepts_only_well_formed_targets_for_frozen_subjects() {
 }
 
 #[test]
-fn documented_player_preference_shape_is_accepted_by_the_real_proposal_parser() {
+fn player_preference_requires_explicit_expression_and_rejects_inference() {
     let mut context = proposal_context();
     context
         .subjects
@@ -471,6 +471,9 @@ fn documented_player_preference_shape_is_accepted_by_the_real_proposal_parser() 
     let response = r#"{"version":1,"candidates":[{"candidateId":"c1","classification":"new","sourceIds":["s1"],"subjectRef":{"kind":"playerPreference"},"entityIds":[],"dimension":"playerPreference","summary":"希望避免恐怖描写。","inferred":false,"reason":"玩家明确表达了偏好。"}]}"#;
     let proposal = aoidos_memory::model::Proposal::parse(response.as_bytes(), &context);
     assert!(proposal.is_ok());
+
+    let inferred = response.replace("\"inferred\":false", "\"inferred\":true");
+    assert!(aoidos_memory::model::Proposal::parse(inferred.as_bytes(), &context).is_err());
 }
 
 #[test]

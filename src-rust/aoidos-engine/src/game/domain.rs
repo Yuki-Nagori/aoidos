@@ -13,7 +13,10 @@ use crate::{
     },
     request::PreparedGeneration,
 };
-use aoidos_llm::{guard::GuardSpec, provider::ProviderInput};
+use aoidos_llm::{
+    guard::GuardSpec,
+    provider::{ProviderInput, RequestMode},
+};
 use std::sync::Arc;
 
 /// 每次接纳冻结一次，后续子调用只使用该份请求构造器；不再次读取用户设置。
@@ -26,6 +29,12 @@ pub struct FrozenRound {
 /// 供应商和凭据在接纳前解析；内部提议 / 公开正文复用同一预算端口。
 pub trait Generation: Send + Sync {
     fn shape(&self) -> Shape;
+    fn request_mode(&self) -> RequestMode {
+        match self.shape() {
+            Shape::Completion => RequestMode::Completion,
+            Shape::Chat | Shape::ChatPrefix => RequestMode::Chat,
+        }
+    }
     fn projection_budget(&self) -> Budget;
     /// # Errors
     /// 能力、Token 估算 / 预算或请求构造失败返回脱敏 Fault，不做额外重试。

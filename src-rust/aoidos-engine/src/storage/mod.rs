@@ -351,6 +351,57 @@ impl Storage {
         .map_err(memory_config_error)
     }
 
+    /// 查找周目最新的未终结批次，供窗口重开后恢复现有处理状态。
+    /// # Errors
+    /// 周目、批次或持久回执无法通过仓储完整性校验时拒绝返回。
+    pub fn active_memory_batch_status(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<MemoryBatchStatus>, Fault> {
+        let (run, catalog) = self.memory_catalog_for_run(run_id)?;
+        let batch_id = self
+            .with_memory(&run.session_id, &catalog, |repository, connection, _| {
+                repository.latest_pending_batch(connection, run_id)
+            })
+            .map_err(memory_config_error)?;
+        batch_id
+            .map(|batch_id| self.memory_batch_status(run_id, &batch_id))
+            .transpose()
+    }
+
+    /// 读取仍处于 queued 的冻结提案，供显式发送入口构造 Provider 输入。
+    /// 原始响应和正文只保留在本地，不由此状态视图导出。
+    /// # Errors
+    /// runId / batchId 不匹配、状态已变化或快照损坏时拒绝返回。
+    pub fn queued_memory_batch(
+        &self,
+        run_id: &str,
+        batch_id: &str,
+    ) -> Result<
+        (
+            aoidos_memory::model::Run,
+            crate::game::catalog::SceneCatalog,
+            aoidos_memory::repository::BatchSnapshot,
+        ),
+        Fault,
+    > {
+        let (run, catalog) = self.memory_catalog_for_run(run_id)?;
+        let snapshot = self
+            .with_memory(&run.session_id, &catalog, |repository, connection, _| {
+                let (snapshot, state) = repository.batch(connection, batch_id)?;
+                if snapshot.run_id != run_id
+                    || state != aoidos_memory::repository::BatchState::Queued
+                {
+                    return Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::StaleVersion,
+                    ));
+                }
+                Ok(snapshot)
+            })
+            .map_err(memory_config_error)?;
+        Ok((run, catalog, snapshot))
+    }
+
     /// 按固定历史上界扫描当前分支，将有效原文登记为稳定素材；不冻结批次或发送请求。
     /// 每页最多扫描 `MAX_SCAN` 条 / `MAX_SCAN_BYTES`，后续页游标绑定 run 和 historyRevision。
     /// # Errors
@@ -442,34 +493,118 @@ impl Storage {
                         aoidos_memory::error::Reason::StaleVersion,
                     ));
                 }
-                let context = crate::record::memory::build_proposal_context(
-                    crate::record::memory::ProposalContextInput {
-                        connection,
-                        repository,
-                        catalog,
-                        run: &current_run,
-                        session,
-                        directory,
-                        batch: &snapshot,
-                        source_port: port,
-                    },
-                )?;
-                snapshot.input = aoidos_json::to_value(serde_json::json!({
-                    "proposalContext": context,
-                }))
-                .map_err(|_| {
-                    aoidos_memory::error::Error::Rejected(
-                        aoidos_memory::error::Reason::InvalidSchema,
-                    )
-                })?;
-                // 在占用素材前验证最终转义结果和两种 Provider 输入都能通过大小门限。
-                for mode in [
-                    aoidos_llm::provider::RequestMode::Completion,
-                    aoidos_llm::provider::RequestMode::Chat,
-                ] {
-                    crate::record::memory::prompt::build_memory_prompt(&snapshot, mode)?;
+                MemoryProposalContext {
+                    connection,
+                    repository,
+                    source_port: port,
+                    session,
+                    directory,
+                    catalog,
+                    run: &current_run,
                 }
+                .attach(&mut snapshot)?;
                 repository.freeze_batch(connection, port, &snapshot)
+            },
+        )
+        .map_err(memory_config_error)
+    }
+
+    /// 从已登记的最早可处理素材组装一批稳定快照；此步骤只准备数据，不占用素材或发送请求。
+    /// 每批最多选 16 个素材单元，后续显式发送仍须调用 `freeze_memory_batch` 重新核验并占用。
+    /// # Errors
+    /// 没有可处理素材、记录来源无效或上下文 / Prompt 超限时拒绝构造快照。
+    pub fn prepare_collectible_memory_batch(
+        &self,
+        run_id: &str,
+    ) -> Result<aoidos_memory::repository::BatchSnapshot, Fault> {
+        use aoidos_memory::model::{CausalPort, new_id};
+
+        const MAX_BATCH_MATERIALS: usize = 16;
+        const MATERIAL_PAGE: usize = aoidos_memory::repository::MAX_COLLECTIBLE_MATERIAL_SCAN;
+
+        let (run, catalog) = self.memory_catalog_for_run(run_id)?;
+        self.with_memory_context(
+            &run.session_id,
+            &catalog,
+            |repository, connection, port, session, directory| {
+                if repository
+                    .latest_pending_batch(connection, run_id)?
+                    .is_some()
+                {
+                    return Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::StaleVersion,
+                    ));
+                }
+                let current_run = repository.run_for_session(connection, &run.session_id)?;
+                if current_run.run_id != run_id {
+                    return Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::StaleVersion,
+                    ));
+                }
+                let mut cursor = None;
+                let mut spans = Vec::with_capacity(MAX_BATCH_MATERIALS);
+                for _ in 0..16 {
+                    let page = repository.collectible_materials_page(
+                        connection,
+                        port,
+                        run_id,
+                        cursor,
+                        MATERIAL_PAGE,
+                    )?;
+                    for material in page.materials {
+                        let Some(text) = port.source_text(&material.source)? else {
+                            return Err(aoidos_memory::error::Error::Rejected(
+                                aoidos_memory::error::Reason::InvalidSource,
+                            ));
+                        };
+                        let number = spans.len() + 1;
+                        spans.push(aoidos_memory::repository::Span {
+                            source_id: format!("s{number}"),
+                            material_id: material.material_id,
+                            source: material.source,
+                            text,
+                            context: false,
+                            continuation: material.ordinal > 0,
+                        });
+                        if spans.len() == MAX_BATCH_MATERIALS {
+                            break;
+                        }
+                    }
+                    if spans.len() == MAX_BATCH_MATERIALS {
+                        break;
+                    }
+                    cursor = page.next;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+                if spans.is_empty() {
+                    return Err(aoidos_memory::error::Error::NotFound);
+                }
+                let boundary = port.boundary()?;
+                let mut snapshot = aoidos_memory::repository::BatchSnapshot {
+                    logical_clock: repository.clock(connection, port, run_id)?,
+                    version: 1,
+                    batch_id: new_id(),
+                    run_id: run_id.into(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: current_run.policy_hash,
+                    spans,
+                    input: serde_json::Value::Object(serde_json::Map::new()),
+                };
+                MemoryProposalContext {
+                    connection,
+                    repository,
+                    source_port: port,
+                    session,
+                    directory,
+                    catalog: &catalog,
+                    run: &current_run,
+                }
+                .attach(&mut snapshot)?;
+                Ok(snapshot)
             },
         )
         .map_err(memory_config_error)
@@ -604,7 +739,7 @@ impl Storage {
         .map_err(memory_config_error)
     }
 
-    fn memory_catalog_for_run(
+    pub fn memory_catalog_for_run(
         &self,
         run_id: &str,
     ) -> Result<
@@ -732,6 +867,50 @@ impl Storage {
     }
 }
 
+struct MemoryProposalContext<'a> {
+    connection: &'a rusqlite::Connection,
+    repository: &'a aoidos_memory::repository::Repository,
+    source_port: &'a crate::record::memory::SourcePort<'a>,
+    session: &'a crate::record::session::Session,
+    directory: &'a crate::game::catalog::EntityDirectory,
+    catalog: &'a crate::game::catalog::SceneCatalog,
+    run: &'a aoidos_memory::model::Run,
+}
+
+impl MemoryProposalContext<'_> {
+    fn attach(
+        &self,
+        snapshot: &mut aoidos_memory::repository::BatchSnapshot,
+    ) -> aoidos_memory::error::Result<()> {
+        let context = crate::record::memory::build_proposal_context(
+            crate::record::memory::ProposalContextInput {
+                connection: self.connection,
+                repository: self.repository,
+                catalog: self.catalog,
+                run: self.run,
+                session: self.session,
+                directory: self.directory,
+                batch: snapshot,
+                source_port: self.source_port,
+            },
+        )?;
+        snapshot.input = aoidos_json::to_value(serde_json::json!({
+            "proposalContext": context,
+        }))
+        .map_err(|_| {
+            aoidos_memory::error::Error::Rejected(aoidos_memory::error::Reason::InvalidSchema)
+        })?;
+        // 冻结素材前验证最终转义结果可用于两种 Provider 输入，避免 queued 批次无法发送。
+        for mode in [
+            aoidos_llm::provider::RequestMode::Completion,
+            aoidos_llm::provider::RequestMode::Chat,
+        ] {
+            crate::record::memory::prompt::build_memory_prompt(snapshot, mode)?;
+        }
+        Ok(())
+    }
+}
+
 /// 可安全跨 IPC 返回的批次视图；不包含私有 prompt 或供应商原始响应。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -751,6 +930,10 @@ fn memory_batch_diagnostic(code: &str) -> &'static str {
         "response.version" => "response.version",
         "policy.capacity_blocked" => "policy.capacity_blocked",
         "source.invalid" => "source.invalid",
+        "memory.candidate.review" => "memory.candidate.review",
+        "memory.candidate.shared_target" => "memory.candidate.shared_target",
+        "memory.candidate.duplicate_anchor" => "memory.candidate.duplicate_anchor",
+        "memory.operation.rejected" => "memory.operation.rejected",
         "memory.receipt-failed" => "memory.receipt-failed",
         _ => "memory.unknown",
     }

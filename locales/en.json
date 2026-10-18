@@ -99,6 +99,33 @@
     "localOnly": "This step stays local and does not send a model request.",
     "collectMore": "More history remains; continue scanning to include it.",
     "collectError": "Memory sources could not be collected. Refresh the session and retry.",
+    "prepareBatch": "Prepare memory proposal",
+    "sendBatch": "Send proposal to model",
+    "completeBatch": "Apply received proposal",
+    "refreshBatch": "Refresh proposal status",
+    "processing": "Preparing or applying…",
+    "batchError": "The proposal could not be prepared or updated. Refresh its status before retrying.",
+    "batchStates": {
+      "queued": "Prepared locally; not sent",
+      "dispatched": "Request sent; awaiting result",
+      "received": "Result received; local application can be retried",
+      "completed": "Proposal applied",
+      "rejected": "Proposal rejected",
+      "unknown": "Request outcome is unknown; do not resend automatically"
+    },
+    "outcomes": {
+      "applied": "Applied",
+      "noOp": "No change",
+      "rejected": "Rejected",
+      "pending": "Pending",
+      "deferred": "Deferred for review"
+    },
+    "reasons": {
+      "review": "This classification needs a later review.",
+      "sharedTarget": "Conflicting candidates were deferred together.",
+      "duplicateAnchor": "This source already anchors a memory for the same subject and dimension; review the existing entry or associate this as an update.",
+      "operationRejected": "The target changed or the operation could not be safely applied."
+    },
     "noneQuestions": "No pending questions.",
     "noneEntries": "No committed memories.",
     "classifications": {

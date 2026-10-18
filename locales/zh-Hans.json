@@ -99,6 +99,33 @@
     "localOnly": "此步骤仅在本地执行，不会发送模型请求。",
     "collectMore": "仍有后续历史；继续扫描后才能全部纳入。",
     "collectError": "记忆素材收集失败，请刷新会话后重试。",
+    "prepareBatch": "准备记忆提案",
+    "sendBatch": "发送提案给模型",
+    "completeBatch": "应用已收到的提案",
+    "refreshBatch": "刷新提案状态",
+    "processing": "正在准备或应用…",
+    "batchError": "提案准备或更新失败。重试前请先刷新状态。",
+    "batchStates": {
+      "queued": "已在本地准备，尚未发送",
+      "dispatched": "请求已发送，正在等待结果",
+      "received": "已收到结果，可重试本地应用",
+      "completed": "提案已应用",
+      "rejected": "提案已拒绝",
+      "unknown": "请求结果未知；不会自动重发"
+    },
+    "outcomes": {
+      "applied": "已应用",
+      "noOp": "未改变内容",
+      "rejected": "已拒绝",
+      "pending": "待处理",
+      "deferred": "延后复核"
+    },
+    "reasons": {
+      "review": "此分类需要后续复核。",
+      "sharedTarget": "存在冲突的候选项，已整体延后。",
+      "duplicateAnchor": "同一来源已锚定相同主体与维度的记忆；请复核既有条目，或在新提案中将其关联为更新。",
+      "operationRejected": "目标已变化，或操作无法安全应用。"
+    },
     "noneQuestions": "当前没有待确认问题。",
     "noneEntries": "当前没有已提交记忆。",
     "classifications": {

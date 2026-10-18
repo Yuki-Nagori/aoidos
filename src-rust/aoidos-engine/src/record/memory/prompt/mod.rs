@@ -163,7 +163,8 @@ pub fn build_memory_prompt(snapshot: &BatchSnapshot, mode: RequestMode) -> Resul
         correction、notWorthy、uncertain。subjectRef 只能是 {\"kind\":\"playerPreference\"} 或\
         {\"kind\":\"character\",\"id\":\"输入中的 entityId\"}。dimension 只能是 story、\
         relationship、playerPreference、foreshadowing。角色只能用 story / relationship / foreshadowing，\
-        玩家偏好只能用 playerPreference；attitude 只能是 unexpressed、believed、\
+        玩家偏好只能用 playerPreference，且必须来自玩家明确表达，inferred 必须为 false；\
+        attitude 只能是 unexpressed、believed、\
         doubtful、denied。targetRef 结构为 {\"entryId\",\"expectedVersionId\",\
         \"expectedStateRevision\"}，每个值必须复制自输入。\n\
         每个候选只使用协议字段 candidateId、classification、sourceIds、subjectRef、entityIds、\

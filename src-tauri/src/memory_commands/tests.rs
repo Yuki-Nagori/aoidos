@@ -101,7 +101,11 @@ async fn memory_configuration_commands_preserve_versions_and_return_effective_va
             memory_list_entries,
             memory_get_entry,
             memory_get_batch_status,
-            memory_collect_materials
+            memory_get_active_batch,
+            memory_collect_materials,
+            memory_prepare_batch,
+            memory_send_batch,
+            memory_complete_batch
         ])
         .build(mock_context(noop_assets()))
         .unwrap();

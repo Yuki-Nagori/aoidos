@@ -4,8 +4,9 @@ use crate::{fault::Fault, request::PreparedGeneration, storage::Storage, turn::C
 use aoidos_llm::schedule::{AttemptIdentity, AttemptOutcome, BudgetDenial, BudgetPort};
 use aoidos_memory::{
     error::{Error, Reason},
+    model::OperationState,
     model::{CausalPort, Proposal, ProposalContext},
-    repository::{BatchCompletion, BatchState, CycleMarkCommit},
+    repository::{BatchState, CandidateOutcome, CandidateResult, CycleMarkCommit},
 };
 use std::sync::{Arc, Mutex};
 
@@ -39,12 +40,29 @@ impl BatchPersistence for SqliteBatchPersistence {
             return Err(Fault::bad_request());
         }
         self.storage
-            .with_memory(
+            .with_memory_context(
                 &self.session_id,
                 &self.catalog,
-                |repository, connection, port| {
+                |repository, connection, port, session, directory| {
                     let (_, state) = repository.batch(connection, &self.batch_id)?;
-                    if state != BatchState::Queued
+                    if state != BatchState::Queued {
+                        return Err(Error::Rejected(Reason::StaleVersion));
+                    }
+                    let (snapshot, _) = repository.batch(connection, &self.batch_id)?;
+                    let run = repository.run_for_session(connection, &self.session_id)?;
+                    let frozen = frozen_proposal_context(&snapshot)?;
+                    let current = super::build_proposal_context(super::ProposalContextInput {
+                        connection,
+                        repository,
+                        catalog: &self.catalog,
+                        run: &run,
+                        session,
+                        directory,
+                        batch: &snapshot,
+                        source_port: port,
+                    })?;
+                    if run.run_id != snapshot.run_id
+                        || !same_proposal_context(&current, &frozen)?
                         || !repository.dispatch_batch(
                             connection,
                             port,
@@ -190,7 +208,8 @@ impl BudgetPort for DispatchBudget {
 /// 在 coordinator 空闲时取得独立 lease，执行一个不可重试的记忆请求并保存原始响应。
 ///
 /// `request` 必须由可信引擎按冻结批次输入构造，并携带本局 027 `LedgerBudgetPort`；
-/// 调用方负责确认批次授权。此函数不构造候选操作、不读取设置，也没有自动触发器。
+/// 调用方负责确认批次授权；`validate_selection` 在取得共享 lease 后、任何预算预留或发送前执行，
+/// 用于确认会话和 profile 在等待 lease 期间没有切换。此函数不构造候选操作、不读取设置，也没有自动触发器。
 /// # Errors
 /// 游戏仍占用 lease、预算预留 / 批次登记失败或响应不能持久化时返回脱敏错误。
 pub async fn process_authorized_batch(
@@ -200,6 +219,7 @@ pub async fn process_authorized_batch(
     catalog: Arc<crate::game::catalog::SceneCatalog>,
     batch_id: String,
     request: PreparedGeneration,
+    validate_selection: impl FnOnce() -> Result<(), Fault> + Send,
 ) -> Result<crate::turn::PrivateResult, Fault> {
     let persistence: Arc<dyn BatchPersistence> = Arc::new(SqliteBatchPersistence {
         storage,
@@ -207,7 +227,7 @@ pub async fn process_authorized_batch(
         catalog,
         batch_id,
     });
-    execute_batch(coordinator, persistence, request).await
+    execute_batch_checked(coordinator, persistence, request, validate_selection).await
 }
 
 /// 从当前 queued 批次恢复完整提案上下文，并重建普通来源与刻痕授权。
@@ -254,19 +274,18 @@ pub fn prepare_memory_proposal_context(
         .map_err(memory_fault)
 }
 
-/// 按当前冻结授权校验已收回的提案，并将刻痕与普通候选摘要原子完成。
+/// 按当前冻结授权校验已收到的提案，提交普通候选操作并完成批次。
 ///
 /// 候选始终按批次冻结的目标版本解析；完成前重建其余授权上下文，避免本批已经提交的
 /// 目标变更使自己的完成回执失效。目标版本的并发冲突由候选操作 CAS 核验。
-/// 此函数不会重新发送请求，也不会重新计算普通候选的操作结果。含刻痕时由仓储在同一事务写入刻痕和完成回执。
+/// 此函数不会重新发送请求；普通操作按稳定计划幂等重放，刻痕与完成回执由仓储在同一事务写入。
 /// # Errors
-/// 批次尚未收到响应、提案不符合冻结授权或当前来源已失效时拒绝完成；相同完成重放返回 `false`。
+/// 批次尚未收到响应、提案不符合冻结授权或当前来源已失效时拒绝完成；待恢复操作会保留批次，已完成重放返回 `false`。
 pub fn complete_received_batch(
     storage: &Storage,
     session_id: &str,
     catalog: &crate::game::catalog::SceneCatalog,
     batch_id: &str,
-    completion: &BatchCompletion,
 ) -> Result<bool, Fault> {
     storage
         .with_memory_context(
@@ -319,8 +338,121 @@ pub fn complete_received_batch(
                     })
                     .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
 
+                let mut previous_versions = std::collections::BTreeMap::new();
+                for (entry_id, target) in &frozen.targets {
+                    let previous = repository.version(
+                        connection,
+                        port,
+                        &run.run_id,
+                        entry_id,
+                        &target.version_id,
+                    )?;
+                    if previous.subject != target.subject
+                        || previous.dimension != target.dimension
+                        || previous.summary != target.summary
+                        || previous.attitude != target.attitude
+                        || previous.inferred != target.inferred
+                    {
+                        return Err(Error::Rejected(Reason::StaleVersion));
+                    }
+                    previous_versions.insert(entry_id.clone(), previous);
+                }
+                for candidate in &proposal.candidates {
+                    if matches!(
+                        candidate.classification,
+                        aoidos_memory::model::Classification::Supplement
+                            | aoidos_memory::model::Classification::Correction
+                    ) && let Some(target) = &candidate.target_ref
+                        && !previous_versions.contains_key(&target.entry_id)
+                    {
+                        let previous = repository.version(
+                            connection,
+                            port,
+                            &run.run_id,
+                            &target.entry_id,
+                            &target.expected_version_id,
+                        )?;
+                        previous_versions.insert(target.entry_id.clone(), previous);
+                    }
+                }
+                let plans = super::candidate_operations::build_plans(
+                    &snapshot,
+                    &proposal,
+                    &frozen,
+                    &run,
+                    &previous_versions,
+                )?;
+                let mut outcomes = plans.immediate_results;
+                for group in plans.operations {
+                    // 独立组逐个提交会推进逻辑时钟；每次执行前读取当前值，
+                    // 避免同一批次的后续组沿用冻结时的旧时钟而被误拒绝。
+                    let mut plan = group.plan;
+                    plan.expected_logical_clock =
+                        repository.clock(connection, port, &run.run_id)?;
+                    let state = match repository.prepare(connection, port, &plan) {
+                        Ok(state) => state,
+                        Err(Error::Rejected(_)) => {
+                            outcomes.extend(plan.candidate_ids.iter().map(|candidate_id| {
+                                CandidateResult {
+                                    candidate_id: candidate_id.clone(),
+                                    outcome: CandidateOutcome::Rejected,
+                                    reason_code: Some("memory.operation.rejected".into()),
+                                }
+                            }));
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let state = if state == OperationState::Prepared {
+                        let state = repository.write_versions(connection, &plan.operation_id)?;
+                        if state == OperationState::Ready {
+                            match repository.apply(connection, port, &plan.operation_id) {
+                                Ok(state) => state,
+                                Err(Error::Rejected(_)) => {
+                                    repository.operation(connection, &plan.operation_id)?.1
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        } else {
+                            state
+                        }
+                    } else {
+                        state
+                    };
+                    match state {
+                        OperationState::Applied => {
+                            outcomes.extend(plan.candidate_ids.iter().map(|candidate_id| {
+                                CandidateResult {
+                                    candidate_id: candidate_id.clone(),
+                                    outcome: if group.no_op_candidates.contains(candidate_id) {
+                                        CandidateOutcome::NoOp
+                                    } else {
+                                        CandidateOutcome::Applied
+                                    },
+                                    reason_code: None,
+                                }
+                            }));
+                        }
+                        OperationState::Rejected => {
+                            outcomes.extend(plan.candidate_ids.iter().map(|candidate_id| {
+                                CandidateResult {
+                                    candidate_id: candidate_id.clone(),
+                                    outcome: CandidateOutcome::Rejected,
+                                    reason_code: Some("memory.operation.rejected".into()),
+                                }
+                            }));
+                        }
+                        OperationState::Prepared
+                        | OperationState::Ready
+                        | OperationState::Quarantined => {
+                            return Err(Error::Rejected(Reason::RecoveryRequired));
+                        }
+                    }
+                }
+                let completion = super::candidate_operations::completion(outcomes, Vec::new());
+
                 if cycle_marks.is_empty() {
-                    let bytes = aoidos_json::canonical_string(completion)
+                    let bytes = aoidos_json::canonical_string(&completion)
                         .map_err(|_| Error::Rejected(Reason::InvalidSchema))?
                         .into_bytes();
                     repository.complete_batch(connection, batch_id, &bytes)
@@ -329,7 +461,7 @@ pub fn complete_received_batch(
                         connection,
                         port,
                         batch_id,
-                        completion,
+                        &completion,
                         &cycle_marks,
                     )
                 }
@@ -366,19 +498,30 @@ fn same_proposal_authority(
 ) -> aoidos_memory::error::Result<bool> {
     let mut current = current.clone();
     let mut frozen = frozen.clone();
-    // targets 是候选更新所用的 CAS 基线；本批操作应用后它们自然会改变。
+    // targets 是候选更新使用的 CAS 基线；本批操作应用后这些目标会自然改变。
     current.targets.clear();
     frozen.targets.clear();
     same_proposal_context(&current, &frozen)
 }
 
+#[cfg(test)]
 async fn execute_batch(
     coordinator: &Coordinator,
     persistence: Arc<dyn BatchPersistence>,
-    mut request: PreparedGeneration,
+    request: PreparedGeneration,
 ) -> Result<crate::turn::PrivateResult, Fault> {
-    // Acquiring here makes active game rounds win the shared app-wide gate.
+    execute_batch_checked(coordinator, persistence, request, || Ok(())).await
+}
+
+async fn execute_batch_checked(
+    coordinator: &Coordinator,
+    persistence: Arc<dyn BatchPersistence>,
+    mut request: PreparedGeneration,
+    validate_selection: impl FnOnce() -> Result<(), Fault>,
+) -> Result<crate::turn::PrivateResult, Fault> {
+    // 先取得共享 lease，确保正在进行的游戏回合优先使用应用级门禁。
     let lease = coordinator.acquire()?;
+    validate_selection()?;
     let budget = Arc::new(DispatchBudget {
         inner: request.budget.clone(),
         persistence,
@@ -574,6 +717,41 @@ mod tests {
         assert_eq!(receipt.0, result.turn_id);
         assert_eq!(receipt.2, br#"{"version":1,"candidates":[]}"#);
         coordinator.check_available().unwrap();
+    }
+
+    #[tokio::test]
+    async fn selection_revalidation_runs_before_budget_reservation_or_transport() {
+        let events = Arc::new(crate::test_support::Events::default());
+        let coordinator = Coordinator::new(events, 16).unwrap();
+        let persistence = Arc::new(MemoryPort::default());
+        let budget = Arc::new(RecordingBudget {
+            calls: persistence.calls.clone(),
+            reserves: AtomicUsize::new(0),
+        });
+        let (mut request, sends) = generation(
+            vec![
+                Ok(aoidos_llm::provider::ProviderDelta::Text(
+                    r#"{"version":1,"candidates":[]}"#.into(),
+                )),
+                Ok(aoidos_llm::provider::ProviderDelta::Finish(
+                    aoidos_llm::provider::ProviderFinish::Stop,
+                )),
+            ],
+            false,
+        );
+        request.budget = budget.clone();
+
+        let error = execute_batch_checked(&coordinator, persistence.clone(), request, || {
+            Err(Fault::new("app.bad-request", "活动选择已变化"))
+        })
+        .await
+        .err()
+        .unwrap();
+
+        assert_eq!(error.code, "app.bad-request");
+        assert_eq!(budget.reserves.load(Ordering::SeqCst), 0);
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+        assert!(persistence.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

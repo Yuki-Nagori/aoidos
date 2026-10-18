@@ -180,6 +180,10 @@ fn validates_player_preferences_and_character_evidence_without_granting_extra_fi
     assert!(proposal(preference_candidate()).validate(&context).is_ok());
     assert!(proposal(character_candidate()).validate(&context).is_ok());
 
+    let mut inferred_preference = preference_candidate();
+    inferred_preference.inferred = Some(true);
+    assert!(proposal(inferred_preference).validate(&context).is_err());
+
     let mut update = character_candidate();
     update.classification = Classification::Supplement;
     update.target_ref = Some(target_ref(&context));

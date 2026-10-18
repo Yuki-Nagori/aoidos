@@ -125,6 +125,30 @@ impl ProfileFactory {
             run_id.map(str::to_owned),
         )
     }
+
+    /// 按已冻结周目 profile 准备一个受统一账本约束的私有请求。
+    /// 输入构造器接收同一份冻结 profile 的请求模式，不需要二次读取可能已变化的设置。
+    /// # Errors
+    /// profile、供应商、预算、模式或输入不合法时在发送前拒绝。
+    pub fn prepare_private_for_run(
+        &self,
+        profile_id: &str,
+        run_id: &str,
+        build_input: impl FnOnce(
+            aoidos_llm::provider::RequestMode,
+        ) -> Result<
+            (
+                aoidos_llm::provider::ProviderInput,
+                aoidos_llm::guard::GuardSpec,
+            ),
+            Fault,
+        >,
+    ) -> Result<crate::request::PreparedGeneration, Fault> {
+        let frozen = self.for_profile(profile_id, Some(run_id))?;
+        let mode = frozen.generation.request_mode();
+        let (input, guard) = build_input(mode)?;
+        frozen.generation.prepare(input, guard, false)
+    }
     fn select(&self, id: String) {
         *self
             .selected
@@ -221,6 +245,13 @@ impl Product {
             factory,
             opening: tokio::sync::Mutex::new(()),
         }
+    }
+    /// 返回磁盘登记的当前会话及 profile；记忆请求使用它来继承游戏实际选择的模型。
+    /// # Errors
+    /// 当前会话缺失或元数据损坏时拒绝，不接受调用方指定其他 profile。
+    pub fn active_profile(&self) -> Result<(String, String), Fault> {
+        let selection = read_selection(&self.root)?.ok_or_else(no_selection)?;
+        Ok((selection.session_id, selection.profile_id))
     }
     /// 明确新建或重开已选择周目；预检不发 HTTP，重开保持暂停并等待显式恢复。
     /// # Errors

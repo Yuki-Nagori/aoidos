@@ -47,10 +47,14 @@
 
 ## 验证计划与结果
 
-| 日期 | 检查                             | 预期         | 实际结果 |
-| ---- | -------------------------------- | ------------ | -------- |
-| —    | 本阶段完整单元 / 故障 / 集成验证 | 协议边界成立 | 未执行   |
-| —    | `bun run verify`                 | 全项通过     | 未执行   |
+| 日期       | 检查                                         | 预期             | 实际结果                                 |
+| ---------- | -------------------------------------------- | ---------------- | ---------------------------------------- |
+| 2026-10-18 | `cargo test -p aoidos-memory --lib`          | 仓储协议成立     | 273 项通过                               |
+| 2026-10-18 | `cargo test -p aoidos-engine --lib`          | 引擎流程成立     | 465 项通过                               |
+| 2026-10-18 | `cargo test -p aoidos --lib`                 | IPC / 壳边界成立 | 61 项通过                                |
+| 2026-10-18 | `bun run test`                               | Web 行为回归     | 43 个文件、402 项通过                    |
+| 2026-10-18 | typecheck / i18n / clippy / 格式 / Web build | 静态与打包通过   | 全部通过                                 |
+| 2026-10-18 | `bun run verify`                             | 全项通过         | 全项通过；Rust 覆盖率 97.16%（门槛 90%） |
 
 2026-10-17：cycle runtime 回归测试通过（7 项）；受影响 Rust 测试通过（aoidos-engine 434 项、Tauri 61 项），Vitest 通过（400 项）；格式、受影响 lint、Web 构建、i18n 与引擎 / Tauri 编译通过。独立 review 后修复提示领取的 session 锁重入、共享条件规则重复求值、同场景后续提示无法领取及锁前场景快照竞态；新增同条件多提示与锁持有期间领取的 Rust 回归验证，旧场景请求未返回时仍允许领取新场景提示，并保留同场景已展示提示。完整 `bun run verify` 尚未运行。
 
@@ -78,7 +82,7 @@
 
 ## 完成摘要
 
-正在实施。已接入普通回合逻辑时钟的可恢复推进，以及提示的 engine / IPC / TypeScript / 界面请求与展示入口；待真实剧本提供提示规则后验证可见提示。已接入本地素材收集、有限可信来源上下文、稳定实体及已确认别名快照、定向对话和场景获知证据、Engine 原子冻结与 Prompt / 护栏纯构造。已将本批可信主体的活动既有记忆以有界 TargetSnapshot 冻结到上下文；仍需接入显式发送、候选操作构造 / 原子提交及算法验收。真实供应商费用实验须满足 035 的实机授权条件后再开展。
+正在实施。已接入普通回合逻辑时钟的可恢复推进，以及提示的 engine / IPC / TypeScript / 界面请求与展示入口；待真实剧本提供提示规则后验证可见提示。显式记忆处理已接通：玩家动作有界收集当前素材并冻结批次，发送命令复用 020 lease 与 035 费用端口；响应结果经受信版本操作和完成回执提交。窗口重载可找回最近未终结批次，`received` 可仅重试本地提交，`dispatched / unknown` 不自动重发。当前 `repeat / uncertain` 保守 deferred；强化 / 复活尚缺少主体获知证据绑定的效果存储与审计，锚点去重目前覆盖活动目标及同组新候选。长对局、故障与算法验收仍待完成。真实供应商费用实验须满足 035 的实机授权条件后再开展。
 
 2026-10-18：收紧提案上下文收发一致性。`prepare_memory_proposal_context` 从 queued 批次重建来源与规则白名单，并要求与冻结上下文完全相同；`complete_received_batch` 也在 received 阶段执行相同重建，避免发送 / 完成之间替换候选权限。集成测试覆盖调用方上下文污染被忽略、授权规则变化后拒绝继续。独立 review 发现转义后的 Provider 输入可能超过 64 KiB，或刻痕授权合并后超过实体上限，导致已冻结 queued 批次无法发送；现于冻结写入前验证 Chat / Completion 两种最终输入，并限制实体名扫描总比较量，超限时素材保持可收集。`bun run format:affected`、`bun run lint:affected`、`bun run test:affected` 通过，另复跑新增规则变化用例通过。
 
@@ -87,3 +91,13 @@
 2026-10-18：扩展可信上下文到场景获知证据和已确认别名。`SceneEvidence::for_source_ranges` 在一次有界当前路径扫描中校验已应用回执、成功因果链与观察 / 传闻规则，仅返回证据来源区间被冻结素材完整覆盖的事件；Prompt 映射保存真实 mutation ID，且在冻结前验证 Chat / Completion 的完整转义输入。Memory Repository 用有界多模式精确匹配查找当前周目有效别名，重建其来源与目录唯一性；重复写法仍有多重实体绑定时全部排除。`EntitySnapshot` 冻结规范名、已确认别名、类别与范围，Prompt 校验同范围名称不冲突。定向别名、场景证据和 Prompt 验证已通过；旧记忆 targets、显式发送 UI / IPC、候选操作提交和算法验收仍未完成。
 2026-10-18：场景证据现支持多个连续素材片段联合覆盖同一来源区间，片段有缺口时仍拒绝关联；新增跨素材边界回归。传闻快照保留 `unverified` / `disputed`，Prompt 强制要求传闻携带状态并拒绝观察 / 定向对话伪带状态；新增真实已提交传闻从事件查询、快照映射到最终 Prompt 的端到端验证。完整受影响测试、lint 与格式检查通过，独立复审未发现阻断问题。旧单值证据来源快照不会自动升级为多来源格式；无法补齐来源集合，或传闻证据没有不确定性状态的批次保留原始读取能力，但继续构造 Prompt、恢复请求与完成候选时失败关闭。
 2026-10-18：提案上下文按本批可信主体读取当前周目的活动记忆目标，冻结 `entryId / versionId / stateRevision` 与摘要供 Proposal v1 核对；目标超过 64 项时拒绝冻结，避免截断白名单后把更新误判为新建。扫描使用 `memory_entries_page(run_id,status,entry_id)` 索引，每周目最多检查 10,001 个活动条目；其他周目和已归档历史不消耗预算，超出 10,000 项时失败关闭。复审确认，发送前完整上下文必须与冻结值一致；响应完成时核验非目标权限并按冻结目标解析候选，目标变化继续由版本 / 状态修订 CAS 保护。新增目标变化后的完成 / 重放、当前周目扫描上限及跨周目历史隔离测试。`bun run test:affected`（Rust workspace 与 Vitest 402 项）、`bun run lint:affected`、`bun run format:affected` 均通过。
+
+2026-10-18：将 Proposal 校验与持久版本约束对齐，拒绝 `inferred=true` 的玩家偏好候选，避免响应校验通过后才在版本登记处失败；同步记忆协议说明并增加回归测试。`cargo test -p aoidos-memory --lib`（273 项）、`cargo test -p aoidos-engine --lib`（459 项）、`cargo clippy -p aoidos-memory --all-targets -- -D warnings`、`cargo fmt --all --check` 均通过；候选操作物化与提交仍未接入。
+
+2026-10-18：完成候选操作的首段 Engine 接线：从已校验 Proposal 和批次冻结快照建立确定性操作 / entry / version 身份，合并并校验来源与获知证据；共享素材的候选按依赖组一起提交，`notWorthy` 通过无正文操作确认处理，`repeat / uncertain` 保持 deferred。已把收到的模型响应经 `prepare → write_versions → apply` CAS 流程提交，再将逐候选结果持久化为完成回执；重放复用同一 operation ID，不再次创建版本。独立操作按最新逻辑时钟顺序执行；旧目标已变化时写入 rejected 结果，不覆盖当前状态。新增真实 Storage 集成用例覆盖新增记忆、共享素材组、notWorthy、完成重放及目标并发变化。`cargo test -p aoidos-engine --lib` 462 项通过，目标集成测试及 `cargo clippy -p aoidos-engine --all-targets -- -D warnings` 通过。强化 / 复活、已有主体维度锚点去重、正式发送入口和算法验收仍未完成。
+
+2026-10-18：接入显式产品链路：准备命令先在本地自动收集有界素材、核验并冻结可信上下文，不发送请求；发送命令要求当前 profile / run 一致，沿用 Product 私有请求工厂、共享 Turn coordinator、lease 与账本端口，收到完成后调用本地候选提交。新增 received 本地恢复命令，不会重新调用模型；批次状态查询增加最近未终结批次恢复入口，页面重载可恢复 queued / dispatched / received / unknown 状态，且不轮询。UI 将准备与发送分为两次明确动作。仓储测试验证准备后仍为 queued、重载恢复同一批次及完成后不再列为活动批次；Rust 编译、类型检查和 IPC / Engine 测试通过，完整 `bun run verify` 尚未运行。
+
+2026-10-18：候选提交读取冻结白名单内当前活动记忆版本，新增同一主体 / 维度与重叠来源范围的 `new` 锚点保护；命中时整个依赖组 deferred、不消费素材，并给出稳定诊断，UI 展示逐候选结果与原因。不同维度允许复用同一来源。专项测试覆盖重复拒绝与跨维度放行。强化 / 复活效果、归档版本边界和完整算法验收仍待推进。
+
+2026-10-18：在共享 Turn coordinator lease 获得后、预算预留和网络请求前重新读取并校验当前 profile / run，避免命令排队期间切换 profile 导致过期选择继续收费或发送；新增校验失败时不预留预算、不调用 transport 的回归测试。同步修正架构文档中显式发送、IPC、候选提交仍未接入的过期现状。完整 `bun run verify` 全项通过：Web 402 项、Rust workspace 覆盖率 97.16%（37,085 / 38,170 行，门槛 90%）、类型检查、clippy、分层、格式、knip、基准、Web build 和 rustdoc 均通过。覆盖率命令使用仓库固定 Rust 1.99 工具链及其 LLVM 工具运行。

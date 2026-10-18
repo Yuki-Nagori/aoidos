@@ -1,5 +1,6 @@
 //! 记忆来源适配：当前有效路径、原文 UTF-8 与角色获知证据均在会话锁内核验。
 
+mod candidate_operations;
 mod cycle_context;
 pub mod processing;
 pub mod prompt;
