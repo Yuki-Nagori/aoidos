@@ -117,7 +117,7 @@ jobs:
         run: bun run build:web:assets
       - name: Build affected Tauri application
         if: needs.changes.outputs.has_app_build == 'true'
-        run: cargo build --locked --package aoidos
+        run: bun scripts/cargo.mts build --locked --package aoidos
       - name: Affected Rust and Vitest tests
         if: needs.changes.outputs.has_rust_test == 'true' || needs.changes.outputs.has_vitest == 'true'
         uses: ./.github/actions/run-scope

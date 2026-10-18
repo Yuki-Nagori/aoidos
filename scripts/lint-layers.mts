@@ -1,14 +1,20 @@
 import { execFileSync } from "node:child_process";
+import { cargoInvocation, rustToolchainEnv } from "./rust-toolchain";
 import type { WorkspacePackage } from "./rust-layers";
 import { checkWorkspaceLayers } from "./rust-layers";
 
 type CargoMetadata = { workspace_members: string[]; packages: WorkspacePackage[] };
 
 const metadata = JSON.parse(
-  execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], {
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  }),
+  execFileSync(
+    "rustup",
+    cargoInvocation(["metadata", "--locked", "--no-deps", "--format-version", "1"]),
+    {
+      env: rustToolchainEnv(),
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  ),
 ) as CargoMetadata;
 const workspaceIds = new Set(metadata.workspace_members);
 const workspacePackages = metadata.packages.filter(({ id }) => workspaceIds.has(id));

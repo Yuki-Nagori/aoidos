@@ -124,6 +124,12 @@ async fn product_wait(
                 operation.round_id.as_deref() == Some(&round_id)
                     && operation.outcome != aoidos_engine::game::state::OperationOutcome::Accepted
             })
+            // 终态快照可能先于 actor 释放回合 lease 发布，避免夹具紧接着提交时碰到瞬时 busy。
+            && app
+                .state::<TurnService>()
+                .coordinator
+                .check_available()
+                .is_ok()
         {
             return Ok(snapshot);
         }

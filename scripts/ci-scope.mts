@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { cargoInvocation, rustToolchainEnv } from "./rust-toolchain";
 import type { CargoPackage } from "./rust-test-selector";
 import type { CiPlan } from "./ci-selector";
 import { conservativeFullPlan, createCiPlan } from "./ci-selector";
@@ -58,11 +59,16 @@ function getPlan(): { root: string; plan: CiPlan } {
   } else {
     try {
       const metadata = JSON.parse(
-        execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], {
-          cwd: root,
-          encoding: "utf8",
-          maxBuffer: 16 * 1024 * 1024,
-        }),
+        execFileSync(
+          "rustup",
+          cargoInvocation(["metadata", "--locked", "--no-deps", "--format-version", "1"], root),
+          {
+            cwd: root,
+            env: rustToolchainEnv(root),
+            encoding: "utf8",
+            maxBuffer: 16 * 1024 * 1024,
+          },
+        ),
       ) as { packages: CargoPackage[] };
       const tests = [...listFiles(join(root, "tests"))]
         .filter((path) => path.endsWith(".test.ts"))
@@ -86,7 +92,11 @@ function getPlan(): { root: string; plan: CiPlan } {
 }
 
 function run(command: string, args: string[], cwd: string): void {
-  const result = spawnSync(command, args, { stdio: "inherit", cwd });
+  const result = spawnSync(command, args, {
+    stdio: "inherit",
+    cwd,
+    env: rustToolchainEnv(cwd),
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
@@ -96,7 +106,7 @@ function runBun(root: string, script: string, args: string[] = []): void {
 }
 
 function runCargo(root: string, args: string[]): void {
-  run("cargo", args, root);
+  run("rustup", cargoInvocation(args, root), root);
 }
 
 function runTest(root: string, plan: CiPlan): void {

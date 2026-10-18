@@ -79,6 +79,7 @@ Aoidos 是基于 Bun、Vue 3、TypeScript 和 Tauri 2 的 AI 剧情跑团桌面�
 ## 日常工程约定
 
 - 命令通过根 `package.json` 中的 Bun scripts 执行。常规本地提交前运行 `bun run test:affected`、`bun run format:affected` 和 `bun run lint:affected`，不要每个提交都运行全量 `bun run verify`；选择器遇到共享配置、未知输入或差异不可用时会自动扩展到全量。任务收尾仍运行一次 `bun run verify`；PR CI 在 Ubuntu 执行格式、lint、Clippy 等质量检查，并在三平台构建 Web 产物、受影响 Tauri 应用和运行受影响测试，相关原生验收在三平台执行。Nightly 在三平台构建并运行完整 Vitest、Rust / 原生测试，Ubuntu 运行完整 `verify` 与覆盖率。
+- 仓库中的 Rust 命令统一通过 `scripts/cargo.mts`、`scripts/toolchain.mts` 或 `scripts/rust-toolchain.ts` 按 `rust-toolchain.toml` 调用 `rustup run`；不要在项目脚本中直接调用系统 `cargo` 或 Tauri CLI，以免 Homebrew 等 PATH 优先项绕过仓库锁定的工具链。
 - `bun.lock` 与根目录唯一的 `Cargo.lock` 随依赖改动同步提交。
 - Rust 定型命令参数和返回值后，TypeScript 侧立即声明同型；`invoke` 不负责运行时校验。
 - 前端纯逻辑放在 `utils/` 并配行为测试；Rust 命令层保持薄，业务增长后拆为 workspace crate。

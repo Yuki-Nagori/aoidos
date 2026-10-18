@@ -1,9 +1,9 @@
 # 050 — CI 分层与影响范围选择器
 
-- 状态：in-progress
+- 状态：done
 - 依赖：048、049
 - 优先级：P1
-- 创建 / 更新：2026-10-16 / 2026-10-16
+- 创建 / 更新：2026-10-16 / 2026-10-18
 
 ## 目标与背景
 
@@ -53,9 +53,10 @@ PR 在三平台构建 Web 产物及受影响 Tauri 应用，并运行受影响�
 - [x] 本地和 CI 共用同一规划器；无 shell 拼接路径，不受平台路径分隔符影响。
 - [x] PR 三平台构建 Web 产物及受影响 Tauri 应用并按影响范围运行测试，质量检查留在 Ubuntu；nightly 配置三平台完整 Vitest / Rust / 原生测试和 Ubuntu `bun run verify`，PR 原生桌面验收按相关变更触发。
 - [x] selector 行为测试覆盖依赖闭包、无关范围、资源与镜像映射、格式 / lint 选择及安全回退。
+- [x] Rust package scripts、Tauri CLI、CI 构建、CI scope、coverage、layer lint 与安装检查都按 `rust-toolchain.toml` 经 `rustup run` 调用 Rust；系统 `PATH` 中其他 cargo / rustc 不会覆盖项目工具链。
 - [x] 本地 `bun run verify` 全项通过。
 - [x] PR 三平台构建与受影响测试通过，Windows / macOS 选择范围有日志可审查。
-- [ ] Nightly 三平台全量构建与测试通过。
+- [x] Nightly 三平台全量构建与测试通过。
 - [x] subagent 独立评审完成，发现已处理并复验。
 
 ## 验证记录
@@ -65,7 +66,7 @@ PR 在三平台构建 Web 产物及受影响 Tauri 应用，并运行受影响�
 - **2026-10-16 · `bun run verify`**：完整通过；Vitest 38 个文件 / 375 项，覆盖率 100%；Rust workspace 测试通过，覆盖率 31,693 / 31,806 行（99.64%，门槛 90%）；typecheck、lint、Clippy、分层检查、Biome / dprint / rustfmt、Knip、bench、Web build 与 rustdoc 均通过。
 - **2026-10-16 · 独立评审**：`/root/review_050_selector` 使用 `gpt-6.1-sol` / medium 检查完整实现及最终小幅修正；未发现可执行缺陷或回归。
 - **2026-10-16 · PR #151**：Actions run [38913067825](https://github.com/Yuki-Nagori/aoidos/actions/runs/38913067825) 全部通过；Ubuntu、macOS、Windows 三平台构建与受影响测试通过，Ubuntu 共享质量门禁通过。Windows/macOS 的受影响测试计划由 `detect affected checks` 生成并供各平台 job 消费。
-- **Nightly**：三平台全量构建与测试尚未执行，保留为唯一未验收项。
+- **2026-10-17 · Nightly**：Actions run [39064589075](https://github.com/Yuki-Nagori/aoidos/actions/runs/39064589075) 在 `main` 提交 `46beef8` 全部通过，三平台全量构建与测试及 Ubuntu 完整验证通过。
 
 ## 风险与回退
 
@@ -79,7 +80,9 @@ PR 在三平台构建 Web 产物及受影响 Tauri 应用，并运行受影响�
 - 2026-10-16：独立 review 发现并修复删除 / 排除路径误传、共享 Rust 构建输入漏选、普通 Web 源码漏跑 i18n，以及 CI 冷 runner 的覆盖率工具源码安装风险；修复后 review 通过。
 - 2026-10-16：本地提交前改用受影响范围测试、格式与 lint；Husky 同样改用 `format:affected`，完整 `verify` 留给任务收尾。
 - 2026-10-16：PR 三平台构建 Web 产物、受影响 Tauri 应用并只跑受影响测试，格式 / lint / Clippy 等质量门禁留在 Ubuntu；原生验收按相关变更触发。Nightly 在三平台构建并运行完整 Vitest / Rust / 原生测试，Ubuntu 执行完整 `bun run verify`，可手动触发。
+- 2026-10-18：合并后本机复验发现 Homebrew cargo / rustc 位于 PATH 前部，绕过 rustup 的项目工具链并使 LLVM 覆盖率无法定位。新增共享 `rust-toolchain.ts`、`cargo.mts` 和 `toolchain.mts`，package scripts、Tauri CLI、CI 构建、影响范围执行器、覆盖率、分层 lint 和 setup 均通过 `rustup run` 使用仓库指定版本；不要求修改用户 shell 配置。
+- 2026-10-18：Nightly 三平台全量构建与测试通过，Task 050 验收完成。后续复验发现原生产品夹具在终态快照发布与 lease 释放之间有竞态，夹具现在等待协调器空闲后再发起下一操作。
 
 ## 完成摘要
 
-分层规范、选择器、PR / nightly CI 拆分与本机完整验证已完成；PR 三平台受影响构建 / 测试已通过。Nightly 三平台全量运行尚未验证，完成后再将任务标为 done。
+分层规范、选择器、PR / nightly CI 拆分、三平台 Nightly 全量验证和本机完整验证均已完成。后续工具链统一与原生夹具同步修复按项目脚本执行并经过本机完整验证。
