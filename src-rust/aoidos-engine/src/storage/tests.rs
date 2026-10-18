@@ -323,7 +323,13 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
                     context: false,
                     continuation: false,
                 }],
-                input: serde_json::json!({"version": 1}),
+                input: serde_json::json!({
+                    "version": 1,
+                    "proposalContext": ProposalContext {
+                        source_ids: ["s1".into()].into(),
+                        ..ProposalContext::default()
+                    }
+                }),
             };
             repository.freeze_batch(connection, port, &snapshot)?;
             Ok(())

@@ -260,7 +260,12 @@ impl Fixture {
                 context: false,
                 continuation: false,
             }],
-            input: serde_json::json!({}),
+            input: serde_json::json!({
+                "proposalContext": ProposalContext {
+                    source_ids: ["s1".into()].into(),
+                    ..ProposalContext::default()
+                }
+            }),
         };
         self.repo
             .freeze_batch(&mut self.conn, &self.port, &snapshot)

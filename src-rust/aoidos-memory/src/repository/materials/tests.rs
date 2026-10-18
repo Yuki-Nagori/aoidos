@@ -2,7 +2,15 @@
 
 use super::super::test_support::*;
 use super::*;
-use crate::model::{CycleKind, CycleMarkV1, CycleSourceRef, DetailPolicy};
+use crate::model::{CycleKind, CycleMarkV1, CycleSourceRef, DetailPolicy, ProposalContext};
+
+fn frozen_input() -> serde_json::Value {
+    let context = ProposalContext {
+        source_ids: ["s1".into()].into(),
+        ..ProposalContext::default()
+    };
+    serde_json::json!({"proposalContext": context})
+}
 
 fn cycle_mark_commit(f: &Fixture) -> CycleMarkCommit {
     let mut mark = CycleMarkV1 {
@@ -71,12 +79,44 @@ fn material_identity_and_frozen_batch_survive_replays() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({"previous": []}),
+        input: {
+            let mut input = frozen_input();
+            input["previous"] = serde_json::json!([]);
+            input
+        },
     };
     let digest = f
         .repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
         .unwrap();
+    let mut invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input = serde_json::json!({});
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
+    invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input["proposalContext"]["sourceIds"] = serde_json::json!(["s2"]);
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
+    invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input["proposalContext"]["sourceIds"] = serde_json::json!([]);
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
+    invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input["proposalContext"]["allowEverything"] = serde_json::json!(true);
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
     assert_eq!(
         f.repo
             .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -88,7 +128,7 @@ fn material_identity_and_frozen_batch_survive_replays() {
         (snapshot.clone(), BatchState::Queued)
     );
     let mut conflict = snapshot.clone();
-    conflict.input = serde_json::json!({"previous": [1]});
+    conflict.input["previous"] = serde_json::json!([1]);
     assert!(matches!(
         f.repo.freeze_batch(&mut f.conn, &f.port, &conflict),
         Err(Error::Corrupt)
@@ -104,6 +144,28 @@ fn material_identity_and_frozen_batch_survive_replays() {
     rejected(
         f.repo.freeze_batch(&mut f.conn, &f.port, &conflict),
         Reason::InvalidSource,
+    );
+    let mut legacy = snapshot.clone();
+    legacy.input = serde_json::json!({"previous": []});
+    let legacy_bytes = aoidos_json::canonical_string(&legacy).unwrap();
+    let legacy_digest = hash(legacy_bytes.as_bytes());
+    f.conn
+        .execute(
+            "UPDATE memory_batches SET snapshot_json=?1,input_digest=?2 WHERE batch_id=?3",
+            params![
+                legacy_bytes.into_bytes(),
+                legacy_digest.as_slice(),
+                legacy.batch_id
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        f.repo.batch(&f.conn, &legacy.batch_id).unwrap(),
+        (legacy.clone(), BatchState::Queued)
+    );
+    assert_eq!(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &legacy).unwrap(),
+        legacy_digest
     );
     f.conn
         .execute(
@@ -147,7 +209,7 @@ fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_b
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     let first = snapshot(new_id());
     assert!(
@@ -261,7 +323,7 @@ fn collectible_material_pages_are_bounded_ordered_and_skip_reserved_sources() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &reserved)
@@ -385,14 +447,15 @@ fn batch_digest_and_capacity_reject_untrusted_snapshots() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
-    snapshot.input = serde_json::json!({"oversize": "x".repeat(65536)});
+    snapshot.input = frozen_input();
+    snapshot.input["oversize"] = serde_json::json!("x".repeat(65536));
     rejected(
         f.repo.freeze_batch(&mut f.conn, &f.port, &snapshot),
         Reason::CapacityBlocked,
     );
-    snapshot.input = serde_json::json!({});
+    snapshot.input = frozen_input();
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
         .unwrap();
@@ -429,7 +492,7 @@ fn oversized_persisted_snapshot_is_rejected_before_blob_copy() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -471,7 +534,7 @@ fn identical_text_cannot_replace_frozen_record_identity() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
 
     f.repo
@@ -542,7 +605,7 @@ fn batch_request_identity_and_results_are_durable_and_idempotent() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -696,7 +759,7 @@ fn unknown_and_rejected_batches_cannot_be_redispatched_or_overwritten() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     let unknown = make_snapshot();
     f.repo.freeze_batch(&mut f.conn, &f.port, &unknown).unwrap();
@@ -855,7 +918,7 @@ fn completion_must_resolve_exactly_each_persisted_candidate_once() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -984,7 +1047,7 @@ fn batch_reads_reject_unsupported_versions_and_identity_mismatch() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
 
     let mut invalid = snapshot.clone();
@@ -1092,7 +1155,7 @@ fn queued_fixture() -> (Fixture, String, String, String) {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)

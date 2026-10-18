@@ -1,7 +1,7 @@
 //! 稳定素材及批次短引用映射；恢复复用原始身份，不重新切片或发请求。
 
 use super::*;
-use crate::model::{MAX_INTEGER, MAX_PROPOSAL_BYTES};
+use crate::model::{MAX_INTEGER, MAX_PROPOSAL_BYTES, ProposalContext};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_COLLECTIBLE_MATERIAL_SCAN: usize = 128;
@@ -459,6 +459,7 @@ impl Repository {
             }
             return Ok(digest);
         }
+        validate_proposal_context(snapshot)?;
         for span in &snapshot.spans {
             let status: Option<String> = tx
                 .query_row(
@@ -1150,6 +1151,31 @@ impl Repository {
         tx.commit().map_err(sql)?;
         Ok(next)
     }
+}
+
+/// 新批次的冻结授权必须随快照持久化，且只能引用该快照实际包含的来源。
+fn validate_proposal_context(snapshot: &BatchSnapshot) -> Result<()> {
+    let value = snapshot
+        .input
+        .get("proposalContext")
+        .cloned()
+        .ok_or_else(reject)?;
+    let context: ProposalContext = aoidos_json::from_value(value).map_err(|_| reject())?;
+    let sources = snapshot
+        .spans
+        .iter()
+        .map(|span| span.source_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if sources.len() != snapshot.spans.len()
+        || context.source_ids.len() != sources.len()
+        || context
+            .source_ids
+            .iter()
+            .any(|source_id| !sources.contains(source_id.as_str()))
+    {
+        return Err(reject());
+    }
+    Ok(())
 }
 impl Repository {
     fn validate_cycle_mark_commits(
