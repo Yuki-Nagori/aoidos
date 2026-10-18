@@ -1,10 +1,14 @@
 //! 明确确认的别名提交、撤销与按有效来源重建的精确查找。
 
 use super::*;
+use aho_corasick::AhoCorasick;
+use std::collections::BTreeMap;
 
 const MAX_ALIASES_PER_RUN: u64 = 4096;
 const MAX_ALIAS_SOURCES: usize = 128;
 const MAX_ALIAS_NAME_BYTES: usize = 256;
+const MAX_ALIAS_MATCH_TEXT_BYTES: usize = 256 * 1024;
+const MAX_ALIAS_MATCHES: usize = 16_384;
 
 impl Repository {
     /// 按当前完整目录和有效因果来源解析精确别名；相似名称不在此处合并。
@@ -37,6 +41,79 @@ impl Repository {
             return Ok(None);
         };
         Ok(Some(EntityAlias { sources, ..alias }))
+    }
+
+    /// 按原文精确筛选并重建当前周目仍有效的已确认别名。
+    /// 原始别名名称不单独作为授权返回；仅返回来源仍有效且目录未发生冲突的绑定。
+    /// # Errors
+    /// 文本窗口、别名表或匹配数量超限，或来源 / 目录状态损坏时拒绝查询。
+    pub fn aliases_mentioned_in(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        texts: &[&str],
+    ) -> Result<Vec<EntityAlias>> {
+        if texts.is_empty() || texts.len() > 128 || !valid_id(run_id) {
+            return Err(reject());
+        }
+        let (run, boundary) = self.boundary(conn, run_id, port)?;
+        let mut statement = conn
+            .prepare("SELECT alias_id,run_id,entity_id,category,scope,alias_name,status,revision,registered_entity_revision FROM memory_aliases WHERE run_id=?1 AND status='active' ORDER BY category,scope,alias_name LIMIT ?2")
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(params![run_id, MAX_ALIASES_PER_RUN + 1], read_alias)
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        if rows.len() as u64 > MAX_ALIASES_PER_RUN {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        let aliases = rows
+            .into_iter()
+            .map(decode_alias)
+            .collect::<Result<Vec<_>>>()?;
+        let text_bytes = texts
+            .iter()
+            .fold(0usize, |total, text| total.saturating_add(text.len()));
+        if text_bytes > MAX_ALIAS_MATCH_TEXT_BYTES {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        if aliases.is_empty() {
+            return Ok(Vec::new());
+        }
+        let matcher = AhoCorasick::new(aliases.iter().map(|alias| alias.name.as_str()))
+            .map_err(|_| Error::Rejected(Reason::CapacityBlocked))?;
+        let mut matched_patterns = BTreeSet::new();
+        let mut match_count = 0usize;
+        for text in texts {
+            for matched in matcher.find_overlapping_iter(text) {
+                match_count = match_count.saturating_add(1);
+                if match_count > MAX_ALIAS_MATCHES {
+                    return Err(Error::Rejected(Reason::CapacityBlocked));
+                }
+                matched_patterns.insert(matched.pattern().as_usize());
+            }
+        }
+        let mut matches = Vec::new();
+        for index in matched_patterns {
+            let alias = &aliases[index];
+            if let Some(sources) = effective_alias_sources(conn, alias, &run, &boundary, port)? {
+                matches.push(EntityAlias {
+                    sources,
+                    ..alias.clone()
+                });
+            }
+        }
+        let mut names = BTreeMap::<String, usize>::new();
+        for alias in &matches {
+            *names.entry(alias.name.clone()).or_default() += 1;
+        }
+        matches.retain(|alias| names.get(&alias.name) == Some(&1));
+        if matches.len() > 128 {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        Ok(matches)
     }
 
     /// 以别名身份和 revision 作 CAS 撤销；重复提交同一已完成撤销保持幂等。

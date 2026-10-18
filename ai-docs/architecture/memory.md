@@ -1,6 +1,6 @@
 # 记忆系统
 
-更新日期：2026-10-18。状态：**产品规则与工程协议 v1 已评审；029–031 已交付存储、批次、配置和查询；032 已交付轮回节点与刻痕引擎接口及持久恢复队列；033 正在接入显式素材收集 / 冻结、候选 / Prompt 构造和处理入口并开展算法标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
+更新日期：2026-10-18。状态：**产品规则与工程协议 v1 已评审；029–031 已交付存储、批次、配置和查询；032 已交付轮回节点与刻痕引擎接口及持久恢复队列；033 已接入素材收集、有限受信上下文与 Engine 原子冻结，继续实现显式发送和记忆候选处理并开展算法标定**。对应 [007](../task/007-memory-design.md) 与 [issue #13](https://github.com/Yuki-Nagori/aoidos/issues/13)。本文维护规则与边界，算法 / 验证计划见[算法文档](memory-algorithms.md)，实施进度见 [029–033](../task-index.md)。生产参数须经实测审定。
 
 ## 阅读路径
 
@@ -69,7 +69,7 @@ recap 是记录投影摘要，不等于会话记忆；segment 是收束边界，
 
 同一条认知可以关联多个来源，每个来源分别保存获知方式、范围和因果引用，保留后续变化过程；不能只用最新获知方式覆盖旧来源。例如先听到传闻、后来亲眼观察，两种来源均保留各自限定，观察不追溯性地把此前传闻变成亲历。来源失效与混合来源正文继续遵守既有因果回退规则。
 
-因此“听说但怀疑”和“亲眼看到却误解”可以分别表达，不根据摘要里是否出现“听说”“相信”等关键词决定权限。Rust 模型与持久字段已由 029 建立；031 已补齐相关 TS / IPC DTO 与查询入口，产品记忆候选构造和 Prompt 接入仍待后续任务。
+因此“听说但怀疑”和“亲眼看到却误解”可以分别表达，不根据摘要里是否出现“听说”“相信”等关键词决定权限。Rust 模型与持久字段已由 029 建立；031 已补齐相关 TS / IPC DTO 与查询入口。033 已接入冻结上下文和 Prompt 构造，候选操作与产品处理入口仍待完成。
 
 ### 默认认知状态（已确认）
 
@@ -227,7 +227,7 @@ LLM 返回有界结构化候选，分类为复述、补充、新事件、纠正�
 
 “明确指向”、候选集合与冲突检查需要可验证的判定协议，自动登记的提交 / 撤销 / 回退恢复需遵守引擎类型化变更和审计约束。012 的 `SceneCatalog` 接入绑定剧本修订的 `EntityDirectory`：完整目录按类别 / 范围检查规范名唯一性、核验场景 actor，并只提供精确规范名查找；不完整快照拒绝解析。内置 Mistbell v1 通过 `resources/scripts/mistbell/entities.json` 显式登记固定初始实体，原文不作实体推断；engine 在资源登记时严格校验元数据，并将原文与清单共同纳入 `scriptRevision`，旧修订存档不会静默接受新目录。043 的 `EntityRegistry` 将固定种子与周目级动态实体合并为有界快照；`Storage::with_memory` 在 session → SQLite 锁顺序下装配当前有效分支的完整 `entityRevision`，再冻结到 `SourcePort`。动态身份只能由可信 catalog rule 生成意图、经 023 世界操作持久提交；分支外身份留在审计表但不对记忆可见。固定清单只作种子数据，记忆不依赖 Mistbell 专属路径。
 
-`SourcePort` 校验三类可信证据。`told` 要求玩家输入位于当前分支并定向给完整目录中的角色；普通回合必须完整成功，checkpoint 恢复则须沿 023 核验过的同一输入 / 接收者继承链抵达完整成功终态。角色必须完整回复并完成结算；证据 subject / informant、固定 scope 与 rule 也必须吻合。校验器复用 023 回合恢复状态机，核验跳过 / 检定、完整输出、结算计划与回执、场景推进及成功终态，避免仅凭局部事实拼出不完整因果链。单次扫描最多处理 256 条 / 4 MiB，并在匹配终态闭合后停止。045 的 `observed` / `rumor` 证据由 `SceneEvidence::get` 校验当前有效目录、规则、来源区间、应用回执和因果路径；`Storage::with_memory` 现显式接收活动 `SceneCatalog`，并在会话 → SQLite 锁内将其与当前实体快照绑定到 `SourcePort`。仓储执行证据校验时显式传入共享连接。场景修订或在场策略缺失时入口失败关闭。此项打通的是可信证据读取边界，产品记忆候选 / Prompt 流程仍未接入；046 接入角色选择 UI。别名支持玩家确认后的事务化登记、撤销及按有效来源重建；自动明确指向证据尚未接入。目录不会自动授予角色知识。
+`SourcePort` 校验三类可信证据。`told` 要求玩家输入位于当前分支并定向给完整目录中的角色；普通回合必须完整成功，checkpoint 恢复则须沿 023 核验过的同一输入 / 接收者继承链抵达完整成功终态。角色必须完整回复并完成结算；证据 subject / informant、固定 scope 与 rule 也必须吻合。校验器复用 023 回合恢复状态机，核验跳过 / 检定、完整输出、结算计划与回执、场景推进及成功终态，避免仅凭局部事实拼出不完整因果链。单次扫描最多处理 256 条 / 4 MiB，并在匹配终态闭合后停止。045 的 `observed` / `rumor` 证据由 `SceneEvidence::get` 校验当前有效目录、规则、来源区间、应用回执和因果路径；`Storage::with_memory` 显式接收活动 `SceneCatalog`，并在会话 → SQLite 锁内将其与当前实体快照绑定到 `SourcePort`。仓储执行证据校验时显式传入共享连接。场景修订或在场策略缺失时入口失败关闭。033 的提案上下文构造器会对一批素材只扫描一次当前有效路径，并只选取素材片段联合、连续且完整覆盖的已验证观察 / 传闻事件；场景事件来源可以跨相邻素材片段，但不能跨越来源缺口、记录或正文 hash。冻结证据保存覆盖来源 ID 的有序集合及传闻不确定性；准备发送和完成响应前都会重建并比对。别名支持玩家确认后的事务化登记、撤销及按有效来源重建；提案上下文只在素材正文精确命中且登记来源仍有效、目录无冲突时附带别名，不自动推断近似名称。目录不会自动授予角色知识。
 
 `entities.json` 只提供固定剧本初始实体，不限制未来世界出现动态角色。043 已建立统一 Rust 注册表：动态身份由引擎生成 UUID 派生 ID，不以名字推导；持久记录绑定 session、脚本 / catalog 修订、WorldMutation hash 与 recordSeq，登记表、entityRevision 和 `store_applied` 回执在同一 SQLite 事务提交。未提交意图不会进入快照；重放按稳定 mutation ID 幂等恢复，快照验证来源记录与回执并只暴露当前因果路径上的身份。记忆只消费已提交稳定 ID。032 再决定哪些已登记动态 NPC 可由剧本规则授权进入轮回刻痕；不能按同名或近似名自动继承。注册身份本身仍不证明角色知情。当前别名写入仅由玩家明确回答实体关联问题触发，尚未接入可信对话接收对象等自动明确指向证据。
 
@@ -461,6 +461,8 @@ manifest 需要关联条目身份、正文版本与校验信息、状态、来�
 | Batch             | batchId、runId、historyRevision、policyHash、输入摘要 inputDigest、状态；inputDigest 覆盖来源映射、实体目录 revision / 旧记忆版本及可信证据快照                     |
 | SourceSpan        | batchId + 短引用 ID `s1…sN`、SourceRef、片段正文 / 上下文角色；引用 ID 的唯一约束包含 batchId                                                                       |
 | KnowledgeEvidence | 引擎分配的 evidenceId、subjectId、SourceRef、获知方式、告知者（适用时）、范围及所依据的可信规则 / 记录身份                                                          |
+| EntitySnapshot    | entityId 对应的受信类别、scope 与 canonicalName；动态身份使用目录登记的稳定 ID，不要求模型猜 UUID 与正文名称的映射                                                  |
+| ProposalContext   | 来源、主体、实体 / 获知证据、刻痕授权与最多 64 个当前目标快照；目标绑定 entryId、versionId、stateRevision 与摘要                                                    |
 | MemoryVersion     | entryId、versionId、parentVersionId（首版省略）、restoredFromVersionId（恢复时必有）、subject、dimension、summary、attitude、inferred、来源集合、可信证据集合、hash |
 
 recordSeq / historyRevision 沿用 006 / 012 的安全整数范围；正文 hash 为原始正文 SHA-256，不与 006 recap 的整行 sourceHash 混用。mode、完成状态、speakerId 从原始记录读取，模型不能覆盖。来源有效性必须调用 022 提供的有效路径视图，并核验 hash、区间、提交状态和素材资格。
@@ -483,7 +485,7 @@ recordSeq / historyRevision 沿用 006 / 012 的安全整数范围；正文 hash
 | classification      | `repeat / supplement / new / correction / notWorthy / uncertain`                                                                        |
 | sourceIds           | 本批提供的片段 ID 数组，至少 1 项                                                                                                       |
 | subjectRef          | 本批提供的主体引用；角色主体或当前玩家偏好主体                                                                                          |
-| entityIds           | 已登记的稳定实体 ID 数组，可为空；不能创建实体                                                                                          |
+| entityIds           | 已登记的稳定实体 ID 数组，可为空；不能创建实体。冻结上下文同时提供一一对应的类别、scope 与 canonicalName 快照                           |
 | evidenceIds         | 本批提供的可信获知证据；角色可保存分类为非空数组，uncertain / notWorthy 可省略，玩家偏好省略                                            |
 | targetRef           | 旧条目 entryId + expectedVersionId + expectedStateRevision；repeat / supplement / correction 必有，new / notWorthy 省略，uncertain 可选 |
 | dimension           | `story / relationship / playerPreference / foreshadowing`；可保存分类必有                                                               |
@@ -492,6 +494,8 @@ recordSeq / historyRevision 沿用 006 / 012 的安全整数范围；正文 hash
 | attitudeEvidenceIds | 改变态度或首建非 unexpressed 状态时必有非空数组，指向提供的角色表达 / 引擎规则证据                                                      |
 | inferred            | 可保存分类必有布尔值；true 时保留推断依据，不成为新亲历证据                                                                             |
 | reason              | 有界依据摘要，非内部思维链                                                                                                              |
+
+冻结 `ProposalContext` 的 `entities` map 以稳定 entityId 为键，值为类别、scope、规范名和精确确认别名；其键集合必须与 `entityIds` 完全一致，实体和别名名称在同类别 / 范围内不得冲突。获知证据的批次局部 key 与实际场景 mutation ID 分开保存，后者在 `observed` / `rumor` 中必填并经当前路径重建。每项场景证据携带非空、唯一且有界的 `sourceIds` 集合，逐项对应冻结素材片段；`observed` / `rumor` 的来源字节区间必须被这些片段联合连续覆盖，单个片段不必独自覆盖整个事件，来源有缺口仍失败关闭。传闻证据还必须保留 `unverified` 或 `disputed` 状态；`observed` 和 `told` 不得附带传闻状态。由此模型能从正文名称选择已登记身份，不能猜动态实体 UUID，也不能把同名但不同范围的地点误合并。旧的单值证据 `sourceId` 字段不会自动升级为多来源快照：仓储原始批次可读取，但若无法恢复全部来源，或传闻证据缺少不确定性状态，则 Prompt 构造、请求恢复与候选完成均失败关闭；不伪造迁移权限。其他旧快照若其非空 `entityIds` 缺少完整实体映射，或场景证据缺少实际事件 ID，同样不能继续处理。
 
 可选 `cycleMarks` 是与普通候选共用请求和容量预算的数组，单项只接受 `candidateId`、`ruleId`、`sourceIds`、`subjectIds`、`summary`。引用必须来自本批冻结上下文及剧本授权；模型不能提交 `markId`、周目代数、刻痕类型、优先级或其他持久权限字段，这些由引擎按已登记规则生成。刻痕最多 8 项，普通候选与刻痕合计最多 128 项，摘要总字节数最多 2 KiB，授权、来源与原子完成边界见[轮回与节点的类型化接入](#轮回与节点的类型化接入)。
 
@@ -564,9 +568,19 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 当前实现将 turnId / 027 requestId、响应原文、响应 hash、逐项完成摘要及错误码存入共享 SQLite 的 `memory_batch_receipts`，并与 `memory_batches.status` 在同一事务提交；响应与摘要分别限制为 64 KiB，读取先检查长度再复制 BLOB。这样避免状态与结果文件的双写窗口。完成摘要使用 version=1、outcomes 数组；candidateId 必须与响应候选集合一一对应且不重复，rejected / pending / deferred 必须带稳定 reasonCode，applied / no-op 不带原因。候选与依赖操作的多对一映射存入 `memory_batch_candidate_operations`，与操作计划、目标和版本在同一事务登记；读取恢复计划时必须核对映射集合，完成摘要逐项读取关联操作并审计 applied 状态与提交回执；操作进入持久 `rejected` 时只能以候选 `rejected` 终结，未决或隔离操作不能被其他 outcome 绕过。未绑定操作的候选不能声明 applied。升级前已完成的批次由一次性 backfill 标记为历史回执，以保留可读性而不伪造缺失的候选关联；新批次始终执行严格映射校验。已完成结果为 `deferred` 的候选可从原响应 / 冻结输入重新做本地验证并绑定一个操作；候选标识、原因和关联操作可由 `deferred_candidates` 读取，操作提交不改写原批次回执，其他终态候选不能重开。该路径不重新发送请求，也不创建定时重试；无有效本地计划时继续保持 deferred。dispatched 缺完整响应只能转 unknown，不自动重发。重新发起模型判断须进入新的已授权批次并使用新的物理请求身份，已完成的同源操作仍幂等。
 
-033 已确认产品触发语义：玩家显式发起处理时，系统自动汇集当前周目、当前因果分支中仍有效且未处理的素材；收集与冻结本身不发模型请求，发送必须来自玩家的显式操作。Engine `Storage::collect_memory_materials` 已按 256 条 / 4 MiB 分页扫描并登记有效当前分支来源；游标绑定 run、historyRevision 与首次扫描记录上界，正文按 2048 字节 UTF-8 边界稳定切片，IPC 只返回 eligible 数量。仓储候选页 `collectible_materials_page` 每次最多扫描 128 条原始素材，游标绑定 run、historyRevision 和复合序号上界；即使整页素材已被过滤也会前进，翻页期间新增素材不会进入本轮扫描。它固定遍历上界，不构成跨页 SQLite 快照；每页资格反映该页读取时状态，最终冻结仍在 `IMMEDIATE` 事务中重新校验全部素材。素材与批次的占用查询分别使用复合索引。素材最多被一个尚未拒绝的批次占用；完成 / unknown 批次不会释放占用，避免重复处理及不确定请求的重复收费；模型明确拒绝的素材可由新的显式授权重新冻结。冻结操作在 SQLite `IMMEDIATE` 事务中校验素材仍为 eligible、来源仍有效且未被处理 / 占用，同 batchId 同快照重放保持幂等；新批次还必须在同一快照中保存严格反序列化的 `proposalContext`，其 `sourceIds` 必须与实际 spans 完全一致，避免冻结一个稍后才会被 prompt 拒绝的批次。历史批次读取与同快照重放保持兼容；缺少该上下文的批次不能构造 prompt，也不能用当前运行态补造权限。收集按钮与分页状态已接入查询面板，不触发模型请求。`record::memory::prompt` 已提供纯 Rust Prompt 构造器，Completion / Chat 均从同一 `BatchSnapshot.input.proposalContext` 严格恢复白名单，不接受另一个独立 context 参数，避免跨批次混用授权；Prompt 使用专属 `[AOIDOS:MEMORY-PROPOSAL]` 护栏、全角括号转义，并限制为 64 KiB。构造器不查库、不扩大权限。可信上下文组装、冻结时写入完整输入、显式发送按钮与 private 请求 UI / IPC 仍待实现，prompt 构造器尚未接入收费发送链路。
+#### 素材收集与上下文冻结
 
-engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造的 private 请求，在共享 `Coordinator` 空闲后取得独立 lease。其预算包装器先调用请求携带的 027 预算端口，再在共享 SQLite 登记唯一 turnId / requestId；登记成功后才进入 020 private 调度。记忆请求限制为一次物理发送，不启用自动传输重试或温度阶梯；完整输出在 lease 释放前写入 `received`，发送或回执结果不确定则记录 `unknown`，不重发。此入口没有自动触发器；当前 Prompt 构造器仅完成冻结数据到 ProviderInput / GuardSpec 的纯转换，可信上下文装配、批次冻结调用、用户授权界面和记忆 IPC 尚未接入；035 的真实供应商授权门继续关闭。
+033 已确认产品触发语义：玩家显式发起处理时，系统自动汇集当前周目、当前因果分支中仍有效且未处理的素材；收集与冻结本身不发模型请求。`Storage::collect_memory_materials` 分页扫描最多 256 条 / 4 MiB，游标绑定 run、historyRevision 与首次扫描上界，正文按 2048 字节 UTF-8 边界稳定切片；IPC 只返回 eligible 数量。仓储页 `collectible_materials_page` 每次最多扫描 128 条原始素材，游标还绑定复合序号上界；过滤后的空页也会前进，扫描期间新增素材留待下一轮。分页不是 SQLite 跨页快照；最终冻结在 `IMMEDIATE` 事务中重验所有素材。素材与批次占用查询使用复合索引；素材至多被一个未拒绝批次占用，完成 / unknown 不释放占用，模型明确拒绝后才允许新的显式授权重新冻结。
+
+`Storage::freeze_memory_batch` 在 session → SQLite 锁区重建受信 `ProposalContext`，忽略调用方 prompt 内容，并在仓储事务中冻结来源、上下文与占用状态。冻结前同时验证 Chat / Completion 转义后的最终输入不超过 64 KiB；相同 batchId / 快照重放幂等。上下文包含精确命中的实体与有效确认别名、定向对话获知证据、来源区间完整覆盖的场景观察 / 传闻、玩家偏好及 032 刻痕授权。实体快照保存稳定 ID、类别、范围、规范名与别名；场景证据保存世界事件 ID，并在冻结、发送准备和响应完成时重建核验。
+
+当前主体的活动既有记忆按当前周目的活动条目读取，并以有界 `TargetSnapshot` 冻结 `entryId`、`versionId`、`stateRevision` 和摘要。上限为 64 项；发现第 65 项时拒绝冻结，避免截断目标后把更新误判为新建。扫描通过 `memory_entries_page(run_id,status,entry_id)` 索引最多检查 10,001 个活动条目，超过每周目 10,000 条的预算时失败关闭；其他周目和已归档历史不消耗本次预算。Prompt 校验目标身份、修订、主体和摘要。候选操作的构造与提交仍未接入。
+
+发请求准备时，系统重建完整上下文并要求与冻结值完全一致。响应完成时重建并比较实体、来源、获知证据和规则授权等非目标权限；候选始终按原冻结目标解析，因为本批已提交的更新会改变当前目标版本或集合。目标操作必须以冻结的 `versionId` / `stateRevision` 做 CAS，竞争更新不能覆盖新状态；操作回执由仓储在完成时审计。历史批次仍可读取；缺少必要实体或场景事件快照的历史批次在继续处理时失败关闭，不从当前运行态补造权限。当前查询面板只有本地素材收集入口，不触发模型请求。`record::memory::prompt` 提供纯 Rust Prompt 构造器：Completion / Chat 均从 `BatchSnapshot.input.proposalContext` 恢复白名单，不接收独立 context 参数；Prompt 使用 `[AOIDOS:MEMORY-PROPOSAL]` 护栏、全角括号转义，输入上限为 64 KiB。构造器不查库、不扩大权限。
+
+#### 授权发送与失败恢复
+
+engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造的 private 请求，在共享 `Coordinator` 空闲后取得独立 lease。其预算包装器先调用请求携带的 027 预算端口，再在共享 SQLite 登记唯一 turnId / requestId；登记成功后才进入 020 private 调度。记忆请求限制为一次物理发送，不启用自动传输重试或温度阶梯；完整输出在 lease 释放前写入 `received`，发送或回执结果不确定则记录 `unknown`，不重发。此入口没有自动触发器；Prompt 构造和受信上下文冻结已接入，但显式发送按钮、私有请求 UI / IPC 和候选操作构造 / 提交仍未接入；035 的真实供应商授权门继续关闭。
 
 原始结果已经持久保存而因待确认容量 / 本地资源暂时不能提交的候选，保留 localDeferred 原因与计划；空间释放后只重新做本地核验，不再调用模型。输入切片不足时同样等新上下文，不对同一不足输入反复收费。网络 / 顶层 schema 失败的素材标 needsExplicitRetry，只有用户主动重试 / 恢复或新的有效输入改变判定前提时才能重新排收费批次，不能用定时重扫暗中修复 JSON。
 
@@ -574,7 +588,9 @@ engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造
 
 ### manifest、操作状态机与恢复
 
-029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射、别名来源 / 审计与旧完成回执兼容迁移，接入 observed / rumor 的可信证据读取边界，并提供复用 020 / 027 的授权 private 批次执行入口；033 已接入本地素材扫描，并新增纯 prompt 构造器，但可信上下文组装、批次冻结调用、显式调用触发、UI 与记忆 IPC 尚未完成。canonical 数据归 engine 的 `EntityRegistry` 所有，经恢复校验后的有界只读快照交给 memory；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。别名每周目最多 4096 个，每项最多 128 个支持来源，每段来源 JSON 最多 32 KiB。
+兼容边界：仓储仍能读取旧批次快照；继续准备请求时会重建并比较完整上下文，完成响应时则核验非目标权限，并使用冻结目标解析候选。若旧 `entityIds` 没有一一对应的 `entities` 快照，则失败关闭，不从当前目录补写历史授权。
+
+029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射、别名来源 / 审计与旧完成回执兼容迁移，接入 observed / rumor 的可信证据读取边界，并提供复用 020 / 027 的授权 private 批次执行入口；033 已接入本地素材扫描、受信上下文组装、批次冻结和纯 prompt 构造。显式调用触发、UI 与记忆 IPC 尚未完成。canonical 数据归 engine 的 `EntityRegistry` 所有，经恢复校验后的有界只读快照交给 memory；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。别名每周目最多 4096 个，每项最多 128 个支持来源，每段来源 JSON 最多 32 KiB。
 
 已应用操作若与 `store_applied` 回执、计划摘要或目标记录不一致，会在 `memory_run_faults` 持久登记故障，并拒绝该 run 后续所有写入，返回 `recoveryRequired`。当前没有自动解冻路径；必须经未来显式审计修复，不能以重新运行普通恢复覆盖冲突。
 
@@ -644,7 +660,7 @@ prepared → ready → applied 是正常路径。文件落盘成功而 ready 回
 
 ### 轮回与节点的类型化接入
 
-032 已在 `aoidos-memory` 实现 CycleMarkV1、稳定身份、来源快照和有界查询，并为现有 Proposal v1 增加可选 `cycleMarks` 字段，复用同一记忆请求，不增加模型调用。每个剧本的周目代数在新会话创建时单调分配；重开、恢复与历史回退读取原值，不推进代数，分配与 run 创建同事务提交。模型只提交登记规则 ID、白名单来源 / 对象引用和摘要；剧本规则以实体类别与精确 scope 授权，主体 ID 从绑定当前 session 与 historyRevision 的完整实体快照展开，因此已提交并在当前分支可见的动态 NPC 也可被授权，名称相似或相同不授予资格。类型化授权上下文提供 scriptId、cycleGen、规则版本、对象白名单、imprintKey、kind、detailPolicy 与 priority，再由程序生成稳定 markId；提交时核对代数必须属于当前 run。摘要措辞变化不生成新刻痕身份。仓储新增 `complete_batch_with_cycle_marks`：引擎先按可信规则物化刻痕，仓储再核对候选、冻结来源和主体，并在一个事务中登记刻痕及完成回执；完成回执记录候选到 markId 的映射，读取时核验刻痕仍存在且身份一致。普通 `complete_batch` 不能提交刻痕回执；含刻痕候选的响应必须走可信引擎的原子入口，不能仅凭已有刻痕 ID 声称本批次已提交。Engine 提供 `prepare_cycle_mark_context`，从 queued 批次快照恢复提案白名单，并要求重建的当前刻痕规则与已冻结授权完全一致；`complete_received_batch` 不再接受调用方另传 context，而是在同一存储锁区从 received 快照恢复同一白名单、重建并比对授权，再校验响应和原子提交刻痕与完成摘要。此路径不重发模型请求。033 已将 `RoundCompleted` 接入持久生命周期队列：确认后的场内回合幂等推进逻辑时钟与节点进度；历史分叉会先按仓储游标恢复时钟，每次最多处理 16 页，超限时保留事件并要求后续恢复。若回退保留了尚未消费的完成事件，引擎只为当前有效路径中仍可核验的回合补记时钟，并丢弃旧修订的节点进度事件。Engine 的显式场景提示入口先恢复生命周期事件，再在 session / domain 锁内读取当前场景和最新已应用世界、求值剧本提示规则；存储复用已持有的 session 锁后原子领取，避免锁重入。`engine_claim_scene_hint`、TypeScript 调用和界面展示均已接入，领取仅由玩家显式触发，不轮询、不调用模型。内置最小场景尚无提示规则，因此不会凭空显示提示；记忆候选上下文 / Prompt 及显式记忆处理仍待接入。
+032 已在 `aoidos-memory` 实现 CycleMarkV1、稳定身份、来源快照和有界查询，并为现有 Proposal v1 增加可选 `cycleMarks` 字段，复用同一记忆请求，不增加模型调用。每个剧本的周目代数在新会话创建时单调分配；重开、恢复与历史回退读取原值，不推进代数，分配与 run 创建同事务提交。模型只提交登记规则 ID、白名单来源 / 对象引用和摘要；剧本规则以实体类别与精确 scope 授权，主体 ID 从绑定当前 session 与 historyRevision 的完整实体快照展开，因此已提交并在当前分支可见的动态 NPC 也可被授权，名称相似或相同不授予资格。类型化授权上下文提供 scriptId、cycleGen、规则版本、对象白名单、imprintKey、kind、detailPolicy 与 priority，再由程序生成稳定 markId；提交时核对代数必须属于当前 run。摘要措辞变化不生成新刻痕身份。仓储新增 `complete_batch_with_cycle_marks`：引擎先按可信规则物化刻痕，仓储再核对候选、冻结来源和主体，并在一个事务中登记刻痕及完成回执；完成回执记录候选到 markId 的映射，读取时核验刻痕仍存在且身份一致。普通 `complete_batch` 不能提交刻痕回执；含刻痕候选的响应必须走可信引擎的原子入口，不能仅凭已有刻痕 ID 声称本批次已提交。Engine 提供 `prepare_cycle_mark_context`，从 queued 批次快照恢复提案白名单，并要求重建的当前刻痕规则与已冻结授权完全一致；`complete_received_batch` 不再接受调用方另传 context，而是在同一存储锁区从 received 快照恢复同一白名单、重建并比对授权，再校验响应和原子提交刻痕与完成摘要。此路径不重发模型请求。033 已将 `RoundCompleted` 接入持久生命周期队列：确认后的场内回合幂等推进逻辑时钟与节点进度；历史分叉会先按仓储游标恢复时钟，每次最多处理 16 页，超限时保留事件并要求后续恢复。若回退保留了尚未消费的完成事件，引擎只为当前有效路径中仍可核验的回合补记时钟，并丢弃旧修订的节点进度事件。Engine 的显式场景提示入口先恢复生命周期事件，再在 session / domain 锁内读取当前场景和最新已应用世界、求值剧本提示规则；存储复用已持有的 session 锁后原子领取，避免锁重入。`engine_claim_scene_hint`、TypeScript 调用和界面展示均已接入，领取仅由玩家显式触发，不轮询、不调用模型。内置最小场景尚无提示规则，因此不会凭空显示提示；033 的可信来源上下文、场景获知证据和确认别名现已进入冻结 Prompt，活动旧记忆目标已进入冻结上下文；显式记忆处理与候选操作提交仍待接入。
 
 授权处理只有本地规则能产生刻痕，模型可在已授权范围内提出摘要。首轮开发活动刻痕上限每剧本合计 64，绝对 256；每条摘要 ≤512 字节、每次拟选最多 8 条且摘要总计 ≤2 KiB。超限独立归档，不删除来源；去重合并来源前重查每个分支锚点。读取及容量归档前会将 SQL 排序字段与已校验载荷交叉核对，防止损坏优先级影响归档。同一规则的新一代实例保留 generation 和来源版本，不把旧 cycle strength 套入会话公式。
 

@@ -3,8 +3,13 @@
 mod cycle_context;
 pub mod processing;
 pub mod prompt;
+mod proposal_context;
 
 pub use cycle_context::{CycleMarkContext, CycleMarkContextInput, build_cycle_mark_context};
+pub use proposal_context::{
+    ProposalContextInput, ProposalSourceContextInput, build_proposal_authority_context,
+    build_proposal_context, build_proposal_source_context,
+};
 
 use std::{cell::RefCell, collections::BTreeMap, sync::Arc};
 
@@ -368,7 +373,10 @@ impl<'a> SourcePort<'a> {
         Ok(value)
     }
 
-    fn direct_dialogue_recipient(&self, source: &SourceRef) -> Result<Option<(String, String)>> {
+    pub(crate) fn direct_dialogue_recipient(
+        &self,
+        source: &SourceRef,
+    ) -> Result<Option<(String, String)>> {
         if source.mode != Some(InputMode::InCharacter) || self.source_text(source)?.is_none() {
             return Ok(None);
         }

@@ -418,6 +418,63 @@ impl Storage {
         .map_err(memory_config_error)
     }
 
+    /// 在会话与数据库共享锁区内重建提案白名单，并原子冻结可信输入。
+    /// 调用方只能提交候选批次身份和来源；实体、证据与刻痕权限均由当前引擎状态装配。
+    /// # Errors
+    /// 批次边界过期、来源无效、上下文超限或事务写入失败时拒绝冻结。
+    pub fn freeze_memory_batch(
+        &self,
+        catalog: &crate::game::catalog::SceneCatalog,
+        mut snapshot: aoidos_memory::repository::BatchSnapshot,
+    ) -> Result<aoidos_memory::model::Hash, Fault> {
+        let run = self.with_database(|connection| {
+            self.memory
+                .run(connection, &snapshot.run_id)
+                .map_err(memory_config_error)
+        })?;
+        self.with_memory_context(
+            &run.session_id,
+            catalog,
+            |repository, connection, port, session, directory| {
+                let current_run = repository.run_for_session(connection, &run.session_id)?;
+                if current_run.run_id != snapshot.run_id {
+                    return Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::StaleVersion,
+                    ));
+                }
+                let context = crate::record::memory::build_proposal_context(
+                    crate::record::memory::ProposalContextInput {
+                        connection,
+                        repository,
+                        catalog,
+                        run: &current_run,
+                        session,
+                        directory,
+                        batch: &snapshot,
+                        source_port: port,
+                    },
+                )?;
+                snapshot.input = aoidos_json::to_value(serde_json::json!({
+                    "proposalContext": context,
+                }))
+                .map_err(|_| {
+                    aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::InvalidSchema,
+                    )
+                })?;
+                // 在占用素材前验证最终转义结果和两种 Provider 输入都能通过大小门限。
+                for mode in [
+                    aoidos_llm::provider::RequestMode::Completion,
+                    aoidos_llm::provider::RequestMode::Chat,
+                ] {
+                    crate::record::memory::prompt::build_memory_prompt(&snapshot, mode)?;
+                }
+                repository.freeze_batch(connection, port, &snapshot)
+            },
+        )
+        .map_err(memory_config_error)
+    }
+
     /// 读取当前历史版本下的待确认问题；失效问题由仓储持久标记。
     /// # Errors
     /// 游标过期、来源失效读取失败或周目身份不匹配时拒绝返回结果。

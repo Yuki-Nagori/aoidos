@@ -173,6 +173,7 @@ dependencies = [
 name = "aoidos-memory"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "aoidos-json",
  "aoidos-store",
  "rusqlite",

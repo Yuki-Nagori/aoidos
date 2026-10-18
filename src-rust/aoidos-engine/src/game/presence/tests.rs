@@ -3465,6 +3465,52 @@ fn completed_rumor_round_returns_only_the_verified_delivery_metadata() {
     assert_eq!(trusted.informant_id.as_deref(), Some("keeper"));
     assert_eq!(trusted.source.record_seq, source_seq);
     assert_eq!(trusted.uncertainty, Some(RumorUncertainty::Unverified));
+    let matched = SceneEvidence::for_source_ranges(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        &[(
+            source_seq,
+            format::hash(text.as_bytes()),
+            0,
+            text.len() as u64,
+        )],
+    )
+    .unwrap();
+    assert_eq!(matched.as_slice(), std::slice::from_ref(&trusted));
+    let split = text.len() as u64 / 2;
+    let matched_across_adjacent_spans = SceneEvidence::for_source_ranges(
+        &port.connection,
+        &fixture.session,
+        &port.catalog,
+        &port.directory,
+        &[
+            (source_seq, format::hash(text.as_bytes()), 0, split),
+            (
+                source_seq,
+                format::hash(text.as_bytes()),
+                split,
+                text.len() as u64,
+            ),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        matched_across_adjacent_spans.as_slice(),
+        std::slice::from_ref(&trusted)
+    );
+    assert!(
+        SceneEvidence::for_source_ranges(
+            &port.connection,
+            &fixture.session,
+            &port.catalog,
+            &port.directory,
+            &[(source_seq, format::hash(text.as_bytes()), 0, 1)],
+        )
+        .unwrap()
+        .is_empty()
+    );
 
     let (foreign_catalog, _) = catalog(&format::hash(b"foreign-script"));
     assert_eq!(

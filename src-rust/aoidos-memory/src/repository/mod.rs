@@ -4,12 +4,14 @@ use crate::{
     error::{Error, Reason, Result, invalid_json, sql},
     model::*,
 };
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
+
+const MAX_PROPOSAL_TARGET_SCAN: usize = 10_000;
 
 mod aliases;
 mod config;
@@ -302,6 +304,87 @@ impl Repository {
             .map_err(sql)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(sql)?;
+        ids.iter().map(|id| self.entry(conn, run_id, id)).collect()
+    }
+
+    /// 按当前提案主体读取有限的活动记忆目标；不读取无关主体或历史版本。
+    /// # Errors
+    /// 历史修订、主体集合或查询上限不合法时拒绝读取。
+    pub fn entries_for_subjects(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        history_revision: u64,
+        subjects: &[Subject],
+        limit: usize,
+    ) -> Result<Vec<Entry>> {
+        let (_, boundary) = self.boundary(conn, run_id, port)?;
+        if boundary.history_revision != history_revision {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        if limit == 0
+            || limit > crate::model::MAX_PROPOSAL_TARGETS + 1
+            || subjects.len() > 129
+            || subjects
+                .iter()
+                .any(|subject| matches!(subject, Subject::Character { id } if !valid_name(id)))
+        {
+            return Err(reject());
+        }
+
+        let subject_json = subjects
+            .iter()
+            .map(canonical)
+            .collect::<Result<BTreeSet<_>>>()?;
+        if subject_json.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (3..subject_json.len() + 3)
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!(
+            "WITH bounded_entries AS MATERIALIZED (\
+                 SELECT entry_id,current_version_id FROM memory_entries \
+                 WHERE run_id=?1 AND status='active' \
+                 ORDER BY entry_id LIMIT ?2\
+             ), matched_entries AS MATERIALIZED (\
+                 SELECT e.entry_id FROM bounded_entries e \
+                 JOIN memory_versions v ON v.entry_id=e.entry_id \
+                     AND v.version_id=e.current_version_id \
+                 WHERE v.subject_json IN ({placeholders}) \
+                 ORDER BY e.entry_id LIMIT ?{}\
+             ), scan_stats AS (SELECT COUNT(*) AS scanned FROM bounded_entries) \
+             SELECT scan_stats.scanned,matched_entries.entry_id \
+             FROM scan_stats LEFT JOIN matched_entries ON 1",
+            subject_json.len() + 3
+        );
+        let mut values = Vec::with_capacity(subject_json.len() + 3);
+        values.push(rusqlite::types::Value::Text(run_id.into()));
+        values.push(rusqlite::types::Value::Integer(
+            (MAX_PROPOSAL_TARGET_SCAN + 1) as i64,
+        ));
+        values.extend(subject_json.into_iter().map(rusqlite::types::Value::Blob));
+        values.push(rusqlite::types::Value::Integer(limit as i64));
+        let mut statement = conn.prepare(&query).map_err(sql)?;
+        let rows = statement
+            .query_map(params_from_iter(values.iter()), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        let mut ids = Vec::with_capacity(limit.min(rows.len()));
+        for (scanned, entry_id) in rows {
+            let scanned = usize::try_from(scanned).map_err(|_| Error::Corrupt)?;
+            if scanned > MAX_PROPOSAL_TARGET_SCAN {
+                return Err(Error::Rejected(Reason::CapacityBlocked));
+            }
+            if let Some(entry_id) = entry_id {
+                ids.push(entry_id);
+            }
+        }
         ids.iter().map(|id| self.entry(conn, run_id, id)).collect()
     }
 

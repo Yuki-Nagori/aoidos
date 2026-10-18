@@ -1,5 +1,28 @@
 use super::*;
-use crate::model::{InputMode, new_id};
+use crate::model::{EntityCategory, InputMode, KnowledgeKind, new_id};
+
+fn evidence_snapshot(subject_id: &str, source_id: &str) -> EvidenceSnapshot {
+    EvidenceSnapshot {
+        event_id: None,
+        subject_id: subject_id.into(),
+        source_ids: vec![source_id.into()],
+        kind: KnowledgeKind::Told,
+        uncertainty: None,
+        informant_id: Some("player".into()),
+        scope: "directDialogue".into(),
+        rule_id: "directDialogueV1".into(),
+        source: SourceRef {
+            script_id: "mistbell".into(),
+            run_id: new_id(),
+            session_id: new_id(),
+            record_seq: 1,
+            body_hash: crate::model::hash(b"evidence"),
+            start_byte: 0,
+            end_byte: 8,
+            mode: Some(InputMode::InCharacter),
+        },
+    }
+}
 
 fn context() -> ProposalContext {
     let subject = SubjectRef::Character { id: "guard".into() };
@@ -7,15 +30,29 @@ fn context() -> ProposalContext {
     ProposalContext {
         source_ids: ["s1".into(), "s2".into()].into(),
         entity_ids: ["guard".into(), "harbor".into()].into(),
-        subjects: [SubjectRef::PlayerPreference, subject.clone()].into(),
-        evidence: [(
-            "e1".into(),
-            EvidenceSnapshot {
-                subject_id: "guard".into(),
-                source_id: "s1".into(),
-            },
-        )]
+        entities: [
+            (
+                "guard".into(),
+                EntitySnapshot {
+                    kind: EntityCategory::Character,
+                    scope: "old-harbor".into(),
+                    canonical_name: "守门人".into(),
+                    aliases: Default::default(),
+                },
+            ),
+            (
+                "harbor".into(),
+                EntitySnapshot {
+                    kind: EntityCategory::Place,
+                    scope: "global".into(),
+                    canonical_name: "旧港".into(),
+                    aliases: Default::default(),
+                },
+            ),
+        ]
         .into(),
+        subjects: [SubjectRef::PlayerPreference, subject.clone()].into(),
+        evidence: [("e1".into(), evidence_snapshot("guard", "s1"))].into(),
         targets: [(
             entry.clone(),
             TargetSnapshot {
@@ -24,7 +61,9 @@ fn context() -> ProposalContext {
                 state_revision: 3,
                 subject: Subject::Character { id: "guard".into() },
                 dimension: Dimension::Story,
+                summary: "在旧港相信守门人".into(),
                 attitude: Attitude::Unexpressed,
+                inferred: false,
             },
         )]
         .into(),
@@ -433,13 +472,9 @@ fn cycle_mark_summaries_share_the_projected_byte_budget() {
 #[test]
 fn evidence_must_match_subject_source_and_attitude_subset() {
     let mut context = context();
-    context.evidence.insert(
-        "e2".into(),
-        EvidenceSnapshot {
-            subject_id: "guard".into(),
-            source_id: "s2".into(),
-        },
-    );
+    context
+        .evidence
+        .insert("e2".into(), evidence_snapshot("guard", "s2"));
     let mut candidate = character_candidate();
     candidate.evidence_ids.clear();
     assert!(proposal(candidate.clone()).validate(&context).is_err());

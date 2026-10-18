@@ -1,6 +1,6 @@
 use super::*;
 use aoidos_memory::{
-    model::{SourceRef, hash},
+    model::{InputMode, KnowledgeKind, SourceRef, hash},
     repository::{BatchSnapshot, Span},
 };
 
@@ -141,6 +141,15 @@ fn prompt_accepts_maximum_subjects_and_rejects_unlisted_character_subjects() {
     for index in 0..128 {
         let id = format!("character-{index}");
         context.entity_ids.insert(id.clone());
+        context.entities.insert(
+            id.clone(),
+            aoidos_memory::model::EntitySnapshot {
+                kind: aoidos_memory::model::EntityCategory::Character,
+                scope: "mistbell".into(),
+                canonical_name: id.clone(),
+                aliases: Default::default(),
+            },
+        );
         context.subjects.insert(SubjectRef::Character { id });
     }
     assert!(
@@ -155,6 +164,7 @@ fn prompt_accepts_maximum_subjects_and_rejects_unlisted_character_subjects() {
         id: "character-127".into(),
     });
     context.entity_ids.remove("character-127");
+    context.entities.remove("character-127");
     context.subjects.insert(SubjectRef::Character {
         id: "unlisted-character".into(),
     });
@@ -186,6 +196,273 @@ fn chat_prompt_keeps_frozen_data_separate_from_instructions() {
 }
 
 #[test]
+fn prompt_requires_frozen_canonical_names_for_every_entity_id() {
+    let mut context = proposal_context();
+    context.entity_ids.insert("npc-uuid".into());
+    assert!(matches!(
+        build_memory_prompt(
+            &with_context(snapshot("洛苇离开了钟室。"), &context),
+            RequestMode::Completion
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    context.entities.insert(
+        "npc-uuid".into(),
+        aoidos_memory::model::EntitySnapshot {
+            kind: aoidos_memory::model::EntityCategory::Character,
+            scope: "mistbell".into(),
+            canonical_name: "洛苇".into(),
+            aliases: Default::default(),
+        },
+    );
+    let prompt = build_memory_prompt(
+        &with_context(snapshot("洛苇离开了钟室。"), &context),
+        RequestMode::Completion,
+    )
+    .unwrap();
+    let ProviderInput::Completion(input) = prompt.input else {
+        panic!("completion mode keeps completion input");
+    };
+    assert!(input.prompt.contains("npc-uuid"));
+    assert!(input.prompt.contains("洛苇"));
+}
+
+#[test]
+fn prompt_accepts_frozen_scene_evidence_and_confirmed_aliases() {
+    use aoidos_memory::model::{EntityCategory, EntitySnapshot, EvidenceSnapshot, SubjectRef};
+
+    let source = snapshot("守门人说钟室已空。").spans[0].source.clone();
+    let mut scene_source = source.clone();
+    scene_source.end_byte = 9;
+    let mut context = proposal_context();
+    context.entity_ids.insert("keeper".into());
+    context.subjects.insert(SubjectRef::Character {
+        id: "keeper".into(),
+    });
+    context.entities.insert(
+        "keeper".into(),
+        EntitySnapshot {
+            kind: EntityCategory::Character,
+            scope: "mistbell".into(),
+            canonical_name: "守门人".into(),
+            aliases: ["老钟".into()].into(),
+        },
+    );
+    context.evidence.insert(
+        "e2".into(),
+        EvidenceSnapshot {
+            event_id: Some(uuid::Uuid::new_v4().to_string()),
+            subject_id: "keeper".into(),
+            source_ids: vec!["s1".into()],
+            kind: KnowledgeKind::Observed,
+            uncertainty: None,
+            informant_id: None,
+            scope: "room".into(),
+            rule_id: "room-observation-v1".into(),
+            source: scene_source,
+        },
+    );
+
+    let prompt = build_memory_prompt(
+        &with_context(snapshot("守门人说钟室已空。"), &context),
+        RequestMode::Completion,
+    )
+    .unwrap();
+    let ProviderInput::Completion(input) = prompt.input else {
+        panic!("completion mode keeps completion input");
+    };
+    assert!(input.prompt.contains("room-observation-v1"));
+    assert!(input.prompt.contains("老钟"));
+}
+
+#[test]
+fn prompt_preserves_disputed_rumor_uncertainty_and_rejects_missing_status() {
+    use aoidos_memory::model::{
+        EntityCategory, EntitySnapshot, EvidenceSnapshot, RumorUncertainty, SubjectRef,
+    };
+
+    let span = snapshot("守门人说钟室已空。").spans[0].clone();
+    let mut source = span.source.clone();
+    source.end_byte = 9;
+    let mut context = proposal_context();
+    context.entity_ids.insert("keeper".into());
+    context.subjects.insert(SubjectRef::Character {
+        id: "keeper".into(),
+    });
+    context.entities.insert(
+        "keeper".into(),
+        EntitySnapshot {
+            kind: EntityCategory::Character,
+            scope: "mistbell".into(),
+            canonical_name: "守门人".into(),
+            aliases: Default::default(),
+        },
+    );
+    context.evidence.insert(
+        "e2".into(),
+        EvidenceSnapshot {
+            event_id: Some(uuid::Uuid::new_v4().to_string()),
+            subject_id: "keeper".into(),
+            source_ids: vec![span.source_id],
+            kind: KnowledgeKind::Rumor,
+            uncertainty: Some(RumorUncertainty::Disputed),
+            informant_id: Some("informant".into()),
+            scope: "room".into(),
+            rule_id: "room-rumor-v1".into(),
+            source,
+        },
+    );
+
+    let prompt = build_memory_prompt(
+        &with_context(snapshot("守门人说钟室已空。"), &context),
+        RequestMode::Completion,
+    )
+    .unwrap();
+    let ProviderInput::Completion(input) = prompt.input else {
+        panic!("completion mode keeps completion input");
+    };
+    assert!(input.prompt.contains("\"uncertainty\":\"disputed\""));
+    assert!(input.prompt.contains("room-rumor-v1"));
+
+    context.evidence.get_mut("e2").unwrap().uncertainty = None;
+    assert!(matches!(
+        build_memory_prompt(
+            &with_context(snapshot("守门人说钟室已空。"), &context),
+            RequestMode::Completion
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
+fn prompt_keeps_same_names_in_distinct_scopes_and_rejects_ambiguous_duplicates() {
+    let mut context = proposal_context();
+    for (id, scope) in [("east-gate", "east-town"), ("west-gate", "west-town")] {
+        context.entity_ids.insert(id.into());
+        context.entities.insert(
+            id.into(),
+            aoidos_memory::model::EntitySnapshot {
+                kind: aoidos_memory::model::EntityCategory::Place,
+                scope: scope.into(),
+                canonical_name: "东门".into(),
+                aliases: Default::default(),
+            },
+        );
+    }
+    assert!(
+        build_memory_prompt(
+            &with_context(snapshot("东门外"), &context),
+            RequestMode::Completion
+        )
+        .is_ok()
+    );
+
+    context.entities.get_mut("west-gate").unwrap().scope = "east-town".into();
+    assert!(matches!(
+        build_memory_prompt(
+            &with_context(snapshot("东门外"), &context),
+            RequestMode::Completion
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
+fn prompt_rejects_one_confirmed_alias_bound_to_two_entities_in_the_same_scope() {
+    use aoidos_memory::model::{EntityCategory, EntitySnapshot};
+
+    let mut context = proposal_context();
+    for (id, canonical_name) in [("keeper-a", "守夜人甲"), ("keeper-b", "守夜人乙")] {
+        context.entity_ids.insert(id.into());
+        context.entities.insert(
+            id.into(),
+            EntitySnapshot {
+                kind: EntityCategory::Character,
+                scope: "mistbell".into(),
+                canonical_name: canonical_name.into(),
+                aliases: ["钟".into()].into(),
+            },
+        );
+    }
+    assert!(matches!(
+        build_memory_prompt(
+            &with_context(snapshot("钟在钟室响起"), &context),
+            RequestMode::Completion
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
+fn legacy_context_without_entity_snapshots_fails_closed_for_entity_ids() {
+    let mut context = proposal_context();
+    context.entity_ids.insert("dynamic-npc".into());
+    let mut batch = with_context(snapshot("一段旧记忆"), &context);
+    batch.input["proposalContext"]
+        .as_object_mut()
+        .unwrap()
+        .remove("entities");
+    assert!(matches!(
+        build_memory_prompt(&batch, RequestMode::Completion),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
+fn prompt_accepts_only_well_formed_targets_for_frozen_subjects() {
+    use aoidos_memory::model::{Attitude, Dimension, Subject, SubjectRef, TargetSnapshot};
+
+    let entry_id = uuid::Uuid::new_v4().to_string();
+    let version_id = uuid::Uuid::new_v4().to_string();
+    let mut context = proposal_context();
+    context.subjects.insert(SubjectRef::PlayerPreference);
+    context.targets.insert(
+        entry_id.clone(),
+        TargetSnapshot {
+            entry_id: entry_id.clone(),
+            version_id: version_id.clone(),
+            state_revision: 1,
+            subject: Subject::PlayerPreference,
+            dimension: Dimension::PlayerPreference,
+            summary: "玩家希望保留海风意象".into(),
+            attitude: Attitude::Believed,
+            inferred: false,
+        },
+    );
+    assert!(
+        build_memory_prompt(
+            &with_context(snapshot("海风让我安心。"), &context),
+            RequestMode::Completion
+        )
+        .is_ok()
+    );
+
+    let target = context.targets.get_mut(&entry_id).unwrap();
+    target.subject = Subject::Character {
+        id: "keeper".into(),
+    };
+    assert!(matches!(
+        build_memory_prompt(
+            &with_context(snapshot("海风让我安心。"), &context),
+            RequestMode::Completion
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    let target = context.targets.get_mut(&entry_id).unwrap();
+    target.subject = Subject::PlayerPreference;
+    target.version_id = "not-a-uuid".into();
+    assert!(matches!(
+        build_memory_prompt(
+            &with_context(snapshot("海风让我安心。"), &context),
+            RequestMode::Completion
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
 fn documented_player_preference_shape_is_accepted_by_the_real_proposal_parser() {
     let mut context = proposal_context();
     context
@@ -202,14 +479,39 @@ fn character_attitude_candidate_requires_matching_attitude_evidence() {
 
     let mut context = proposal_context();
     context.entity_ids.insert("keeper".into());
+    context.entities.insert(
+        "keeper".into(),
+        aoidos_memory::model::EntitySnapshot {
+            kind: aoidos_memory::model::EntityCategory::Character,
+            scope: "mistbell".into(),
+            canonical_name: "守门人".into(),
+            aliases: Default::default(),
+        },
+    );
     context.subjects.insert(SubjectRef::Character {
         id: "keeper".into(),
     });
     context.evidence.insert(
         "e1".into(),
         EvidenceSnapshot {
+            event_id: None,
             subject_id: "keeper".into(),
-            source_id: "s1".into(),
+            source_ids: vec!["s1".into()],
+            kind: KnowledgeKind::Told,
+            uncertainty: None,
+            informant_id: Some("player".into()),
+            scope: "directDialogue".into(),
+            rule_id: "directDialogueV1".into(),
+            source: SourceRef {
+                script_id: "mistbell".into(),
+                run_id: "run-1".into(),
+                session_id: "session-1".into(),
+                record_seq: 1,
+                body_hash: hash(b"a trusted source"),
+                start_byte: 0,
+                end_byte: 16,
+                mode: Some(InputMode::InCharacter),
+            },
         },
     );
     let response = r#"{"version":1,"candidates":[{"candidateId":"c1","classification":"new","sourceIds":["s1"],"subjectRef":{"kind":"character","id":"keeper"},"entityIds":["keeper"],"evidenceIds":["e1"],"dimension":"story","summary":"相信守门人会遵守约定。","attitude":"believed","attitudeEvidenceIds":["e1"],"inferred":false,"reason":"角色直接表达了相信。"}]}"#;

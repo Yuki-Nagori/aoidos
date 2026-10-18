@@ -197,7 +197,7 @@ impl EntityDirectory {
         )
     }
 
-    pub(super) fn entries(&self) -> impl Iterator<Item = &CanonicalEntity> {
+    pub(crate) fn entries(&self) -> impl Iterator<Item = &CanonicalEntity> {
         self.by_id.values()
     }
 

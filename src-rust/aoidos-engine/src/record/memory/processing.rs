@@ -210,13 +210,13 @@ pub async fn process_authorized_batch(
     execute_batch(coordinator, persistence, request).await
 }
 
-/// 从当前 queued 批次恢复完整提案上下文，并复核其中的刻痕授权。
+/// 从当前 queued 批次恢复完整提案上下文，并重建普通来源与刻痕授权。
 ///
-/// 输出 context 完全来自冻结快照；当前剧本、周目、实体目录和来源重建结果必须与已冻结
-/// 授权一致，不能由调用方补充或替换普通候选字段。
+/// 当前剧本、周目、实体目录、证据和来源重建结果必须与冻结快照完全一致；
+/// 返回值来自当前重建结果，不接受调用方补充或替换权限字段。
 /// # Errors
 /// 批次状态、历史 / 实体 / 证据修订或任一来源不再匹配时拒绝构造请求上下文。
-pub fn prepare_cycle_mark_context(
+pub fn prepare_memory_proposal_context(
     storage: &Storage,
     session_id: &str,
     catalog: &crate::game::catalog::SceneCatalog,
@@ -233,24 +233,21 @@ pub fn prepare_cycle_mark_context(
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
                 let run = repository.run_for_session(connection, session_id)?;
-                let cycle_context = super::build_cycle_mark_context(super::CycleMarkContextInput {
+                let frozen = frozen_proposal_context(&snapshot)?;
+                let rebuilt = super::build_proposal_context(super::ProposalContextInput {
+                    connection,
+                    repository,
                     catalog,
                     run: &run,
                     session,
                     directory,
                     batch: &snapshot,
                     source_port: port,
-                })
-                .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
-                let frozen = frozen_proposal_context(&snapshot)?;
-                let mut rebuilt = frozen.clone();
-                cycle_context
-                    .apply_to(&mut rebuilt)
-                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+                })?;
                 if !same_proposal_context(&rebuilt, &frozen)? {
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
-                *context = frozen;
+                *context = rebuilt;
                 Ok(())
             },
         )
@@ -259,8 +256,9 @@ pub fn prepare_cycle_mark_context(
 
 /// 按当前冻结授权校验已收回的提案，并将刻痕与普通候选摘要原子完成。
 ///
-/// 提案上下文只从收到响应的冻结批次恢复；此函数不会重新发送请求，也不会重新计算普通
-/// 候选的操作结果。含刻痕时由仓储在同一事务写入刻痕和完成回执。
+/// 候选始终按批次冻结的目标版本解析；完成前重建其余授权上下文，避免本批已经提交的
+/// 目标变更使自己的完成回执失效。目标版本的并发冲突由候选操作 CAS 核验。
+/// 此函数不会重新发送请求，也不会重新计算普通候选的操作结果。含刻痕时由仓储在同一事务写入刻痕和完成回执。
 /// # Errors
 /// 批次尚未收到响应、提案不符合冻结授权或当前来源已失效时拒绝完成；相同完成重放返回 `false`。
 pub fn complete_received_batch(
@@ -289,21 +287,19 @@ pub fn complete_received_batch(
                 if !matches!(state, BatchState::Received | BatchState::Completed) {
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
-                let cycle_context = super::build_cycle_mark_context(super::CycleMarkContextInput {
-                    catalog,
-                    run: &run,
-                    session,
-                    directory,
-                    batch: &snapshot,
-                    source_port: port,
-                })
-                .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
-                let context = frozen_proposal_context(&snapshot)?;
-                let mut rebuilt = context.clone();
-                cycle_context
-                    .apply_to(&mut rebuilt)
-                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
-                if !same_proposal_context(&rebuilt, &context)? {
+                let rebuilt =
+                    super::build_proposal_authority_context(super::ProposalContextInput {
+                        connection,
+                        repository,
+                        catalog,
+                        run: &run,
+                        session,
+                        directory,
+                        batch: &snapshot,
+                        source_port: port,
+                    })?;
+                let frozen = frozen_proposal_context(&snapshot)?;
+                if !same_proposal_authority(&rebuilt, &frozen)? {
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
                 let receipt = repository.batch_receipt(connection, batch_id)?;
@@ -311,14 +307,14 @@ pub fn complete_received_batch(
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
                 let response = receipt.response.as_deref().ok_or(Error::Corrupt)?;
-                let proposal = Proposal::parse(response, &context)?;
+                let proposal = Proposal::parse(response, &frozen)?;
                 let cycle_marks = proposal
                     .cycle_marks
                     .iter()
                     .map(|candidate| {
                         Ok(CycleMarkCommit {
                             candidate_id: candidate.candidate_id.clone(),
-                            mark: candidate.materialize(&context)?,
+                            mark: candidate.materialize(&frozen)?,
                         })
                     })
                     .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
@@ -362,6 +358,18 @@ fn same_proposal_context(
     let right =
         aoidos_json::canonical_string(right).map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
     Ok(left == right)
+}
+
+fn same_proposal_authority(
+    current: &ProposalContext,
+    frozen: &ProposalContext,
+) -> aoidos_memory::error::Result<bool> {
+    let mut current = current.clone();
+    let mut frozen = frozen.clone();
+    // targets 是候选更新所用的 CAS 基线；本批操作应用后它们自然会改变。
+    current.targets.clear();
+    frozen.targets.clear();
+    same_proposal_context(&current, &frozen)
 }
 
 async fn execute_batch(

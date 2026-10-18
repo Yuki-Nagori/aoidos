@@ -2,7 +2,11 @@ use super::*;
 use crate::{migration::MigrationEvent, record::test_support};
 use aoidos_memory::{
     error::{Error, Reason},
-    model::{Algorithm, CausalPort, CycleKind, DetailPolicy, Policy, ProposalContext},
+    model::{
+        Algorithm, Attitude, CausalPort, ChangeKind, CycleKind, DetailPolicy, Dimension,
+        EntryState, Expected, Plan, Policy, ProposalContext, Subject, Target, Version,
+        new_id as new_memory_id, set_hash,
+    },
     repository::{BatchCompletion, BatchSnapshot, Span},
 };
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -248,6 +252,249 @@ fn memory_collection_registers_stable_utf8_units_without_exposing_source_text() 
 }
 
 #[test]
+fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
+    let root = std::env::temp_dir().join(format!("aoidos-memory-targets-{}", uuid::Uuid::new_v4()));
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    let catalog = scene_catalog();
+    let run = storage
+        .initialize_memory_run(&session_id, &catalog)
+        .unwrap();
+    let session = storage.records.get(&session_id).unwrap();
+    let prior_seq = session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我喜欢海风。".into(),
+            mode: Some(crate::record::format::InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let (entry_id, version_id) = storage
+        .with_memory_context(
+            &session_id,
+            &catalog,
+            |repository, connection, port, _, _| {
+                let source = port.reference(&run.run_id, prior_seq)?;
+                let sources = vec![source];
+                let version = Version {
+                    version: 1,
+                    entry_id: new_memory_id(),
+                    version_id: new_memory_id(),
+                    parent_version_id: None,
+                    restored_from_version_id: None,
+                    subject: Subject::PlayerPreference,
+                    dimension: Dimension::PlayerPreference,
+                    summary: "用户喜欢海风".into(),
+                    attitude: Attitude::Believed,
+                    inferred: false,
+                    change: ChangeKind::New,
+                    source_set_hash: set_hash(&sources)?,
+                    evidence_set_hash: set_hash::<aoidos_memory::model::KnowledgeEvidence>(&[])?,
+                    sources,
+                    evidence: vec![],
+                    policy_hash: run.policy_hash,
+                };
+                let boundary = port.boundary()?;
+                let plan = Plan {
+                    expected_logical_clock: repository.clock(connection, port, &run.run_id)?,
+                    operation_id: new_memory_id(),
+                    run_id: run.run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    batch_id: None,
+                    candidate_ids: vec![],
+                    targets: vec![Target {
+                        entry_id: version.entry_id.clone(),
+                        expected: Expected {
+                            version_id: None,
+                            state_revision: 0,
+                        },
+                        next: Some(version.clone()),
+                        state: EntryState::Active,
+                        effects: vec![],
+                    }],
+                    processed_materials: vec![],
+                    reason: "test target snapshot".into(),
+                };
+                repository.prepare(connection, port, &plan)?;
+                repository.write_versions(connection, &plan.operation_id)?;
+                repository.apply(connection, port, &plan.operation_id)?;
+                Ok((version.entry_id, version.version_id))
+            },
+        )
+        .unwrap();
+    let current_seq = session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我仍然喜欢海风。".into(),
+            mode: Some(crate::record::format::InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let snapshot = storage
+        .with_memory_context(
+            &session_id,
+            &catalog,
+            |repository, connection, port, _, _| {
+                let source = port.reference(&run.run_id, current_seq)?;
+                let material_id = repository.register_material(connection, port, &source, 0)?;
+                let boundary = port.boundary()?;
+                Ok(BatchSnapshot {
+                    logical_clock: repository.clock(connection, port, &run.run_id)?,
+                    version: 1,
+                    batch_id: new_memory_id(),
+                    run_id: run.run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    spans: vec![Span {
+                        source_id: "s1".into(),
+                        material_id,
+                        source,
+                        text: "我仍然喜欢海风。".into(),
+                        context: false,
+                        continuation: false,
+                    }],
+                    input: serde_json::json!({}),
+                })
+            },
+        )
+        .unwrap();
+
+    storage
+        .freeze_memory_batch(&catalog, snapshot.clone())
+        .unwrap();
+    let frozen = storage
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            repository
+                .batch(connection, &snapshot.batch_id)
+                .map(|(batch, _)| batch)
+        })
+        .unwrap();
+    let context: ProposalContext =
+        aoidos_json::from_value(frozen.input["proposalContext"].clone()).unwrap();
+    let target = &context.targets[&entry_id];
+    assert_eq!(target.version_id, version_id);
+    assert_eq!(target.summary, "用户喜欢海风");
+    assert_eq!(target.state_revision, 1);
+
+    let candidate = aoidos_memory::model::Candidate {
+        candidate_id: "update-1".into(),
+        classification: aoidos_memory::model::Classification::Supplement,
+        source_ids: vec!["s1".into()],
+        subject_ref: aoidos_memory::model::SubjectRef::PlayerPreference,
+        entity_ids: vec![],
+        evidence_ids: vec![],
+        target_ref: Some(aoidos_memory::model::TargetRef {
+            entry_id: entry_id.clone(),
+            expected_version_id: version_id,
+            expected_state_revision: 1,
+        }),
+        dimension: Some(Dimension::PlayerPreference),
+        summary: Some("用户在新回合再次表达对海风的偏好".into()),
+        attitude: None,
+        attitude_evidence_ids: vec![],
+        inferred: Some(false),
+        reason: "与既有偏好一致".into(),
+    };
+    aoidos_memory::model::Proposal {
+        version: 1,
+        candidates: vec![candidate],
+        cycle_marks: vec![],
+    }
+    .validate(&context)
+    .unwrap();
+
+    let turn_id = new_memory_id();
+    let request_id = new_memory_id();
+    let batch_id = snapshot.batch_id.clone();
+    storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            repository.dispatch_batch(connection, port, &batch_id, &turn_id, &request_id)?;
+            repository.receive_batch(
+                connection,
+                &batch_id,
+                &turn_id,
+                &request_id,
+                br#"{"version":1,"candidates":[]}"#,
+            )?;
+
+            let entry = repository.entry(connection, &run.run_id, &entry_id)?;
+            let version = repository.current(connection, port, &run.run_id, &entry_id)?;
+            let boundary = port.boundary()?;
+            let plan = Plan {
+                expected_logical_clock: repository.clock(connection, port, &run.run_id)?,
+                operation_id: new_memory_id(),
+                run_id: run.run_id.clone(),
+                history_revision: boundary.history_revision,
+                entity_revision: boundary.entity_revision,
+                evidence_revision: boundary.evidence_revision,
+                policy_hash: run.policy_hash,
+                batch_id: None,
+                candidate_ids: vec![],
+                targets: vec![Target {
+                    entry_id: entry_id.clone(),
+                    expected: Expected {
+                        version_id: Some(version.version_id),
+                        state_revision: entry.state_revision,
+                    },
+                    next: None,
+                    state: EntryState::Archived,
+                    effects: vec![],
+                }],
+                processed_materials: vec![],
+                reason: "test target changed after response".into(),
+            };
+            repository.prepare(connection, port, &plan)?;
+            repository.write_versions(connection, &plan.operation_id)?;
+            repository.apply(connection, port, &plan.operation_id)?;
+            Ok(())
+        })
+        .unwrap();
+
+    let completion = BatchCompletion {
+        version: 1,
+        outcomes: vec![],
+        cycle_marks: vec![],
+    };
+    assert!(
+        crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &batch_id,
+            &completion,
+        )
+        .unwrap()
+    );
+    assert!(
+        !crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &batch_id,
+            &completion,
+        )
+        .unwrap()
+    );
+
+    storage.close().unwrap();
+}
+
+#[test]
 fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atomically() {
     let root = std::env::temp_dir().join(format!(
         "aoidos-cycle-mark-completion-{}",
@@ -301,15 +548,15 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
     let request_id = aoidos_memory::model::new_id();
     let response = r#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark-1","ruleId":"remember-rescue","sourceIds":["s1"],"subjectIds":["luo-wei"],"summary":"洛苇记得玩家曾帮助她逃离钟室。"}]}"#.as_bytes();
 
-    storage
+    let snapshot = storage
         .with_memory_context(
             &session_id,
             &catalog,
-            |repository, connection, port, session, directory| {
+            |repository, connection, port, _, _| {
                 let source = port.reference(&run.run_id, source_seq)?;
                 let material_id = repository.register_material(connection, port, &source, 0)?;
                 let boundary = port.boundary()?;
-                let mut snapshot = BatchSnapshot {
+                Ok(BatchSnapshot {
                     logical_clock: repository.clock(connection, port, &run.run_id)?,
                     version: 1,
                     batch_id: batch_id.clone(),
@@ -327,46 +574,31 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
                         continuation: false,
                     }],
                     input: serde_json::json!({
-                        "version": 1,
-                        "proposalContext": ProposalContext {
-                            source_ids: ["s1".into()].into(),
-                            ..ProposalContext::default()
-                        }
+                        "untrustedPromptContext": ["伪造记忆不得进入模型输入"],
                     }),
-                };
-                let mut context: ProposalContext =
-                    aoidos_json::from_value(snapshot.input["proposalContext"].clone())
-                        .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
-                crate::record::memory::build_cycle_mark_context(
-                    crate::record::memory::CycleMarkContextInput {
-                        catalog: &catalog,
-                        run: &run,
-                        session,
-                        directory,
-                        batch: &snapshot,
-                        source_port: port,
-                    },
-                )
-                .map_err(|_| {
-                    aoidos_memory::error::Error::Rejected(
-                        aoidos_memory::error::Reason::InvalidSchema,
-                    )
-                })?
-                .apply_to(&mut context)
-                .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
-                snapshot.input["proposalContext"] = serde_json::to_value(context)
-                    .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
-                repository.freeze_batch(connection, port, &snapshot)?;
-                Ok(())
+                })
             },
         )
+        .unwrap();
+    storage.freeze_memory_batch(&catalog, snapshot).unwrap();
+    storage
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            let (frozen, _) = repository.batch(connection, &batch_id)?;
+            assert!(frozen.input.get("untrustedPromptContext").is_none());
+            let context: ProposalContext =
+                aoidos_json::from_value(frozen.input["proposalContext"].clone())
+                    .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+            assert!(context.cycle_rules.contains_key("remember-rescue"));
+            assert_eq!(context.source_ids, ["s1".into()].into());
+            Ok(())
+        })
         .unwrap();
 
     let mut context = ProposalContext {
         entity_ids: ["untrusted-entity".into()].into(),
         ..ProposalContext::default()
     };
-    crate::record::memory::processing::prepare_cycle_mark_context(
+    crate::record::memory::processing::prepare_memory_proposal_context(
         &storage,
         &session_id,
         &catalog,
@@ -415,7 +647,7 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
         ])
         .unwrap();
     assert_eq!(
-        crate::record::memory::processing::prepare_cycle_mark_context(
+        crate::record::memory::processing::prepare_memory_proposal_context(
             &storage,
             &session_id,
             &changed_catalog,
@@ -477,6 +709,95 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
     storage.close().unwrap();
     drop(storage);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn oversized_escaped_memory_prompt_is_rejected_before_materials_are_reserved() {
+    let root = std::env::temp_dir().join(format!(
+        "aoidos-memory-prompt-capacity-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    let catalog = scene_catalog();
+    let run = storage
+        .initialize_memory_run(&session_id, &catalog)
+        .unwrap();
+    let session = storage.records.get(&session_id).unwrap();
+    let sequences = (0..16)
+        .map(|_| {
+            session
+                .lock()
+                .unwrap()
+                .append(crate::record::format::Body::PlayerSpeech {
+                    player_id: "player".into(),
+                    text: "[".repeat(2048),
+                    mode: None,
+                    content_range: None,
+                })
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let snapshot = storage
+        .with_memory_context(
+            &session_id,
+            &catalog,
+            |repository, connection, port, _, _| {
+                let boundary = port.boundary()?;
+                let spans = sequences
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &record_seq)| {
+                        let source = port.reference(&run.run_id, record_seq)?;
+                        let material_id =
+                            repository.register_material(connection, port, &source, 0)?;
+                        Ok(Span {
+                            source_id: format!("s{}", index + 1),
+                            material_id,
+                            text: "[".repeat(2048),
+                            source,
+                            context: false,
+                            continuation: false,
+                        })
+                    })
+                    .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
+                Ok(BatchSnapshot {
+                    logical_clock: repository.clock(connection, port, &run.run_id)?,
+                    version: 1,
+                    batch_id: aoidos_memory::model::new_id(),
+                    run_id: run.run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    spans,
+                    input: serde_json::json!({}),
+                })
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .freeze_memory_batch(&catalog, snapshot)
+            .unwrap_err()
+            .code,
+        "app.bad-request"
+    );
+    assert_eq!(
+        storage
+            .collect_memory_materials(&run.run_id, None)
+            .unwrap()
+            .eligible_count,
+        16
+    );
+    storage.close().unwrap();
 }
 
 #[test]

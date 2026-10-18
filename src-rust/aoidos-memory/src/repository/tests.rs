@@ -187,6 +187,135 @@ fn page_cursor_is_omitted_when_the_last_page_is_full() {
 }
 
 #[test]
+fn entries_for_subjects_returns_only_active_current_targets_and_checks_revision() {
+    let mut f = Fixture::new();
+    let character_id = "bellkeeper";
+    let mut character = f.version();
+    character.subject = Subject::Character {
+        id: character_id.into(),
+    };
+    character.dimension = Dimension::Story;
+    character.evidence.push(KnowledgeEvidence {
+        evidence_id: new_id(),
+        subject_id: character_id.into(),
+        source: f.source(),
+        kind: KnowledgeKind::Observed,
+        informant_id: None,
+        scope: "public".into(),
+        rule_id: "observation".into(),
+    });
+    character.evidence_set_hash = set_hash(&character.evidence).unwrap();
+    let character_entry = character.entry_id.clone();
+    f.commit(&f.plan(character));
+
+    let preference = f.version();
+    let preference_entry = preference.entry_id.clone();
+    f.commit(&f.plan(preference));
+
+    let archived = f.version();
+    let archived_entry = archived.entry_id.clone();
+    let mut archived_plan = f.plan(archived);
+    archived_plan.targets[0].state = EntryState::Archived;
+    f.commit(&archived_plan);
+
+    let subjects = [
+        Subject::Character {
+            id: character_id.into(),
+        },
+        Subject::PlayerPreference,
+    ];
+    let entries = f
+        .repo
+        .entries_for_subjects(&f.conn, &f.port, &f.run.run_id, 0, &subjects, 65)
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.entry_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        [character_entry.as_str(), preference_entry.as_str()]
+            .into_iter()
+            .collect()
+    );
+    assert!(!entries.iter().any(|entry| entry.entry_id == archived_entry));
+
+    rejected(
+        f.repo
+            .entries_for_subjects(&f.conn, &f.port, &f.run.run_id, 0, &subjects, 66),
+        Reason::InvalidSchema,
+    );
+    f.port.view.history_revision = 1;
+    rejected(
+        f.repo
+            .entries_for_subjects(&f.conn, &f.port, &f.run.run_id, 0, &subjects, 65),
+        Reason::StaleVersion,
+    );
+}
+
+#[test]
+fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
+    let f = Fixture::new();
+    let mut insert = f
+        .conn
+        .prepare("INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')")
+        .unwrap();
+    for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
+        insert.execute(params![new_id(), f.run.run_id]).unwrap();
+    }
+
+    rejected(
+        f.repo.entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGETS + 1,
+        ),
+        Reason::CapacityBlocked,
+    );
+}
+
+#[test]
+fn entries_for_subjects_budget_ignores_history_from_other_runs() {
+    let mut f = Fixture::new();
+    let version = f.version();
+    let entry_id = version.entry_id.clone();
+    f.commit(&f.plan(version));
+    let subject_json = canonical(&Subject::PlayerPreference).unwrap();
+    {
+        let mut insert = f
+            .conn
+            .prepare(
+                "INSERT INTO memory_versions(version_id,entry_id,body_hash,body_length,source_set_hash,evidence_set_hash,policy_hash,subject_json,change_kind) \
+                 VALUES(?1,?2,zeroblob(32),1,zeroblob(32),zeroblob(32),zeroblob(32),?3,'new')",
+            )
+            .unwrap();
+        for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
+            insert
+                .execute(params![new_id(), entry_id, subject_json])
+                .unwrap();
+        }
+    }
+
+    f.port.view.session_id = new_id();
+    let other_run = f.repo.create_run(&mut f.conn, &f.port, policy()).unwrap();
+    assert!(
+        f.repo
+            .entries_for_subjects(
+                &f.conn,
+                &f.port,
+                &other_run.run_id,
+                0,
+                &[Subject::PlayerPreference],
+                MAX_PROPOSAL_TARGETS + 1,
+            )
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn source_and_evidence_checks_apply_to_character_versions() {
     let mut f = Fixture::new();
     let mut version = f.version();
