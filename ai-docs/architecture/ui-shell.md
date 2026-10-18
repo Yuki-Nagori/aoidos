@@ -1,6 +1,6 @@
 # 界面结构与交互
 
-更新日期：2026-10-16；官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
+更新日期：2026-10-19；官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。页面视觉与状态样例以用户维护的 `aoidos-art` 为准，先由 [051](../task/051-web-ui-architecture-refactor.md) 整理 Vue 结构，再由 [052](../task/052-aoidos-art-vue-port.md) 移植；静态 HTML 只作为设计输入，不进入产品运行时。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
 
 ## 舞台与覆盖层
 
@@ -19,7 +19,7 @@
 
 舞台内容使用 aspect-ratio 与容器尺寸计算；不支持容器查询时用 ResizeObserver 更新可用矩形。不把浏览器页面缩放值当设备像素比。默认窗口为 960 × 640，最小客户区为 640 × 480 CSS 像素；桌面舞台锁定 16:9，高度不足时优先等比缩小，不用最小高度撑破比例。窄屏改为占满可用纵向空间。
 
-当前组件边界由 `App.vue` 编排产品状态，`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览分别位于 utils，定时器与偏好写入由 composables 管理。设置摘要在有活动对局时收起，仍可手动展开。
+当前实现仍由 `App.vue` 组合产品状态，`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览分别位于 utils，定时器与偏好写入由 composables 管理。设置摘要在有活动对局时收起，仍可手动展开。该现状将在 051 按职责拆分；拆分前后均不得改变本文定义的交互。
 
 ## 面板四态
 

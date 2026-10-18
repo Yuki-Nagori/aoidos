@@ -125,6 +125,11 @@ impl Fixture {
         let conn = Connection::open_in_memory().unwrap();
         Self::with_connection(root, conn, policy())
     }
+    pub(super) fn new_in_memory_with_policy(run_policy: Policy) -> Self {
+        let root = std::env::temp_dir().join(format!("aoidos-memory-test-{}", new_id()));
+        let conn = Connection::open_in_memory().unwrap();
+        Self::with_connection(root, conn, run_policy)
+    }
     fn with_connection(root: PathBuf, mut conn: Connection, run_policy: Policy) -> Self {
         let repo = Repository::new(&root);
         conn.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE store_applied(id TEXT PRIMARY KEY,content_hash TEXT NOT NULL);").unwrap();
