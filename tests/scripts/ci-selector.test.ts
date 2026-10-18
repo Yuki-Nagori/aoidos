@@ -26,19 +26,39 @@ const packages: CargoPackage[] = [
   },
 ];
 const knownTests = [
-  "tests/web/composables/useBilling.test.ts",
-  "tests/web/App.test.ts",
+  "tests/web/features/billing/composables/useBilling.test.ts",
+  "tests/web/app/App.test.ts",
   "tests/scripts/rust-layers.test.ts",
   "tests/scripts/ci-scope.test.ts",
 ];
 
 describe("CI scope selection", () => {
   it("selects mirrored frontend tests and changed TypeScript lint/format files", () => {
-    const plan = createCiPlan(["src-web/composables/useBilling.ts"], packages, root, knownTests);
+    const plan = createCiPlan(
+      ["src-web/features/billing/composables/useBilling.ts"],
+      packages,
+      root,
+      knownTests,
+    );
 
-    expect(plan.vitestFiles).toEqual(["tests/web/composables/useBilling.test.ts"]);
-    expect(plan.biomeFormatFiles).toEqual(["src-web/composables/useBilling.ts"]);
-    expect(plan.biomeLintFiles).toEqual(["src-web/composables/useBilling.ts"]);
+    expect(plan.vitestFiles).toEqual(["tests/web/features/billing/composables/useBilling.test.ts"]);
+    expect(plan.biomeFormatFiles).toEqual(["src-web/features/billing/composables/useBilling.ts"]);
+    expect(plan.biomeLintFiles).toEqual(["src-web/features/billing/composables/useBilling.ts"]);
+    expect(plan.rustTestPackages).toEqual([]);
+    expect(plan.runNativeTests).toBe(false);
+  });
+
+  it("keeps ordinary Vue feature changes out of Rust and native test targets", () => {
+    const plan = createCiPlan(
+      ["src-web/features/billing/components/BillingPanel.vue"],
+      packages,
+      root,
+      [...knownTests, "tests/web/features/billing/components/BillingPanel.test.ts"],
+    );
+
+    expect(plan.vitestFiles).toEqual([
+      "tests/web/features/billing/components/BillingPanel.test.ts",
+    ]);
     expect(plan.rustTestPackages).toEqual([]);
     expect(plan.runNativeTests).toBe(false);
   });
@@ -59,25 +79,29 @@ describe("CI scope selection", () => {
   });
 
   it("uses full checks when a source file has no mirrored behavior test", () => {
-    const plan = createCiPlan(["src-web/components/NewPanel.vue"], packages, root, knownTests);
+    const plan = createCiPlan(
+      ["src-web/features/game/components/NewPanel.vue"],
+      packages,
+      root,
+      knownTests,
+    );
 
     expect(plan.vitestFiles).toBe("all");
-    expect(plan.dprintFormatFiles).toEqual(["src-web/components/NewPanel.vue"]);
+    expect(plan.dprintFormatFiles).toEqual(["src-web/features/game/components/NewPanel.vue"]);
   });
 
-  it("falls back to all checkers for shared tool configuration", () => {
+  it("widens Vitest configuration changes without running unrelated Rust tests", () => {
     const plan = createCiPlan(["vitest.config.ts"], packages, root, knownTests);
 
-    expect(plan.full).toBe(true);
+    expect(plan.full).toBe(false);
     expect(plan.vitestFiles).toBe("all");
-    expect(plan.biomeFormatFiles).toBe("all");
-    expect(plan.dprintFormatFiles).toBe("all");
-    expect(plan.rustTestPackages).toEqual([
-      "aoidos",
-      "aoidos-engine",
-      "aoidos-native-tests",
-      "aoidos-store",
-    ]);
+    expect(plan.biomeFormatFiles).toEqual(["vitest.config.ts"]);
+    expect(plan.dprintFormatFiles).toEqual([]);
+    expect(plan.biomeLintFiles).toEqual(["vitest.config.ts"]);
+    expect(plan.rustTestPackages).toEqual([]);
+    expect(plan.rustLintPackages).toEqual([]);
+    expect(plan.runNativeTests).toBe(false);
+    expect(plan.runLayerCheck).toBe(false);
   });
 
   it("keeps documentation formatting separate from code tests and lint", () => {
@@ -91,7 +115,7 @@ describe("CI scope selection", () => {
 
   it("does not pass deleted or tool-excluded files to format and lint commands", () => {
     const paths = [
-      "src-web/components/Removed.vue",
+      "src-web/features/game/components/Removed.vue",
       "resources/scripts/mistbell/scenario.md",
       "resources/scripts/mistbell/entities.json",
       "public/theme-bootstrap.js",
@@ -129,15 +153,20 @@ describe("CI scope selection", () => {
 
   it("runs native smoke tests for WebView source files imported by the harness", () => {
     expect(
-      createCiPlan(["src-web/composables/useGameView.ts"], packages, root, knownTests)
+      createCiPlan(["src-web/features/game/composables/useGameView.ts"], packages, root, knownTests)
         .runNativeTests,
     ).toBe(true);
     expect(
-      createCiPlan(["src-web/composables/useBilling.ts"], packages, root, knownTests)
-        .runNativeTests,
+      createCiPlan(
+        ["src-web/features/billing/composables/useBilling.ts"],
+        packages,
+        root,
+        knownTests,
+      ).runNativeTests,
     ).toBe(false);
     expect(
-      createCiPlan(["src-web/utils/listener-group.ts"], packages, root, knownTests).runNativeTests,
+      createCiPlan(["src-web/shared/utils/listener-group.ts"], packages, root, knownTests)
+        .runNativeTests,
     ).toBe(true);
   });
 
@@ -146,7 +175,7 @@ describe("CI scope selection", () => {
       "src-tauri/src/lib.rs",
       "tests/rust/native-platform/webview/main.ts",
       "src-web/api/game.ts",
-      "src-web/composables/useGameView.ts",
+      "src-web/features/game/composables/useGameView.ts",
       "src-web/theme-bootstrap.ts",
       "locales/en.json",
       "public/icon.png",
@@ -156,7 +185,10 @@ describe("CI scope selection", () => {
   });
 
   it("runs the locale checker for ordinary Vue and TypeScript source", () => {
-    for (const path of ["src-web/App.vue", "src-web/composables/useBilling.ts"]) {
+    for (const path of [
+      "src-web/app/App.vue",
+      "src-web/features/billing/composables/useBilling.ts",
+    ]) {
       expect(createCiPlan([path], packages, root, knownTests).runI18nCheck).toBe(true);
     }
   });

@@ -26,9 +26,9 @@
 
 ## 覆盖率门槛
 
-- 前端 `bun run test:coverage`：v8 provider，只统计逻辑层——`src-web/{utils,stores,composables}` 与组件旁 `use*.ts`；行 / 分支 / 函数 / 语句各至少 90%。`main.ts` 是装配、api 是薄封装、`bench/` 是基准，均不入门槛。
+- 前端 `bun run test:coverage`：v8 provider，统计 `src-web/features/**` 的功能规则 / 状态 composable 与 `src-web/shared/**`；行 / 分支 / 函数 / 语句各至少 90%。`app/`、`GameWorkspace` 页面级跨 composable 编排、API 薄封装和 `bench/` 不计入门槛；关键用户路径仍由组件 / 入口行为测试验证，不能用 coverage 排除代替行为证据。
 - Rust `bun run coverage:rust`：`cargo llvm-cov --workspace --lib --json` 统计纳入文件的**聚合行覆盖率至少 90%**，配置在根目录 [`coverage-rust.config.mts`](../../coverage-rust.config.mts)，由 `scripts/coverage-rust.mts` 执行。小文件不单独设 100% 预算，Tauri 宏映射的无源行也不再单独登记；平台适配 / 装配排除见下方台账。
-- PR CI 由变更规划、Ubuntu 共享质量门禁和三平台构建 / 受影响测试组成；可复用步骤位于 `.github/actions/`。三平台均构建 Web 产物，并按同一计划运行受影响 Tauri 应用 / Rust crate / 消费者及对应 Vitest 镜像测试；格式、lint 和 Clippy 在 Ubuntu 执行，原生验收在相关 WebView 夹具直接或传递输入、原生测试输入或 Rust 消费闭包受影响时运行。测试、Biome、dprint、rustfmt 与 Clippy 共用变更计划，Cargo 反向依赖闭包从 metadata 得出。共享配置、空 diff、未知路径或不可用元数据 / 基线回退全量。Nightly 在三平台构建并运行完整 Vitest、workspace Rust 和原生测试；Rust / Vitest coverage、knip、bench、rustdoc 由 Ubuntu nightly 的完整 `bun run verify` 执行，也可手动触发。`bun run test:rust` 仍是本地完整 workspace 测试入口。覆盖统计平台分工不替代平台行为测试。
+- PR CI 由变更规划、Ubuntu 共享质量门禁和三平台构建 / 受影响测试组成；可复用步骤位于 `.github/actions/`。三平台均构建 Web 产物，并按同一计划运行受影响 Tauri 应用 / Rust crate / 消费者及对应 Vitest 镜像测试；Vue / TS 改动按镜像关系选择 Vitest，找不到对应测试时扩展到全部 Vitest。除 WebView 夹具直接或传递依赖的文件外，纯 Web 改动不触发 Rust 或原生测试。格式、lint 和 Clippy 在 Ubuntu 执行，原生验收仅在 WebView 夹具输入、原生测试输入或 Rust 消费闭包受影响时运行。测试、Biome、dprint、rustfmt 与 Clippy 共用变更计划，Cargo 反向依赖闭包从 metadata 得出；`vitest.config.ts` 变更扩展到全部 Vitest，但不扩大 Cargo 测试范围。其他共享配置、空 diff、未知路径或不可用元数据 / 基线回退全量。Nightly 在三平台构建并运行完整 Vitest、workspace Rust 和原生测试；Rust / Vitest coverage、knip、bench、rustdoc 由 Ubuntu nightly 的完整 `bun run verify` 执行，也可手动触发。`bun run test:rust` 仍是本地完整 workspace 测试入口。覆盖统计平台分工不替代平台行为测试。
 
 ### Rust 覆盖豁免台账
 

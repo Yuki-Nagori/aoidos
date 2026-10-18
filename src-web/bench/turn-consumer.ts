@@ -1,7 +1,7 @@
 // 正文事件校验基准；数值只供本机比较，不作为性能验收结论。
 import { Bench } from "tinybench";
-import type { TurnNotification } from "../utils/turn-consumer";
-import { validTurnEvent } from "../utils/turn-consumer";
+import type { TurnNotification } from "../features/game/utils/turn-consumer";
+import { validTurnEvent } from "../features/game/utils/turn-consumer";
 const event: TurnNotification = {
   kind: "chunk",
   envelope: { seq: 1, data: { turnId: "benchmark", delta: "雾钟地窖的钟声响起。" } },

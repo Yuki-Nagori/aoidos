@@ -107,7 +107,7 @@ src-tauri
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。033 已接入记忆产品处理链路，真实样本与生产参数验收仍在进行；计费运行时由 engine 持有账本并实现 LLM 的预算端口。端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
 
-前端 API 放在 `src-web/api/`，可测纯逻辑放在 `utils/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
+前端 IPC 调用放在 `src-web/api/`；功能私有逻辑留在 `features/<feature>/`，跨功能共用逻辑放在 `shared/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
 
 ### JSON 共用能力
 
@@ -199,9 +199,9 @@ engine::Storage（共享 SQLite 迁移 / 连接）← aoidos-locale（偏好与�
 
 src-web/i18n/startup → locale API → locale_commands → 同型 IPC 结果
   → 首次挂载前对齐持久偏好并注入 useLocale
-src-web/composables/useLocale → 最新意图与回读确认
+src-web/features/locale/composables/useLocale → 最新意图与回读确认
   → 当前视图代次确认 → html lang / 界面消息
-src-web/utils/format → Intl + 字符串 / BigInt 精确格式化
+src-web/shared/utils/format → Intl + 字符串 / BigInt 精确格式化
 ```
 
 `aoidos-locale` 只依赖 `aoidos-store`，由 engine 和 Tauri 单向消费；偏好与主题 / 游戏 UI 偏好分别持有。Task 034 的三平台与最终 verify 证据记在[任务](../task/034-i18n-impl.md)。
@@ -220,12 +220,16 @@ useEnginePhase → api/engine + listener-group
   → phase-recovery（有界缓存、单在飞快照与恢复代次）
     → phase-consumer（独立事件基线与跨流修订）
 
-App.vue → useGameView / useGameInput / useGameControls / useUiPreferences
-  ├─ usePanelState（面板交互状态）
-  ├─ GameStage（props / emits 驱动的展示组件；处理舞台内键盘与焦点交互）
-  └─ #panel slot（App 投影）
-       ├─ RecordFeed（组件；预览、历史分页、正文展开与未读）
-       └─ ActionComposer（玩家输入）
+app/App.vue（跨功能组合）
+  ├─ app/components/SetupPanel（产品、主题、语言与跨功能设置）
+  │    ├─ features/billing/BillingPanel（费用与供应商用量）
+  │    └─ memory 设置由 app 插槽装配
+  ├─ features/memory/MemoryQueryPanel（与游戏区并列）
+  └─ features/game/GameWorkspace
+       ├─ useGameView / useGameInput / useGameControls
+       ├─ useUiPreferences 由 app 创建并注入
+       ├─ usePanelState → GameStage（舞台与面板展示）
+       └─ RecordFeed + ActionComposer（记录与玩家输入）
 ```
 
 `game::domain` 定义可信世界解释器、冻结请求构造器和只读 completed 通知的内部端口，不引用 Tauri，也不虚构世界属性。实现与验证状态见 [023](../task/023-turn-state-machine-impl.md)，生产 crate 依赖保持单向。
@@ -256,7 +260,7 @@ aoidos-art（固定版本的静态设计输入）
 ### 最小正式入口
 
 ```text
-App.vue → useProduct → api/engine → game_ipc
+app/App.vue → features/product/useProduct → api/engine → game_ipc
   → Product（活动会话与默认资源登记）
     ├─→ assets → aoidos-script（原文校验；固定编译资源）
     ├─→ builtin（最小探索规则；原文不自动成为世界操作）
