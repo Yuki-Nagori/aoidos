@@ -1,6 +1,6 @@
 # 目录与模块规划
 
-更新日期：2026-10-13。
+更新日期：2026-10-19。
 
 [架构总览](README.md)
 
@@ -9,7 +9,7 @@
 ├── src-web/                   # 前端：Vue 3 + TypeScript
 │   ├── main.ts                # 应用入口：挂载根组件
 │   ├── App.vue                # 根编排：产品生命周期、IPC 消费与界面状态连接
-│   ├── components/            # 展示边界：GameStage、RecordFeed、ActionComposer
+│   ├── components/            # 展示边界：游戏、记录、输入及记忆设置 / 查询面板
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
 │   ├── i18n/                  # vue-i18n 实例与挂载前持久语言同步
@@ -27,6 +27,7 @@
 │   ├── src/theme_commands/    # 主题目录、偏好与剧本皮肤命令适配
 │   ├── src/locale_commands/   # 语言偏好 IPC；native.rs 单独封装真实 Wry 菜单 / 托盘适配
 │   ├── src/billing_commands/  # 预算、计价、账本与供应商余额命令适配
+│   ├── src/memory_commands/   # 记忆配置、查询、确认与批次命令适配
 │   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；平台原生输入经 aoidos-llm 分发
 │   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
 │   ├── src/events.rs          # 每流序号与事件信封，窗口投递由 turn_commands 适配
@@ -41,7 +42,7 @@
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
 │   ├── aoidos-theme/          # 主题目录 / 偏好 / 剧本皮肤校验，含 assets/themes/ 与 build.rs
 │   ├── aoidos-billing/        # 模型计价、周期、账本与预算领域规则
-│   ├── aoidos-memory/         # 029：记忆版本、SQLite manifest、幂等操作、因果核验与恢复
+│   ├── aoidos-memory/         # 记忆模型、仓储、批次、轮回节点与恢复协议
 │   ├── aoidos-locale/         # 034：受限语言偏好、系统语言归一化与独立 SQLite schema
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── aoidos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
@@ -83,6 +84,6 @@ Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../
 
 `aoidos-engine/src/game/` 分为串行驱动 / 执行、场景目录、骰判、转换、恢复、控制和阶段发布；`domain.rs` 定义可信域端口，`input.rs`、`proposal.rs`、`state.rs` 分别保存输入、提议与 IPC 数据。前端阶段链路见[架构总览](README.md#阶段机基础链路)，验收证据见 [023](../task/023-turn-state-machine-impl.md)。
 
-`aoidos-memory/src/repository/` 的 `mod.rs` 提供共享存储能力，materials、operations、reconciliation、recovery 各自使用同目录 `{mod.rs,tests.rs}`；跨模块 SQLite 夹具在 `test_support.rs`。engine 通过 `record/memory/{mod.rs,tests.rs}` 持有记忆端口与共享连接，memory 不反向依赖 engine，避免依赖环。029 的 crate 目前是存储 / 恢复基础，不代表产品记忆管线已接入。
+`aoidos-memory/src/repository/` 的 `mod.rs` 提供共享存储能力；aliases、config、confirmations、cycle、materials、operations、reconciliation、recovery 各自使用同目录 `{mod.rs,tests.rs}`，cycle 另有 `outbox.rs`；跨模块 SQLite 夹具在 `test_support.rs`。engine 通过 `record/memory/{mod.rs,tests.rs}` 持有记忆端口与共享连接，memory 不反向依赖 engine，避免依赖环。产品链路已接入配置、显式查询 / 确认、素材批次与轮回节点；算法参数及长对局 / 供应商实验的验收状态见 [033](../task/033-memory-calibration-integration.md)。
 
 `tests/fixtures/record/token-estimation-v1.json` 保存匿名合成输入与离线 tokenizer 标定数据；不含玩家数据或密钥。原生窗口夹具继续放 `tests/rust/native-platform/`，不把需要私有实现访问的单测迁入此处。
