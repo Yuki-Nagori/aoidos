@@ -127,8 +127,8 @@ impl Repository {
             }
             _ => {
                 conn.execute(
-                    "UPDATE memory_entries SET effect_history_revision=NULL,effect_recovery_history=?1,effect_recovery_after=0 WHERE entry_id=?2",
-                    params![boundary.history_revision, entry_id],
+                    "UPDATE memory_entries SET effect_history_revision=NULL WHERE entry_id=?1",
+                    [entry_id],
                 )
                 .map_err(sql)?;
                 conn.execute(
@@ -186,7 +186,6 @@ impl Repository {
                     self.freeze_corrupt_run(conn, &run.run_id, &operation_id)?;
                     return Err(Error::Corrupt);
                 }
-                self.verify_applied(conn, &plan)?;
                 audited_operations.insert(operation_id.clone(), plan);
             }
             let plan = audited_operations
@@ -266,11 +265,6 @@ impl Repository {
                 }
             }
             tx.execute(
-                "UPDATE memory_entries SET effect_recovery_after=?1 WHERE entry_id=?2",
-                params![position, entry_id],
-            )
-            .map_err(sql)?;
-            tx.execute(
                 "UPDATE memory_effect_evidence_progress SET recovery_after=?1 WHERE entry_id=?2",
                 params![position, entry_id],
             )
@@ -280,7 +274,12 @@ impl Repository {
         if !complete {
             return Ok(false);
         }
-        let updated=conn.execute("UPDATE memory_entries SET effect_history_revision=?1,effect_recovery_history=NULL,effect_recovery_after=0 WHERE entry_id=?2",params![boundary.history_revision,entry_id]).map_err(sql)?;
+        let updated = conn
+            .execute(
+                "UPDATE memory_entries SET effect_history_revision=?1 WHERE entry_id=?2",
+                params![boundary.history_revision, entry_id],
+            )
+            .map_err(sql)?;
         if updated != 1 {
             return Err(Error::Corrupt);
         }
@@ -385,7 +384,7 @@ impl Repository {
         Ok(Some(target.state))
     }
     /// 分页读取当前有效效果；保留原 gain，不因前项撤回重新计算后项。
-    /// 一页最多 32 个效果；关联操作每页只审计一次，计划字节计入同一恢复预算。
+    /// 一页最多 32 个效果；关联操作每页只审计一次。回退重建另有独立的恢复预算。
     /// # Errors
     /// 回退重建未完成拒绝消费；来源原文不可读取时返回错误，不能用旧 valid 缓存放行。
     pub fn effects(
@@ -441,7 +440,6 @@ impl Repository {
                     self.freeze_corrupt_run(conn, run_id, &row.operation_id)?;
                     return Err(Error::Corrupt);
                 }
-                self.verify_applied(conn, &plan)?;
                 audited.insert(row.operation_id.clone(), plan);
             }
             let bytes = row.bytes.into_result()?;

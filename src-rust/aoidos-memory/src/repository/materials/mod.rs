@@ -1041,7 +1041,7 @@ impl Repository {
 
     /// 只在主动重试 / 新的有效输入下创建新 batch；旧批次仍保留 unknown / rejected。
     /// # Errors
-    /// 仅 queued / dispatched 批次可显式拒绝，且错误码不携带供应商正文。
+    /// 仅 dispatched / received 批次可显式拒绝，且错误码不携带供应商正文。
     pub fn reject_batch(
         &self,
         conn: &mut Connection,

@@ -43,7 +43,7 @@ fn resolution(question: &MemoryQuestion, answer: QuestionAnswer) -> QuestionReso
 
 #[test]
 fn mentioned_name_is_persisted_only_when_it_is_an_exact_source_substring() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let mut draft = draft(&f, &["keeper"]);
     draft.mentioned_name = Some("钟声".into());
     let opened = open_draft(&mut f, &draft).unwrap();
@@ -69,7 +69,7 @@ fn mentioned_name_is_persisted_only_when_it_is_an_exact_source_substring() {
 
 #[test]
 fn resolved_name_question_rechecks_its_source_backing() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     f.port.alias_entities.borrow_mut().insert(
         "keeper".into(),
         EntityAliasContext {
@@ -104,7 +104,7 @@ fn resolved_name_question_rechecks_its_source_backing() {
 
 #[test]
 fn changing_the_mentioned_name_advances_revision_and_rejects_old_answers() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let mut draft = draft(&f, &["keeper"]);
     draft.mentioned_name = Some("钟声".into());
     let original = open_draft(&mut f, &draft).unwrap();
@@ -134,7 +134,7 @@ fn changing_the_mentioned_name_advances_revision_and_rejects_old_answers() {
 
 #[test]
 fn resolving_question_rejects_a_persisted_mention_missing_from_source() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     let mut altered = question.draft.clone();
     altered.mentioned_name = Some("并未出现的名字".into());
@@ -168,7 +168,7 @@ fn resolving_question_rejects_a_persisted_mention_missing_from_source() {
 
 #[test]
 fn question_kind_mismatch_rejects_candidates_before_persistence() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let mut association = draft(&f, &["keeper"]);
     association.candidates = vec![QuestionCandidate::MemoryClassification {
         classification: Classification::Uncertain,
@@ -189,7 +189,7 @@ fn question_kind_mismatch_rejects_candidates_before_persistence() {
 
 #[test]
 fn repeated_question_is_idempotent_and_candidate_changes_advance_revision() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let first = open(&mut f, &["keeper", "guard"]).unwrap();
     let repeated = open(&mut f, &["keeper", "guard"]).unwrap();
     assert_eq!(first, repeated);
@@ -208,7 +208,7 @@ fn repeated_question_is_idempotent_and_candidate_changes_advance_revision() {
 
 #[test]
 fn source_order_does_not_create_a_second_identity_for_the_same_event() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let first_source = f.source();
     let mut second_source = first_source.clone();
     second_source.record_seq += 1;
@@ -224,7 +224,7 @@ fn source_order_does_not_create_a_second_identity_for_the_same_event() {
 
 #[test]
 fn resolution_is_cas_guarded_and_cannot_select_an_unoffered_entity() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper", "guard"]).unwrap();
     rejected(
         f.repo.resolve_question(
@@ -278,7 +278,7 @@ fn resolution_is_cas_guarded_and_cannot_select_an_unoffered_entity() {
 
 #[test]
 fn changed_history_rejects_a_stale_answer_without_resolving_the_question() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     f.port.view.history_revision += 1;
     assert!(matches!(
@@ -301,7 +301,7 @@ fn changed_history_rejects_a_stale_answer_without_resolving_the_question() {
 
 #[test]
 fn proposed_names_remain_suggestions_instead_of_creating_entities() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     let resolved = f
         .repo
@@ -336,7 +336,7 @@ fn proposed_names_remain_suggestions_instead_of_creating_entities() {
 
 #[test]
 fn invalid_sources_and_candidate_shapes_are_rejected() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     f.port.invalid.set(true);
     assert!(matches!(
         open(&mut f, &["keeper"]),
@@ -365,7 +365,7 @@ fn invalid_sources_and_candidate_shapes_are_rejected() {
 
 #[test]
 fn pending_question_capacity_is_enforced_atomically_per_run() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     for event_slot in 0..MAX_PENDING_QUESTIONS_PER_RUN as u32 {
         let mut draft = draft(&f, &["keeper"]);
         draft.identity.event_slot = event_slot;
@@ -390,7 +390,7 @@ fn pending_question_capacity_is_enforced_atomically_per_run() {
 
 #[test]
 fn classification_questions_only_accept_classification_candidates() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let mut invalid = draft(&f, &["keeper"]);
     invalid.identity.kind = QuestionKind::MemoryClassification;
     invalid.mentioned_name = Some("钟声".into());
@@ -439,7 +439,7 @@ fn classification_questions_only_accept_classification_candidates() {
 
 #[test]
 fn skipped_question_stays_pending_and_can_be_answered_later() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     let skipped = f
         .repo
@@ -472,7 +472,7 @@ fn skipped_question_stays_pending_and_can_be_answered_later() {
 
 #[test]
 fn invalid_resolution_ids_and_revoked_sources_leave_questions_pending() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     let mut invalid = resolution(&question, QuestionAnswer::None);
     invalid.question_id = "invalid".into();
@@ -509,7 +509,7 @@ fn invalid_resolution_ids_and_revoked_sources_leave_questions_pending() {
 
 #[test]
 fn draft_revision_source_and_candidate_boundaries_reject_before_persistence() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let valid = draft(&f, &["keeper"]);
     let mut invalids = Vec::new();
     let mut empty = valid.clone();
@@ -548,7 +548,7 @@ fn draft_revision_source_and_candidate_boundaries_reject_before_persistence() {
 
 #[test]
 fn revision_overflow_and_sqlite_update_races_preserve_existing_question() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper", "guard"]).unwrap();
     f.conn
         .execute(
@@ -584,7 +584,7 @@ fn revision_overflow_and_sqlite_update_races_preserve_existing_question() {
 
 #[test]
 fn persisted_question_key_draft_and_answer_corruption_are_rejected() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     let original_draft = canonical(&question.draft).unwrap();
     f.conn
@@ -658,7 +658,7 @@ fn optional_answer_blob_requires_matching_type_length_and_limit() {
 
 #[test]
 fn pending_question_pages_are_bounded_and_resume_without_duplicate_rows() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     for event_slot in 0..35 {
         let mut draft = draft(&f, &["keeper"]);
         draft.identity.event_slot = event_slot;
@@ -689,7 +689,7 @@ fn pending_question_pages_are_bounded_and_resume_without_duplicate_rows() {
 
 #[test]
 fn pending_question_page_rejects_stale_cursor_and_invalidates_old_sources() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let first = open(&mut f, &["keeper"]).unwrap();
     let mut second_draft = draft(&f, &["keeper"]);
     second_draft.identity.event_slot += 1;
@@ -740,7 +740,7 @@ fn pending_question_page_rejects_stale_cursor_and_invalidates_old_sources() {
 
 #[test]
 fn pending_page_invalidates_a_persisted_mention_not_backed_by_its_sources() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     let mut corrupted = question.draft.clone();
     corrupted.mentioned_name = Some("并未出现的名字".into());
@@ -768,7 +768,7 @@ fn pending_page_invalidates_a_persisted_mention_not_backed_by_its_sources() {
 
 #[test]
 fn pending_question_pages_keep_a_fixed_queue_snapshot_when_new_items_arrive() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     for event_slot in 0..2 {
         let mut draft = draft(&f, &["keeper"]);
         draft.identity.event_slot = event_slot;
@@ -805,7 +805,7 @@ fn pending_question_pages_keep_a_fixed_queue_snapshot_when_new_items_arrive() {
 
 #[test]
 fn pending_question_page_rolls_back_all_invalidations_when_one_update_is_rejected() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let first = open(&mut f, &["keeper"]).unwrap();
     let mut second_draft = draft(&f, &["keeper"]);
     second_draft.identity.event_slot += 1;
@@ -856,7 +856,7 @@ fn pending_question_page_rolls_back_all_invalidations_when_one_update_is_rejecte
 
 #[test]
 fn pending_question_page_rejects_persisted_sequence_outside_cursor_integer_range() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     f.conn
         .execute(
@@ -880,7 +880,7 @@ fn pending_question_page_rejects_persisted_sequence_outside_cursor_integer_range
 
 #[test]
 fn pending_question_pages_reject_invalid_limits_and_cursors() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let invalid = QuestionCursor {
         run_id: f.run.run_id.clone(),
         history_revision: 0,
@@ -903,7 +903,7 @@ fn pending_question_pages_reject_invalid_limits_and_cursors() {
 
 #[test]
 fn persisted_draft_revisions_must_match_columns_and_empty_sources_are_corrupt() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let question = open(&mut f, &["keeper"]).unwrap();
     for column in ["history_revision", "entity_revision", "evidence_revision"] {
         f.conn
@@ -946,7 +946,7 @@ fn persisted_draft_revisions_must_match_columns_and_empty_sources_are_corrupt() 
 
 #[test]
 fn opening_question_rejects_noncanonical_persisted_source_order() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let mut input = draft(&f, &["keeper"]);
     let mut second = f.source();
     second.record_seq += 1;

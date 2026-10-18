@@ -86,7 +86,7 @@ fn confirm_alias(fixture: &mut Fixture, event_slot: u32, entity_id: &str) -> Ent
 
 #[test]
 fn explicit_entity_confirmation_registers_exact_alias_and_sources_atomically() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 1, ENTITY_ID);
     assert_eq!(alias.entity_id, ENTITY_ID);
     assert_eq!(alias.name, ALIAS_NAME);
@@ -127,7 +127,7 @@ fn explicit_entity_confirmation_registers_exact_alias_and_sources_atomically() {
 
 #[test]
 fn alias_context_only_returns_confirmed_names_present_in_the_frozen_source_text() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let confirmed = confirm_alias(&mut fixture, 1, ENTITY_ID);
     let matches = fixture
         .repo
@@ -156,7 +156,7 @@ fn alias_context_only_returns_confirmed_names_present_in_the_frozen_source_text(
 
 #[test]
 fn separate_confirmations_add_distinct_support_without_duplicate_retries() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let first = confirm_alias(&mut fixture, 20, ENTITY_ID);
     let second = confirm_alias(&mut fixture, 21, ENTITY_ID);
 
@@ -178,7 +178,7 @@ fn separate_confirmations_add_distinct_support_without_duplicate_retries() {
 
 #[test]
 fn canonical_name_conflict_keeps_question_pending_and_does_not_write_alias() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     fixture
         .port
         .alias_entities
@@ -239,7 +239,7 @@ fn canonical_name_conflict_keeps_question_pending_and_does_not_write_alias() {
 
 #[test]
 fn a_new_branch_can_confirm_a_name_after_the_old_alias_sources_are_withdrawn() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let old_alias = confirm_alias(&mut fixture, 25, ENTITY_ID);
     fixture
         .port
@@ -307,7 +307,7 @@ fn a_new_branch_can_confirm_a_name_after_the_old_alias_sources_are_withdrawn() {
 
 #[test]
 fn unrelated_question_sources_do_not_keep_a_withdrawn_name_alias_alive() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     fixture
         .port
         .alias_entities
@@ -384,7 +384,7 @@ fn unrelated_question_sources_do_not_keep_a_withdrawn_name_alias_alive() {
 
 #[test]
 fn confirming_an_existing_canonical_name_resolves_without_creating_an_alias() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     fixture
         .port
         .alias_entities
@@ -447,7 +447,7 @@ fn confirming_an_existing_canonical_name_resolves_without_creating_an_alias() {
 
 #[test]
 fn an_active_alias_cannot_be_reassigned_to_a_different_entity() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     confirm_alias(&mut fixture, 3, ENTITY_ID);
     fixture.port.alias_entities.borrow_mut().insert(
         OTHER_ENTITY_ID.into(),
@@ -498,7 +498,7 @@ fn an_active_alias_cannot_be_reassigned_to_a_different_entity() {
 
 #[test]
 fn revocation_is_cas_idempotent_and_confirmation_can_reactivate_alias() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 5, ENTITY_ID);
     let revoke = AliasRevocation {
         alias_id: alias.alias_id.clone(),
@@ -550,7 +550,7 @@ fn revocation_is_cas_idempotent_and_confirmation_can_reactivate_alias() {
 
 #[test]
 fn alias_lookup_rebuilds_from_any_current_source_after_history_rollback() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     confirm_alias(&mut fixture, 7, ENTITY_ID);
     fixture.port.invalid.set(true);
     assert!(
@@ -586,7 +586,7 @@ fn alias_lookup_rebuilds_from_any_current_source_after_history_rollback() {
 
 #[test]
 fn alias_lookup_rejects_source_rows_with_a_mismatched_hash() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 23, ENTITY_ID);
     fixture
         .conn
@@ -611,7 +611,7 @@ fn alias_lookup_rejects_source_rows_with_a_mismatched_hash() {
 
 #[test]
 fn source_less_or_unregistered_entity_confirmations_cannot_create_aliases() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let draft = entity_question(&fixture, 8, ENTITY_ID);
     let question = fixture
         .repo
@@ -695,7 +695,7 @@ fn revocation(fixture: &Fixture, alias: &EntityAlias) -> AliasRevocation {
 
 #[test]
 fn revocation_rejects_invalid_unknown_stale_and_exhausted_versions() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 30, ENTITY_ID);
     let valid = revocation(&fixture, &alias);
     for invalid in [
@@ -799,7 +799,7 @@ fn revocation_rejects_invalid_unknown_stale_and_exhausted_versions() {
 
 #[test]
 fn revocation_cas_does_not_acknowledge_an_ignored_storage_update() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 31, ENTITY_ID);
     fixture.conn.execute_batch("CREATE TRIGGER ignore_alias_update BEFORE UPDATE ON memory_aliases BEGIN SELECT RAISE(IGNORE); END").unwrap();
     let revoke = revocation(&fixture, &alias);
@@ -820,7 +820,7 @@ fn revocation_cas_does_not_acknowledge_an_ignored_storage_update() {
 
 #[test]
 fn confirmations_require_valid_context_and_name_containing_current_source() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let question = opened_question(&mut fixture, 32);
     let context = entity_context(ENTITY_ID, "守夜人");
     for invalid in [
@@ -872,7 +872,7 @@ fn confirmations_require_valid_context_and_name_containing_current_source() {
 
 #[test]
 fn duplicate_alias_application_is_idempotent_without_extra_audit_event() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let question = opened_question(&mut fixture, 33);
     fixture
         .port
@@ -895,7 +895,7 @@ fn duplicate_alias_application_is_idempotent_without_extra_audit_event() {
 
 #[test]
 fn alias_resolution_requires_current_directory_and_registered_revision() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 34, ENTITY_ID);
     fixture.port.view.entity_revision = alias.registered_entity_revision - 1;
     assert!(matches!(
@@ -991,7 +991,7 @@ fn alias_source_capacity_is_bounded_and_corrupt_sources_fail_closed() {
 
 #[test]
 fn alias_count_and_revision_capacity_reject_without_partial_submission() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 37, ENTITY_ID);
     let question = opened_question(&mut fixture, 38);
     fixture
@@ -1058,7 +1058,7 @@ fn alias_count_and_revision_capacity_reject_without_partial_submission() {
 
 #[test]
 fn stale_alias_reassignment_checks_revision_and_requires_successful_revocation() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 39, ENTITY_ID);
     fixture.port.alias_entities.borrow_mut().insert(
         OTHER_ENTITY_ID.into(),
@@ -1081,7 +1081,7 @@ fn stale_alias_reassignment_checks_revision_and_requires_successful_revocation()
 
 #[test]
 fn audit_write_failure_rolls_back_alias_registration_and_revocation() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let question = opened_question(&mut fixture, 41);
     fixture
         .port
@@ -1115,7 +1115,7 @@ fn audit_write_failure_rolls_back_alias_registration_and_revocation() {
 
 #[test]
 fn reconfirming_a_corrupt_nonactive_alias_does_not_repair_or_overwrite_it() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::new_in_memory();
     let alias = confirm_alias(&mut fixture, 43, ENTITY_ID);
     let question = opened_question(&mut fixture, 44);
     fixture
