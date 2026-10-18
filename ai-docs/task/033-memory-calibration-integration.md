@@ -78,3 +78,5 @@
 ## 完成摘要
 
 正在实施。已接入普通回合逻辑时钟的可恢复推进，以及提示的 engine / IPC / TypeScript / 界面请求与展示入口；待真实剧本提供提示规则后验证可见提示。已接入本地素材收集和 prompt / 护栏纯构造，接下来完成可信候选上下文装配、完整批次冻结、显式发送产品链路及算法验收。真实供应商费用实验须满足 035 的实机授权条件后再开展。
+
+2026-10-18：收紧提案上下文收发一致性。`prepare_cycle_mark_context` 现在从 queued 批次快照恢复白名单，并要求当前规则重建结果与冻结刻痕授权完全相同；`complete_received_batch` 移除外部 context 参数，只从 received 批次恢复提案上下文并复核授权，避免调用方在发送 / 完成之间替换候选白名单。集成测试覆盖调用方上下文污染被忽略、授权规则变化后拒绝继续；`bun run format:affected`、`bun run lint:affected`、`bun run test:affected` 通过，另复跑新增规则变化用例通过。

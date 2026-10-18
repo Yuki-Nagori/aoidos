@@ -302,41 +302,70 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
     let response = r#"{"version":1,"candidates":[],"cycleMarks":[{"candidateId":"mark-1","ruleId":"remember-rescue","sourceIds":["s1"],"subjectIds":["luo-wei"],"summary":"洛苇记得玩家曾帮助她逃离钟室。"}]}"#.as_bytes();
 
     storage
-        .with_memory(&session_id, &catalog, |repository, connection, port| {
-            let source = port.reference(&run.run_id, source_seq)?;
-            let material_id = repository.register_material(connection, port, &source, 0)?;
-            let boundary = port.boundary()?;
-            let snapshot = BatchSnapshot {
-                logical_clock: repository.clock(connection, port, &run.run_id)?,
-                version: 1,
-                batch_id: batch_id.clone(),
-                run_id: run.run_id.clone(),
-                history_revision: boundary.history_revision,
-                entity_revision: boundary.entity_revision,
-                evidence_revision: boundary.evidence_revision,
-                policy_hash: run.policy_hash,
-                spans: vec![Span {
-                    source_id: "s1".into(),
-                    material_id,
-                    source,
-                    text: "我曾帮助洛苇逃出钟室。".into(),
-                    context: false,
-                    continuation: false,
-                }],
-                input: serde_json::json!({
-                    "version": 1,
-                    "proposalContext": ProposalContext {
-                        source_ids: ["s1".into()].into(),
-                        ..ProposalContext::default()
-                    }
-                }),
-            };
-            repository.freeze_batch(connection, port, &snapshot)?;
-            Ok(())
-        })
+        .with_memory_context(
+            &session_id,
+            &catalog,
+            |repository, connection, port, session, directory| {
+                let source = port.reference(&run.run_id, source_seq)?;
+                let material_id = repository.register_material(connection, port, &source, 0)?;
+                let boundary = port.boundary()?;
+                let mut snapshot = BatchSnapshot {
+                    logical_clock: repository.clock(connection, port, &run.run_id)?,
+                    version: 1,
+                    batch_id: batch_id.clone(),
+                    run_id: run.run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    spans: vec![Span {
+                        source_id: "s1".into(),
+                        material_id,
+                        source,
+                        text: "我曾帮助洛苇逃出钟室。".into(),
+                        context: false,
+                        continuation: false,
+                    }],
+                    input: serde_json::json!({
+                        "version": 1,
+                        "proposalContext": ProposalContext {
+                            source_ids: ["s1".into()].into(),
+                            ..ProposalContext::default()
+                        }
+                    }),
+                };
+                let mut context: ProposalContext =
+                    aoidos_json::from_value(snapshot.input["proposalContext"].clone())
+                        .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+                crate::record::memory::build_cycle_mark_context(
+                    crate::record::memory::CycleMarkContextInput {
+                        catalog: &catalog,
+                        run: &run,
+                        session,
+                        directory,
+                        batch: &snapshot,
+                        source_port: port,
+                    },
+                )
+                .map_err(|_| {
+                    aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::InvalidSchema,
+                    )
+                })?
+                .apply_to(&mut context)
+                .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+                snapshot.input["proposalContext"] = serde_json::to_value(context)
+                    .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+                repository.freeze_batch(connection, port, &snapshot)?;
+                Ok(())
+            },
+        )
         .unwrap();
 
-    let mut context = ProposalContext::default();
+    let mut context = ProposalContext {
+        entity_ids: ["untrusted-entity".into()].into(),
+        ..ProposalContext::default()
+    };
     crate::record::memory::processing::prepare_cycle_mark_context(
         &storage,
         &session_id,
@@ -345,6 +374,58 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
         &mut context,
     )
     .unwrap();
+    assert!(!context.entity_ids.contains("untrusted-entity"));
+    assert!(context.cycle_rules.contains_key("remember-rescue"));
+    assert_eq!(context.source_ids, ["s1".into()].into());
+    let changed_catalog = catalog
+        .clone()
+        .with_cycle_mark_rules(vec![
+            crate::game::catalog::CycleMarkRule::new(
+                "remember-rescue".into(),
+                1,
+                vec![
+                    crate::game::catalog::CycleSubjectScope::new(
+                        crate::game::catalog::EntityKind::Character,
+                        "mistbell".into(),
+                    )
+                    .unwrap(),
+                ],
+                "rescued-player".into(),
+                CycleKind::Familiarity,
+                DetailPolicy::Vague,
+                10,
+            )
+            .unwrap(),
+            crate::game::catalog::CycleMarkRule::new(
+                "remember-second".into(),
+                1,
+                vec![
+                    crate::game::catalog::CycleSubjectScope::new(
+                        crate::game::catalog::EntityKind::Character,
+                        "mistbell".into(),
+                    )
+                    .unwrap(),
+                ],
+                "rescued-player-second".into(),
+                CycleKind::Familiarity,
+                DetailPolicy::Vague,
+                10,
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+    assert_eq!(
+        crate::record::memory::processing::prepare_cycle_mark_context(
+            &storage,
+            &session_id,
+            &changed_catalog,
+            &batch_id,
+            &mut ProposalContext::default(),
+        )
+        .unwrap_err()
+        .code,
+        "app.bad-request"
+    );
     storage
         .with_memory(&session_id, &catalog, |repository, connection, port| {
             repository.dispatch_batch(connection, port, &batch_id, &turn_id, &request_id)?;
@@ -363,7 +444,6 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
             &session_id,
             &catalog,
             &batch_id,
-            &context,
             &completion,
         )
         .unwrap()
@@ -374,7 +454,6 @@ fn received_cycle_mark_is_materialized_from_current_authority_and_completed_atom
             &session_id,
             &catalog,
             &batch_id,
-            &context,
             &completion,
         )
         .unwrap()

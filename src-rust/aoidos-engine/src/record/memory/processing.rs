@@ -210,10 +210,10 @@ pub async fn process_authorized_batch(
     execute_batch(coordinator, persistence, request).await
 }
 
-/// 将当前 queued 批次的可信刻痕授权并入普通提案上下文，供单次记忆请求使用。
+/// 从当前 queued 批次恢复完整提案上下文，并复核其中的刻痕授权。
 ///
-/// `context` 中的普通候选字段必须由调用方从同一冻结批次构造；刻痕规则与来源只由
-/// 本函数从活动剧本、周目、实体目录和仓储快照生成。完成时会在同一锁边界重建并复核。
+/// 输出 context 完全来自冻结快照；当前剧本、周目、实体目录和来源重建结果必须与已冻结
+/// 授权一致，不能由调用方补充或替换普通候选字段。
 /// # Errors
 /// 批次状态、历史 / 实体 / 证据修订或任一来源不再匹配时拒绝构造请求上下文。
 pub fn prepare_cycle_mark_context(
@@ -242,9 +242,16 @@ pub fn prepare_cycle_mark_context(
                     source_port: port,
                 })
                 .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
+                let frozen = frozen_proposal_context(&snapshot)?;
+                let mut rebuilt = frozen.clone();
                 cycle_context
-                    .apply_to(context)
-                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))
+                    .apply_to(&mut rebuilt)
+                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+                if !same_proposal_context(&rebuilt, &frozen)? {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+                *context = frozen;
+                Ok(())
             },
         )
         .map_err(memory_fault)
@@ -252,8 +259,8 @@ pub fn prepare_cycle_mark_context(
 
 /// 按当前冻结授权校验已收回的提案，并将刻痕与普通候选摘要原子完成。
 ///
-/// `context` 必须与发送请求时使用的冻结提案上下文一致；此函数不会重新发送请求，
-/// 也不会重新计算普通候选的操作结果。含刻痕时由仓储在同一事务写入刻痕和完成回执。
+/// 提案上下文只从收到响应的冻结批次恢复；此函数不会重新发送请求，也不会重新计算普通
+/// 候选的操作结果。含刻痕时由仓储在同一事务写入刻痕和完成回执。
 /// # Errors
 /// 批次尚未收到响应、提案不符合冻结授权或当前来源已失效时拒绝完成；相同完成重放返回 `false`。
 pub fn complete_received_batch(
@@ -261,7 +268,6 @@ pub fn complete_received_batch(
     session_id: &str,
     catalog: &crate::game::catalog::SceneCatalog,
     batch_id: &str,
-    context: &ProposalContext,
     completion: &BatchCompletion,
 ) -> Result<bool, Fault> {
     storage
@@ -292,10 +298,14 @@ pub fn complete_received_batch(
                     source_port: port,
                 })
                 .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
-                let mut context = context.clone();
+                let context = frozen_proposal_context(&snapshot)?;
+                let mut rebuilt = context.clone();
                 cycle_context
-                    .apply_to(&mut context)
+                    .apply_to(&mut rebuilt)
                     .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+                if !same_proposal_context(&rebuilt, &context)? {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
                 let receipt = repository.batch_receipt(connection, batch_id)?;
                 if receipt.state != state {
                     return Err(Error::Rejected(Reason::StaleVersion));
@@ -330,6 +340,28 @@ pub fn complete_received_batch(
             },
         )
         .map_err(memory_fault)
+}
+
+fn frozen_proposal_context(
+    snapshot: &aoidos_memory::repository::BatchSnapshot,
+) -> aoidos_memory::error::Result<ProposalContext> {
+    let value = snapshot
+        .input
+        .get("proposalContext")
+        .cloned()
+        .ok_or(Error::Rejected(Reason::InvalidSchema))?;
+    aoidos_json::from_value(value).map_err(|_| Error::Rejected(Reason::InvalidSchema))
+}
+
+fn same_proposal_context(
+    left: &ProposalContext,
+    right: &ProposalContext,
+) -> aoidos_memory::error::Result<bool> {
+    let left =
+        aoidos_json::canonical_string(left).map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+    let right =
+        aoidos_json::canonical_string(right).map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+    Ok(left == right)
 }
 
 async fn execute_batch(
