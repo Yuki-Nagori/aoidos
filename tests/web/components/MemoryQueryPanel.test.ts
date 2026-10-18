@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   MemoryEntry,
   MemoryEntryDetails,
+  MemoryBatchStatus,
   MemoryMaterialPage,
   MemoryQuestion,
   MemoryQuestionPage,
@@ -12,17 +13,27 @@ import { i18n } from "../../../src-web/i18n";
 import {
   getMemoryEntry,
   collectMemoryMaterials,
+  completeMemoryBatch,
+  getActiveMemoryBatch,
+  getMemoryBatchStatus,
   listMemoryEntries,
   listMemoryQuestions,
+  prepareMemoryBatch,
   resolveMemoryQuestion,
+  sendMemoryBatch,
 } from "../../../src-web/api/memory";
 
 vi.mock("../../../src-web/api/memory", () => ({
   getMemoryEntry: vi.fn(),
   collectMemoryMaterials: vi.fn(),
+  completeMemoryBatch: vi.fn(),
+  getActiveMemoryBatch: vi.fn(),
+  getMemoryBatchStatus: vi.fn(),
   listMemoryEntries: vi.fn(),
   listMemoryQuestions: vi.fn(),
+  prepareMemoryBatch: vi.fn(),
   resolveMemoryQuestion: vi.fn(),
+  sendMemoryBatch: vi.fn(),
 }));
 
 const question: MemoryQuestion = {
@@ -96,6 +107,15 @@ const entryDetails: MemoryEntryDetails = {
 };
 
 describe("MemoryQueryPanel", () => {
+  const batchStatus = (state: MemoryBatchStatus["state"]): MemoryBatchStatus => ({
+    batchId: "batch-1",
+    runId: "run-1",
+    historyRevision: 5,
+    state,
+    completion: null,
+    diagnosticCode: null,
+  });
+
   beforeEach(() => {
     i18n.global.locale.value = "zh-Hans";
     vi.resetAllMocks();
@@ -121,7 +141,89 @@ describe("MemoryQueryPanel", () => {
       eligibleCount: 0,
       nextCursor: null,
     });
+    vi.mocked(getActiveMemoryBatch).mockResolvedValue(null);
+    vi.mocked(getMemoryBatchStatus).mockResolvedValue(batchStatus("queued"));
+    vi.mocked(prepareMemoryBatch).mockResolvedValue({ batchId: "batch-1" });
+    vi.mocked(sendMemoryBatch).mockResolvedValue(batchStatus("received"));
+    vi.mocked(completeMemoryBatch).mockResolvedValue(batchStatus("completed"));
   });
+
+  it("only sends a prepared proposal after the player explicitly clicks send", async () => {
+    const wrapper = mount(MemoryQueryPanel, {
+      props: { runId: "run-1", historyRevision: 5 },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "准备记忆提案")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(collectMemoryMaterials).toHaveBeenCalledWith("run-1", null);
+    expect(prepareMemoryBatch).toHaveBeenCalledWith("run-1");
+    expect(getMemoryBatchStatus).toHaveBeenCalledWith("run-1", "batch-1");
+    expect(sendMemoryBatch).not.toHaveBeenCalled();
+
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "发送提案给模型")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(sendMemoryBatch).toHaveBeenCalledWith("run-1", "batch-1");
+    expect(completeMemoryBatch).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("已收到");
+    wrapper.unmount();
+  });
+
+  it("recovers a received proposal for local completion without resending it", async () => {
+    vi.mocked(getActiveMemoryBatch).mockResolvedValue(batchStatus("received"));
+    const wrapper = mount(MemoryQueryPanel, {
+      props: { runId: "run-1", historyRevision: 5 },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("已收到");
+    expect(wrapper.findAll("button").some((button) => button.text() === "发送提案给模型")).toBe(
+      false,
+    );
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "应用已收到的提案")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(completeMemoryBatch).toHaveBeenCalledWith("run-1", "batch-1");
+    expect(sendMemoryBatch).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it.each(["dispatched", "unknown"] as const)(
+    "does not offer a resend for a recovered %s proposal",
+    async (state) => {
+      vi.mocked(getActiveMemoryBatch).mockResolvedValue(batchStatus(state));
+      const wrapper = mount(MemoryQueryPanel, {
+        props: { runId: "run-1", historyRevision: 5 },
+        global: { plugins: [i18n] },
+      });
+      await flushPromises();
+
+      expect(wrapper.text()).toContain(
+        state === "unknown" ? "请求结果未知；不会自动重发" : "请求已发送，正在等待结果",
+      );
+      expect(wrapper.findAll("button").some((button) => button.text() === "发送提案给模型")).toBe(
+        false,
+      );
+      expect(wrapper.findAll("button").some((button) => button.text() === "准备记忆提案")).toBe(
+        false,
+      );
+      expect(sendMemoryBatch).not.toHaveBeenCalled();
+      wrapper.unmount();
+    },
+  );
 
   it("collects current-run sources without exposing their text or sending a model request", async () => {
     const cursor: MemoryMaterialPage["nextCursor"] = {

@@ -39,6 +39,18 @@ fn policy(algorithm: Algorithm) -> Policy {
     }
 }
 
+fn source_id(index: u64) -> String {
+    format!("00000000-0000-4000-8000-{index:012}")
+}
+
+fn accepted_gain(index: u64, position: u64, amount: u64) -> AcceptedReinforcement {
+    AcceptedReinforcement {
+        source_id: source_id(index),
+        logical_position: position,
+        kind: ReinforcementKind::Gain { amount },
+    }
+}
+
 #[test]
 fn archive_selection_uses_required_score_recency_and_byte_order() {
     let candidates = [
@@ -275,6 +287,183 @@ fn no_decay_is_a_bounded_baseline() {
         strength_score(&policy, 10_000, 0, 1_000_000).unwrap(),
         700_000
     );
+}
+
+#[test]
+fn reinforcement_uses_open_left_and_closed_right_logical_window() {
+    let policy = policy(Algorithm::None);
+    let accepted = [
+        accepted_gain(1, 10, 50_000), // 左边界不计入当前窗口
+        accepted_gain(2, 30, 50_000), // 当前素材位置计入窗口
+    ];
+
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(3), 30, &accepted).unwrap(),
+        Some(25_000)
+    );
+}
+
+#[test]
+fn reinforcement_counts_position_zero_until_it_reaches_the_open_window_boundary() {
+    let policy = policy(Algorithm::None);
+    let at_zero = [accepted_gain(1, 0, 10_000), accepted_gain(2, 0, 10_000)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(3), 0, &at_zero).unwrap(),
+        None
+    );
+
+    let before_boundary = [accepted_gain(1, 0, 10_000)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(2), 1, &before_boundary).unwrap(),
+        Some(policy.reinforcement_gain / 2)
+    );
+    assert_eq!(
+        reinforcement_increment(
+            &policy,
+            &source_id(2),
+            policy.repeat_window_rounds,
+            &before_boundary,
+        )
+        .unwrap(),
+        Some(policy.reinforcement_gain)
+    );
+}
+
+#[test]
+fn reinforcement_is_idempotent_and_repeat_limited() {
+    let policy = policy(Algorithm::None);
+    let repeated_source = [accepted_gain(1, 1, 10_000)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(1), 2, &repeated_source).unwrap(),
+        None
+    );
+
+    let at_limit = [accepted_gain(1, 1, 10_000), accepted_gain(2, 2, 10_000)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(3), 2, &at_limit).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn reinforcement_zero_gain_remains_an_accepted_idempotent_source() {
+    let mut policy = policy(Algorithm::None);
+    policy.reinforcement_gain = 1;
+    let first = reinforcement_increment(&policy, &source_id(1), 1, &[]).unwrap();
+    assert_eq!(first, Some(1));
+
+    let accepted = [accepted_gain(1, 1, 1)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(2), 2, &accepted).unwrap(),
+        Some(0)
+    );
+    let accepted_zero = [accepted_gain(1, 1, 1), accepted_gain(2, 2, 0)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(2), 3, &accepted_zero).unwrap(),
+        None
+    );
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(1), 3, &accepted_zero).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn reinforcement_respects_remaining_cap_and_preserves_accepted_gain_amounts() {
+    let mut policy = policy(Algorithm::None);
+    policy.reinforcement_cap = 60_000;
+    let accepted = [accepted_gain(1, 1, 40_000)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(2), 2, &accepted).unwrap(),
+        Some(20_000)
+    );
+
+    let capped = [accepted_gain(1, 1, 60_000)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(2), 2, &capped).unwrap(),
+        None
+    );
+
+    // 前项已撤回，只剩此前按 n=1 接纳的 25,000；不能把它重算成 50,000。
+    let accepted_after_withdrawal = [accepted_gain(3, 2, 25_000)];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(4), 3, &accepted_after_withdrawal).unwrap(),
+        Some(25_000)
+    );
+}
+
+#[test]
+fn same_source_revival_does_not_count_as_gain_or_claim_source() {
+    let policy = policy(Algorithm::None);
+    let accepted = [
+        AcceptedReinforcement {
+            source_id: source_id(2),
+            logical_position: 2,
+            kind: ReinforcementKind::Revival,
+        },
+        accepted_gain(1, 1, 10_000),
+    ];
+    assert_eq!(
+        reinforcement_increment(&policy, &source_id(2), 2, &accepted).unwrap(),
+        Some(25_000)
+    );
+}
+
+#[test]
+fn revival_cooldown_uses_effective_logical_positions_and_excludes_replayed_sources() {
+    let policy = policy(Algorithm::None);
+    let accepted = [
+        AcceptedReinforcement {
+            source_id: source_id(1),
+            logical_position: 5,
+            kind: ReinforcementKind::Gain { amount: 10_000 },
+        },
+        AcceptedReinforcement {
+            source_id: source_id(2),
+            logical_position: 10,
+            kind: ReinforcementKind::Revival,
+        },
+    ];
+
+    assert!(!revival_allowed(&policy, &source_id(3), 29, &accepted).unwrap());
+    assert!(revival_allowed(&policy, &source_id(3), 30, &accepted).unwrap());
+    assert!(!revival_allowed(&policy, &source_id(1), 30, &accepted).unwrap());
+    assert!(!revival_allowed(&policy, &source_id(2), 30, &accepted).unwrap());
+}
+
+#[test]
+fn revival_rejects_future_history_and_does_not_treat_gain_as_cooldown() {
+    let policy = policy(Algorithm::None);
+    let gain_only = [AcceptedReinforcement {
+        source_id: source_id(1),
+        logical_position: 20,
+        kind: ReinforcementKind::Gain { amount: 10_000 },
+    }];
+    assert!(revival_allowed(&policy, &source_id(2), 20, &gain_only).unwrap());
+
+    let future = [AcceptedReinforcement {
+        source_id: source_id(1),
+        logical_position: 21,
+        kind: ReinforcementKind::Revival,
+    }];
+    assert!(matches!(
+        revival_allowed(&policy, &source_id(2), 20, &future),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+}
+
+#[test]
+fn reinforcement_rejects_future_effects_and_invalid_positions() {
+    let policy = policy(Algorithm::None);
+    let future = [accepted_gain(1, 3, 10_000)];
+    assert!(matches!(
+        reinforcement_increment(&policy, &source_id(2), 2, &future),
+        Err(Error::Rejected(Reason::StaleVersion))
+    ));
+    assert!(matches!(
+        reinforcement_increment(&policy, &source_id(2), MAX_INTEGER + 1, &[]),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
 }
 
 #[test]

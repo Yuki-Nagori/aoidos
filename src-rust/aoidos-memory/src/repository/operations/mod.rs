@@ -239,7 +239,7 @@ impl Repository {
             if !target.effects.is_empty() {
                 let subject = subject.ok_or(Error::Corrupt)?;
                 if matches!(subject, Subject::Character { .. }) {
-                    // v1 效果只记录通用来源；主体绑定的获知证据进入 schema 前拒绝角色效果。
+                    // v1 效果尚未持久化主体获知证据，因此角色效果必须失败关闭。
                     return Err(Error::Rejected(Reason::PolicyUnavailable));
                 }
             }
