@@ -2,7 +2,7 @@
 
 更新日期：2026-10-18。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。033 已新增本地素材扫描命令，冻结输入、显式发送命令仍待实现。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。033 已接入素材收集、批次冻结、显式发送与本地完成 / 恢复命令；算法生产参数和实测仍见对应 task。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -422,6 +422,12 @@ else showGenericError(err);
 - `memory_get_entry`：接收 `{ runId, entryId, expectedVersionId }`；读取指定不可变版本并重新核验其策略、正文 hash 与当前有效来源；失效版本不会因历史查询绕过校验。
 - `memory_get_batch_status`：接收 `{ runId, batchId }`；只返回与周目匹配的持久状态、完成摘要和白名单诊断码，不返回 prompt 或供应商原始响应；调用只读状态，不重发请求、不后台轮询。
 - `memory_collect_materials`：接收 `{ runId, cursor }`，`cursor` 可为 `null`；仅在本地扫描当前有效分支并登记素材，返回 `{ runId, historyRevision, eligibleCount, nextCursor }`，不返回正文、不冻结批次、不发送模型请求。游标固定 run、历史修订和首次扫描记录上界；每页最多扫描 256 条 / 4 MiB，超预算前停在上一条完整记录并返回续页位置。
+- `memory_get_active_batch`：接收 `{ runId }`；返回 `MemoryBatchStatus | null`，仅恢复当前活动会话所属周目中最近的未终结批次，不发起请求或后台轮询。
+- `memory_prepare_batch`：接收 `{ runId }`；本地收集并冻结当前可处理素材，返回 `{ batchId }`。没有可冻结素材、周目 / 会话不匹配或冻结校验失败时拒绝；不调用模型、不占用预算。
+- `memory_send_batch`：接收 `{ runId, batchId }`；只发送指定的 `queued` 批次，返回 `MemoryBatchStatus`。要求当前会话 / profile 匹配、共享 Coordinator lease 可用且 027 预算授权成功；不确定的供应商结果记为 `unknown`，不会自动重发。模型响应已收到而本地提交失败时保留 `received`，可通过完成命令恢复。
+- `memory_complete_batch`：接收 `{ runId, batchId }`；对已收到的响应重试本地候选提交，返回 `MemoryBatchStatus`，不重新发送模型请求。终态状态包含候选 outcome 摘要及白名单 `diagnosticCode`，不含 prompt 或供应商原始响应。
+
+`MemoryBatchStatus` 的状态为 `queued | dispatched | received | completed | rejected | unknown`，并包含 `batchId`、`runId`、`historyRevision`、可空 `completion` 与可空 `diagnosticCode`。以上命令统一经过存储就绪检查；未知身份或会话不匹配按 not-found 处理，参数 / 状态不允许按 bad-request 处理，活动 lease 冲突为 `app.busy`，底层持久化错误保留对应 `store.*` 错误。供应商调用只存在于显式发送命令，恢复与查询不消耗新的模型请求。
 
 版本冲突或参数非法为 `app.bad-request`，未登记 / 非法剧本身份为 `app.bad-request`，配置损坏为 `store.corrupt`，存储初始化不可用为 `app.not-ready`。配置历史按 scope/version 留存并校验规范 JSON 哈希；当前版本通过 head 指针读取。`PolicyParameters` 数值均限制为 JavaScript 安全整数范围，Rust 负责完整领域校验，TypeScript 只声明类型且 `invoke` 透传。
 
