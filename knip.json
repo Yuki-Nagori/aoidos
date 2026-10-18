@@ -10,5 +10,6 @@
     "tests/rust/native-platform/webview/*.ts"
   ],
   "project": ["src-web/**/*.ts", "src-web/**/*.vue", "scripts/**/*.ts", "scripts/**/*.mts"],
-  "ignoreDependencies": ["tailwindcss"]
+  "ignoreDependencies": ["@tauri-apps/cli", "tailwindcss"],
+  "ignoreBinaries": ["rustup"]
 }

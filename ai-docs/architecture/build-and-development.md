@@ -1,12 +1,12 @@
 # 构建与开发
 
-更新日期：2026-10-16。
+更新日期：2026-10-18。
 
 [架构总览](README.md)
 
 ## 环境
 
-预装 [Bun](https://bun.sh) 与 [rustup](https://rustup.rs) 后，`bun install` 一次完成其余一切：npm 依赖与 husky 钩子，加上 postinstall 钩子里的 Rust 侧配置（scripts/setup.mts）——按 `rust-toolchain.toml` 安装工具链（含 clippy / rustfmt / llvm-tools-preview）、对半截安装卸载重装自愈、补装覆盖率门禁用的 cargo-llvm-cov；全部就位时只是两次秒级探测。CI 会先通过预编译 action 安装覆盖率工具，再运行 `bun install`，避免冷 runner 从源码构建。环境异常时 `bun run setup` 手动重跑同一逻辑。平台 WebView 依赖属系统层：Windows 需 WebView2（Win10/11 一般自带），macOS 需 Xcode Command Line Tools，Linux 需 webkit2gtk 等开发包（[Tauri 前置要求](https://tauri.app/start/prerequisites/)）。
+预装 [Bun](https://bun.sh) 与 [rustup](https://rustup.rs) 后，`bun install` 一次完成其余一切：npm 依赖与 husky 钩子，加上 postinstall 钩子里的 Rust 侧配置（scripts/setup.mts）——按 `rust-toolchain.toml` 安装缺失的工具链组件（含 clippy / rustfmt / llvm-tools-preview）、修复损坏安装、补装覆盖率门禁用的 cargo-llvm-cov；组件已就绪时只做本地查询。仓库 Cargo 命令与 Tauri CLI 通过 `scripts/cargo.mts` / `scripts/toolchain.mts` 按该文件调用 `rustup run`，不受系统 `PATH` 中其他 cargo / rustc 发行版影响。CI 会先通过预编译 action 安装覆盖率工具，再运行 `bun install`，避免冷 runner 从源码构建。环境异常时 `bun run setup` 手动重跑同一逻辑。平台 WebView 依赖属系统层：Windows 需 WebView2（Win10/11 一般自带），macOS 需 Xcode Command Line Tools，Linux 需 webkit2gtk 等开发包（[Tauri 前置要求](https://tauri.app/start/prerequisites/)）。
 
 ## 常用命令
 

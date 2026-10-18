@@ -1,6 +1,7 @@
 // coverage:rust 门禁执行器：跑 llvm-cov（JSON 导出），按根目录
 // coverage-rust.config.mts 的聚合行覆盖底线裁决。
 import { exit } from "node:process";
+import { cargoInvocation, rustToolchainEnv } from "./rust-toolchain";
 import config from "../coverage-rust.config.mts";
 
 const reportPath = "target/coverage-rust.json";
@@ -8,15 +9,17 @@ const ignoreRegex = config.ignore.map((pattern) => pattern.source).join("|");
 
 const run = Bun.spawnSync(
   [
-    "cargo",
-    "llvm-cov",
-    "--workspace",
-    "--lib",
-    "--json",
-    `--ignore-filename-regex=${ignoreRegex}`,
-    `--output-path=${reportPath}`,
+    "rustup",
+    ...cargoInvocation([
+      "llvm-cov",
+      "--workspace",
+      "--lib",
+      "--json",
+      `--ignore-filename-regex=${ignoreRegex}`,
+      `--output-path=${reportPath}`,
+    ]),
   ],
-  { stdout: "inherit", stderr: "inherit" },
+  { env: rustToolchainEnv(), stdout: "inherit", stderr: "inherit" },
 );
 if (!run.success) {
   exit(run.exitCode ?? 1);

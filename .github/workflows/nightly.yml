@@ -31,7 +31,7 @@ jobs:
       - name: Build web assets
         run: bun run build:web:assets
       - name: Build full Rust workspace
-        run: cargo build --locked --workspace
+        run: bun scripts/cargo.mts build --locked --workspace
       - name: Run full Vitest suite
         run: bun run test
       - name: Run full workspace Rust tests
