@@ -82,7 +82,7 @@ Aoidos 是基于 Bun、Vue 3、TypeScript 和 Tauri 2 的 AI 剧情跑团桌面�
 - 仓库中的 Rust 命令统一通过 `scripts/cargo.mts`、`scripts/toolchain.mts` 或 `scripts/rust-toolchain.ts` 按 `rust-toolchain.toml` 调用 `rustup run`；不要在项目脚本中直接调用系统 `cargo` 或 Tauri CLI，以免 Homebrew 等 PATH 优先项绕过仓库锁定的工具链。
 - `bun.lock` 与根目录唯一的 `Cargo.lock` 随依赖改动同步提交。
 - Rust 定型命令参数和返回值后，TypeScript 侧立即声明同型；`invoke` 不负责运行时校验。
-- 前端纯逻辑放在 `utils/` 并配行为测试；Rust 命令层保持薄，业务增长后拆为 workspace crate。
+- 前端单 feature 纯逻辑放在该 feature 的 `utils/`，跨 feature 逻辑放 `src-web/shared/` 并配行为测试；Rust 命令层保持薄，业务增长后拆为 workspace crate。
 - 非平凡改动先按[任务模板](ai-docs/task/_template.md)登记 task；提交消息包含 `Task: NNN`。CI 修复等平凡改动可不建 task，例外遵循[任务索引](ai-docs/task-index.md)和[提交规范](ai-docs/standards/commits.md)。
 - 技术行为变化同步更新受影响文档。目录结构使用文本代码块；Mermaid 图入库前渲染校验。
 - CI workflow 保留 job 编排与平台条件；重复的工具安装、选择计划执行和桌面会话步骤抽到 `.github/actions/` composite action。测试、格式与 lint 复用 `scripts/ci-scope.mts` 的变更计划；未知路径、共享配置或差异不可用时必须全量回退，不得静默跳过。CI 在 `bun install` 前通过 setup action 安装 `cargo-llvm-cov`，避免 postinstall 在冷 runner 上源码编译。

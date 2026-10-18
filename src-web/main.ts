@@ -1,8 +1,8 @@
 import "./app.css";
 import { createApp } from "vue";
-import App from "./App.vue";
+import App from "./app/App.vue";
 import { localeStartupKey } from "./api/locale";
-import { i18n } from "./i18n";
+import { i18n } from "./i18n/index";
 import { hydrateLocale } from "./i18n/startup";
 
 async function mountApp(): Promise<void> {

@@ -19,7 +19,7 @@ import {
   listenRecords,
 } from "../../../../src-web/api/records";
 import { setUiPreferences } from "../../../../src-web/api/store";
-import { useGameView } from "../../../../src-web/composables/useGameView";
+import { useGameView } from "../../../../src-web/features/game/composables/useGameView";
 function check(value: boolean, message: string): void {
   if (!value) throw { code: message };
 }

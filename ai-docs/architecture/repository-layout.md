@@ -8,13 +8,13 @@
 ├── index.html                 # Vite 入口 HTML（挂载点 #app）
 ├── src-web/                   # 前端：Vue 3 + TypeScript
 │   ├── main.ts                # 应用入口：挂载根组件
-│   ├── App.vue                # 根编排：产品生命周期、IPC 消费与界面状态连接
-│   ├── components/            # 展示边界：游戏、记录、输入及记忆设置 / 查询面板
+│   ├── app/                   # App.vue 根组合与 SetupPanel 等跨功能界面
+│   ├── features/              # game、product、billing、memory、locale、theme 功能模块
+│   │   └── <feature>/         # 各自的 components/、composables/、utils/ 与类型
+│   ├── shared/                # 跨功能共享的纯逻辑 / 展示原语，不依赖 feature
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
 │   ├── api/                   # IPC 薄调用与 TS 载荷类型
 │   ├── i18n/                  # vue-i18n 实例与挂载前持久语言同步
-│   ├── utils/                 # 纯消费规则 / 恢复协调及其他纯逻辑，配单测
-│   ├── composables/           # Vue 身份、监听、偏好与 scope 清理，消费 utils
 │   ├── styles/                # 全局样式扩展；generated/ 仅放构建生成的 CSS
 │   ├── theme-bootstrap.ts     # 首帧主题引导（构建为 /theme-bootstrap.js）
 │   ├── locale-bootstrap.ts    # 首帧语言引导（构建为 /locale-bootstrap.js）
@@ -50,7 +50,10 @@
 │       └── src/platform/     # 三平台原生输入；Unix 权限共用
 ├── resources/scripts/        # 已发布剧本原文与署名 / 许可，编译期内嵌
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
-├── tests/web/                 # Vitest 单测（目录镜像 src-web）
+├── tests/web/                 # Vitest 行为测试（目录镜像 src-web）
+│   ├── app/                   # 根组合与跨功能界面
+│   ├── features/              # 按生产 feature 镜像
+│   ├── shared/                # 共享逻辑
 │   └── i18n/                  # 启动语言同步测试
 ├── scripts/                   # 仓库脚本（环境 / 覆盖率 / 原生夹具与 Rust 构建适配；TS 独立 tsconfig）
 ├── coverage-rust.config.mts   # Rust 覆盖率门禁的忽略清单与逐文件预算（scripts/coverage-rust.mts 消费）
@@ -66,15 +69,15 @@
 
 ## 归属规则
 
-上图记录当前实际目录。`App.vue` 仍承担较多跨功能组合；051 将在不改变行为的前提下整理为 `app/`、`features/` 与真正共享的基础层。实现前不要把尚不存在的目标目录当作现状；实现后本图和对应测试路径随代码同步。
+上图记录当前实际目录。`app/App.vue` 只装配产品、语言、主题、计费、记忆和对局功能；应用级 `SetupPanel` 组合多个设置 feature，`GameWorkspace` 管理游戏内状态与呈现。feature 之间不互相导入实现；共享能力放 `shared/`，测试按生产目录镜像。
 
-组件只做编排与渲染，跨功能共享的纯逻辑进 `utils/` 并配单测，功能私有逻辑留在对应 feature；`commands.rs` 只做解参数、调逻辑、回包，业务长大后在 `src-rust/` 下拆独立 crate（加入 `members`，依赖方向与工程纪律见[职责边界](ts-rust-boundary.md)），命令层只做转发。全局状态、路由、UI 组件库在需求真实出现前不引入，也不建占位目录。
+组件只做编排与渲染，跨功能共享的纯逻辑进 `shared/utils/` 并配单测，功能私有逻辑留在对应 feature；`commands.rs` 只做解参数、调逻辑、回包，业务长大后在 `src-rust/` 下拆独立 crate（加入 `members`，依赖方向与工程纪律见[职责边界](ts-rust-boundary.md)），命令层只做转发。全局状态、路由、UI 组件库在需求真实出现前不引入，也不建占位目录。
 
 标准库类型与调用不按 import 集中封装：各模块可直接使用 `Path`、`Duration`、`io::Error` 等。带有项目统一存储规则的能力（原子写、私有权限发布、有界读取、缺失路径判断、实例锁）归 `aoidos-store`；共用 JSON 编解码 / 重复键校验 / 规范化归 `aoidos-json`，领域 JSON schema / 版本校验归消费 crate，原生输入和权限适配归 `aoidos-llm::platform`，请求超时归 LLM 调度。只提取真实共用的规则，不为统一调用外观增加转发层。
 
 Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../standards/rust.md#rust-模块目录)。
 
-新增文件的归属按职责判断，不按语言堆放；访问私有实现的测试贴近源码（如 `commands.rs` 的 `mod tests`），前端公开行为的测试放 `tests/web/` 并镜像目录结构。
+新增文件的归属按职责判断，不按语言堆放；访问私有实现的测试贴近源码（如 `commands.rs` 的 `mod tests`），前端公开行为的测试放 `tests/web/` 并镜像目录结构，例如 `tests/web/features/game/utils/turn-consumer.test.ts` 对应 `src-web/features/game/utils/turn-consumer.ts`。
 
 ## 命名
 

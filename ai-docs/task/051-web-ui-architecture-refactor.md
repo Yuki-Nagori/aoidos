@@ -1,6 +1,6 @@
 # 051 — Web UI 架构拆分
 
-- 状态：ready
+- 状态：done
 - 依赖：025、034、046、047
 - 优先级：P1
 - 创建 / 更新：2026-10-19 / 2026-10-19
@@ -35,24 +35,23 @@
 
 ## 预计改动
 
-以 `src-web/App.vue`、现有 `components/`、`composables/`、`utils/`、`api/` 和对应 `tests/web/` 为迁移对象；预计建立 `src-web/app/` 与 `src-web/features/<feature>/`，共享组件 / composable / utils 仅保留真正跨 feature 的内容。同步 `ai-docs/standards/frontend.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/repository-layout.md`、`ai-docs/architecture/ui-shell.md` 与选择器配置。最终路径以依赖图和现存职责核验后为准。
+将前端组合拆为 `src-web/app/`、`src-web/features/<feature>/` 与 `src-web/shared/`，按职责迁移原组件、composable、utility 和镜像测试。共享层仅保留跨 feature 能力；应用层组合设置与记忆面板，对局工作区持有游戏界面生命周期。同步 `ai-docs/standards/frontend.md`、`ai-docs/standards/layering.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/repository-layout.md`、`ai-docs/architecture/ui-shell.md`、`ai-docs/architecture/i18n.md`、CI selector、coverage 口径与入口测试文档路径。
 
 ## 验收标准
 
-- [ ] `App.vue` 仅负责应用入口级组合，不承载多项 feature 的状态机、业务流程及大段页面模板。
-- [ ] 页面 / 组件 / composable / 纯逻辑归属能从目录直接判断；共享层没有 feature 依赖，feature 间不存在循环依赖。
-- [ ] 现有对局、输入、记录、恢复、主题、语言、费用、记忆与角色选择行为保持一致；没有复制 API 或引入第二套状态真源。
-- [ ] 测试跟随新目录并通过影响范围选择器，Vitest 行为验证覆盖主要用户路径。
-- [ ] 架构链路图、目录规划、规范与 task 同步；独立评审完成，评审发现已处理。
-- [ ] 最终 `bun run verify` 全项通过。
+- [x] `App.vue` 仅负责应用入口级组合，不承载多项 feature 的状态机、业务流程及大段页面模板。
+- [x] 页面 / 组件 / composable / 纯逻辑归属能从目录直接判断；共享层没有 feature 依赖，feature 间不存在循环依赖。
+- [x] 现有对局、输入、记录、恢复、主题、语言、费用、记忆与角色选择行为保持一致；没有复制 API 或引入第二套状态真源。
+- [x] 测试跟随新目录并通过影响范围选择器，Vitest 行为验证覆盖主要用户路径。
+- [x] 架构链路图、目录规划、规范与 task 同步；独立评审完成，评审发现已处理。
+- [x] 最终 `bun run verify` 全项通过。
 
 ## 验证计划与结果
 
-| 日期 | 环境 / 命令                                                                 | 预期                 | 实际结果 |
-| ---- | --------------------------------------------------------------------------- | -------------------- | -------- |
-| —    | `bun run test:affected`、`bun run format:affected`、`bun run lint:affected` | 受影响检查通过       | 未执行   |
-| —    | `bun run verify`                                                            | 全项通过             | 未执行   |
-| —    | 独立架构评审                                                                | 无未处理的高风险发现 | 未执行   |
+| 日期       | 环境 / 命令                        | 预期                 | 实际结果                                                                                                                                                                                        |
+| ---------- | ---------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-19 | `bun run verify`                   | 全项通过             | 通过：前端 46 个文件 / 409 个测试，前端覆盖率语句 99.63%、分支 99.19%、函数 100%、行 99.73%；Rust 覆盖率 96.82%，Web 构建、格式、lint、i18n、依赖分层、knip、benchmark 与 Rust 文档生成均通过。 |
+| 2026-10-19 | 独立架构评审（gpt-6.1-sol medium） | 无未处理的高风险发现 | 通过；修复组件偏好注入、DOM refs / 历史修订连接、错误映射重复和 native selector，并补齐组件装配测试与文档。                                                                                     |
 
 ## 风险与回退
 
@@ -61,7 +60,8 @@
 ## 决策与工作记录
 
 - 2026-10-19：与 052 分开登记。051 只处理结构和职责，要求现有视觉 / 行为不变，避免架构重构与大规模样式变化混在一个评审中。
+- 2026-10-19：工作区 composable 只依赖 `focus()` 端口，不依赖具体输入组件；共享错误转换支持调用方提供 fallback code，保留偏好错误的 `store.io` 语义。共享层可以引用 `api/` 的纯类型，不依赖 IPC 运行时。
 
 ## 完成摘要
 
-未开始。完成后填写迁移后的边界、检查证据及未验证的平台限制，再与任务索引一起更新状态。
+已完成 feature-first 迁移、应用组合根、跨 feature shared 边界和测试镜像；修复 review 发现并补齐工作区 / 账单组件的动态行为测试。架构链路、目录、依赖规则、coverage 与 CI selector 均与实现同步。`bun run verify` 和独立评审通过。

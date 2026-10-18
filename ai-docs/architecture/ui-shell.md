@@ -19,7 +19,7 @@
 
 舞台内容使用 aspect-ratio 与容器尺寸计算；不支持容器查询时用 ResizeObserver 更新可用矩形。不把浏览器页面缩放值当设备像素比。默认窗口为 960 × 640，最小客户区为 640 × 480 CSS 像素；桌面舞台锁定 16:9，高度不足时优先等比缩小，不用最小高度撑破比例。窄屏改为占满可用纵向空间。
 
-当前实现仍由 `App.vue` 组合产品状态，`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览分别位于 utils，定时器与偏好写入由 composables 管理。设置摘要在有活动对局时收起，仍可手动展开。该现状将在 051 按职责拆分；拆分前后均不得改变本文定义的交互。
+当前 `app/App.vue` 组合产品、主题、语言、费用、记忆偏好与游戏视图；`app/components/SetupPanel.vue` 展示跨功能设置并通过插槽承载记忆设置；费用明细由 `features/billing/components/BillingPanel.vue` 持有，随活动会话和供应商属性更新。`features/game/components/GameWorkspace.vue` 管理对局内状态和交互，记忆查询与游戏工作区由 app 并列装配。`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览位于 game feature 的 utils，定时器与偏好写入由 composables 管理。设置摘要在有活动对局时收起，仍可手动展开。051 只整理职责，不改变本文定义的交互；052 再移植视觉设计。
 
 ## 面板四态
 

@@ -24,7 +24,6 @@ const SHARED_CONFIG = new Set([
   "bun.lock",
   "biome.json",
   "dprint.json",
-  "vitest.config.ts",
   "vite.config.ts",
   "tsconfig.json",
   "rust-toolchain.toml",
@@ -161,20 +160,29 @@ export function createCiPlan(
   const dprintPaths = new Set<string>();
 
   for (const path of normalized) {
+    // Vitest 的配置只影响 Web / 脚本测试选择，不改变 Cargo 测试目标。
+    if (path === "vitest.config.ts") allVitest = true;
+
     if (
       path.startsWith("src-tauri/") ||
       path.startsWith("tests/rust/native-platform/") ||
       path.startsWith("src-web/api/") ||
-      path.startsWith("src-web/utils/") ||
       [
         "src-web/app.css",
-        "src-web/composables/useEnginePhase.ts",
-        "src-web/composables/useGameView.ts",
-        "src-web/composables/useLlmTurn.ts",
-        "src-web/composables/useMigration.ts",
-        "src-web/composables/useRecordView.ts",
+        "src-web/features/game/composables/useEnginePhase.ts",
+        "src-web/features/game/composables/useGameView.ts",
+        "src-web/features/game/composables/useLlmTurn.ts",
+        "src-web/features/game/composables/useRecordView.ts",
+        "src-web/features/game/utils/phase-consumer.ts",
+        "src-web/features/game/utils/phase-recovery.ts",
+        "src-web/features/game/utils/record-recovery.ts",
+        "src-web/features/game/utils/turn-consumer.ts",
+        "src-web/features/game/utils/turn-recovery.ts",
+        "src-web/features/product/composables/useMigration.ts",
         "src-web/locale-bootstrap.ts",
         "src-web/main.ts",
+        "src-web/shared/utils/listener-group.ts",
+        "src-web/shared/utils/error.ts",
         "src-web/styles/generated/theme-defaults.css",
         "src-web/theme-bootstrap.ts",
       ].includes(path) ||
@@ -235,6 +243,7 @@ export function createCiPlan(
       path.startsWith(".github/") ||
       path.startsWith("ai-docs/") ||
       path.startsWith("public/") ||
+      path === "vitest.config.ts" ||
       path === "README.md" ||
       path === "AGENTS.md";
     if (!isKnownArea) return fullPlan(`unmapped path: ${path}`, packages);

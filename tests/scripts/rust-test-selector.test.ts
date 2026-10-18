@@ -76,7 +76,7 @@ describe("Rust test scope selection", () => {
 
   it("skips Rust tests for known web-only and documentation changes", () => {
     const plan = selectRustTestPlan(
-      ["src-web/App.vue", "ai-docs/architecture/README.md"],
+      ["src-web/app/App.vue", "ai-docs/architecture/README.md"],
       packages,
       root,
     );

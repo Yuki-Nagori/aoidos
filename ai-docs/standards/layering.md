@@ -1,6 +1,6 @@
 # 依赖分层规范
 
-更新日期：2026-10-16。本文规定 Aoidos 的 Rust crate、Tauri 壳、Vue 层及测试代码的依赖方向。实现边界见[架构总览](../architecture/README.md)与[TS / Rust 边界](../architecture/ts-rust-boundary.md)；CI 检查不得替代架构评审。
+更新日期：2026-10-19。本文规定 Aoidos 的 Rust crate、Tauri 壳、Vue 层及测试代码的依赖方向。实现边界见[架构总览](../architecture/README.md)与[TS / Rust 边界](../architecture/ts-rust-boundary.md)；CI 检查不得替代架构评审。
 
 ## Rust crate
 
@@ -26,18 +26,19 @@
 ## Web 层
 
 ```text
-Vue 入口 / App → components 与 composables
-components → composables、api、utils、i18n
-composables → api、utils、i18n
+main.ts → app/App.vue → app/components（跨 feature 的页面组合）
+                          ├─→ features/<feature>/components、composables、utils
+                          └─→ shared（多个 feature 共用的基础能力）
+features/<feature> → api、i18n、shared
+shared → 第三方库、浏览器标准 API 与无运行时依赖的 API 类型
 api → Tauri IPC API 与载荷类型
-utils → 纯逻辑与标准库
 ```
 
-`api/` 不得导入 Vue 组件或 composable；`utils/` 不得反向依赖 UI、IPC 或 composable。Vue 组件负责呈现，composable 负责生命周期与状态连接，纯规则进入 `utils/`。新增公共逻辑应优先放在最低且职责正确的层，避免组件之间互相导入。
+`app/` 是唯一可以直接装配多个 feature 的层；feature 之间不导入对方实现，需要协作时由 app 通过 props、事件或回调连接。`shared/` 不得导入 app 或任何 feature；可以引用 `api/` 的纯类型契约，不得依赖其运行时调用；单 feature 逻辑留在该 feature 的 `utils/` / `composables/`。`api/` 不得导入 Vue 组件或 composable。不要为搬文件引入 barrel 转发或第二套状态源。
 
 ## 测试层
 
-- `tests/web/` 镜像 `src-web/`，`tests/scripts/` 镜像 `scripts/`；测试可导入生产模块，生产模块不得导入测试代码。
+- `tests/web/` 镜像 `src-web/`（如 `tests/web/features/game/` 对应 `src-web/features/game/`），`tests/scripts/` 镜像 `scripts/`；测试可导入生产模块，生产模块不得导入测试代码。
 - Rust 私有实现测试留在 crate 源码单元测试；跨 crate / 原生会话验证放专用测试 crate。
 - 影响范围选择只改变执行集合，不改变断言、覆盖率阈值和平台验收要求。selector 不确定时执行全量。
 
