@@ -1,8 +1,10 @@
 //! 稳定素材及批次短引用映射；恢复复用原始身份，不重新切片或发请求。
 
 use super::*;
-use crate::model::MAX_PROPOSAL_BYTES;
+use crate::model::{MAX_INTEGER, MAX_PROPOSAL_BYTES};
 use serde::{Deserialize, Serialize};
+
+pub const MAX_COLLECTIBLE_MATERIAL_SCAN: usize = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -13,6 +15,29 @@ pub struct Span {
     pub text: String,
     pub context: bool,
     pub continuation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterialCursor {
+    pub run_id: String,
+    pub history_revision: u64,
+    pub through_record_seq: u64,
+    pub through_ordinal: u64,
+    pub after_record_seq: u64,
+    pub after_ordinal: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectibleMaterial {
+    pub material_id: String,
+    pub source: SourceRef,
+    pub ordinal: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectibleMaterialPage {
+    pub materials: Vec<CollectibleMaterial>,
+    pub next: Option<MaterialCursor>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -159,6 +184,141 @@ impl Repository {
             )
             .map_err(sql)?;
         Ok(!reserved)
+    }
+
+    /// 按原始记录与稳定分片序号分页返回当前仍可处理的素材。
+    /// `limit` 同时限制扫描行数，失效来源会被跳过，但仍推进游标。
+    /// # Errors
+    /// 分页预算、游标或 run 边界不合法，或持久来源损坏时返回错误。
+    pub fn collectible_materials_page(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        after: Option<MaterialCursor>,
+        limit: usize,
+    ) -> Result<CollectibleMaterialPage> {
+        let (run, boundary) = self.boundary(conn, run_id, port)?;
+        if limit == 0
+            || limit > MAX_COLLECTIBLE_MATERIAL_SCAN
+            || after.as_ref().is_some_and(|cursor| {
+                cursor.run_id != run_id
+                    || cursor.history_revision != boundary.history_revision
+                    || cursor.through_record_seq > MAX_INTEGER
+                    || cursor.through_ordinal > MAX_INTEGER
+                    || cursor.after_record_seq == 0
+                    || cursor.after_record_seq > cursor.through_record_seq
+                    || cursor.after_record_seq > MAX_INTEGER
+                    || cursor.after_ordinal > MAX_INTEGER
+                    || (cursor.after_record_seq == cursor.through_record_seq
+                        && cursor.after_ordinal > cursor.through_ordinal)
+            })
+        {
+            return Err(reject());
+        }
+
+        let (through_record_seq, through_ordinal, after_record_seq, after_ordinal) =
+            if let Some(cursor) = after {
+                (
+                    cursor.through_record_seq,
+                    cursor.through_ordinal,
+                    cursor.after_record_seq,
+                    cursor.after_ordinal,
+                )
+            } else {
+                let upper: Option<(u64, u64)> = conn
+                    .query_row(
+                        "SELECT record_seq,unit_ordinal FROM memory_materials
+                         WHERE run_id=?1 ORDER BY record_seq DESC,unit_ordinal DESC LIMIT 1",
+                        [&run.run_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()
+                    .map_err(sql)?;
+                let Some((through_record_seq, through_ordinal)) = upper else {
+                    return Ok(CollectibleMaterialPage {
+                        materials: Vec::new(),
+                        next: None,
+                    });
+                };
+                (through_record_seq, through_ordinal, 0, 0)
+            };
+        let mut statement = conn
+            .prepare(
+                "SELECT m.material_id,m.record_seq,m.unit_ordinal
+                       ,m.status,
+                       EXISTS(SELECT 1 FROM memory_processed AS p WHERE p.material_id=m.material_id),
+                       EXISTS(
+                         SELECT 1 FROM memory_spans AS s
+                         JOIN memory_batches AS b ON b.batch_id=s.batch_id
+                         WHERE s.material_id=m.material_id AND b.status<>'rejected'
+                       )
+                 FROM memory_materials AS m
+                 WHERE m.run_id=?1
+                   AND (m.record_seq,m.unit_ordinal)>(?2,?3)
+                   AND (m.record_seq,m.unit_ordinal)<=(?4,?5)
+                 ORDER BY m.record_seq,m.unit_ordinal
+                 LIMIT ?6",
+            )
+            .map_err(sql)?;
+        let mut rows = statement
+            .query_map(
+                params![
+                    run.run_id,
+                    after_record_seq,
+                    after_ordinal,
+                    through_record_seq,
+                    through_ordinal,
+                    limit + 1
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, bool>(4)?,
+                        row.get::<_, bool>(5)?,
+                    ))
+                },
+            )
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        let has_more = rows.len() > limit;
+        rows.truncate(limit);
+        let next = has_more.then(|| {
+            let (_, record_seq, ordinal, _, _, _) = rows[rows.len() - 1].clone();
+            MaterialCursor {
+                run_id: run.run_id.clone(),
+                history_revision: boundary.history_revision,
+                through_record_seq,
+                through_ordinal,
+                after_record_seq: record_seq,
+                after_ordinal: ordinal,
+            }
+        });
+
+        let mut materials = Vec::with_capacity(rows.len());
+        for (material_id, record_seq, ordinal, status, processed, reserved) in rows {
+            if status != "eligible" || processed || reserved {
+                continue;
+            }
+            let source = self.material_source(conn, &run.run_id, &material_id)?;
+            if source.record_seq != record_seq
+                || !self.valid_sources(&run, std::slice::from_ref(&source), port)?
+                || port.source_text(&source)?.is_none()
+            {
+                continue;
+            }
+            materials.push(CollectibleMaterial {
+                material_id,
+                source,
+                ordinal,
+            });
+        }
+
+        Ok(CollectibleMaterialPage { materials, next })
     }
 
     /// # Errors

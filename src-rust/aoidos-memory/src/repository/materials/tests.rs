@@ -203,6 +203,122 @@ fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_b
 }
 
 #[test]
+fn collectible_material_pages_are_bounded_ordered_and_skip_reserved_sources() {
+    let mut f = Fixture::new();
+    let register = |f: &Fixture, record_seq| {
+        let mut source = f.source();
+        source.record_seq = record_seq;
+        f.repo
+            .register_material(&f.conn, &f.port, &source, 0)
+            .unwrap()
+    };
+    let first = register(&f, 1);
+    let second = register(&f, 2);
+    let third = register(&f, 3);
+
+    let first_page = f
+        .repo
+        .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, None, 1)
+        .unwrap();
+    assert_eq!(first_page.materials.len(), 1);
+    assert_eq!(first_page.materials[0].material_id, first);
+    let cursor = first_page.next.unwrap();
+    // 分页期间追加的素材不能进入本次扫描快照。
+    register(&f, 4);
+    let mut foreign_cursor = cursor.clone();
+    foreign_cursor.run_id = new_id();
+    assert!(matches!(
+        f.repo
+            .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, Some(foreign_cursor), 1,),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    let mut stale_cursor = cursor.clone();
+    stale_cursor.history_revision += 1;
+    assert!(matches!(
+        f.repo
+            .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, Some(stale_cursor), 1,),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    let reserved = BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id: new_id(),
+        run_id: f.run.run_id.clone(),
+        history_revision: 0,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash: f.run.policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: second.clone(),
+            source: {
+                let mut source = f.source();
+                source.record_seq = 2;
+                source
+            },
+            text: "钟声".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: serde_json::json!({}),
+    };
+    f.repo
+        .freeze_batch(&mut f.conn, &f.port, &reserved)
+        .unwrap();
+
+    let filtered_page = f
+        .repo
+        .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, Some(cursor), 1)
+        .unwrap();
+    assert!(filtered_page.materials.is_empty());
+    let last_page = f
+        .repo
+        .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, filtered_page.next, 1)
+        .unwrap();
+    assert_eq!(last_page.materials.len(), 1);
+    assert_eq!(last_page.materials[0].material_id, third);
+    assert!(last_page.next.is_none());
+}
+
+#[test]
+fn collectible_material_page_rejects_invalid_limits_and_cursors() {
+    let f = Fixture::new();
+    assert!(matches!(
+        f.repo
+            .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, None, 0),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    assert!(matches!(
+        f.repo.collectible_materials_page(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            None,
+            MAX_COLLECTIBLE_MATERIAL_SCAN + 1,
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    assert!(matches!(
+        f.repo.collectible_materials_page(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            Some(MaterialCursor {
+                run_id: f.run.run_id.clone(),
+                history_revision: 0,
+                through_record_seq: 2,
+                through_ordinal: 0,
+                after_record_seq: 0,
+                after_ordinal: 0,
+            }),
+            1,
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+}
+
+#[test]
 fn deferred_candidates_are_unavailable_before_batch_completion() {
     let mut f = Fixture::new();
     let snapshot = f.received_batch("candidate_1");

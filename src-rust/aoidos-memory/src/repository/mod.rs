@@ -23,7 +23,8 @@ pub use confirmations::{QuestionCursor, QuestionPage};
 mod materials;
 pub use materials::{
     BatchCompletion, BatchReceipt, BatchSnapshot, BatchState, CandidateOutcome, CandidateResult,
-    CycleMarkCommit, CycleMarkResult, DeferredCandidate, Span,
+    CollectibleMaterial, CollectibleMaterialPage, CycleMarkCommit, CycleMarkResult,
+    DeferredCandidate, MAX_COLLECTIBLE_MATERIAL_SCAN, MaterialCursor, Span,
 };
 #[cfg(test)]
 mod test_support;

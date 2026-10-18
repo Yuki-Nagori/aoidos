@@ -10,6 +10,7 @@ pub enum PromptTarget {
     Character(String),
     CheckProposal,
     SceneProposal,
+    MemoryProposal,
 }
 impl From<&Target> for PromptTarget {
     fn from(target: &Target) -> Self {
@@ -26,6 +27,7 @@ impl PromptTarget {
             Self::Character(_) => "characterSpeech",
             Self::CheckProposal => "check-proposal",
             Self::SceneProposal => "scene-proposal",
+            Self::MemoryProposal => "memory-proposal",
         }
     }
     pub fn speaker(&self) -> Option<&str> {
@@ -35,7 +37,10 @@ impl PromptTarget {
         }
     }
     pub fn proposal(&self) -> bool {
-        matches!(self, Self::CheckProposal | Self::SceneProposal)
+        matches!(
+            self,
+            Self::CheckProposal | Self::SceneProposal | Self::MemoryProposal
+        )
     }
     pub fn close(&self) -> &'static str {
         match self {
@@ -43,6 +48,7 @@ impl PromptTarget {
             Self::Character(_) => "[/AOIDOS:CHARACTER]",
             Self::CheckProposal => "[/AOIDOS:CHECK-PROPOSAL]",
             Self::SceneProposal => "[/AOIDOS:SCENE-PROPOSAL]",
+            Self::MemoryProposal => "[/AOIDOS:MEMORY-PROPOSAL]",
         }
     }
 }
@@ -65,6 +71,7 @@ pub fn open_request(target: &PromptTarget) -> String {
         PromptTarget::Character(id) => format!("[AOIDOS:CHARACTER id={id}]\n"),
         PromptTarget::CheckProposal => "[AOIDOS:CHECK-PROPOSAL]\n".into(),
         PromptTarget::SceneProposal => "[AOIDOS:SCENE-PROPOSAL]\n".into(),
+        PromptTarget::MemoryProposal => "[AOIDOS:MEMORY-PROPOSAL]\n".into(),
     }
 }
 /// v1 的目标绑定版本化 GuardSpec 身份。
@@ -85,6 +92,7 @@ pub fn guard_request(target: &PromptTarget) -> GuardSpec {
         "[/AOIDOS:CHARACTER]",
         "[/AOIDOS:CHECK-PROPOSAL]",
         "[/AOIDOS:SCENE-PROPOSAL]",
+        "[/AOIDOS:MEMORY-PROPOSAL]",
     ]
     .into_iter()
     .enumerate()
@@ -173,7 +181,11 @@ mod tests {
     }
     #[test]
     fn proposal_markers_are_internal_targets_and_only_their_own_close_is_successful() {
-        for target in [PromptTarget::CheckProposal, PromptTarget::SceneProposal] {
+        for target in [
+            PromptTarget::CheckProposal,
+            PromptTarget::SceneProposal,
+            PromptTarget::MemoryProposal,
+        ] {
             assert!(target.proposal());
             assert!(target.speaker().is_none());
             assert!(guard_request_id(&target).ends_with(target.kind()));

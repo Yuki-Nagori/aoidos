@@ -2,6 +2,7 @@
 
 mod cycle_context;
 pub mod processing;
+pub mod prompt;
 
 pub use cycle_context::{CycleMarkContext, CycleMarkContextInput, build_cycle_mark_context};
 

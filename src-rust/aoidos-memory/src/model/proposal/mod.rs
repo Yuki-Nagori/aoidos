@@ -92,7 +92,8 @@ pub struct Proposal {
 }
 
 /// 只包含冻结批次中已经登记且可信的身份，不接收来自候选的目录或证据。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProposalContext {
     pub source_ids: BTreeSet<String>,
     pub entity_ids: BTreeSet<String>,
@@ -117,7 +118,8 @@ pub struct CycleMarkCandidate {
 }
 
 /// 由可信剧本与当前周目构造的授权快照，绝不能直接由模型填充。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CycleMarkAuthorization {
     pub rule_id: String,
     pub script_id: String,
@@ -131,13 +133,15 @@ pub struct CycleMarkAuthorization {
     pub priority: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EvidenceSnapshot {
     pub subject_id: String,
     pub source_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TargetSnapshot {
     pub entry_id: String,
     pub version_id: String,

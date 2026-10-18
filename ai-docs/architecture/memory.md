@@ -486,16 +486,16 @@ recordSeq / historyRevision 沿用 006 / 012 的安全整数范围；正文 hash
 | entityIds           | 已登记的稳定实体 ID 数组，可为空；不能创建实体                                                                                          |
 | evidenceIds         | 本批提供的可信获知证据；角色可保存分类为非空数组，uncertain / notWorthy 可省略，玩家偏好省略                                            |
 | targetRef           | 旧条目 entryId + expectedVersionId + expectedStateRevision；repeat / supplement / correction 必有，new / notWorthy 省略，uncertain 可选 |
-| dimension           | `plot / relationship / preference / clue`；可保存分类必有                                                                               |
+| dimension           | `story / relationship / playerPreference / foreshadowing`；可保存分类必有                                                               |
 | summary             | 可保存分类必有，非空白、有界；notWorthy 省略，uncertain 只给问题说明                                                                    |
-| attitude            | 角色可保存分类必有：`unexpressed / believes / doubts / rejects`；偏好省略                                                               |
+| attitude            | 角色可保存分类必有：`unexpressed / believed / doubtful / denied`；偏好省略                                                              |
 | attitudeEvidenceIds | 改变态度或首建非 unexpressed 状态时必有非空数组，指向提供的角色表达 / 引擎规则证据                                                      |
 | inferred            | 可保存分类必有布尔值；true 时保留推断依据，不成为新亲历证据                                                                             |
 | reason              | 有界依据摘要，非内部思维链                                                                                                              |
 
 可选 `cycleMarks` 是与普通候选共用请求和容量预算的数组，单项只接受 `candidateId`、`ruleId`、`sourceIds`、`subjectIds`、`summary`。引用必须来自本批冻结上下文及剧本授权；模型不能提交 `markId`、周目代数、刻痕类型、优先级或其他持久权限字段，这些由引擎按已登记规则生成。刻痕最多 8 项，普通候选与刻痕合计最多 128 项，摘要总字节数最多 2 KiB，授权、来源与原子完成边界见[轮回与节点的类型化接入](#轮回与节点的类型化接入)。
 
-角色主体仅使用 plot / relationship / clue，玩家偏好主体仅使用 preference；态度证据须明确属于本 subject，转述另一人的态度不能更新自己的态度。已知反话、表演 / 伪装、仅引用他人说法的来源不作为真实认知变化证据，不能用“相信”关键词直接转换。
+角色主体仅使用 `story / relationship / foreshadowing`，玩家偏好主体仅使用 `playerPreference`；态度证据须明确属于本 subject，转述另一人的态度不能更新自己的态度。已知反话、表演 / 伪装、仅引用他人说法的来源不作为真实认知变化证据，不能用“相信”关键词直接转换。
 
 候选没有 strength、分数、文件路径、SQL、事实 patch、自由引文、实体登记或权限覆盖字段。新事件没有旧 targetRef；无法确定关联须 uncertain。repeat 只计划有效强化 / 复活或 no-op，不用其摘要或态度覆盖旧内容；有内容 / 态度变化须 supplement 或 correction。classification=new 的源素材主体 / 维度 anchor 已处理时拒绝或转待关联问题，不能换 candidateId 创建重复 entry。分类相互依赖时由程序形成依赖操作组，模型不能用任意组号改变原子边界。
 
@@ -505,7 +505,7 @@ PromptPlan 由 Rust 构造：可信任务说明 / schema → 冻结批次身份 
 
 #### 最小候选示例
 
-程序给出 s1 对应玩家已提交的场外原文“不喜欢恐怖描写”，p1 对应玩家偏好主体；模型可返回以下完整 JSON。引文由程序提取，不在模型输出中重复原文：
+程序给出 s1 对应玩家已提交的场外原文“不喜欢恐怖描写”，并在主体白名单中提供玩家偏好；模型可返回以下完整 JSON。引文由程序提取，不在模型输出中重复原文：
 
 ```json
 {
@@ -515,9 +515,9 @@ PromptPlan 由 Rust 构造：可信任务说明 / schema → 冻结批次身份 
       "candidateId": "c1",
       "classification": "new",
       "sourceIds": ["s1"],
-      "subjectRef": "p1",
+      "subjectRef": { "kind": "playerPreference" },
       "entityIds": [],
-      "dimension": "preference",
+      "dimension": "playerPreference",
       "summary": "希望避免恐怖描写。",
       "inferred": false,
       "reason": "玩家明确表达了体验偏好。"
@@ -526,7 +526,7 @@ PromptPlan 由 Rust 构造：可信任务说明 / schema → 冻结批次身份 
 }
 ```
 
-恢复重复收到同一个结果时复用持久计划和 entryId；若同源偏好已经处理，不再创建新条目。把 p1 改成未提供角色、加 strength 字段、引用未知 s2 或将 summary 当玩家逐字引文，分别在主体 / schema / 引用 / 展示边界拒绝。
+恢复重复收到同一个结果时复用持久计划和 entryId；若同源偏好已经处理，不再创建新条目。把主体改成白名单外角色、加 strength 字段、引用未知 s2 或将 summary 当玩家逐字引文，分别在主体 / schema / 引用 / 展示边界拒绝。
 
 ### 纯函数门控、实体与幂等
 
@@ -564,9 +564,9 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 当前实现将 turnId / 027 requestId、响应原文、响应 hash、逐项完成摘要及错误码存入共享 SQLite 的 `memory_batch_receipts`，并与 `memory_batches.status` 在同一事务提交；响应与摘要分别限制为 64 KiB，读取先检查长度再复制 BLOB。这样避免状态与结果文件的双写窗口。完成摘要使用 version=1、outcomes 数组；candidateId 必须与响应候选集合一一对应且不重复，rejected / pending / deferred 必须带稳定 reasonCode，applied / no-op 不带原因。候选与依赖操作的多对一映射存入 `memory_batch_candidate_operations`，与操作计划、目标和版本在同一事务登记；读取恢复计划时必须核对映射集合，完成摘要逐项读取关联操作并审计 applied 状态与提交回执；操作进入持久 `rejected` 时只能以候选 `rejected` 终结，未决或隔离操作不能被其他 outcome 绕过。未绑定操作的候选不能声明 applied。升级前已完成的批次由一次性 backfill 标记为历史回执，以保留可读性而不伪造缺失的候选关联；新批次始终执行严格映射校验。已完成结果为 `deferred` 的候选可从原响应 / 冻结输入重新做本地验证并绑定一个操作；候选标识、原因和关联操作可由 `deferred_candidates` 读取，操作提交不改写原批次回执，其他终态候选不能重开。该路径不重新发送请求，也不创建定时重试；无有效本地计划时继续保持 deferred。dispatched 缺完整响应只能转 unknown，不自动重发。重新发起模型判断须进入新的已授权批次并使用新的物理请求身份，已完成的同源操作仍幂等。
 
-033 已确认产品触发语义：玩家显式发起处理时，系统自动汇集当前周目、当前因果分支中仍有效且未处理的素材；收集与冻结本身不发模型请求，发送必须来自玩家的显式操作。Engine `Storage::collect_memory_materials` 已按 256 条 / 4 MiB 分页扫描并登记有效当前分支来源；游标绑定 run、historyRevision 与首次扫描记录上界，正文按 2048 字节 UTF-8 边界稳定切片，IPC 只返回 eligible 数量。素材最多被一个尚未拒绝的批次占用；完成 / unknown 批次不会释放占用，避免重复处理及不确定请求的重复收费；模型明确拒绝的批次可由新的显式授权重新冻结。冻结操作在 SQLite `IMMEDIATE` 事务中校验素材仍为 eligible、来源仍有效且未被处理 / 占用，同 batchId 同快照重放保持幂等。收集按钮与分页状态已接入查询面板，不触发模型请求；冻结后的候选 / Prompt 输入构造、显式发送按钮与 private 请求 UI / IPC 仍待实现。
+033 已确认产品触发语义：玩家显式发起处理时，系统自动汇集当前周目、当前因果分支中仍有效且未处理的素材；收集与冻结本身不发模型请求，发送必须来自玩家的显式操作。Engine `Storage::collect_memory_materials` 已按 256 条 / 4 MiB 分页扫描并登记有效当前分支来源；游标绑定 run、historyRevision 与首次扫描记录上界，正文按 2048 字节 UTF-8 边界稳定切片，IPC 只返回 eligible 数量。仓储候选页 `collectible_materials_page` 每次最多扫描 128 条原始素材，游标绑定 run、historyRevision 和复合序号上界；即使整页素材已被过滤也会前进，翻页期间新增素材不会进入本轮扫描。它固定遍历上界，不构成跨页 SQLite 快照；每页资格反映该页读取时状态，最终冻结仍在 `IMMEDIATE` 事务中重新校验全部素材。素材与批次的占用查询分别使用复合索引。素材最多被一个尚未拒绝的批次占用；完成 / unknown 批次不会释放占用，避免重复处理及不确定请求的重复收费；模型明确拒绝的素材可由新的显式授权重新冻结。冻结操作在 SQLite `IMMEDIATE` 事务中校验素材仍为 eligible、来源仍有效且未被处理 / 占用，同 batchId 同快照重放保持幂等。收集按钮与分页状态已接入查询面板，不触发模型请求。`record::memory::prompt` 已提供纯 Rust Prompt 构造器，消费冻结批次与 `ProposalContext`，覆盖 Completion / Chat 输入形态、专属 `[AOIDOS:MEMORY-PROPOSAL]` 护栏、全角括号数据转义及 64 KiB prompt 字节上限；冻结的来源白名单、旧记忆及证据由 context 明确提供，构造器不查库、不扩大权限。可信上下文组装、冻结时写入完整输入、显式发送按钮与 private 请求 UI / IPC 仍待实现，prompt 构造器尚未接入收费发送链路。
 
-engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造的 private 请求，在共享 `Coordinator` 空闲后取得独立 lease。其预算包装器先调用请求携带的 027 预算端口，再在共享 SQLite 登记唯一 turnId / requestId；登记成功后才进入 020 private 调度。记忆请求限制为一次物理发送，不启用自动传输重试或温度阶梯；完整输出在 lease 释放前写入 `received`，发送或回执结果不确定则记录 `unknown`，不重发。此入口没有自动触发器；冻结 Prompt / 候选构造、用户授权界面和记忆 IPC 尚未接入；035 的真实供应商授权门继续关闭。
+engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造的 private 请求，在共享 `Coordinator` 空闲后取得独立 lease。其预算包装器先调用请求携带的 027 预算端口，再在共享 SQLite 登记唯一 turnId / requestId；登记成功后才进入 020 private 调度。记忆请求限制为一次物理发送，不启用自动传输重试或温度阶梯；完整输出在 lease 释放前写入 `received`，发送或回执结果不确定则记录 `unknown`，不重发。此入口没有自动触发器；当前 Prompt 构造器仅完成冻结数据到 ProviderInput / GuardSpec 的纯转换，可信上下文装配、批次冻结调用、用户授权界面和记忆 IPC 尚未接入；035 的真实供应商授权门继续关闭。
 
 原始结果已经持久保存而因待确认容量 / 本地资源暂时不能提交的候选，保留 localDeferred 原因与计划；空间释放后只重新做本地核验，不再调用模型。输入切片不足时同样等新上下文，不对同一不足输入反复收费。网络 / 顶层 schema 失败的素材标 needsExplicitRetry，只有用户主动重试 / 恢复或新的有效输入改变判定前提时才能重新排收费批次，不能用定时重扫暗中修复 JSON。
 
@@ -574,7 +574,7 @@ engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造
 
 ### manifest、操作状态机与恢复
 
-029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射、别名来源 / 审计与旧完成回执兼容迁移，接入 observed / rumor 的可信证据读取边界，并提供复用 020 / 027 的授权 private 批次执行入口；冻结 Prompt / 候选构造、调用触发、UI 与记忆 IPC 仍未接入。canonical 数据归 engine 的 `EntityRegistry` 所有，经恢复校验后的有界只读快照交给 memory；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。别名每周目最多 4096 个，每项最多 128 个支持来源，每段来源 JSON 最多 32 KiB。
+029 在 `aoidos-memory` 中实现 runs / 会话绑定、材料 / 批次 / spans、entries / 不可变 versions / source 与 evidence 关联、effects、operations / targets、processed 标记、clock receipts 与持久 run faults。030 追加批次请求回执、待确认问题、候选—操作映射、别名来源 / 审计与旧完成回执兼容迁移，接入 observed / rumor 的可信证据读取边界，并提供复用 020 / 027 的授权 private 批次执行入口；033 已接入本地素材扫描，并新增纯 prompt 构造器，但可信上下文组装、批次冻结调用、显式调用触发、UI 与记忆 IPC 尚未完成。canonical 数据归 engine 的 `EntityRegistry` 所有，经恢复校验后的有界只读快照交给 memory；engine 持有共享 SQLite 连接并负责迁移编号，业务 crate 拥有记忆 schema 与读写逻辑。恢复读取 SQLite BLOB 前先检查声明长度；单个来源 / 证据项最多 32 KiB，每组最多 128 项且通用加载聚合最多 4 MiB；同一版本关联是正文 JSON 的重复索引，聚合长度不得超过版本正文 32 KiB。操作计划最多 1 MiB、快照最多 64 KiB、批次响应 / 完成摘要各最多 64 KiB、问题快照最多 64 KiB；待确认分页最多 32 项，每次最多扫描 256 项。别名每周目最多 4096 个，每项最多 128 个支持来源，每段来源 JSON 最多 32 KiB。
 
 已应用操作若与 `store_applied` 回执、计划摘要或目标记录不一致，会在 `memory_run_faults` 持久登记故障，并拒绝该 run 后续所有写入，返回 `recoveryRequired`。当前没有自动解冻路径；必须经未来显式审计修复，不能以重新运行普通恢复覆盖冲突。
 
