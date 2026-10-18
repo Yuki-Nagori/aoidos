@@ -4,6 +4,129 @@ use super::super::test_support::*;
 use super::*;
 
 #[test]
+fn forged_reinforcement_gain_cannot_bypass_the_frozen_policy() {
+    let mut f = Fixture::new();
+    let version = f.version();
+    let initial = f.plan(version.clone());
+    f.commit(&initial);
+
+    let mut forged = f.plan(version.clone());
+    forged.targets[0].expected = Expected {
+        version_id: Some(version.version_id.clone()),
+        state_revision: 1,
+    };
+    forged.targets[0].next = None;
+    forged.targets[0].effects.push(Effect {
+        effect_id: new_id(),
+        kind: EffectKind::Gain,
+        source: f.source(),
+        logical_position: 0,
+        gain: policy().reinforcement_gain + 1,
+        evidence: vec![],
+    });
+
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &forged),
+        Reason::InvalidSource,
+    );
+}
+
+#[test]
+fn effect_position_cannot_be_forged_without_a_batch() {
+    let mut f = Fixture::new();
+    let version = f.version();
+    f.commit(&f.plan(version.clone()));
+    let earlier_round = f.source();
+    f.repo
+        .complete_round(
+            &mut f.conn,
+            &f.port,
+            &f.run.run_id,
+            &new_id(),
+            &earlier_round,
+        )
+        .unwrap();
+
+    let mut plan = f.plan(version.clone());
+    plan.expected_logical_clock = 1;
+    plan.targets[0].expected = Expected {
+        version_id: Some(version.version_id),
+        state_revision: 1,
+    };
+    plan.targets[0].next = None;
+    let mut later_source = f.source();
+    later_source.record_seq = 2;
+    plan.targets[0].effects.push(Effect {
+        effect_id: new_id(),
+        kind: EffectKind::Gain,
+        source: later_source,
+        logical_position: 0,
+        gain: policy().reinforcement_gain,
+        evidence: vec![],
+    });
+
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &plan),
+        Reason::InvalidSource,
+    );
+}
+
+#[test]
+fn revival_is_rejected_when_it_would_exceed_active_capacity() {
+    let mut run_policy = policy();
+    run_policy.active_capacity = 100;
+    let mut f = Fixture::with_policy(run_policy);
+    let version = f.version();
+    let initial = f.plan(version.clone());
+    f.commit(&initial);
+
+    let current = f
+        .repo
+        .current(&f.conn, &f.port, &f.run.run_id, &version.entry_id)
+        .unwrap();
+    let mut archive = f.plan(current.clone());
+    archive.targets[0].expected = Expected {
+        version_id: Some(current.version_id.clone()),
+        state_revision: 1,
+    };
+    archive.targets[0].next = None;
+    archive.targets[0].state = EntryState::Archived;
+    f.commit(&archive);
+
+    for _ in 0..100 {
+        f.conn
+            .execute(
+                "INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')",
+                params![new_id(), f.run.run_id],
+            )
+            .unwrap();
+    }
+
+    let mut revival = f.plan(current.clone());
+    revival.targets[0].expected = Expected {
+        version_id: Some(current.version_id),
+        state_revision: 2,
+    };
+    revival.targets[0].next = None;
+    revival.targets[0].state = EntryState::Active;
+    let mut source = f.source();
+    source.record_seq = 2;
+    revival.targets[0].effects.push(Effect {
+        effect_id: new_id(),
+        kind: EffectKind::Revival,
+        source,
+        logical_position: 0,
+        gain: 0,
+        evidence: vec![],
+    });
+
+    rejected(
+        f.repo.prepare(&mut f.conn, &f.port, &revival),
+        Reason::CapacityBlocked,
+    );
+}
+
+#[test]
 fn commit_is_idempotent_and_detects_receipt_or_plan_conflicts() {
     let mut f = Fixture::new();
     let version = f.version();
@@ -350,18 +473,65 @@ fn character_effects_require_subject_bound_knowledge_evidence_support() {
         rule_id: "observed".into(),
     }];
     version.evidence_set_hash = set_hash(&version.evidence).unwrap();
+    let evidence = version.evidence.clone();
     let mut plan = f.plan(version);
     plan.targets[0].effects.push(Effect {
         effect_id: new_id(),
         kind: EffectKind::Gain,
         source,
         logical_position: 0,
-        gain: 10,
+        gain: policy().reinforcement_gain,
+        evidence: vec![],
     });
 
     rejected(
         f.repo.prepare(&mut f.conn, &f.port, &plan),
-        Reason::PolicyUnavailable,
+        Reason::InvalidSource,
+    );
+    plan.targets[0].effects[0].evidence = evidence.clone();
+    f.commit(&plan);
+    let effects = f
+        .repo
+        .effects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            &plan.targets[0].entry_id,
+            0,
+            32,
+        )
+        .unwrap();
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].1.evidence, evidence);
+
+    f.port.evidence_invalid.set(true);
+    f.port.view.evidence_revision += 1;
+    rejected(
+        f.repo.effects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            &plan.targets[0].entry_id,
+            0,
+            32,
+        ),
+        Reason::RecoveryRequired,
+    );
+    f.repo
+        .recover(&mut f.conn, &f.port, &f.run.run_id, None)
+        .unwrap();
+    assert!(
+        f.repo
+            .effects(
+                &f.conn,
+                &f.port,
+                &f.run.run_id,
+                &plan.targets[0].entry_id,
+                0,
+                32
+            )
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -593,6 +763,7 @@ fn preparation_rejects_oversized_or_internally_inconsistent_plans() {
             source: f.source(),
             logical_position: 0,
             gain: 1,
+            evidence: vec![],
         })
         .collect();
     rejected(
@@ -614,6 +785,7 @@ fn preparation_rejects_oversized_or_internally_inconsistent_plans() {
         source: f.source(),
         logical_position: 0,
         gain: 1,
+        evidence: vec![],
     });
     rejected(
         f.repo.prepare(&mut f.conn, &f.port, &invalid_effect),
@@ -642,6 +814,7 @@ fn preparation_rejects_duplicate_materials_and_effect_identities() {
         source: f.source(),
         logical_position: 0,
         gain: 1,
+        evidence: vec![],
     };
     plan.targets[0].effects = vec![effect.clone(), effect];
     rejected(
@@ -660,7 +833,8 @@ fn plan_rechecks_existing_entry_source_state_and_effect_uniqueness() {
         kind: EffectKind::Gain,
         source: f.source(),
         logical_position: 0,
-        gain: 10,
+        gain: policy().reinforcement_gain,
+        evidence: vec![],
     });
     f.commit(&initial);
 
@@ -722,7 +896,8 @@ fn plan_rechecks_existing_entry_source_state_and_effect_uniqueness() {
         kind: EffectKind::Gain,
         source: f.source(),
         logical_position: 0,
-        gain: 10,
+        gain: policy().reinforcement_gain,
+        evidence: vec![],
     });
     rejected(
         f.repo.prepare(&mut f.conn, &f.port, &repeated_effect),
@@ -754,7 +929,8 @@ fn applied_audit_rejects_each_inconsistent_receipt_component() {
             kind: EffectKind::Gain,
             source: f.source(),
             logical_position: 0,
-            gain: 5,
+            gain: 1,
+            evidence: vec![],
         });
         plan.processed_materials.push(material);
         f.commit(&plan);
@@ -787,7 +963,8 @@ fn applied_effect_deduplication_indexes_must_match_the_committed_source() {
             kind: EffectKind::Gain,
             source: f.source(),
             logical_position: 0,
-            gain: 5,
+            gain: 1,
+            evidence: vec![],
         });
         f.commit(&plan);
         f.conn.execute_batch(mutation).unwrap();
@@ -823,7 +1000,8 @@ fn applied_audit_rejects_extra_effects_or_processed_materials() {
             kind: EffectKind::Gain,
             source: f.source(),
             logical_position: 0,
-            gain: 5,
+            gain: 1,
+            evidence: vec![],
         });
         f.commit(&plan);
         if extra_effect {
@@ -989,7 +1167,7 @@ fn state_only_and_material_targets_revalidate_sources_before_prepare() {
     archive.targets[0].expected.version_id = Some(original.version_id.clone());
     archive.targets[0].expected.state_revision = 1;
     archive.targets[0].next = None;
-    archive.targets[0].state = EntryState::Archived;
+    archive.targets[0].state = EntryState::Active;
     let mut unavailable_effect_source = f.source();
     unavailable_effect_source.record_seq = 2;
     archive.targets[0].effects.push(Effect {
@@ -998,6 +1176,7 @@ fn state_only_and_material_targets_revalidate_sources_before_prepare() {
         source: unavailable_effect_source,
         logical_position: 0,
         gain: 1,
+        evidence: vec![],
     });
     f.port.invalid.set(true);
     rejected(
@@ -1193,6 +1372,7 @@ fn storage_failure_during_plan_recheck_keeps_operation_ready() {
         source: f.source(),
         logical_position: 0,
         gain: 1,
+        evidence: vec![],
     });
     f.repo.prepare(&mut f.conn, &f.port, &plan).unwrap();
     f.repo
@@ -1448,6 +1628,7 @@ fn state_only_effect_requires_decodable_persisted_subject_metadata() {
         source: f.source(),
         logical_position: 0,
         gain: 1,
+        evidence: vec![],
     });
     assert!(matches!(
         f.repo.prepare(&mut f.conn, &f.port, &plan),

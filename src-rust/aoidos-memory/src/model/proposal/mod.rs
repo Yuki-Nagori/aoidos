@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_PROPOSAL_BYTES: usize = 64 * 1024;
 pub const MAX_CANDIDATES: usize = 128;
 pub const MAX_REFERENCES: usize = 128;
+pub const MAX_PROPOSAL_TARGETS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,10 +93,14 @@ pub struct Proposal {
 }
 
 /// 只包含冻结批次中已经登记且可信的身份，不接收来自候选的目录或证据。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProposalContext {
     pub source_ids: BTreeSet<String>,
     pub entity_ids: BTreeSet<String>,
+    /// 与实体 ID 一一对应的可信目录信息，供模型关联正文名称而不猜测身份。
+    #[serde(default)]
+    pub entities: BTreeMap<String, EntitySnapshot>,
     pub subjects: BTreeSet<SubjectRef>,
     pub evidence: BTreeMap<String, EvidenceSnapshot>,
     pub targets: BTreeMap<String, TargetSnapshot>,
@@ -103,6 +108,18 @@ pub struct ProposalContext {
     pub cycle_rules: BTreeMap<String, CycleMarkAuthorization>,
     /// 批次短 ID 到已核验原始来源的映射。
     pub cycle_sources: BTreeMap<String, CycleSourceRef>,
+}
+
+/// 由当前完整实体目录冻结的可展示身份信息；map key 是稳定 entityId。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntitySnapshot {
+    pub kind: crate::model::EntityCategory,
+    pub scope: String,
+    pub canonical_name: String,
+    /// 仅包含该周目经明确确认、来源仍有效的精确别名。
+    #[serde(default)]
+    pub aliases: BTreeSet<String>,
 }
 
 /// 模型只提供摘要和白名单引用；持久刻痕身份及权限字段由引擎生成。
@@ -117,7 +134,8 @@ pub struct CycleMarkCandidate {
 }
 
 /// 由可信剧本与当前周目构造的授权快照，绝不能直接由模型填充。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CycleMarkAuthorization {
     pub rule_id: String,
     pub script_id: String,
@@ -131,20 +149,46 @@ pub struct CycleMarkAuthorization {
     pub priority: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceSnapshot {
+    /// 场景观察 / 传闻对应的世界 mutation ID；定向对话的引擎内证据没有独立事件身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
     pub subject_id: String,
-    pub source_id: String,
+    /// 为完整引用该证据来源范围所需的批次素材；顺序按原文区间排列。
+    pub source_ids: Vec<String>,
+    pub kind: super::KnowledgeKind,
+    /// 传闻的不确定状态；观察和定向对话不允许携带此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertainty: Option<RumorUncertainty>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub informant_id: Option<String>,
+    pub scope: String,
+    pub rule_id: String,
+    pub source: SourceRef,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 当前仍有效的传闻可信状态，不等同于世界事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RumorUncertainty {
+    Unverified,
+    Disputed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TargetSnapshot {
     pub entry_id: String,
     pub version_id: String,
     pub state_revision: u64,
+    pub state: super::EntryState,
     pub subject: Subject,
     pub dimension: Dimension,
+    pub summary: String,
     pub attitude: Attitude,
+    pub inferred: bool,
 }
 
 impl Proposal {
@@ -384,7 +428,14 @@ fn validate_evidence(candidate: &Candidate, context: &ProposalContext) -> Result
                 .any(|id| {
                     context.evidence.get(id).is_none_or(|evidence| {
                         evidence.subject_id != subject
-                            || !candidate.source_ids.contains(&evidence.source_id)
+                            || evidence.source_ids.is_empty()
+                            || evidence.source_ids.len() > MAX_REFERENCES
+                            || evidence.source_ids.iter().collect::<BTreeSet<_>>().len()
+                                != evidence.source_ids.len()
+                            || evidence
+                                .source_ids
+                                .iter()
+                                .any(|id| !candidate.source_ids.contains(id))
                     })
                 })
             || candidate
@@ -419,6 +470,12 @@ fn validate_target(candidate: &Candidate, context: &ProposalContext) -> Result<(
     if snapshot.entry_id != reference.entry_id
         || snapshot.version_id != reference.expected_version_id
         || snapshot.state_revision != reference.expected_state_revision
+        || snapshot.state == super::EntryState::Unavailable
+        || (snapshot.state == super::EntryState::Archived
+            && matches!(
+                candidate.classification,
+                Classification::Supplement | Classification::Correction
+            ))
         || !candidate.subject_ref.matches_subject(&snapshot.subject)
         || candidate
             .dimension
@@ -435,6 +492,8 @@ fn validate_shape(candidate: &Candidate, context: &ProposalContext) -> Result<()
         .as_ref()
         .is_some_and(|summary| valid_summary(summary));
     let is_character = matches!(candidate.subject_ref, SubjectRef::Character { .. });
+    let invalid_inferred_preference = matches!(candidate.subject_ref, SubjectRef::PlayerPreference)
+        && candidate.inferred != Some(false);
     let previous_attitude = candidate
         .target_ref
         .as_ref()
@@ -453,6 +512,7 @@ fn validate_shape(candidate: &Candidate, context: &ProposalContext) -> Result<()
                 || !has_body
                 || candidate.dimension.is_none()
                 || candidate.inferred.is_none()
+                || invalid_inferred_preference
                 || (is_character && candidate.attitude.is_none())
                 || !valid_dimension_for_subject(&candidate.subject_ref, candidate.dimension)
             {
@@ -464,6 +524,7 @@ fn validate_shape(candidate: &Candidate, context: &ProposalContext) -> Result<()
                 || !has_body
                 || candidate.dimension.is_none()
                 || candidate.inferred.is_none()
+                || invalid_inferred_preference
                 || (is_character && candidate.attitude.is_none())
                 || !valid_dimension_for_subject(&candidate.subject_ref, candidate.dimension)
             {

@@ -1,8 +1,11 @@
 //! 稳定素材及批次短引用映射；恢复复用原始身份，不重新切片或发请求。
 
 use super::*;
-use crate::model::MAX_PROPOSAL_BYTES;
+use crate::algorithm::MAX_ARCHIVE_CANDIDATES;
+use crate::model::{MAX_INTEGER, MAX_PROPOSAL_BYTES, ProposalContext};
 use serde::{Deserialize, Serialize};
+
+pub const MAX_COLLECTIBLE_MATERIAL_SCAN: usize = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -13,6 +16,29 @@ pub struct Span {
     pub text: String,
     pub context: bool,
     pub continuation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterialCursor {
+    pub run_id: String,
+    pub history_revision: u64,
+    pub through_record_seq: u64,
+    pub through_ordinal: u64,
+    pub after_record_seq: u64,
+    pub after_ordinal: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectibleMaterial {
+    pub material_id: String,
+    pub source: SourceRef,
+    pub ordinal: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectibleMaterialPage {
+    pub materials: Vec<CollectibleMaterial>,
+    pub next: Option<MaterialCursor>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -115,6 +141,187 @@ struct CompletionTransaction<'a> {
 }
 
 impl Repository {
+    /// 判断已登记素材是否仍可进入新批次；未完成或结果不明的既有批次会占用来源。
+    /// # Errors
+    /// run / 历史边界不可用、来源记录损坏或 SQLite 读取失败时返回错误。
+    pub fn material_is_collectible(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        material_id: &str,
+    ) -> Result<bool> {
+        let (run, _) = self.boundary(conn, run_id, port)?;
+        if !valid_id(material_id) {
+            return Err(reject());
+        }
+        let source = self.material_source(conn, &run.run_id, material_id)?;
+        if !self.valid_sources(&run, std::slice::from_ref(&source), port)?
+            || port.source_text(&source)?.is_none()
+        {
+            return Ok(false);
+        }
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM memory_materials WHERE run_id=?1 AND material_id=?2",
+                params![run_id, material_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        if status.as_deref() != Some("eligible") {
+            return Ok(false);
+        }
+        let reserved: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memory_processed WHERE material_id=?1)
+                 OR EXISTS(
+                     SELECT 1 FROM memory_spans AS s
+                     JOIN memory_batches AS b ON b.batch_id=s.batch_id
+                     WHERE s.material_id=?1 AND b.status<>'rejected'
+                 )",
+                [material_id],
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        Ok(!reserved)
+    }
+
+    /// 按原始记录与稳定分片序号分页返回当前仍可处理的素材。
+    /// `limit` 同时限制扫描行数，失效来源会被跳过，但仍推进游标。
+    /// # Errors
+    /// 分页预算、游标或 run 边界不合法，或持久来源损坏时返回错误。
+    pub fn collectible_materials_page(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        after: Option<MaterialCursor>,
+        limit: usize,
+    ) -> Result<CollectibleMaterialPage> {
+        let (run, boundary) = self.boundary(conn, run_id, port)?;
+        if limit == 0
+            || limit > MAX_COLLECTIBLE_MATERIAL_SCAN
+            || after.as_ref().is_some_and(|cursor| {
+                cursor.run_id != run_id
+                    || cursor.history_revision != boundary.history_revision
+                    || cursor.through_record_seq > MAX_INTEGER
+                    || cursor.through_ordinal > MAX_INTEGER
+                    || cursor.after_record_seq == 0
+                    || cursor.after_record_seq > cursor.through_record_seq
+                    || cursor.after_record_seq > MAX_INTEGER
+                    || cursor.after_ordinal > MAX_INTEGER
+                    || (cursor.after_record_seq == cursor.through_record_seq
+                        && cursor.after_ordinal > cursor.through_ordinal)
+            })
+        {
+            return Err(reject());
+        }
+
+        let (through_record_seq, through_ordinal, after_record_seq, after_ordinal) =
+            if let Some(cursor) = after {
+                (
+                    cursor.through_record_seq,
+                    cursor.through_ordinal,
+                    cursor.after_record_seq,
+                    cursor.after_ordinal,
+                )
+            } else {
+                let upper: Option<(u64, u64)> = conn
+                    .query_row(
+                        "SELECT record_seq,unit_ordinal FROM memory_materials
+                         WHERE run_id=?1 ORDER BY record_seq DESC,unit_ordinal DESC LIMIT 1",
+                        [&run.run_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()
+                    .map_err(sql)?;
+                let Some((through_record_seq, through_ordinal)) = upper else {
+                    return Ok(CollectibleMaterialPage {
+                        materials: Vec::new(),
+                        next: None,
+                    });
+                };
+                (through_record_seq, through_ordinal, 0, 0)
+            };
+        let mut statement = conn
+            .prepare(
+                "SELECT m.material_id,m.record_seq,m.unit_ordinal
+                       ,m.status,
+                       EXISTS(SELECT 1 FROM memory_processed AS p WHERE p.material_id=m.material_id),
+                       EXISTS(
+                         SELECT 1 FROM memory_spans AS s
+                         JOIN memory_batches AS b ON b.batch_id=s.batch_id
+                         WHERE s.material_id=m.material_id AND b.status<>'rejected'
+                       )
+                 FROM memory_materials AS m
+                 WHERE m.run_id=?1
+                   AND (m.record_seq,m.unit_ordinal)>(?2,?3)
+                   AND (m.record_seq,m.unit_ordinal)<=(?4,?5)
+                 ORDER BY m.record_seq,m.unit_ordinal
+                 LIMIT ?6",
+            )
+            .map_err(sql)?;
+        let mut rows = statement
+            .query_map(
+                params![
+                    run.run_id,
+                    after_record_seq,
+                    after_ordinal,
+                    through_record_seq,
+                    through_ordinal,
+                    limit + 1
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, bool>(4)?,
+                        row.get::<_, bool>(5)?,
+                    ))
+                },
+            )
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        let has_more = rows.len() > limit;
+        rows.truncate(limit);
+        let next = has_more.then(|| {
+            let (_, record_seq, ordinal, _, _, _) = rows[rows.len() - 1].clone();
+            MaterialCursor {
+                run_id: run.run_id.clone(),
+                history_revision: boundary.history_revision,
+                through_record_seq,
+                through_ordinal,
+                after_record_seq: record_seq,
+                after_ordinal: ordinal,
+            }
+        });
+
+        let mut materials = Vec::with_capacity(rows.len());
+        for (material_id, record_seq, ordinal, status, processed, reserved) in rows {
+            if status != "eligible" || processed || reserved {
+                continue;
+            }
+            let source = self.material_source(conn, &run.run_id, &material_id)?;
+            if source.record_seq != record_seq
+                || !self.valid_sources(&run, std::slice::from_ref(&source), port)?
+                || port.source_text(&source)?.is_none()
+            {
+                continue;
+            }
+            materials.push(CollectibleMaterial {
+                material_id,
+                source,
+                ordinal,
+            });
+        }
+
+        Ok(CollectibleMaterialPage { materials, next })
+    }
+
     /// # Errors
     /// 同原记录 / ordinal 不同区间为身份冲突，不能通过重新切片制造新素材。
     pub fn register_material(
@@ -124,17 +331,20 @@ impl Repository {
         source: &SourceRef,
         ordinal: u64,
     ) -> Result<String> {
-        let (run, _) = self.boundary(conn, &source.run_id, port)?;
+        let (run, boundary) = self.boundary(conn, &source.run_id, port)?;
         self.ensure_writable(conn, &run.run_id)?;
         if ordinal > MAX_INTEGER || !self.valid_sources(&run, std::slice::from_ref(source), port)? {
             return Err(Error::Rejected(Reason::InvalidSource));
         }
+        self.clock(conn, port, &run.run_id)?;
+        let logical_position = self.source_logical_position(conn, port, &run, &boundary, source)?;
         let encoded = canonical(source)?;
         let previous=conn.query_row("SELECT material_id,length(source_json),source_json FROM memory_materials WHERE run_id=?1 AND session_id=?2 AND record_seq=?3 AND unit_ordinal=?4",params![source.run_id,source.session_id,source.record_seq,ordinal],read_material).optional().map_err(sql)?;
         if let Some((id, bytes)) = previous {
             if bytes.into_result()? != encoded {
                 return Err(Error::Corrupt);
             }
+            self.save_material_position(conn, &id, boundary.history_revision, logical_position)?;
             return Ok(id);
         }
         let duplicate = conn
@@ -161,7 +371,96 @@ impl Repository {
             ],
         )
         .map_err(sql)?;
+        self.save_material_position(conn, &id, boundary.history_revision, logical_position)?;
         Ok(id)
+    }
+
+    /// 返回素材在当前因果历史中的发生回合；历史修订变化时重新从已核验回合回执推导。
+    pub fn material_logical_position(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        material_id: &str,
+    ) -> Result<u64> {
+        let (run, boundary) = self.boundary(conn, run_id, port)?;
+        self.clock(conn, port, run_id)?;
+        let stored: Option<(u64, u64)> = conn
+            .query_row(
+                "SELECT history_revision,logical_position FROM memory_material_positions WHERE material_id=?1",
+                [material_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql)?;
+        if let Some((revision, position)) = stored
+            && revision == boundary.history_revision
+        {
+            return Ok(position);
+        }
+        let source = self.material_source(conn, run_id, material_id)?;
+        let position = self.source_logical_position(conn, port, &run, &boundary, &source)?;
+        self.save_material_position(conn, material_id, boundary.history_revision, position)?;
+        Ok(position)
+    }
+
+    pub(super) fn source_logical_position(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run: &Run,
+        boundary: &Boundary,
+        source: &SourceRef,
+    ) -> Result<u64> {
+        let mut statement = conn
+            .prepare(
+                "SELECT round_id,length(source_json),source_json,logical_position FROM memory_clock_receipts WHERE run_id=?1 AND valid=1 ORDER BY rowid LIMIT ?2",
+            )
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(
+                params![run.run_id, MAX_ARCHIVE_CANDIDATES + 1],
+                read_clock_source,
+            )
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        drop(statement);
+        if rows.len() > MAX_ARCHIVE_CANDIDATES {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        let mut position = 0_u64;
+        for (round_id, length, bytes, _) in rows {
+            if length > 32 * 1024 {
+                return Err(Error::Corrupt);
+            }
+            let receipt_source: SourceRef = decode(&bytes.into_result()?, 32 * 1024)?;
+            if receipt_source.record_seq < source.record_seq
+                && self.valid_sources(run, std::slice::from_ref(&receipt_source), port)?
+                && port.completed_round(&round_id, &receipt_source)?
+            {
+                position = position.checked_add(1).ok_or(Error::Corrupt)?;
+            }
+        }
+        if position > MAX_INTEGER || boundary.history_revision > MAX_INTEGER {
+            return Err(Error::Corrupt);
+        }
+        Ok(position)
+    }
+
+    fn save_material_position(
+        &self,
+        conn: &Connection,
+        material_id: &str,
+        history_revision: u64,
+        logical_position: u64,
+    ) -> Result<()> {
+        conn.execute(
+            "INSERT INTO memory_material_positions(material_id,history_revision,logical_position) VALUES(?1,?2,?3) ON CONFLICT(material_id) DO UPDATE SET history_revision=excluded.history_revision,logical_position=excluded.logical_position",
+            params![material_id, history_revision, logical_position],
+        )
+        .map_err(sql)?;
+        Ok(())
     }
     pub(super) fn material_source(
         &self,
@@ -186,21 +485,25 @@ impl Repository {
         port: &dyn CausalPort,
         snapshot: &BatchSnapshot,
     ) -> Result<Hash> {
-        let (run, view) = self.boundary(conn, &snapshot.run_id, port)?;
-        self.ensure_writable(conn, &run.run_id)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        let (run, view) = self.boundary(&tx, &snapshot.run_id, port)?;
+        self.ensure_writable(&tx, &run.run_id)?;
         if snapshot.version != 1
             || !valid_id(&snapshot.batch_id)
             || snapshot.history_revision != view.history_revision
             || snapshot.entity_revision != view.entity_revision
             || snapshot.evidence_revision != view.evidence_revision
             || snapshot.policy_hash != run.policy_hash
-            || snapshot.logical_clock != self.clock(conn, port, &snapshot.run_id)?
+            || snapshot.logical_clock != self.clock(&tx, port, &snapshot.run_id)?
             || snapshot.spans.is_empty()
             || snapshot.spans.len() > 128
         {
             return Err(reject());
         }
         let mut names = BTreeSet::new();
+        let mut materials = BTreeSet::new();
         for span in &snapshot.spans {
             let number = span
                 .source_id
@@ -211,12 +514,18 @@ impl Repository {
                 || span.source_id != format!("s{number}")
                 || !names.insert(&span.source_id)
                 || !valid_id(&span.material_id)
+                || !materials.insert(&span.material_id)
                 || span.text.is_empty()
-                || span.text.len() > if span.context { 1024 } else { 2048 }
+                || span.text.len()
+                    > if span.context {
+                        1024
+                    } else {
+                        MAX_MATERIAL_SPAN_BYTES
+                    }
             {
                 return Err(reject());
             }
-            let source = self.material_source(conn, &run.run_id, &span.material_id)?;
+            let source = self.material_source(&tx, &run.run_id, &span.material_id)?;
             if source != span.source
                 || !self.valid_sources(&run, std::slice::from_ref(&source), port)?
                 || port.source_text(&source)?.as_deref() != Some(&span.text)
@@ -229,7 +538,7 @@ impl Repository {
             return Err(Error::Rejected(Reason::CapacityBlocked));
         }
         let digest = hash(&raw);
-        if let Some(previous) = conn
+        if let Some(previous) = tx
             .query_row(
                 "SELECT length(snapshot_json),snapshot_json FROM memory_batches WHERE batch_id=?1",
                 [&snapshot.batch_id],
@@ -243,9 +552,32 @@ impl Repository {
             }
             return Ok(digest);
         }
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sql)?;
+        validate_proposal_context(snapshot)?;
+        for span in &snapshot.spans {
+            let status: Option<String> = tx
+                .query_row(
+                    "SELECT status FROM memory_materials WHERE run_id=?1 AND material_id=?2",
+                    params![run.run_id, span.material_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql)?;
+            let reserved: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM memory_processed WHERE material_id=?1)
+                     OR EXISTS(
+                         SELECT 1 FROM memory_spans AS s
+                         JOIN memory_batches AS b ON b.batch_id=s.batch_id
+                         WHERE s.material_id=?1 AND s.batch_id<>?2 AND b.status<>'rejected'
+                     )",
+                    params![span.material_id, snapshot.batch_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql)?;
+            if status.as_deref() != Some("eligible") || reserved {
+                return Err(Error::Rejected(Reason::InvalidSource));
+            }
+        }
         tx.execute("INSERT INTO memory_batches(batch_id,run_id,history_revision,input_digest,policy_hash,snapshot_json,status) VALUES(?1,?2,?3,?4,?5,?6,'queued')",params![snapshot.batch_id,snapshot.run_id,snapshot.history_revision,digest.as_slice(),snapshot.policy_hash.as_slice(),raw]).map_err(sql)?;
         for span in &snapshot.spans {
             tx.execute(
@@ -297,6 +629,24 @@ impl Repository {
             }
         }
         Ok((snapshot, decode_enum(&state)?))
+    }
+
+    /// 返回本周目最新的未终结批次身份，供应用重开后恢复显式处理状态。
+    /// # Errors
+    /// 周目身份非法或索引中的批次快照损坏时拒绝返回。
+    pub fn latest_pending_batch(&self, conn: &Connection, run_id: &str) -> Result<Option<String>> {
+        if !valid_id(run_id) {
+            return Err(reject());
+        }
+        conn.query_row(
+            "SELECT batch_id FROM memory_batches
+             WHERE run_id=?1 AND status IN ('queued','dispatched','received','unknown')
+             ORDER BY rowid DESC LIMIT 1",
+            [run_id],
+            read_string,
+        )
+        .optional()
+        .map_err(sql)
     }
 
     /// 在任何网络发送前登记唯一 turn / 计费请求身份。仅首次返回 `true`，调用方才可发送。
@@ -859,6 +1209,20 @@ impl Repository {
             })
             .collect()
     }
+    /// 读取候选已绑定的持久操作身份，用于恢复时复用原计划。
+    /// # Errors
+    /// 候选 / 批次身份无效或持久映射损坏时返回错误。
+    pub fn candidate_operation(
+        &self,
+        conn: &Connection,
+        batch_id: &str,
+        candidate_id: &str,
+    ) -> Result<Option<String>> {
+        if !valid_id(batch_id) || !valid_short_id(candidate_id) {
+            return Err(reject());
+        }
+        candidate_operation(conn, batch_id, candidate_id)
+    }
     /// 只登记已确认的场内完成回执；回退时钟由有效来源重建，不按墙钟增加。
     /// # Errors
     /// 调用方须从可信 completed 场内回合构造来源，重复 round 不重新计时。
@@ -912,6 +1276,31 @@ impl Repository {
         tx.commit().map_err(sql)?;
         Ok(next)
     }
+}
+
+/// 新批次的冻结授权必须随快照持久化，且只能引用该快照实际包含的来源。
+fn validate_proposal_context(snapshot: &BatchSnapshot) -> Result<()> {
+    let value = snapshot
+        .input
+        .get("proposalContext")
+        .cloned()
+        .ok_or_else(reject)?;
+    let context: ProposalContext = aoidos_json::from_value(value).map_err(|_| reject())?;
+    let sources = snapshot
+        .spans
+        .iter()
+        .map(|span| span.source_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if sources.len() != snapshot.spans.len()
+        || context.source_ids.len() != sources.len()
+        || context
+            .source_ids
+            .iter()
+            .any(|source_id| !sources.contains(source_id.as_str()))
+    {
+        return Err(reject());
+    }
+    Ok(())
 }
 impl Repository {
     fn validate_cycle_mark_commits(
@@ -1023,6 +1412,7 @@ impl Repository {
                     let (_, state) = self.operation(conn, &operation_id)?;
                     match (state, outcome.outcome) {
                         (OperationState::Applied, CandidateOutcome::Applied)
+                        | (OperationState::Applied, CandidateOutcome::NoOp)
                         | (OperationState::Rejected, CandidateOutcome::Rejected) => {}
                         (_, CandidateOutcome::Deferred) if batch_completed => {}
                         (OperationState::Prepared | OperationState::Ready, _) => {
@@ -1244,6 +1634,16 @@ fn read_material_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<(BoundedBlo
     Ok((
         read_bounded_blob(row, 0, 1, 32 * 1024)?,
         row.get(2)?,
+        row.get(3)?,
+    ))
+}
+fn read_clock_source(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, usize, BoundedBlob, u64)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        read_bounded_blob(row, 1, 2, 32 * 1024)?,
         row.get(3)?,
     ))
 }

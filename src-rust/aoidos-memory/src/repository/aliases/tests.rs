@@ -126,6 +126,35 @@ fn explicit_entity_confirmation_registers_exact_alias_and_sources_atomically() {
 }
 
 #[test]
+fn alias_context_only_returns_confirmed_names_present_in_the_frozen_source_text() {
+    let mut fixture = Fixture::new();
+    let confirmed = confirm_alias(&mut fixture, 1, ENTITY_ID);
+    let matches = fixture
+        .repo
+        .aliases_mentioned_in(
+            &fixture.conn,
+            &fixture.port,
+            &fixture.run.run_id,
+            &["守门人把钟交给玩家。"],
+        )
+        .unwrap();
+    assert_eq!(matches, [confirmed]);
+
+    assert!(
+        fixture
+            .repo
+            .aliases_mentioned_in(
+                &fixture.conn,
+                &fixture.port,
+                &fixture.run.run_id,
+                &["守门人没有提到别名。"],
+            )
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn separate_confirmations_add_distinct_support_without_duplicate_retries() {
     let mut fixture = Fixture::new();
     let first = confirm_alias(&mut fixture, 20, ENTITY_ID);

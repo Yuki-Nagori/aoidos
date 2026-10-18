@@ -100,7 +100,12 @@ async fn memory_configuration_commands_preserve_versions_and_return_effective_va
             memory_resolve_question,
             memory_list_entries,
             memory_get_entry,
-            memory_get_batch_status
+            memory_get_batch_status,
+            memory_get_active_batch,
+            memory_collect_materials,
+            memory_prepare_batch,
+            memory_send_batch,
+            memory_complete_batch
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -126,6 +131,28 @@ async fn memory_configuration_commands_preserve_versions_and_return_effective_va
 
         let app_config = call("memory_get_app_config", serde_json::json!({})).unwrap();
         assert_eq!(app_config["configVersion"], 1);
+        assert_eq!(
+            call(
+                "memory_collect_materials",
+                serde_json::json!({
+                    "runId":"00000000-0000-4000-8000-000000000001",
+                    "cursor":null
+                }),
+            )
+            .unwrap_err()["code"],
+            "app.not-found"
+        );
+        assert_eq!(
+            call(
+                "memory_collect_materials",
+                serde_json::json!({
+                    "runId":"00000000-0000-4000-8000-000000000001",
+                    "cursor":{"runId":"x","historyRevision":0,"snapshotMaxRecordSeq":1,"afterRecordSeq":0,"extra":true}
+                }),
+            )
+            .unwrap_err()["code"],
+            "app.bad-request"
+        );
         let mut parameters = app_config["parameters"].clone();
         parameters["algorithm"] = "none".into();
         assert_eq!(

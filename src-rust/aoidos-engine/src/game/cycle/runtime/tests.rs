@@ -194,6 +194,112 @@ impl Drop for RuntimeFixture {
     }
 }
 
+fn prepare_completed_round(
+    fixture: &RuntimeFixture,
+    runtime: &CycleRuntime,
+    input_seq: u64,
+) -> u64 {
+    let history_revision = fixture.session.lock().unwrap().history_revision();
+    let round_id = uuid::Uuid::new_v4().to_string();
+    let identity = RoundIdentity {
+        version: 1,
+        round_id: round_id.clone(),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+    };
+    let accepted_seq = fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(
+            Fact::RoundAccepted {
+                identity: identity.clone(),
+                input_seq,
+                mode: InputMode::InCharacter,
+                dice_mode: DiceMode::Manual,
+                profile_id: "profile".into(),
+                profile_revision: "profile-v1".into(),
+                target: GenerationTarget::Narration,
+                scene_id: "entry".into(),
+                presence_revision: None,
+                source_round_id: None,
+                checkpoint_seq: None,
+            }
+            .body("接纳回合")
+            .unwrap(),
+        )
+        .unwrap();
+    let source_record_seq = fixture.session.lock().unwrap().next_sequence();
+    runtime
+        .prepare_cycle_event(CycleLifecycleEvent {
+            version: 1,
+            event_id: CycleLifecycleEvent::event_id_for(
+                &fixture.run.run_id,
+                CycleEventKind::RoundCompleted,
+                history_revision,
+                source_record_seq,
+            ),
+            run_id: fixture.run.run_id.clone(),
+            session_id: fixture.session_id.clone(),
+            kind: CycleEventKind::RoundCompleted,
+            source_record_seq,
+            history_revision,
+            scene_id: "entry".into(),
+            entry_record_seq: 0,
+            catalog_revision: fixture.catalog.revision().into(),
+            world_revision: "world-v1".into(),
+            round_id: Some(round_id),
+            evidence: vec![],
+        })
+        .unwrap();
+    fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(
+            Fact::RoundEnded {
+                identity,
+                outcome: crate::ports::Outcome::Completed,
+                through_seq: accepted_seq,
+                completed_steps: vec![],
+                error: None,
+            }
+            .body("回合结束")
+            .unwrap(),
+        )
+        .unwrap();
+    source_record_seq
+}
+
+fn fork_at(fixture: &RuntimeFixture, target_seq: u64, reason: &str) {
+    let mut session = fixture.session.lock().unwrap();
+    let path = session
+        .path_at(session.history_revision())
+        .unwrap()
+        .into_iter()
+        .filter(|seq| *seq <= target_seq)
+        .collect::<Vec<_>>();
+    use sha2::Digest;
+    let mut digest = sha2::Sha256::new();
+    for seq in &path {
+        digest.update(session.read(*seq).unwrap().raw.as_bytes());
+    }
+    let fork = Fact::HistoryFork {
+        version: 1,
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        mode: ForkMode::Rewind,
+        parent_control_seq: session.history_revision(),
+        target_seq,
+        prefix_hash: format!("sha256:{:x}", digest.finalize()),
+        source_round_id: None,
+        reused_dice_seq: None,
+    }
+    .body(reason)
+    .unwrap();
+    session
+        .commit_history_fork(fork, &mut HistoryRebuildPort(fixture.storage.clone()))
+        .unwrap();
+}
+
 fn catalog(header: &Header) -> crate::game::catalog::SceneCatalog {
     let revision = "catalog-v1";
     let entry = SceneEntryPresence {
@@ -357,9 +463,18 @@ fn scene_hint_is_returned_only_after_the_current_node_claim_is_persisted() {
     };
 
     // 尚未能核验的已完成事件必须阻止读取旧停滞进度和展示提示。
+    assert!(runtime.drain_cycle_events().is_err());
+    let session_handle = storage.records.get(&session_id).unwrap();
+    let session = session_handle.lock().unwrap();
     assert!(
         runtime
-            .claim_scene_hint("entry", history_revision, &world_revision, &matches)
+            .claim_scene_hint(
+                &session,
+                "entry",
+                history_revision,
+                &world_revision,
+                &matches
+            )
             .is_err()
     );
     storage
@@ -369,7 +484,13 @@ fn scene_hint_is_returned_only_after_the_current_node_claim_is_persisted() {
         .unwrap();
 
     let hint = runtime
-        .claim_scene_hint("entry", history_revision, &world_revision, &matches)
+        .claim_scene_hint(
+            &session,
+            "entry",
+            history_revision,
+            &world_revision,
+            &matches,
+        )
         .unwrap()
         .unwrap();
     assert_eq!(hint.hint_id, "entry-hint");
@@ -377,10 +498,17 @@ fn scene_hint_is_returned_only_after_the_current_node_claim_is_persisted() {
     assert_eq!(hint.target_scope, "scene");
     assert!(
         runtime
-            .claim_scene_hint("entry", history_revision, &world_revision, &matches)
+            .claim_scene_hint(
+                &session,
+                "entry",
+                history_revision,
+                &world_revision,
+                &matches
+            )
             .unwrap()
             .is_none()
     );
+    drop(session);
 
     storage
         .with_memory(&session_id, &catalog, |repository, connection, port| {
@@ -506,13 +634,6 @@ fn committed_scene_advance_recovers_its_node_after_storage_reopens() {
 fn completed_round_recovery_replays_after_event_retirement_failure() {
     let fixture = RuntimeFixture::new();
     let runtime = fixture.runtime();
-
-    let round_id = uuid::Uuid::new_v4().to_string();
-    let identity = RoundIdentity {
-        version: 1,
-        round_id: round_id.clone(),
-        operation_id: uuid::Uuid::new_v4().to_string(),
-    };
     let input_seq = fixture
         .session
         .lock()
@@ -524,67 +645,7 @@ fn completed_round_recovery_replays_after_event_retirement_failure() {
             content_range: None,
         })
         .unwrap();
-    let accepted_seq = fixture
-        .session
-        .lock()
-        .unwrap()
-        .append(
-            Fact::RoundAccepted {
-                identity: identity.clone(),
-                input_seq,
-                mode: InputMode::InCharacter,
-                dice_mode: DiceMode::Manual,
-                profile_id: "profile".into(),
-                profile_revision: "profile-v1".into(),
-                target: GenerationTarget::Narration,
-                scene_id: "entry".into(),
-                presence_revision: None,
-                source_round_id: None,
-                checkpoint_seq: None,
-            }
-            .body("接纳回合")
-            .unwrap(),
-        )
-        .unwrap();
-    let source_record_seq = fixture.session.lock().unwrap().next_sequence();
-    runtime
-        .prepare_cycle_event(CycleLifecycleEvent {
-            version: 1,
-            event_id: CycleLifecycleEvent::event_id_for(
-                &fixture.run.run_id,
-                CycleEventKind::RoundCompleted,
-                0,
-                source_record_seq,
-            ),
-            run_id: fixture.run.run_id.clone(),
-            session_id: fixture.session_id.clone(),
-            kind: CycleEventKind::RoundCompleted,
-            source_record_seq,
-            history_revision: 0,
-            scene_id: "entry".into(),
-            entry_record_seq: 0,
-            catalog_revision: fixture.catalog.revision().into(),
-            world_revision: "world-v1".into(),
-            round_id: Some(round_id),
-            evidence: vec![],
-        })
-        .unwrap();
-    fixture
-        .session
-        .lock()
-        .unwrap()
-        .append(
-            Fact::RoundEnded {
-                identity,
-                outcome: crate::ports::Outcome::Completed,
-                through_seq: accepted_seq,
-                completed_steps: vec![],
-                error: None,
-            }
-            .body("回合结束")
-            .unwrap(),
-        )
-        .unwrap();
+    prepare_completed_round(&fixture, &runtime, input_seq);
 
     fixture
         .storage
@@ -625,12 +686,14 @@ fn completed_round_recovery_replays_after_event_retirement_failure() {
                         .len(),
                     1
                 );
-                Ok(state)
+                let logical_clock = repository.clock(connection, port, &fixture.run.run_id)?;
+                Ok((state, logical_clock))
             },
         )
         .unwrap();
-    assert_eq!(applied_before_retry.completed_rounds, 1);
-    assert_eq!(applied_before_retry.stagnation_rounds, 1);
+    assert_eq!(applied_before_retry.0.completed_rounds, 1);
+    assert_eq!(applied_before_retry.0.stagnation_rounds, 1);
+    assert_eq!(applied_before_retry.1, 1);
 
     fixture
         .storage
@@ -669,12 +732,241 @@ fn completed_round_recovery_replays_after_event_retirement_failure() {
                         )?
                         .is_empty()
                 );
-                Ok(state)
+                let logical_clock = repository.clock(connection, port, &fixture.run.run_id)?;
+                Ok((state, logical_clock))
             },
         )
         .unwrap();
-    assert_eq!(applied_after_retry.completed_rounds, 1);
-    assert_eq!(applied_after_retry.stagnation_rounds, 1);
+    assert_eq!(applied_after_retry.0.completed_rounds, 1);
+    assert_eq!(applied_after_retry.0.stagnation_rounds, 1);
+    assert_eq!(applied_after_retry.1, 1);
+}
+
+#[test]
+fn completed_round_clock_is_reconciled_when_history_is_forked() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.runtime();
+    let input_seq = fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我重新观察石门。".into(),
+            mode: Some(InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    prepare_completed_round(&fixture, &runtime, input_seq);
+    runtime.drain_cycle_events().unwrap();
+    let clock_before_fork = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| repository.clock(connection, port, &fixture.run.run_id),
+        )
+        .unwrap();
+    assert_eq!(clock_before_fork, 1);
+
+    fork_at(&fixture, input_seq, "回退到回合输入");
+
+    fixture.runtime().drain_cycle_events().unwrap();
+    let clock_after_fork = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| repository.clock(connection, port, &fixture.run.run_id),
+        )
+        .unwrap();
+    assert_eq!(clock_after_fork, 0);
+
+    let fork_revision = fixture.session.lock().unwrap().history_revision();
+    fixture
+        .runtime()
+        .ensure_current_node("entry", fork_revision, &[])
+        .unwrap();
+    prepare_completed_round(&fixture, &fixture.runtime(), input_seq);
+    fixture.runtime().drain_cycle_events().unwrap();
+    let next_clock = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| repository.clock(connection, port, &fixture.run.run_id),
+        )
+        .unwrap();
+    assert_eq!(next_clock, 1);
+}
+
+#[test]
+fn pending_completed_round_survives_a_fork_that_keeps_its_source() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.runtime();
+    let input_seq = fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我已完成检查。".into(),
+            mode: Some(InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let completed_seq = prepare_completed_round(&fixture, &runtime, input_seq);
+
+    fork_at(&fixture, completed_seq, "保留已完成回合");
+
+    fixture.runtime().drain_cycle_events().unwrap();
+    let (clock, pending) = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| {
+                Ok((
+                    repository.clock(connection, port, &fixture.run.run_id)?,
+                    repository.pending_cycle_events(
+                        connection,
+                        &fixture.run.run_id,
+                        MAX_CYCLE_EVENT_PAGE,
+                    )?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(clock, 1);
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn completed_round_clock_survives_a_fork_after_event_retirement_failure() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.runtime();
+    let input_seq = fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我检查了石门机关。".into(),
+            mode: Some(InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let completed_seq = prepare_completed_round(&fixture, &runtime, input_seq);
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER reject_cycle_event_delete BEFORE DELETE ON memory_cycle_events BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(runtime.drain_cycle_events().is_err());
+
+    fork_at(&fixture, completed_seq, "故障后保留已完成回合");
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch("DROP TRIGGER reject_cycle_event_delete")
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    fixture.runtime().drain_cycle_events().unwrap();
+
+    let (clock, pending) = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| {
+                Ok((
+                    repository.clock(connection, port, &fixture.run.run_id)?,
+                    repository.pending_cycle_events(
+                        connection,
+                        &fixture.run.run_id,
+                        MAX_CYCLE_EVENT_PAGE,
+                    )?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(clock, 1);
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn completed_round_clock_is_restored_after_clock_receipt_failure_and_retained_fork() {
+    let fixture = RuntimeFixture::new();
+    let runtime = fixture.runtime();
+    let input_seq = fixture
+        .session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我检查了石门的刻痕。".into(),
+            mode: Some(InputMode::InCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let completed_seq = prepare_completed_round(&fixture, &runtime, input_seq);
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER reject_cycle_clock_receipt BEFORE INSERT ON memory_clock_receipts BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(runtime.drain_cycle_events().is_err());
+
+    fork_at(&fixture, completed_seq, "时钟回执失败后保留已完成回合");
+
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute_batch("DROP TRIGGER reject_cycle_clock_receipt")
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    runtime.drain_cycle_events().unwrap();
+
+    let (clock, pending) = fixture
+        .storage
+        .with_memory(
+            &fixture.session_id,
+            &fixture.catalog,
+            |repository, connection, port| {
+                Ok((
+                    repository.clock(connection, port, &fixture.run.run_id)?,
+                    repository.pending_cycle_events(
+                        connection,
+                        &fixture.run.run_id,
+                        MAX_CYCLE_EVENT_PAGE,
+                    )?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(clock, 1);
+    assert!(pending.is_empty());
 }
 
 #[test]

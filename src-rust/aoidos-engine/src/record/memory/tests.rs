@@ -3,6 +3,117 @@ use crate::ports::Terminal;
 use crate::record::test_support::Fixture;
 use aoidos_llm::schedule::FinishReason;
 
+#[test]
+fn material_source_pages_split_long_text_at_stable_utf8_boundaries() {
+    let mut fixture = Fixture::new();
+    let text = "🦊".repeat(600);
+    let seq = fixture
+        .session
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: text.clone(),
+            mode: Some(RecordMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let run_id = aoidos_memory::model::new_id();
+    let port = SourcePort::new(&fixture.session);
+    let page = port.material_source_page(&run_id, None, seq).unwrap();
+    let parts = page
+        .sources
+        .iter()
+        .filter(|part| part.source.record_seq == seq)
+        .collect::<Vec<_>>();
+
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0].ordinal, 0);
+    assert_eq!(parts[1].ordinal, 1);
+    assert!(parts.iter().all(
+        |part| part.source.end_byte - part.source.start_byte <= MAX_MATERIAL_SPAN_BYTES as u64
+    ));
+    assert_eq!(parts[0].source.end_byte, parts[1].source.start_byte);
+    assert_eq!(
+        parts
+            .iter()
+            .map(|part| port.source_text(&part.source).unwrap().unwrap())
+            .collect::<String>(),
+        text
+    );
+}
+
+#[test]
+fn material_source_page_cursor_advances_without_scanning_past_its_snapshot() {
+    let mut fixture = Fixture::new();
+    let mut last_seq = 0;
+    for index in 0..(MAX_SCAN + 1) {
+        last_seq = fixture
+            .session
+            .append(Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: format!("素材 {index}"),
+                mode: Some(RecordMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let run_id = aoidos_memory::model::new_id();
+    let port = SourcePort::new(&fixture.session);
+    let first = port.material_source_page(&run_id, None, last_seq).unwrap();
+    let next = first.next_record_seq.unwrap();
+    assert_eq!(first.sources.len(), MAX_SCAN);
+    assert!(next < last_seq);
+
+    let second = port
+        .material_source_page(&run_id, Some(next), last_seq)
+        .unwrap();
+    assert_eq!(second.sources.len(), 1);
+    assert_eq!(second.sources[0].source.record_seq, last_seq);
+    assert_eq!(second.next_record_seq, None);
+}
+
+#[test]
+fn material_source_page_returns_a_cursor_before_reaching_its_byte_limit() {
+    let mut fixture = Fixture::new();
+    let mut last_seq = 0;
+    for _ in 0..20 {
+        last_seq = fixture
+            .session
+            .append(Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "x".repeat(crate::record::format::MAX_TEXT),
+                mode: Some(RecordMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let run_id = aoidos_memory::model::new_id();
+    let port = SourcePort::new(&fixture.session);
+    let first = port.material_source_page(&run_id, None, last_seq).unwrap();
+    let next = first.next_record_seq.unwrap();
+    assert!(!first.sources.is_empty());
+    assert!(
+        first
+            .sources
+            .iter()
+            .all(|source| source.source.record_seq <= next)
+    );
+    assert!(next < last_seq);
+
+    let mut total = first.sources.len();
+    let mut cursor = Some(next);
+    while let Some(after) = cursor {
+        let page = port
+            .material_source_page(&run_id, Some(after), last_seq)
+            .unwrap();
+        total += page.sources.len();
+        cursor = page.next_record_seq;
+    }
+    assert_eq!(
+        total,
+        20 * crate::record::format::MAX_TEXT.div_ceil(MAX_MATERIAL_SPAN_BYTES)
+    );
+}
+
 struct NoopWorld;
 impl crate::record::world::WorldPort for NoopWorld {
     fn validate(
@@ -621,6 +732,110 @@ fn told_evidence(source: SourceRef) -> KnowledgeEvidence {
         scope: DIRECT_DIALOGUE_SCOPE.into(),
         rule_id: DIRECT_DIALOGUE_RULE.into(),
     }
+}
+
+#[test]
+fn proposal_source_context_only_exposes_verified_directed_character_evidence() {
+    use aoidos_memory::{
+        model::{Algorithm, KnowledgeKind, Policy, Run, SubjectRef},
+        repository::{BatchSnapshot, Span},
+    };
+
+    let mut fixture = Fixture::new();
+    let input_seq =
+        direct_character_dialogue(&mut fixture, RecordMode::InCharacter, "npc", "npc", true);
+    let run_id = aoidos_memory::model::new_id();
+    let directory = character_directory(&fixture);
+    let port = SourcePort::with_entity_directory(&fixture.session, &directory).unwrap();
+    let source = port.reference(&run_id, input_seq).unwrap();
+    let boundary = port.boundary().unwrap();
+    let run = Run {
+        run_id: run_id.clone(),
+        script_id: fixture.session.header().script_id.clone(),
+        session_id: fixture.session.header().session_id.clone(),
+        cycle_gen: 1,
+        policy: Policy {
+            version: 1,
+            algorithm_version: 1,
+            config_version: 1,
+            app_config_version: 1,
+            algorithm: Algorithm::None,
+            base_strength: 100_000,
+            reinforcement_gain: 10_000,
+            reinforcement_cap: 100_000,
+            strength_cap: 500_000,
+            half_life_rounds: 10,
+            repeat_window_rounds: 1,
+            repeat_limit: 1,
+            revival_cooldown_rounds: 1,
+            active_capacity: 100,
+            rate_table_version: 1,
+            decay_rate: 1,
+        },
+        policy_hash: aoidos_memory::model::hash(b"test-policy"),
+    };
+    let mut first_source = source.clone();
+    first_source.end_byte = 9;
+    let mut second_source = source.clone();
+    second_source.start_byte = 9;
+    let spans = [("s1", first_source), ("s2", second_source)]
+        .into_iter()
+        .map(|(source_id, source)| Span {
+            source_id: source_id.into(),
+            material_id: aoidos_memory::model::new_id(),
+            text: port.source_text(&source).unwrap().unwrap(),
+            source,
+            context: false,
+            continuation: false,
+        })
+        .collect();
+    let batch = BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id: aoidos_memory::model::new_id(),
+        run_id,
+        history_revision: boundary.history_revision,
+        entity_revision: boundary.entity_revision,
+        evidence_revision: boundary.evidence_revision,
+        policy_hash: run.policy_hash,
+        spans,
+        input: serde_json::json!({}),
+    };
+
+    let context = build_proposal_source_context(ProposalSourceContextInput {
+        run: &run,
+        session: &fixture.session,
+        directory: &directory,
+        batch: &batch,
+        source_port: &port,
+    })
+    .unwrap();
+    let rebuilt = build_proposal_source_context(ProposalSourceContextInput {
+        run: &run,
+        session: &fixture.session,
+        directory: &directory,
+        batch: &batch,
+        source_port: &port,
+    })
+    .unwrap();
+    assert_eq!(context.evidence, rebuilt.evidence);
+
+    assert_eq!(context.entity_ids, ["npc".into()].into());
+    assert_eq!(context.entities["npc"].canonical_name, "NPC");
+    assert_eq!(context.entities["npc"].scope, "demo");
+    assert_eq!(context.source_ids, ["s1".into(), "s2".into()].into());
+    assert!(
+        context
+            .subjects
+            .contains(&SubjectRef::Character { id: "npc".into() })
+    );
+    let evidence = &context.evidence["e1"];
+    assert_eq!(evidence.subject_id, "npc");
+    assert_eq!(evidence.source_ids, ["s1"]);
+    assert_eq!(evidence.kind, KnowledgeKind::Told);
+    assert_eq!(evidence.informant_id.as_deref(), Some("player"));
+    assert_eq!(evidence.source, batch.spans[0].source);
+    assert_eq!(evidence.source_ids, ["s1"]);
 }
 
 #[test]
@@ -1363,6 +1578,7 @@ fn alias_context_does_not_trust_an_incomplete_directory() {
         session: &fixture.session,
         entity_directory: Some(&incomplete),
         scene_catalog: None,
+        text_cache: RefCell::default(),
     };
     assert!(matches!(
         port.entity_alias_context("missing"),
@@ -1879,12 +2095,12 @@ fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
             .unwrap(),
         )
         .unwrap();
-    let text = "守门人说：门后藏着一封旧信。";
+    let text = format!("守门人说：{}", "x".repeat(3000));
     let source_seq = fixture
         .session
         .append(Body::CharacterSpeech {
             speaker_id: "keeper".into(),
-            text: text.into(),
+            text: text.clone(),
             turn_id: aoidos_memory::model::new_id(),
             terminal: Terminal::Completed {
                 finish_reason: FinishReason::Stop,
@@ -1914,7 +2130,7 @@ fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
         None,
         snapshot.scene_id,
         rule.scope_id.clone(),
-        RumorUncertainty::Unverified,
+        RumorUncertainty::Disputed,
         rule,
     );
     let settlement_seq = fixture
@@ -1985,7 +2201,7 @@ fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
 
     let port = SourcePort::with_evidence_context(&fixture.session, &directory, &catalog).unwrap();
     let evidence = KnowledgeEvidence {
-        evidence_id: event.mutation_id,
+        evidence_id: event.mutation_id.clone(),
         subject_id: "player".into(),
         source: SourcePort::new(&fixture.session)
             .reference(&aoidos_memory::model::new_id(), source_seq)
@@ -1999,4 +2215,107 @@ fn rumor_evidence_maps_the_verified_delivery_kind_and_informant() {
         port.valid_evidence_with_connection(&evidence, &connection)
             .unwrap()
     );
+
+    let source = SourcePort::new(&fixture.session)
+        .reference(&aoidos_memory::model::new_id(), source_seq)
+        .unwrap();
+    let matched = crate::game::presence::SceneEvidence::for_source_ranges(
+        &connection,
+        &fixture.session,
+        &catalog,
+        &directory,
+        &[
+            (
+                source_seq,
+                crate::record::format::hash(text.as_bytes()),
+                0,
+                2048,
+            ),
+            (
+                source_seq,
+                crate::record::format::hash(text.as_bytes()),
+                2048,
+                text.len() as u64,
+            ),
+        ],
+    )
+    .unwrap();
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].uncertainty, Some(RumorUncertainty::Disputed));
+    let mut first_source = source.clone();
+    first_source.end_byte = 2048;
+    let mut second_source = source.clone();
+    second_source.start_byte = 2048;
+    let spans = vec![
+        aoidos_memory::repository::Span {
+            source_id: "s1".into(),
+            material_id: aoidos_memory::model::new_id(),
+            source: first_source,
+            text: text[..2048].into(),
+            context: false,
+            continuation: false,
+        },
+        aoidos_memory::repository::Span {
+            source_id: "s2".into(),
+            material_id: aoidos_memory::model::new_id(),
+            source: second_source,
+            text: text[2048..].into(),
+            context: false,
+            continuation: true,
+        },
+    ];
+    let evidence_source_spans =
+        super::proposal_context::source_spans_for_evidence(&matched[0], &spans).unwrap();
+    let evidence_source_ids = evidence_source_spans
+        .iter()
+        .map(|span| span.source_id.clone())
+        .collect();
+    let scene_snapshot = super::proposal_context::map_scene_evidence(
+        matched.into_iter().next().unwrap(),
+        evidence_source_ids,
+        source.clone(),
+    );
+    let run_id = source.run_id.clone();
+    let mut context = aoidos_memory::model::ProposalContext::default();
+    context.source_ids.insert("s1".into());
+    context.source_ids.insert("s2".into());
+    for (id, name) in [("player", "玩家"), ("keeper", "守门人")] {
+        context.entity_ids.insert(id.into());
+        context.entities.insert(
+            id.into(),
+            aoidos_memory::model::EntitySnapshot {
+                kind: aoidos_memory::model::EntityCategory::Character,
+                scope: "global".into(),
+                canonical_name: name.into(),
+                aliases: Default::default(),
+            },
+        );
+    }
+    context
+        .subjects
+        .insert(aoidos_memory::model::SubjectRef::Character {
+            id: "player".into(),
+        });
+    context.evidence.insert("e1".into(), scene_snapshot);
+    let batch = aoidos_memory::repository::BatchSnapshot {
+        logical_clock: 1,
+        version: 1,
+        batch_id: aoidos_memory::model::new_id(),
+        run_id,
+        history_revision: 1,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash: aoidos_memory::model::hash(b"policy"),
+        spans,
+        input: serde_json::json!({
+            "proposalContext": serde_json::to_value(&context).unwrap(),
+        }),
+    };
+    let prompt =
+        super::prompt::build_memory_prompt(&batch, aoidos_llm::provider::RequestMode::Completion)
+            .unwrap();
+    let aoidos_llm::provider::ProviderInput::Completion(prompt) = prompt.input else {
+        panic!("completion mode keeps completion input");
+    };
+    assert!(prompt.prompt.contains("\"uncertainty\":\"disputed\""));
 }

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   MemoryEntry,
   MemoryEntryCursor,
   MemoryEntryDetails,
+  MemoryBatchStatus,
   MemoryKnowledgeEvidence,
+  MemoryMaterialCursor,
   MemoryQuestion,
   MemoryQuestionCandidate,
   MemoryQuestionCursor,
@@ -13,9 +15,15 @@ import type {
 } from "../api/memory";
 import {
   getMemoryEntry,
+  collectMemoryMaterials,
+  completeMemoryBatch,
+  getActiveMemoryBatch,
+  getMemoryBatchStatus,
   listMemoryEntries,
   listMemoryQuestions,
+  prepareMemoryBatch,
   resolveMemoryQuestion,
+  sendMemoryBatch,
 } from "../api/memory";
 
 const props = defineProps<{ runId: string; historyRevision: number }>();
@@ -37,12 +45,48 @@ const evidenceKindLabels = computed<Record<MemoryKnowledgeEvidence["kind"], stri
   told: t("memoryQuery.evidenceKinds.told"),
   rumor: t("memoryQuery.evidenceKinds.rumor"),
 }));
+const batchStateLabels = computed(() => ({
+  queued: t("memoryQuery.batchStates.queued"),
+  dispatched: t("memoryQuery.batchStates.dispatched"),
+  received: t("memoryQuery.batchStates.received"),
+  completed: t("memoryQuery.batchStates.completed"),
+  rejected: t("memoryQuery.batchStates.rejected"),
+  unknown: t("memoryQuery.batchStates.unknown"),
+}));
+const candidateOutcomeLabels = computed(() => ({
+  applied: t("memoryQuery.outcomes.applied"),
+  noOp: t("memoryQuery.outcomes.noOp"),
+  rejected: t("memoryQuery.outcomes.rejected"),
+  pending: t("memoryQuery.outcomes.pending"),
+  deferred: t("memoryQuery.outcomes.deferred"),
+}));
+const candidateReasonLabels = computed<Record<string, string>>(() => ({
+  "memory.candidate.review": t("memoryQuery.reasons.review"),
+  "memory.candidate.shared_target": t("memoryQuery.reasons.sharedTarget"),
+  "memory.candidate.duplicate_anchor": t("memoryQuery.reasons.duplicateAnchor"),
+  "memory.operation.rejected": t("memoryQuery.reasons.operationRejected"),
+  "policy.capacity_blocked": t("memoryQuery.reasons.capacityBlocked"),
+}));
+const canPrepareBatch = computed(
+  () =>
+    !batchStatus.value ||
+    batchStatus.value.state === "completed" ||
+    batchStatus.value.state === "rejected",
+);
 const PAGE_SIZE = 32;
 const MAX_VISIBLE = 128;
 const questions = ref<MemoryQuestion[]>([]);
 const entries = ref<MemoryEntry[]>([]);
 const questionCursor = ref<MemoryQuestionCursor | null>(null);
 const entryCursor = ref<MemoryEntryCursor | null>(null);
+const materialCursor = ref<MemoryMaterialCursor | null>(null);
+const materialCount = ref<number | null>(null);
+const materialBusy = ref(false);
+const materialError = ref(false);
+const batchId = ref<string | null>(null);
+const batchStatus = ref<MemoryBatchStatus | null>(null);
+const batchBusy = ref(false);
+const batchError = ref(false);
 const questionBusy = ref(false);
 const entryBusy = ref(false);
 const detailBusy = ref(false);
@@ -51,6 +95,146 @@ const answering = ref(new Set<string>());
 const proposalNames = ref<Record<string, string>>({});
 const details = ref<MemoryEntryDetails | null>(null);
 let generation = 0;
+
+async function collectMaterials(next = false): Promise<void> {
+  const currentRun = props.runId;
+  const currentHistoryRevision = props.historyRevision;
+  const currentGeneration = generation;
+  if (materialBusy.value || !currentRun) return;
+  materialBusy.value = true;
+  materialError.value = false;
+  let cursor = next ? materialCursor.value : null;
+  let count = next ? (materialCount.value ?? 0) : 0;
+  try {
+    for (let pageNumber = 0; pageNumber < 16; pageNumber += 1) {
+      const page = await collectMemoryMaterials(currentRun, cursor);
+      if (
+        currentGeneration !== generation ||
+        currentRun !== props.runId ||
+        currentHistoryRevision !== props.historyRevision ||
+        page.historyRevision !== currentHistoryRevision
+      )
+        return;
+      count += page.eligibleCount;
+      cursor = page.nextCursor;
+      if (!cursor) break;
+    }
+    if (currentGeneration !== generation) return;
+    materialCount.value = count;
+    materialCursor.value = cursor;
+  } catch {
+    if (currentGeneration === generation) materialError.value = true;
+  } finally {
+    if (currentGeneration === generation) materialBusy.value = false;
+  }
+}
+
+async function prepareBatch(): Promise<void> {
+  const currentRun = props.runId;
+  const currentHistoryRevision = props.historyRevision;
+  const currentGeneration = generation;
+  if (batchBusy.value || !currentRun) return;
+  batchBusy.value = true;
+  batchError.value = false;
+  let cursor = materialCursor.value;
+  let count = cursor ? (materialCount.value ?? 0) : 0;
+  try {
+    for (let pageNumber = 0; pageNumber < 16; pageNumber += 1) {
+      const page = await collectMemoryMaterials(currentRun, cursor);
+      if (
+        currentGeneration !== generation ||
+        currentRun !== props.runId ||
+        currentHistoryRevision !== props.historyRevision ||
+        page.historyRevision !== currentHistoryRevision
+      )
+        return;
+      count += page.eligibleCount;
+      cursor = page.nextCursor;
+      if (!cursor) break;
+    }
+    if (currentGeneration !== generation) return;
+    materialCount.value = count;
+    materialCursor.value = cursor;
+    const prepared = await prepareMemoryBatch(currentRun);
+    if (currentGeneration !== generation || currentRun !== props.runId) return;
+    batchId.value = prepared.batchId;
+    batchStatus.value = await getMemoryBatchStatus(currentRun, prepared.batchId);
+  } catch {
+    if (currentGeneration === generation) batchError.value = true;
+  } finally {
+    if (currentGeneration === generation) batchBusy.value = false;
+  }
+}
+
+async function recoverActiveBatch(): Promise<void> {
+  const currentRun = props.runId;
+  const currentGeneration = generation;
+  if (!currentRun) return;
+  try {
+    const status = await getActiveMemoryBatch(currentRun);
+    if (currentGeneration !== generation || currentRun !== props.runId || !status) return;
+    batchId.value = status.batchId;
+    batchStatus.value = status;
+  } catch {
+    if (currentGeneration === generation) batchError.value = true;
+  }
+}
+
+async function refreshBatch(): Promise<void> {
+  const currentRun = props.runId;
+  const currentBatch = batchId.value;
+  const currentGeneration = generation;
+  if (!currentRun || !currentBatch || batchBusy.value) return;
+  batchBusy.value = true;
+  batchError.value = false;
+  try {
+    const status = await getMemoryBatchStatus(currentRun, currentBatch);
+    if (currentGeneration === generation && currentRun === props.runId)
+      batchStatus.value = status;
+  } catch {
+    if (currentGeneration === generation) batchError.value = true;
+  } finally {
+    if (currentGeneration === generation) batchBusy.value = false;
+  }
+}
+
+async function sendBatch(): Promise<void> {
+  const currentRun = props.runId;
+  const currentBatch = batchId.value;
+  const currentGeneration = generation;
+  if (!currentRun || !currentBatch || batchBusy.value) return;
+  batchBusy.value = true;
+  batchError.value = false;
+  try {
+    const status = await sendMemoryBatch(currentRun, currentBatch);
+    if (currentGeneration !== generation || currentRun !== props.runId) return;
+    batchStatus.value = status;
+    if (status.state === "completed") void loadEntries();
+  } catch {
+    if (currentGeneration === generation) batchError.value = true;
+  } finally {
+    if (currentGeneration === generation) batchBusy.value = false;
+  }
+}
+
+async function completeBatch(): Promise<void> {
+  const currentRun = props.runId;
+  const currentBatch = batchId.value;
+  const currentGeneration = generation;
+  if (!currentRun || !currentBatch || batchBusy.value) return;
+  batchBusy.value = true;
+  batchError.value = false;
+  try {
+    const status = await completeMemoryBatch(currentRun, currentBatch);
+    if (currentGeneration !== generation || currentRun !== props.runId) return;
+    batchStatus.value = status;
+    if (status.state === "completed") void loadEntries();
+  } catch {
+    if (currentGeneration === generation) batchError.value = true;
+  } finally {
+    if (currentGeneration === generation) batchBusy.value = false;
+  }
+}
 
 function candidateName(candidate: MemoryQuestionCandidate): string {
   if (candidate.kind === "entity") return candidate.displayName ?? candidate.entityId;
@@ -192,6 +376,14 @@ watch(
     entries.value = [];
     questionCursor.value = null;
     entryCursor.value = null;
+    materialCursor.value = null;
+    materialCount.value = null;
+    materialBusy.value = false;
+    materialError.value = false;
+    batchId.value = null;
+    batchStatus.value = null;
+    batchBusy.value = false;
+    batchError.value = false;
     details.value = null;
     questionBusy.value = false;
     entryBusy.value = false;
@@ -201,14 +393,97 @@ watch(
     error.value = false;
     void loadQuestions();
     void loadEntries();
+    void recoverActiveBatch();
   },
   { immediate: true },
 );
+
+onBeforeUnmount(() => {
+  generation += 1;
+});
 </script>
 
 <template>
   <details class="glass-panel">
     <summary>{{ t("memoryQuery.title") }}</summary>
+    <section class="grid gap-2 p-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          :disabled="materialBusy"
+          @click="collectMaterials(Boolean(materialCursor))"
+        >
+          {{
+            materialBusy
+            ? t("memoryQuery.collecting")
+            : materialCursor
+              ? t("memoryQuery.collectNext")
+              : t("memoryQuery.collect")
+          }}
+        </button>
+        <p v-if="materialCount !== null" role="status" class="text-sm text-muted">
+          {{ t("memoryQuery.collected", { count: materialCount }) }}
+          {{ t("memoryQuery.localOnly") }}
+        </p>
+      </div>
+      <p v-if="materialError" role="alert" class="text-sm text-danger">
+        {{ t("memoryQuery.collectError") }}
+      </p>
+      <p v-if="materialCursor" class="text-sm text-muted">
+        {{ t("memoryQuery.collectMore") }}
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          v-if="canPrepareBatch"
+          type="button"
+          :disabled="batchBusy"
+          @click="prepareBatch"
+        >
+          {{ batchBusy ? t("memoryQuery.processing") : t("memoryQuery.prepareBatch") }}
+        </button>
+        <button
+          v-if="batchId && batchStatus?.state === 'queued'"
+          type="button"
+          :disabled="batchBusy"
+          @click="sendBatch"
+        >
+          {{ t("memoryQuery.sendBatch") }}
+        </button>
+        <button
+          v-if="batchId && batchStatus?.state === 'received'"
+          type="button"
+          :disabled="batchBusy"
+          @click="completeBatch"
+        >
+          {{ t("memoryQuery.completeBatch") }}
+        </button>
+        <button
+          v-if="batchId"
+          type="button"
+          :disabled="batchBusy"
+          @click="refreshBatch"
+        >
+          {{ t("memoryQuery.refreshBatch") }}
+        </button>
+        <p v-if="batchStatus" role="status" class="text-sm text-muted">
+          {{ batchStateLabels[batchStatus.state] }} · {{ batchId }}
+        </p>
+        <ul
+          v-if="batchStatus?.completion?.outcomes.length"
+          class="grid w-full gap-1 text-sm text-muted"
+        >
+          <li v-for="outcome in batchStatus.completion.outcomes" :key="outcome.candidateId">
+            {{ outcome.candidateId }} · {{ candidateOutcomeLabels[outcome.outcome] }}
+            <span v-if="outcome.reasonCode">· {{
+                candidateReasonLabels[outcome.reasonCode]
+              }}</span>
+          </li>
+        </ul>
+      </div>
+      <p v-if="batchError" role="alert" class="text-sm text-danger">
+        {{ t("memoryQuery.batchError") }}
+      </p>
+    </section>
     <p v-if="error" role="alert">
       {{ t("memoryQuery.error") }}
       <button type="button" class="underline" @click="retry">

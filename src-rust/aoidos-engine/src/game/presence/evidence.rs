@@ -112,6 +112,16 @@ pub struct TrustedEvidence {
 /// 供记忆适配器使用的有界只读查询；不会写入事实或回执。
 pub struct SceneEvidence;
 
+struct EvidenceIndex {
+    records: BTreeMap<u64, crate::record::format::Parsed>,
+    path: Vec<u64>,
+    positions: BTreeMap<u64, usize>,
+    events: BTreeMap<String, IndexedEvent>,
+    accepted: BTreeMap<(String, String), AcceptedRound>,
+    ended: Vec<EndedRound>,
+    policy: PresencePolicy,
+}
+
 impl SceneEvidence {
     /// 解析一个当前有效、已应用且所属回合完整的事件及其全部传闻链。
     /// 索引、来源回合与传闻链共用一次读取的缓存，总量最多 4096 条 / 16 MiB。
@@ -172,6 +182,109 @@ impl SceneEvidence {
             source,
             uncertainty,
         }))
+    }
+
+    /// 一次扫描当前有效路径，返回来源区间被给定素材连续覆盖的可信获知事件。
+    /// # Errors
+    /// 目录、会话或任一有效路径记录需要恢复时失败关闭；输入超过固定上限时拒绝。
+    pub fn for_source_ranges(
+        connection: &rusqlite::Connection,
+        session: &Session,
+        catalog: &SceneCatalog,
+        directory: &EntityDirectory,
+        sources: &[(u64, String, u64, u64)],
+    ) -> Result<Vec<TrustedEvidence>, Fault> {
+        if sources.is_empty()
+            || sources.len() > 128
+            || sources.iter().any(|(record_seq, hash, start, end)| {
+                *record_seq == 0
+                    || !format::valid_hash(hash)
+                    || start >= end
+                    || end.saturating_sub(*start) > MAX_SOURCE_RANGE
+            })
+        {
+            return Err(super::invalid_phase());
+        }
+        validate_evidence_boundary(session, catalog, directory)?;
+        if catalog.presence_policy().is_none() {
+            return Ok(Vec::new());
+        }
+        let mut sources = sources.to_vec();
+        sources.sort();
+        let index = read_evidence_index(connection, session, catalog, None)?;
+        let mut selected = index
+            .events
+            .iter()
+            .filter(|(_, event)| {
+                let source = event_source(&event.payload);
+                source_range_is_covered(source, &sources)
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        selected.sort_by(|left, right| {
+            let left = &index.events[left];
+            let right = &index.events[right];
+            (left.seq, left.order_index).cmp(&(right.seq, right.order_index))
+        });
+        let payloads = validate_selected_evidence(
+            connection, session, catalog, directory, &index, &selected, None,
+        )?;
+        Ok(selected
+            .iter()
+            .zip(payloads)
+            .map(|(_, payload)| trusted_evidence(payload))
+            .collect())
+    }
+}
+
+fn source_range_is_covered(source: &EvidenceSource, ranges: &[(u64, String, u64, u64)]) -> bool {
+    let mut covered_until = source.start_byte;
+    for (record_seq, body_hash, start, end) in ranges {
+        if *record_seq != source.record_seq || body_hash != &source.body_hash {
+            continue;
+        }
+        if *start > covered_until {
+            return false;
+        }
+        if *end > covered_until {
+            covered_until = *end;
+            if covered_until >= source.end_byte {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn trusted_evidence(payload: TrustedPayload) -> TrustedEvidence {
+    match payload {
+        TrustedPayload::Observed(event) => TrustedEvidence {
+            evidence_id: event.evidence_id,
+            subject_id: event.subject_id,
+            informant_id: None,
+            kind: EvidenceKind::Observed,
+            scope_id: event.scope_id,
+            rule_id: event.rule_id,
+            source: event.source,
+            uncertainty: None,
+        },
+        TrustedPayload::Rumor { event, .. } => TrustedEvidence {
+            evidence_id: event.evidence_id,
+            subject_id: event.recipient_id,
+            informant_id: Some(event.informant_id),
+            kind: EvidenceKind::Rumor,
+            scope_id: event.scope_id,
+            rule_id: event.rule_id,
+            source: event.delivery_source,
+            uncertainty: Some(event.uncertainty),
+        },
+    }
+}
+
+fn event_source(payload: &TrustedPayload) -> &EvidenceSource {
+    match payload {
+        TrustedPayload::Observed(event) => &event.source,
+        TrustedPayload::Rumor { event, .. } => &event.delivery_source,
     }
 }
 
@@ -728,6 +841,47 @@ fn find_trusted_evidence(
     evidence_id: &str,
     before_seq: Option<u64>,
 ) -> Result<Option<TrustedPayload>, Fault> {
+    let index = read_evidence_index(connection, session, catalog, before_seq)?;
+    if !index.events.contains_key(evidence_id) {
+        return Ok(None);
+    }
+    validate_selected_evidence(
+        connection,
+        session,
+        catalog,
+        directory,
+        &index,
+        &[evidence_id.to_owned()],
+        before_seq,
+    )?
+    .into_iter()
+    .next()
+    .map(Some)
+    .ok_or_else(super::invalid_phase)
+}
+
+fn validate_evidence_boundary(
+    session: &Session,
+    catalog: &SceneCatalog,
+    directory: &EntityDirectory,
+) -> Result<(), Fault> {
+    if session.needs_recovery()
+        || session.is_read_only()
+        || directory.script_revision() != session.header().script_revision
+        || catalog.script_revision() != session.header().script_revision
+        || !directory.is_complete()
+    {
+        return Err(super::invalid_phase());
+    }
+    Ok(())
+}
+
+fn read_evidence_index(
+    connection: &rusqlite::Connection,
+    session: &Session,
+    catalog: &SceneCatalog,
+    before_seq: Option<u64>,
+) -> Result<EvidenceIndex, Fault> {
     let records = match before_seq {
         None => session.bounded_current_records(MAX_EVIDENCE_RECORDS, MAX_EVIDENCE_BYTES)?,
         Some(before) => session.bounded_records_before(
@@ -737,13 +891,16 @@ fn find_trusted_evidence(
         )?,
     };
     let path = records.keys().copied().collect::<Vec<_>>();
-    let path = path.as_slice();
+    let path_slice = path.as_slice();
     let positions = path
         .iter()
         .enumerate()
         .map(|(index, seq)| (*seq, index))
         .collect::<BTreeMap<_, _>>();
-    let policy = catalog.presence_policy().ok_or_else(super::invalid_phase)?;
+    let policy = catalog
+        .presence_policy()
+        .ok_or_else(super::invalid_phase)?
+        .clone();
     let mut events = BTreeMap::<String, IndexedEvent>::new();
     let mut accepted = BTreeMap::<(String, String), AcceptedRound>::new();
     let mut ended = Vec::<EndedRound>::new();
@@ -813,7 +970,7 @@ fn find_trusted_evidence(
             )
             .map_err(Fault::from)?
             || !successful_round(
-                &records, path, &positions, seq, &identity, &accepted, &ended,
+                &records, path_slice, &positions, seq, &identity, &accepted, &ended,
             )?
         {
             continue;
@@ -832,45 +989,80 @@ fn find_trusted_evidence(
             return Err(super::invalid_phase());
         }
     }
-    let Some(found) = events.get(evidence_id).cloned() else {
-        return Ok(None);
-    };
+    Ok(EvidenceIndex {
+        records,
+        path,
+        positions,
+        events,
+        accepted,
+        ended,
+        policy,
+    })
+}
+
+fn validate_selected_evidence(
+    connection: &rusqlite::Connection,
+    session: &Session,
+    catalog: &SceneCatalog,
+    directory: &EntityDirectory,
+    index: &EvidenceIndex,
+    evidence_ids: &[String],
+    before_seq: Option<u64>,
+) -> Result<Vec<TrustedPayload>, Fault> {
+    if evidence_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = index.path.as_slice();
     let mut visiting = BTreeSet::new();
     let mut recipient_chain = BTreeSet::new();
-    let successful_sources =
-        successful_source_records(&records, path, &positions, &accepted, &ended)?;
+    let successful_sources = successful_source_records(
+        &index.records,
+        path,
+        &index.positions,
+        &index.accepted,
+        &index.ended,
+    )?;
     let context = EvidenceValidationContext {
         connection,
         session,
         catalog,
         directory,
-        policy,
-        positions: &positions,
+        policy: &index.policy,
+        positions: &index.positions,
         successful_sources: Some(&successful_sources),
-        records: Some(&records),
+        records: Some(&index.records),
         lookup_before_seq: before_seq,
     };
-    let chain_info = validate_indexed_event(
-        evidence_id,
-        &events,
-        &context,
-        &mut visiting,
-        &mut recipient_chain,
-        0,
-    )?;
-    let payload = match found.payload {
-        TrustedPayload::Observed(event) => TrustedPayload::Observed(event),
-        TrustedPayload::Rumor { event, .. } => {
-            let (root_informant, hops) = chain_info.ok_or_else(super::invalid_phase)?;
-            TrustedPayload::Rumor {
-                event,
-                root_informant,
-                hops,
-                chain: recipient_chain,
+    let mut payloads = Vec::with_capacity(evidence_ids.len());
+    for evidence_id in evidence_ids {
+        let indexed = index
+            .events
+            .get(evidence_id)
+            .ok_or_else(super::invalid_phase)?;
+        let chain_info = validate_indexed_event(
+            evidence_id,
+            &index.events,
+            &context,
+            &mut visiting,
+            &mut recipient_chain,
+            0,
+        )?;
+        payloads.push(match &indexed.payload {
+            TrustedPayload::Observed(event) => TrustedPayload::Observed(event.clone()),
+            TrustedPayload::Rumor { event, .. } => {
+                let (root_informant, hops) = chain_info.ok_or_else(super::invalid_phase)?;
+                TrustedPayload::Rumor {
+                    event: event.clone(),
+                    root_informant,
+                    hops,
+                    chain: recipient_chain.clone(),
+                }
             }
-        }
-    };
-    Ok(Some(payload))
+        });
+        visiting.clear();
+        recipient_chain.clear();
+    }
+    Ok(payloads)
 }
 
 fn validate_indexed_event(

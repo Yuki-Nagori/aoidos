@@ -11,6 +11,8 @@ use aoidos_memory::model::{
 };
 use std::sync::{Arc, Mutex};
 
+const MAX_CLOCK_RECOVERY_PAGES: usize = 16;
+
 #[cfg(test)]
 mod tests;
 
@@ -92,6 +94,7 @@ impl CompletedRounds for CycleRuntime {
                 &self.session_id,
                 &self.catalog,
                 |repository, connection, port| {
+                    recover_clock_if_needed(repository, connection, port, &run_id)?;
                     let boundary = port.boundary()?;
                     let pending = repository.pending_cycle_events(
                         connection,
@@ -100,11 +103,34 @@ impl CompletedRounds for CycleRuntime {
                     )?;
                     for event in pending {
                         let discard = event.session_id != boundary.session_id
-                            || event.history_revision != boundary.history_revision
                             || event.source_record_seq >= port.next_sequence()
                             || (event.source_record_seq != 0
                                 && !port.has_current_record(event.source_record_seq));
                         if discard {
+                            repository.delete_cycle_event(connection, &run_id, &event.event_id)?;
+                            continue;
+                        }
+                        if event.history_revision != boundary.history_revision {
+                            // 回退若保留了完成记录，节点修订已过期，但普通逻辑时钟仍应计入该回合。
+                            if event.kind == CycleEventKind::RoundCompleted {
+                                let round_id = event.round_id.as_deref().ok_or(
+                                    aoidos_memory::error::Error::Rejected(
+                                        aoidos_memory::error::Reason::InvalidSource,
+                                    ),
+                                )?;
+                                if port.valid_completed_round(
+                                    round_id,
+                                    &event.scene_id,
+                                    event.entry_record_seq,
+                                    event.source_record_seq,
+                                )? {
+                                    let source =
+                                        port.reference(&run_id, event.source_record_seq)?;
+                                    repository.complete_round(
+                                        connection, port, &run_id, round_id, &source,
+                                    )?;
+                                }
+                            }
                             repository.delete_cycle_event(connection, &run_id, &event.event_id)?;
                             continue;
                         }
@@ -154,6 +180,9 @@ impl CompletedRounds for CycleRuntime {
                                         aoidos_memory::error::Reason::InvalidSource,
                                     ));
                                 }
+                                let source = port.reference(&run_id, event.source_record_seq)?;
+                                repository
+                                    .complete_round(connection, port, &run_id, round_id, &source)?;
                                 repository.complete_scene_progress(
                                     connection,
                                     port,
@@ -226,19 +255,18 @@ impl CompletedRounds for CycleRuntime {
 
     fn claim_scene_hint(
         &self,
+        session: &crate::record::session::Session,
         scene_id: &str,
         history_revision: u64,
         world_revision: &str,
         matches: &[SceneRuleMatch],
     ) -> Result<Option<SceneHint>, Fault> {
         let run_id = self.run_id()?;
-        // 提示资格依赖派生进度；先重试提交过的生命周期事件，不能读旧停滞计数。
-        self.drain_cycle_events()?;
         self.storage
-            .with_memory(
-                &self.session_id,
+            .with_memory_context_locked(
+                session,
                 &self.catalog,
-                |repository, connection, port| {
+                |repository, connection, port, _, _| {
                     let boundary = port.boundary()?;
                     if history_revision != boundary.history_revision {
                         return Err(aoidos_memory::error::Error::Rejected(
@@ -314,4 +342,25 @@ impl CompletedRounds for CycleRuntime {
             )
             .map_err(crate::storage::memory_config_error)
     }
+}
+
+/// 回退后的逻辑时钟按仓储分页恢复；单次事件消费最多处理 16 页。
+fn recover_clock_if_needed(
+    repository: &aoidos_memory::repository::Repository,
+    connection: &mut rusqlite::Connection,
+    port: &dyn CausalPort,
+    run_id: &str,
+) -> aoidos_memory::error::Result<()> {
+    for _ in 0..MAX_CLOCK_RECOVERY_PAGES {
+        match repository.clock(connection, port, run_id) {
+            Ok(_) => return Ok(()),
+            Err(aoidos_memory::error::Error::Rejected(
+                aoidos_memory::error::Reason::RecoveryRequired,
+            )) => {
+                repository.recover(connection, port, run_id, None)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    repository.clock(connection, port, run_id).map(|_| ())
 }

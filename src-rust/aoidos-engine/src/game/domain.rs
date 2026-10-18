@@ -13,7 +13,10 @@ use crate::{
     },
     request::PreparedGeneration,
 };
-use aoidos_llm::{guard::GuardSpec, provider::ProviderInput};
+use aoidos_llm::{
+    guard::GuardSpec,
+    provider::{ProviderInput, RequestMode},
+};
 use std::sync::Arc;
 
 /// 每次接纳冻结一次，后续子调用只使用该份请求构造器；不再次读取用户设置。
@@ -26,6 +29,12 @@ pub struct FrozenRound {
 /// 供应商和凭据在接纳前解析；内部提议 / 公开正文复用同一预算端口。
 pub trait Generation: Send + Sync {
     fn shape(&self) -> Shape;
+    fn request_mode(&self) -> RequestMode {
+        match self.shape() {
+            Shape::Completion => RequestMode::Completion,
+            Shape::Chat | Shape::ChatPrefix => RequestMode::Chat,
+        }
+    }
     fn projection_budget(&self) -> Budget;
     /// # Errors
     /// 能力、Token 估算 / 预算或请求构造失败返回脱敏 Fault，不做额外重试。
@@ -58,7 +67,8 @@ pub struct CompletedRound {
     pub through_seq: u64,
 }
 /// 已通过可信规则求值并成功持久化领取的固定场景提示。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SceneHint {
     pub hint_id: String,
     pub text: String,
@@ -107,6 +117,7 @@ pub trait CompletedRounds: Send + Sync {
     /// 周目未初始化、生命周期事件待恢复、历史修订不符、规则结果无效或存储失败时拒绝。
     fn claim_scene_hint(
         &self,
+        _session: &crate::record::session::Session,
         _scene_id: &str,
         _history_revision: u64,
         _world_revision: &str,

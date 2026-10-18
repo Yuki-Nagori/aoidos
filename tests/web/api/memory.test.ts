@@ -6,6 +6,7 @@ import {
   getMemoryBatchStatus,
   getMemoryEntry,
   getMemoryScriptConfig,
+  collectMemoryMaterials,
   listMemoryEntries,
   listMemoryQuestions,
   resolveMemoryQuestion,
@@ -111,4 +112,23 @@ it("forwards memory configuration DTOs without rewriting Rust-owned policy", asy
     runId: "run-1",
     batchId: "batch-1",
   });
+});
+
+it("collects eligible memory sources locally with a history-bound cursor", async () => {
+  const response = {
+    runId: "run-1",
+    historyRevision: 8,
+    eligibleCount: 12,
+    nextCursor: null,
+  };
+  const cursor = {
+    runId: "run-1",
+    historyRevision: 8,
+    snapshotMaxRecordSeq: 100,
+    afterRecordSeq: 64,
+  };
+  vi.mocked(invoke).mockResolvedValue(response);
+
+  expect(await collectMemoryMaterials("run-1", cursor)).toBe(response);
+  expect(invoke).toHaveBeenCalledWith("memory_collect_materials", { runId: "run-1", cursor });
 });

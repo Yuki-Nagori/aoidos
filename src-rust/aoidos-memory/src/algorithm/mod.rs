@@ -2,12 +2,193 @@
 
 use crate::{
     error::{Error, Reason, Result},
-    model::{Algorithm, MAX_CANDIDATES, MAX_INTEGER, Policy, reject, valid_id, valid_short_id},
+    model::{
+        Algorithm, Hash, MAX_CANDIDATES, MAX_INTEGER, Policy, SourceRef, hash, reject, valid_id,
+        valid_short_id,
+    },
 };
 
 const FIXED_SCALE: u64 = 1_000_000;
 pub const MAX_ARCHIVE_CANDIDATES: usize = 10_000;
 const MAX_OPERATION_TARGETS: usize = 16;
+
+/// 为同一周目中的会话记录生成稳定强化来源身份。
+pub fn effect_source_id(run_id: &str, source: &SourceRef) -> Result<String> {
+    if !valid_id(run_id) {
+        return Err(reject());
+    }
+    source.validate()?;
+    let digest: Hash = hash(
+        format!(
+            "aoidos-memory-v1\0effect-source\0{run_id}\0{}\0{}",
+            source.session_id, source.record_seq
+        )
+        .as_bytes(),
+    );
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
+}
+
+/// 已提交到当前有效路径的效果；这里只传入调用方已完成来源核验的记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedReinforcement {
+    pub source_id: String,
+    pub logical_position: u64,
+    pub kind: ReinforcementKind,
+}
+
+/// 复活只重置衰减锚点，不属于强化增益或强化来源幂等账本。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReinforcementKind {
+    Gain { amount: u64 },
+    Revival,
+}
+
+/// 计算一个新强化来源可接纳的增量。
+///
+/// `Some(gain)` 表示来源首次通过强化限制；即使 `gain` 为零也会作为已处理来源，
+/// 由提交方将接受结果追加到账本。`None` 表示同源、窗口次数或累计封顶阻止强化。
+/// 窗口按素材逻辑位置计算，包含候选位置并排除恰好位于窗口左边界的位置。
+/// 已接纳的历史增量按传入的审计值保留，不会因更早效果撤回而重新放大。
+///
+/// # Errors
+/// 策略、来源或效果形状无效时拒绝；历史效果晚于候选位置时返回 staleVersion。
+pub fn reinforcement_increment(
+    policy: &Policy,
+    source_id: &str,
+    logical_position: u64,
+    accepted: &[AcceptedReinforcement],
+) -> Result<Option<u64>> {
+    policy.validate()?;
+    if !valid_id(source_id)
+        || logical_position > MAX_INTEGER
+        || accepted.len() > MAX_ARCHIVE_CANDIDATES
+    {
+        return Err(reject());
+    }
+
+    let mut gain_sources = std::collections::BTreeSet::new();
+    let mut total_gain = 0_u64;
+    let mut window_gain_count = 0_u64;
+    for effect in accepted {
+        if !valid_id(&effect.source_id) || effect.logical_position > MAX_INTEGER {
+            return Err(reject());
+        }
+        if effect.logical_position > logical_position {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        if let ReinforcementKind::Gain { amount } = effect.kind {
+            if amount > policy.reinforcement_cap || !gain_sources.insert(effect.source_id.as_str())
+            {
+                return Err(reject());
+            }
+            total_gain = total_gain.checked_add(amount).ok_or_else(reject)?;
+            if logical_position - effect.logical_position < policy.repeat_window_rounds {
+                window_gain_count += 1;
+            }
+        }
+    }
+
+    if gain_sources.contains(source_id)
+        || window_gain_count >= policy.repeat_limit
+        || total_gain >= policy.reinforcement_cap
+    {
+        return Ok(None);
+    }
+
+    let diminishing_gain = policy
+        .reinforcement_gain
+        .checked_div(1 + window_gain_count)
+        .ok_or_else(reject)?;
+    Ok(Some(
+        diminishing_gain.min(policy.reinforcement_cap - total_gain),
+    ))
+}
+
+/// 判断当前来源能否提交复活；复活不占强化次数或增益额度。
+///
+/// 来源幂等覆盖同一来源上的任意已提交效果，避免重放强化来源再触发复活。
+/// 冷却按有效复活位置计算；恰好经过完整冷却长度后允许再次复活。
+/// `accepted` 必须只包含当前有效因果路径上的效果。
+pub fn revival_allowed(
+    policy: &Policy,
+    source_id: &str,
+    logical_position: u64,
+    accepted: &[AcceptedReinforcement],
+) -> Result<bool> {
+    policy.validate()?;
+    if !valid_id(source_id)
+        || logical_position > MAX_INTEGER
+        || accepted.len() > MAX_ARCHIVE_CANDIDATES
+    {
+        return Err(reject());
+    }
+
+    let mut gain_sources = std::collections::BTreeSet::new();
+    let mut revival_sources = std::collections::BTreeSet::new();
+    let mut total_gain = 0_u64;
+    let mut latest_revival = None;
+    let mut source_already_used = false;
+
+    for effect in accepted {
+        if !valid_id(&effect.source_id) || effect.logical_position > MAX_INTEGER {
+            return Err(reject());
+        }
+        if effect.logical_position > logical_position {
+            return Err(Error::Rejected(Reason::StaleVersion));
+        }
+        if effect.source_id == source_id {
+            source_already_used = true;
+        }
+        match effect.kind {
+            ReinforcementKind::Gain { amount } => {
+                if amount > policy.reinforcement_cap || !gain_sources.insert(&effect.source_id) {
+                    return Err(reject());
+                }
+                total_gain = total_gain.checked_add(amount).ok_or_else(reject)?;
+            }
+            ReinforcementKind::Revival => {
+                if !revival_sources.insert(&effect.source_id) {
+                    return Err(reject());
+                }
+                latest_revival = Some(
+                    latest_revival.map_or(effect.logical_position, |latest: u64| {
+                        latest.max(effect.logical_position)
+                    }),
+                );
+            }
+        }
+    }
+    if total_gain > policy.reinforcement_cap {
+        return Err(reject());
+    }
+    if source_already_used {
+        return Ok(false);
+    }
+    Ok(latest_revival
+        .is_none_or(|position| logical_position - position >= policy.revival_cooldown_rounds))
+}
 
 /// 候选与它触及的稳定素材 / 现有条目；位置由调用方从原始素材登记顺序取得。
 #[derive(Debug, Clone, PartialEq, Eq)]

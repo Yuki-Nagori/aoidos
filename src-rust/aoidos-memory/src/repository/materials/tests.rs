@@ -2,7 +2,15 @@
 
 use super::super::test_support::*;
 use super::*;
-use crate::model::{CycleKind, CycleMarkV1, CycleSourceRef, DetailPolicy};
+use crate::model::{CycleKind, CycleMarkV1, CycleSourceRef, DetailPolicy, ProposalContext};
+
+fn frozen_input() -> serde_json::Value {
+    let context = ProposalContext {
+        source_ids: ["s1".into()].into(),
+        ..ProposalContext::default()
+    };
+    serde_json::json!({"proposalContext": context})
+}
 
 fn cycle_mark_commit(f: &Fixture) -> CycleMarkCommit {
     let mut mark = CycleMarkV1 {
@@ -71,12 +79,44 @@ fn material_identity_and_frozen_batch_survive_replays() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({"previous": []}),
+        input: {
+            let mut input = frozen_input();
+            input["previous"] = serde_json::json!([]);
+            input
+        },
     };
     let digest = f
         .repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
         .unwrap();
+    let mut invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input = serde_json::json!({});
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
+    invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input["proposalContext"]["sourceIds"] = serde_json::json!(["s2"]);
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
+    invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input["proposalContext"]["sourceIds"] = serde_json::json!([]);
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
+    invalid = snapshot.clone();
+    invalid.batch_id = new_id();
+    invalid.input["proposalContext"]["allowEverything"] = serde_json::json!(true);
+    rejected(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &invalid),
+        Reason::InvalidSchema,
+    );
     assert_eq!(
         f.repo
             .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -88,7 +128,7 @@ fn material_identity_and_frozen_batch_survive_replays() {
         (snapshot.clone(), BatchState::Queued)
     );
     let mut conflict = snapshot.clone();
-    conflict.input = serde_json::json!({"previous": [1]});
+    conflict.input["previous"] = serde_json::json!([1]);
     assert!(matches!(
         f.repo.freeze_batch(&mut f.conn, &f.port, &conflict),
         Err(Error::Corrupt)
@@ -105,6 +145,28 @@ fn material_identity_and_frozen_batch_survive_replays() {
         f.repo.freeze_batch(&mut f.conn, &f.port, &conflict),
         Reason::InvalidSource,
     );
+    let mut legacy = snapshot.clone();
+    legacy.input = serde_json::json!({"previous": []});
+    let legacy_bytes = aoidos_json::canonical_string(&legacy).unwrap();
+    let legacy_digest = hash(legacy_bytes.as_bytes());
+    f.conn
+        .execute(
+            "UPDATE memory_batches SET snapshot_json=?1,input_digest=?2 WHERE batch_id=?3",
+            params![
+                legacy_bytes.into_bytes(),
+                legacy_digest.as_slice(),
+                legacy.batch_id
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        f.repo.batch(&f.conn, &legacy.batch_id).unwrap(),
+        (legacy.clone(), BatchState::Queued)
+    );
+    assert_eq!(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &legacy).unwrap(),
+        legacy_digest
+    );
     f.conn
         .execute(
             "DELETE FROM memory_spans WHERE batch_id=?1",
@@ -119,6 +181,249 @@ fn material_identity_and_frozen_batch_survive_replays() {
     assert!(matches!(
         f.repo.batch(&f.conn, &new_id()),
         Err(Error::NotFound)
+    ));
+}
+
+#[test]
+fn material_anchor_uses_preceding_valid_completed_rounds_and_rebuilds_after_rollback() {
+    let mut f = Fixture::new();
+    let mut completed = f.source();
+    completed.record_seq = 2;
+    f.repo
+        .complete_round(&mut f.conn, &f.port, &f.run.run_id, &new_id(), &completed)
+        .unwrap();
+    let mut later_completed = f.source();
+    later_completed.record_seq = 4;
+    f.repo
+        .complete_round(
+            &mut f.conn,
+            &f.port,
+            &f.run.run_id,
+            &new_id(),
+            &later_completed,
+        )
+        .unwrap();
+
+    let mut material_source = f.source();
+    material_source.record_seq = 5;
+    let material = f
+        .repo
+        .register_material(&f.conn, &f.port, &material_source, 0)
+        .unwrap();
+    assert_eq!(
+        f.repo
+            .material_logical_position(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap(),
+        2
+    );
+
+    f.port.view.history_revision += 1;
+    f.port.invalid_records.borrow_mut().insert(2);
+    f.repo
+        .recover(&mut f.conn, &f.port, &f.run.run_id, None)
+        .unwrap();
+    assert_eq!(f.repo.clock(&f.conn, &f.port, &f.run.run_id).unwrap(), 1);
+    assert_eq!(
+        f.repo
+            .material_logical_position(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_be_frozen() {
+    let mut f = Fixture::new();
+    let source = f.source();
+    let material = f
+        .repo
+        .register_material(&f.conn, &f.port, &source, 0)
+        .unwrap();
+    let snapshot = |batch_id| BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id,
+        run_id: f.run.run_id.clone(),
+        history_revision: 0,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash: f.run.policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: material.clone(),
+            source: source.clone(),
+            text: "钟声".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: frozen_input(),
+    };
+    let first = snapshot(new_id());
+    assert!(
+        f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
+    let digest = f.repo.freeze_batch(&mut f.conn, &f.port, &first).unwrap();
+    assert!(
+        !f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
+    assert!(matches!(
+        f.repo
+            .freeze_batch(&mut f.conn, &f.port, &snapshot(new_id())),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+
+    f.conn
+        .execute(
+            "UPDATE memory_batches SET status='rejected' WHERE batch_id=?1",
+            [&first.batch_id],
+        )
+        .unwrap();
+    assert!(
+        f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
+    let retry = snapshot(new_id());
+    f.repo.freeze_batch(&mut f.conn, &f.port, &retry).unwrap();
+    f.conn
+        .execute(
+            "UPDATE memory_materials SET status='processed' WHERE material_id=?1",
+            [&material],
+        )
+        .unwrap();
+    assert!(
+        !f.repo
+            .material_is_collectible(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap()
+    );
+    assert_eq!(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &first).unwrap(),
+        digest
+    );
+    assert!(matches!(
+        f.repo
+            .freeze_batch(&mut f.conn, &f.port, &snapshot(new_id())),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+}
+
+#[test]
+fn collectible_material_pages_are_bounded_ordered_and_skip_reserved_sources() {
+    let mut f = Fixture::new();
+    let register = |f: &Fixture, record_seq| {
+        let mut source = f.source();
+        source.record_seq = record_seq;
+        f.repo
+            .register_material(&f.conn, &f.port, &source, 0)
+            .unwrap()
+    };
+    let first = register(&f, 1);
+    let second = register(&f, 2);
+    let third = register(&f, 3);
+
+    let first_page = f
+        .repo
+        .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, None, 1)
+        .unwrap();
+    assert_eq!(first_page.materials.len(), 1);
+    assert_eq!(first_page.materials[0].material_id, first);
+    let cursor = first_page.next.unwrap();
+    // 分页期间追加的素材不能进入本次扫描快照。
+    register(&f, 4);
+    let mut foreign_cursor = cursor.clone();
+    foreign_cursor.run_id = new_id();
+    assert!(matches!(
+        f.repo
+            .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, Some(foreign_cursor), 1,),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    let mut stale_cursor = cursor.clone();
+    stale_cursor.history_revision += 1;
+    assert!(matches!(
+        f.repo
+            .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, Some(stale_cursor), 1,),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+
+    let reserved = BatchSnapshot {
+        logical_clock: 0,
+        version: 1,
+        batch_id: new_id(),
+        run_id: f.run.run_id.clone(),
+        history_revision: 0,
+        entity_revision: 1,
+        evidence_revision: 1,
+        policy_hash: f.run.policy_hash,
+        spans: vec![Span {
+            source_id: "s1".into(),
+            material_id: second.clone(),
+            source: {
+                let mut source = f.source();
+                source.record_seq = 2;
+                source
+            },
+            text: "钟声".into(),
+            context: false,
+            continuation: false,
+        }],
+        input: frozen_input(),
+    };
+    f.repo
+        .freeze_batch(&mut f.conn, &f.port, &reserved)
+        .unwrap();
+
+    let filtered_page = f
+        .repo
+        .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, Some(cursor), 1)
+        .unwrap();
+    assert!(filtered_page.materials.is_empty());
+    let last_page = f
+        .repo
+        .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, filtered_page.next, 1)
+        .unwrap();
+    assert_eq!(last_page.materials.len(), 1);
+    assert_eq!(last_page.materials[0].material_id, third);
+    assert!(last_page.next.is_none());
+}
+
+#[test]
+fn collectible_material_page_rejects_invalid_limits_and_cursors() {
+    let f = Fixture::new();
+    assert!(matches!(
+        f.repo
+            .collectible_materials_page(&f.conn, &f.port, &f.run.run_id, None, 0),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    assert!(matches!(
+        f.repo.collectible_materials_page(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            None,
+            MAX_COLLECTIBLE_MATERIAL_SCAN + 1,
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
+    assert!(matches!(
+        f.repo.collectible_materials_page(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            Some(MaterialCursor {
+                run_id: f.run.run_id.clone(),
+                history_revision: 0,
+                through_record_seq: 2,
+                through_ordinal: 0,
+                after_record_seq: 0,
+                after_ordinal: 0,
+            }),
+            1,
+        ),
+        Err(Error::Rejected(Reason::InvalidSchema))
     ));
 }
 
@@ -189,14 +494,15 @@ fn batch_digest_and_capacity_reject_untrusted_snapshots() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
-    snapshot.input = serde_json::json!({"oversize": "x".repeat(65536)});
+    snapshot.input = frozen_input();
+    snapshot.input["oversize"] = serde_json::json!("x".repeat(65536));
     rejected(
         f.repo.freeze_batch(&mut f.conn, &f.port, &snapshot),
         Reason::CapacityBlocked,
     );
-    snapshot.input = serde_json::json!({});
+    snapshot.input = frozen_input();
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
         .unwrap();
@@ -233,7 +539,7 @@ fn oversized_persisted_snapshot_is_rejected_before_blob_copy() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -275,7 +581,7 @@ fn identical_text_cannot_replace_frozen_record_identity() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
 
     f.repo
@@ -346,7 +652,7 @@ fn batch_request_identity_and_results_are_durable_and_idempotent() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -500,7 +806,7 @@ fn unknown_and_rejected_batches_cannot_be_redispatched_or_overwritten() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     let unknown = make_snapshot();
     f.repo.freeze_batch(&mut f.conn, &f.port, &unknown).unwrap();
@@ -555,6 +861,11 @@ fn unknown_and_rejected_batches_cannot_be_redispatched_or_overwritten() {
         f.repo.batch(&f.conn, &unknown.batch_id).unwrap().1,
         BatchState::Unknown
     );
+    assert!(matches!(
+        f.repo.freeze_batch(&mut f.conn, &f.port, &make_snapshot()),
+        Err(Error::Rejected(Reason::InvalidSource))
+    ));
+    assert!(f.repo.freeze_batch(&mut f.conn, &f.port, &unknown).is_ok());
     assert!(
         !f.repo
             .dispatch_batch(
@@ -577,7 +888,16 @@ fn unknown_and_rejected_batches_cannot_be_redispatched_or_overwritten() {
         Reason::StaleVersion,
     );
 
-    let rejected_batch = make_snapshot();
+    let mut rejected_source = source.clone();
+    rejected_source.record_seq += 1;
+    let rejected_material = f
+        .repo
+        .register_material(&f.conn, &f.port, &rejected_source, 0)
+        .unwrap();
+    let mut rejected_batch = make_snapshot();
+    rejected_batch.batch_id = new_id();
+    rejected_batch.spans[0].source = rejected_source;
+    rejected_batch.spans[0].material_id = rejected_material;
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &rejected_batch)
         .unwrap();
@@ -645,7 +965,7 @@ fn completion_must_resolve_exactly_each_persisted_candidate_once() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)
@@ -774,7 +1094,7 @@ fn batch_reads_reject_unsupported_versions_and_identity_mismatch() {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
 
     let mut invalid = snapshot.clone();
@@ -882,7 +1202,7 @@ fn queued_fixture() -> (Fixture, String, String, String) {
             context: false,
             continuation: false,
         }],
-        input: serde_json::json!({}),
+        input: frozen_input(),
     };
     f.repo
         .freeze_batch(&mut f.conn, &f.port, &snapshot)

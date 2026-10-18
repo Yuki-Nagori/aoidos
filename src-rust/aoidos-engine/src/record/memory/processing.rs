@@ -4,8 +4,9 @@ use crate::{fault::Fault, request::PreparedGeneration, storage::Storage, turn::C
 use aoidos_llm::schedule::{AttemptIdentity, AttemptOutcome, BudgetDenial, BudgetPort};
 use aoidos_memory::{
     error::{Error, Reason},
+    model::OperationState,
     model::{CausalPort, Proposal, ProposalContext},
-    repository::{BatchCompletion, BatchState, CycleMarkCommit},
+    repository::{BatchState, CandidateOutcome, CandidateResult, CycleMarkCommit},
 };
 use std::sync::{Arc, Mutex};
 
@@ -26,6 +27,40 @@ enum ReceiveFailure {
     Uncertain(Fault),
 }
 
+fn operation_rejection_results(
+    candidate_ids: &[String],
+    reason: Reason,
+) -> std::result::Result<Vec<CandidateResult>, Error> {
+    let (outcome, reason_code) = match reason {
+        Reason::CapacityBlocked => (CandidateOutcome::Deferred, "policy.capacity_blocked"),
+        Reason::RecoveryRequired | Reason::PolicyUnavailable => {
+            return Err(Error::Rejected(reason));
+        }
+        _ => (CandidateOutcome::Rejected, "memory.operation.rejected"),
+    };
+    Ok(candidate_ids
+        .iter()
+        .map(|candidate_id| CandidateResult {
+            candidate_id: candidate_id.clone(),
+            outcome,
+            reason_code: Some(reason_code.into()),
+        })
+        .collect())
+}
+
+fn finish_prepared_operation(
+    mut state: OperationState,
+    mut advance: impl FnMut(OperationState) -> aoidos_memory::error::Result<OperationState>,
+) -> aoidos_memory::error::Result<OperationState> {
+    if state == OperationState::Prepared {
+        state = advance(state)?;
+    }
+    if state == OperationState::Ready {
+        state = advance(state)?;
+    }
+    Ok(state)
+}
+
 struct SqliteBatchPersistence {
     storage: Arc<Storage>,
     session_id: String,
@@ -39,12 +74,29 @@ impl BatchPersistence for SqliteBatchPersistence {
             return Err(Fault::bad_request());
         }
         self.storage
-            .with_memory(
+            .with_memory_context(
                 &self.session_id,
                 &self.catalog,
-                |repository, connection, port| {
+                |repository, connection, port, session, directory| {
                     let (_, state) = repository.batch(connection, &self.batch_id)?;
-                    if state != BatchState::Queued
+                    if state != BatchState::Queued {
+                        return Err(Error::Rejected(Reason::StaleVersion));
+                    }
+                    let (snapshot, _) = repository.batch(connection, &self.batch_id)?;
+                    let run = repository.run_for_session(connection, &self.session_id)?;
+                    let frozen = frozen_proposal_context(&snapshot)?;
+                    let current = super::build_proposal_context(super::ProposalContextInput {
+                        connection,
+                        repository,
+                        catalog: &self.catalog,
+                        run: &run,
+                        session,
+                        directory,
+                        batch: &snapshot,
+                        source_port: port,
+                    })?;
+                    if run.run_id != snapshot.run_id
+                        || !same_proposal_context(&current, &frozen)?
                         || !repository.dispatch_batch(
                             connection,
                             port,
@@ -190,7 +242,8 @@ impl BudgetPort for DispatchBudget {
 /// 在 coordinator 空闲时取得独立 lease，执行一个不可重试的记忆请求并保存原始响应。
 ///
 /// `request` 必须由可信引擎按冻结批次输入构造，并携带本局 027 `LedgerBudgetPort`；
-/// 调用方负责确认批次授权。此函数不构造候选操作、不读取设置，也没有自动触发器。
+/// 调用方负责确认批次授权；`validate_selection` 在取得共享 lease 后、任何预算预留或发送前执行，
+/// 用于确认会话和 profile 在等待 lease 期间没有切换。此函数不构造候选操作、不读取设置，也没有自动触发器。
 /// # Errors
 /// 游戏仍占用 lease、预算预留 / 批次登记失败或响应不能持久化时返回脱敏错误。
 pub async fn process_authorized_batch(
@@ -200,6 +253,7 @@ pub async fn process_authorized_batch(
     catalog: Arc<crate::game::catalog::SceneCatalog>,
     batch_id: String,
     request: PreparedGeneration,
+    validate_selection: impl FnOnce() -> Result<(), Fault> + Send,
 ) -> Result<crate::turn::PrivateResult, Fault> {
     let persistence: Arc<dyn BatchPersistence> = Arc::new(SqliteBatchPersistence {
         storage,
@@ -207,16 +261,16 @@ pub async fn process_authorized_batch(
         catalog,
         batch_id,
     });
-    execute_batch(coordinator, persistence, request).await
+    execute_batch_checked(coordinator, persistence, request, validate_selection).await
 }
 
-/// 将当前 queued 批次的可信刻痕授权并入普通提案上下文，供单次记忆请求使用。
+/// 从当前 queued 批次恢复完整提案上下文，并重建普通来源与刻痕授权。
 ///
-/// `context` 中的普通候选字段必须由调用方从同一冻结批次构造；刻痕规则与来源只由
-/// 本函数从活动剧本、周目、实体目录和仓储快照生成。完成时会在同一锁边界重建并复核。
+/// 当前剧本、周目、实体目录、证据和来源重建结果必须与冻结快照完全一致；
+/// 返回值来自当前重建结果，不接受调用方补充或替换权限字段。
 /// # Errors
 /// 批次状态、历史 / 实体 / 证据修订或任一来源不再匹配时拒绝构造请求上下文。
-pub fn prepare_cycle_mark_context(
+pub fn prepare_memory_proposal_context(
     storage: &Storage,
     session_id: &str,
     catalog: &crate::game::catalog::SceneCatalog,
@@ -233,36 +287,39 @@ pub fn prepare_cycle_mark_context(
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
                 let run = repository.run_for_session(connection, session_id)?;
-                let cycle_context = super::build_cycle_mark_context(super::CycleMarkContextInput {
+                let frozen = frozen_proposal_context(&snapshot)?;
+                let rebuilt = super::build_proposal_context(super::ProposalContextInput {
+                    connection,
+                    repository,
                     catalog,
                     run: &run,
                     session,
                     directory,
                     batch: &snapshot,
                     source_port: port,
-                })
-                .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
-                cycle_context
-                    .apply_to(context)
-                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))
+                })?;
+                if !same_proposal_context(&rebuilt, &frozen)? {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+                *context = rebuilt;
+                Ok(())
             },
         )
         .map_err(memory_fault)
 }
 
-/// 按当前冻结授权校验已收回的提案，并将刻痕与普通候选摘要原子完成。
+/// 按当前冻结授权校验已收到的提案，提交普通候选操作并完成批次。
 ///
-/// `context` 必须与发送请求时使用的冻结提案上下文一致；此函数不会重新发送请求，
-/// 也不会重新计算普通候选的操作结果。含刻痕时由仓储在同一事务写入刻痕和完成回执。
+/// 候选始终按批次冻结的目标版本解析；完成前重建其余授权上下文，避免本批已经提交的
+/// 目标变更使自己的完成回执失效。目标版本的并发冲突由候选操作 CAS 核验。
+/// 此函数不会重新发送请求；普通操作按稳定计划幂等重放，刻痕与完成回执由仓储在同一事务写入。
 /// # Errors
-/// 批次尚未收到响应、提案不符合冻结授权或当前来源已失效时拒绝完成；相同完成重放返回 `false`。
+/// 批次尚未收到响应、提案不符合冻结授权或当前来源已失效时拒绝完成；待恢复操作会保留批次，已完成重放返回 `false`。
 pub fn complete_received_batch(
     storage: &Storage,
     session_id: &str,
     catalog: &crate::game::catalog::SceneCatalog,
     batch_id: &str,
-    context: &ProposalContext,
-    completion: &BatchCompletion,
 ) -> Result<bool, Fault> {
     storage
         .with_memory_context(
@@ -283,38 +340,333 @@ pub fn complete_received_batch(
                 if !matches!(state, BatchState::Received | BatchState::Completed) {
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
-                let cycle_context = super::build_cycle_mark_context(super::CycleMarkContextInput {
-                    catalog,
-                    run: &run,
-                    session,
-                    directory,
-                    batch: &snapshot,
-                    source_port: port,
-                })
-                .map_err(|_| Error::Rejected(Reason::StaleVersion))?;
-                let mut context = context.clone();
-                cycle_context
-                    .apply_to(&mut context)
-                    .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
                 let receipt = repository.batch_receipt(connection, batch_id)?;
                 if receipt.state != state {
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
+                let deferred_candidates = if state == BatchState::Completed {
+                    repository
+                        .deferred_candidates(connection, batch_id)?
+                        .into_iter()
+                        .map(|candidate| candidate.candidate_id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                } else {
+                    std::collections::BTreeSet::new()
+                };
+                if state == BatchState::Completed && deferred_candidates.is_empty() {
+                    return Ok(false);
+                }
+                let rebuilt =
+                    super::build_proposal_authority_context(super::ProposalContextInput {
+                        connection,
+                        repository,
+                        catalog,
+                        run: &run,
+                        session,
+                        directory,
+                        batch: &snapshot,
+                        source_port: port,
+                    })?;
+                let frozen = frozen_proposal_context(&snapshot)?;
+                if !same_proposal_authority(&rebuilt, &frozen)? {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
                 let response = receipt.response.as_deref().ok_or(Error::Corrupt)?;
-                let proposal = Proposal::parse(response, &context)?;
-                let cycle_marks = proposal
-                    .cycle_marks
-                    .iter()
-                    .map(|candidate| {
-                        Ok(CycleMarkCommit {
-                            candidate_id: candidate.candidate_id.clone(),
-                            mark: candidate.materialize(&context)?,
+                let mut proposal = Proposal::parse(response, &frozen)?;
+                if state == BatchState::Completed {
+                    proposal
+                        .candidates
+                        .retain(|candidate| deferred_candidates.contains(&candidate.candidate_id));
+                    // 已完成批次中的刻痕已与原回执原子提交；本次只重试仍 deferred 的普通候选。
+                    proposal.cycle_marks.clear();
+                }
+                let cycle_marks = if state == BatchState::Received {
+                    proposal
+                        .cycle_marks
+                        .iter()
+                        .map(|candidate| {
+                            Ok(CycleMarkCommit {
+                                candidate_id: candidate.candidate_id.clone(),
+                                mark: candidate.materialize(&frozen)?,
+                            })
                         })
-                    })
-                    .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
+                        .collect::<aoidos_memory::error::Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
+                };
 
+                let mut previous_versions = std::collections::BTreeMap::new();
+                for (entry_id, target) in &frozen.targets {
+                    let previous = repository.version(
+                        connection,
+                        port,
+                        &run.run_id,
+                        entry_id,
+                        &target.version_id,
+                    )?;
+                    if previous.subject != target.subject
+                        || previous.dimension != target.dimension
+                        || previous.summary != target.summary
+                        || previous.attitude != target.attitude
+                        || previous.inferred != target.inferred
+                    {
+                        return Err(Error::Rejected(Reason::StaleVersion));
+                    }
+                    previous_versions.insert(entry_id.clone(), previous);
+                }
+                for candidate in &proposal.candidates {
+                    if matches!(
+                        candidate.classification,
+                        aoidos_memory::model::Classification::Supplement
+                            | aoidos_memory::model::Classification::Correction
+                    ) && let Some(target) = &candidate.target_ref
+                        && !previous_versions.contains_key(&target.entry_id)
+                    {
+                        let previous = repository.version(
+                            connection,
+                            port,
+                            &run.run_id,
+                            &target.entry_id,
+                            &target.expected_version_id,
+                        )?;
+                        previous_versions.insert(target.entry_id.clone(), previous);
+                    }
+                }
+                let repeat_target_ids = proposal
+                    .candidates
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.classification == aoidos_memory::model::Classification::Repeat
+                    })
+                    .filter_map(|candidate| {
+                        candidate
+                            .target_ref
+                            .as_ref()
+                            .map(|target| target.entry_id.clone())
+                    })
+                    .collect::<std::collections::BTreeSet<_>>();
+                let mut previous_effects = std::collections::BTreeMap::new();
+                for entry_id in repeat_target_ids {
+                    let mut after = 0;
+                    let mut effects = Vec::new();
+                    loop {
+                        let page = repository.effects(
+                            connection,
+                            port,
+                            &run.run_id,
+                            &entry_id,
+                            after,
+                            32,
+                        )?;
+                        let Some((last, _)) = page.last() else {
+                            break;
+                        };
+                        after = *last;
+                        effects.extend(page);
+                        if effects.len() > aoidos_memory::algorithm::MAX_ARCHIVE_CANDIDATES {
+                            return Err(Error::Rejected(Reason::CapacityBlocked));
+                        }
+                        if effects.len() % 32 != 0 {
+                            break;
+                        }
+                    }
+                    previous_effects.insert(entry_id, effects);
+                }
+                let mut material_positions = std::collections::BTreeMap::new();
+                for span in &snapshot.spans {
+                    if proposal.candidates.iter().any(|candidate| {
+                        candidate.classification == aoidos_memory::model::Classification::Repeat
+                            && candidate.source_ids.contains(&span.source_id)
+                    }) {
+                        let position = repository.material_logical_position(
+                            connection,
+                            port,
+                            &run.run_id,
+                            &span.material_id,
+                        )?;
+                        material_positions.insert(span.material_id.clone(), position);
+                    }
+                }
+                let mut claimed_candidates = std::collections::BTreeSet::new();
+                let candidate_by_id = proposal
+                    .candidates
+                    .iter()
+                    .map(|candidate| (candidate.candidate_id.as_str(), candidate))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let mut persisted_groups = std::collections::BTreeMap::new();
+                for candidate in &proposal.candidates {
+                    let Some(operation_id) = repository.candidate_operation(
+                        connection,
+                        batch_id,
+                        &candidate.candidate_id,
+                    )?
+                    else {
+                        continue;
+                    };
+                    if persisted_groups.contains_key(&operation_id) {
+                        continue;
+                    }
+                    let (plan, operation_state) =
+                        repository.operation(connection, &operation_id)?;
+                    if state == BatchState::Completed
+                        && matches!(
+                            operation_state,
+                            OperationState::Applied | OperationState::Rejected
+                        )
+                    {
+                        claimed_candidates.extend(plan.candidate_ids);
+                        continue;
+                    }
+                    let group_candidates = plan
+                        .candidate_ids
+                        .iter()
+                        .map(|candidate_id| {
+                            candidate_by_id
+                                .get(candidate_id.as_str())
+                                .copied()
+                                .ok_or(Error::Corrupt)
+                        })
+                        .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
+                    claimed_candidates.extend(plan.candidate_ids.iter().cloned());
+                    persisted_groups.insert(
+                        operation_id,
+                        super::candidate_operations::persisted_group(
+                            &snapshot,
+                            plan,
+                            &group_candidates,
+                        )?,
+                    );
+                }
+                let fresh_candidates = proposal
+                    .candidates
+                    .iter()
+                    .filter(|candidate| !claimed_candidates.contains(&candidate.candidate_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let mut fresh_proposal = proposal.clone();
+                fresh_proposal.candidates = fresh_candidates;
+                let plans = super::candidate_operations::build_plans_with_history(
+                    &snapshot,
+                    &fresh_proposal,
+                    &frozen,
+                    &run,
+                    &previous_versions,
+                    &previous_effects,
+                    &material_positions,
+                )?;
+                let mut outcomes = plans.immediate_results;
+                let mut operations = persisted_groups.into_values().collect::<Vec<_>>();
+                operations.extend(plans.operations);
+                operations.sort_by(|left, right| {
+                    fn first_source(
+                        plan: &aoidos_memory::model::Plan,
+                        proposal: &Proposal,
+                        snapshot: &aoidos_memory::repository::BatchSnapshot,
+                    ) -> (u64, String) {
+                        let position = plan
+                            .candidate_ids
+                            .iter()
+                            .filter_map(|id| {
+                                proposal
+                                    .candidates
+                                    .iter()
+                                    .find(|item| &item.candidate_id == id)
+                            })
+                            .flat_map(|candidate| {
+                                candidate.source_ids.iter().filter_map(|source_id| {
+                                    snapshot
+                                        .spans
+                                        .iter()
+                                        .find(|span| &span.source_id == source_id)
+                                })
+                            })
+                            .map(|span| span.source.record_seq)
+                            .min()
+                            .unwrap_or(u64::MAX);
+                        let candidate_id = plan
+                            .candidate_ids
+                            .iter()
+                            .min_by(|left, right| left.as_bytes().cmp(right.as_bytes()))
+                            .cloned()
+                            .unwrap_or_default();
+                        (position, candidate_id)
+                    }
+                    first_source(&left.plan, &proposal, &snapshot).cmp(&first_source(
+                        &right.plan,
+                        &proposal,
+                        &snapshot,
+                    ))
+                });
+                for group in operations {
+                    // 独立组逐个提交会推进逻辑时钟；每次执行前读取当前值，
+                    // 避免同一批次的后续组沿用冻结时的旧时钟而被误拒绝。
+                    let mut plan = group.plan;
+                    if !group.persisted {
+                        plan.expected_logical_clock =
+                            repository.clock(connection, port, &run.run_id)?;
+                    }
+                    let state = match repository.prepare(connection, port, &plan) {
+                        Ok(state) => state,
+                        Err(Error::Rejected(reason)) => {
+                            outcomes
+                                .extend(operation_rejection_results(&plan.candidate_ids, reason)?);
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let state = finish_prepared_operation(state, |state| match state {
+                        OperationState::Prepared => {
+                            repository.write_versions(connection, &plan.operation_id)
+                        }
+                        OperationState::Ready => {
+                            match repository.apply(connection, port, &plan.operation_id) {
+                                Ok(state) => Ok(state),
+                                Err(Error::Rejected(_)) => repository
+                                    .operation(connection, &plan.operation_id)
+                                    .map(|value| value.1),
+                                Err(error) => Err(error),
+                            }
+                        }
+                        _ => Ok(state),
+                    })?;
+                    match state {
+                        OperationState::Applied => {
+                            outcomes.extend(plan.candidate_ids.iter().map(|candidate_id| {
+                                CandidateResult {
+                                    candidate_id: candidate_id.clone(),
+                                    outcome: if group.no_op_candidates.contains(candidate_id) {
+                                        CandidateOutcome::NoOp
+                                    } else {
+                                        CandidateOutcome::Applied
+                                    },
+                                    reason_code: None,
+                                }
+                            }));
+                        }
+                        OperationState::Rejected => {
+                            outcomes.extend(plan.candidate_ids.iter().map(|candidate_id| {
+                                CandidateResult {
+                                    candidate_id: candidate_id.clone(),
+                                    outcome: CandidateOutcome::Rejected,
+                                    reason_code: Some("memory.operation.rejected".into()),
+                                }
+                            }));
+                        }
+                        OperationState::Prepared
+                        | OperationState::Ready
+                        | OperationState::Quarantined => {
+                            return Err(Error::Rejected(Reason::RecoveryRequired));
+                        }
+                    }
+                }
+                let completion = super::candidate_operations::completion(outcomes, Vec::new());
+
+                // completed 回执不可改写；deferred 候选只复用已保存响应做本地操作。
+                if state == BatchState::Completed {
+                    return Ok(false);
+                }
                 if cycle_marks.is_empty() {
-                    let bytes = aoidos_json::canonical_string(completion)
+                    let bytes = aoidos_json::canonical_string(&completion)
                         .map_err(|_| Error::Rejected(Reason::InvalidSchema))?
                         .into_bytes();
                     repository.complete_batch(connection, batch_id, &bytes)
@@ -323,7 +675,7 @@ pub fn complete_received_batch(
                         connection,
                         port,
                         batch_id,
-                        completion,
+                        &completion,
                         &cycle_marks,
                     )
                 }
@@ -332,13 +684,58 @@ pub fn complete_received_batch(
         .map_err(memory_fault)
 }
 
+fn frozen_proposal_context(
+    snapshot: &aoidos_memory::repository::BatchSnapshot,
+) -> aoidos_memory::error::Result<ProposalContext> {
+    let value = snapshot
+        .input
+        .get("proposalContext")
+        .cloned()
+        .ok_or(Error::Rejected(Reason::InvalidSchema))?;
+    aoidos_json::from_value(value).map_err(|_| Error::Rejected(Reason::InvalidSchema))
+}
+
+fn same_proposal_context(
+    left: &ProposalContext,
+    right: &ProposalContext,
+) -> aoidos_memory::error::Result<bool> {
+    let left =
+        aoidos_json::canonical_string(left).map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+    let right =
+        aoidos_json::canonical_string(right).map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
+    Ok(left == right)
+}
+
+fn same_proposal_authority(
+    current: &ProposalContext,
+    frozen: &ProposalContext,
+) -> aoidos_memory::error::Result<bool> {
+    let mut current = current.clone();
+    let mut frozen = frozen.clone();
+    // targets 是候选更新使用的 CAS 基线；本批操作应用后这些目标会自然改变。
+    current.targets.clear();
+    frozen.targets.clear();
+    same_proposal_context(&current, &frozen)
+}
+
+#[cfg(test)]
 async fn execute_batch(
     coordinator: &Coordinator,
     persistence: Arc<dyn BatchPersistence>,
-    mut request: PreparedGeneration,
+    request: PreparedGeneration,
 ) -> Result<crate::turn::PrivateResult, Fault> {
-    // Acquiring here makes active game rounds win the shared app-wide gate.
+    execute_batch_checked(coordinator, persistence, request, || Ok(())).await
+}
+
+async fn execute_batch_checked(
+    coordinator: &Coordinator,
+    persistence: Arc<dyn BatchPersistence>,
+    mut request: PreparedGeneration,
+    validate_selection: impl FnOnce() -> Result<(), Fault>,
+) -> Result<crate::turn::PrivateResult, Fault> {
+    // 先取得共享 lease，确保正在进行的游戏回合优先使用应用级门禁。
     let lease = coordinator.acquire()?;
+    validate_selection()?;
     let budget = Arc::new(DispatchBudget {
         inner: request.budget.clone(),
         persistence,
@@ -496,6 +893,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn capacity_rejection_stays_deferred_and_recovery_errors_do_not_finish_the_batch() {
+        let candidate_ids = vec!["candidate_1".into()];
+        let results = operation_rejection_results(&candidate_ids, Reason::CapacityBlocked).unwrap();
+        assert_eq!(results[0].outcome, CandidateOutcome::Deferred);
+        assert_eq!(
+            results[0].reason_code.as_deref(),
+            Some("policy.capacity_blocked")
+        );
+
+        let results = operation_rejection_results(&candidate_ids, Reason::StaleVersion).unwrap();
+        assert_eq!(results[0].outcome, CandidateOutcome::Rejected);
+        assert_eq!(
+            results[0].reason_code.as_deref(),
+            Some("memory.operation.rejected")
+        );
+        assert!(matches!(
+            operation_rejection_results(&candidate_ids, Reason::RecoveryRequired),
+            Err(Error::Rejected(Reason::RecoveryRequired))
+        ));
+    }
+
+    #[test]
+    fn ready_operation_recovery_applies_without_rewriting_versions() {
+        let mut writes = 0;
+        let mut applies = 0;
+        let state = finish_prepared_operation(OperationState::Ready, |state| match state {
+            OperationState::Prepared => {
+                writes += 1;
+                Ok(OperationState::Ready)
+            }
+            OperationState::Ready => {
+                applies += 1;
+                Ok(OperationState::Applied)
+            }
+            _ => Ok(state),
+        })
+        .unwrap();
+
+        assert_eq!(state, OperationState::Applied);
+        assert_eq!(writes, 0);
+        assert_eq!(applies, 1);
+    }
+
     #[tokio::test]
     async fn dispatch_uses_one_billed_private_attempt_and_persists_response() {
         let events = Arc::new(crate::test_support::Events::default());
@@ -534,6 +975,41 @@ mod tests {
         assert_eq!(receipt.0, result.turn_id);
         assert_eq!(receipt.2, br#"{"version":1,"candidates":[]}"#);
         coordinator.check_available().unwrap();
+    }
+
+    #[tokio::test]
+    async fn selection_revalidation_runs_before_budget_reservation_or_transport() {
+        let events = Arc::new(crate::test_support::Events::default());
+        let coordinator = Coordinator::new(events, 16).unwrap();
+        let persistence = Arc::new(MemoryPort::default());
+        let budget = Arc::new(RecordingBudget {
+            calls: persistence.calls.clone(),
+            reserves: AtomicUsize::new(0),
+        });
+        let (mut request, sends) = generation(
+            vec![
+                Ok(aoidos_llm::provider::ProviderDelta::Text(
+                    r#"{"version":1,"candidates":[]}"#.into(),
+                )),
+                Ok(aoidos_llm::provider::ProviderDelta::Finish(
+                    aoidos_llm::provider::ProviderFinish::Stop,
+                )),
+            ],
+            false,
+        );
+        request.budget = budget.clone();
+
+        let error = execute_batch_checked(&coordinator, persistence.clone(), request, || {
+            Err(Fault::new("app.bad-request", "活动选择已变化"))
+        })
+        .await
+        .err()
+        .unwrap();
+
+        assert_eq!(error.code, "app.bad-request");
+        assert_eq!(budget.reserves.load(Ordering::SeqCst), 0);
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+        assert!(persistence.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

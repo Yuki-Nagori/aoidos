@@ -17,7 +17,7 @@ use crate::{
     },
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -230,6 +230,58 @@ impl Service {
                 .characters
                 .retain(|character| character.id != context.actor_id);
             Ok(snapshot)
+        })
+        .await
+    }
+    /// 从当前已应用世界求值并领取至多一条场景提示；调用方不提交规则匹配或文案。
+    /// # Errors
+    /// 会话待恢复、规则或证据过期、提示领取存储失败时失败关闭。
+    pub async fn claim_scene_hint(
+        &self,
+        id: &str,
+    ) -> Result<Option<super::domain::SceneHint>, Fault> {
+        let context = self.get(id)?.context.clone();
+        crate::blocking::run(move || {
+            // 先在会话锁外恢复事件；下面的领取事务会复用已持有的会话锁。
+            context.completed.drain_cycle_events()?;
+            let session = lock(&context.session);
+            let domain = lock(&context.domain);
+            // 场景与世界必须从同一锁定边界读取，不能复用等待锁期间的旧快照。
+            let phase = context.publisher.snapshot().state;
+            if phase.needs_recovery {
+                return Err(super::invalid_phase());
+            }
+            let Some(scene_id) = phase.scene.map(|scene| scene.scene_id) else {
+                return Ok(None);
+            };
+            let world = domain.confirmed(&session)?;
+            if world.history_revision() != phase.history_revision {
+                return Err(super::invalid_phase());
+            }
+            let scene = domain.catalog().scene(&scene_id)?;
+            let mut evaluated = BTreeSet::new();
+            let matches = scene
+                .rules
+                .hint_rules
+                .iter()
+                .filter(|hint| evaluated.insert(hint.when_rule_id.as_str()))
+                .map(|hint| {
+                    domain.catalog().evaluate_scene_rule(
+                        &scene_id,
+                        &hint.when_rule_id,
+                        &world,
+                        world.world_revision(),
+                        world.history_revision(),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            context.completed.claim_scene_hint(
+                &session,
+                &scene_id,
+                world.history_revision(),
+                world.world_revision(),
+                &matches,
+            )
         })
         .await
     }

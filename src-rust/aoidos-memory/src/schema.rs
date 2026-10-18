@@ -396,6 +396,32 @@ INSERT INTO memory_script_cycle_generations(script_id,cycle_gen)
  ON CONFLICT(script_id) DO UPDATE SET cycle_gen=MAX(cycle_gen,excluded.cycle_gen);
 "#;
 
+/// 稳定素材扫描按 run / record / ordinal 排序，并可由游标有界续读。
+pub const MATERIAL_CURSOR_MIGRATION: &str =
+    "CREATE INDEX memory_materials_cursor ON memory_materials(run_id,record_seq,unit_ordinal);
+     CREATE INDEX memory_spans_material_batch ON memory_spans(material_id,batch_id)";
+
+/// 效果回退游标同时绑定记录历史与主体获知证据修订。
+pub const EFFECT_EVIDENCE_PROGRESS_MIGRATION: &str = r#"
+CREATE TABLE memory_effect_evidence_progress (
+ entry_id TEXT PRIMARY KEY REFERENCES memory_entries(entry_id),
+ confirmed_history_revision INTEGER,
+ confirmed_evidence_revision INTEGER,
+ recovery_history_revision INTEGER,
+ recovery_evidence_revision INTEGER,
+ recovery_after INTEGER NOT NULL DEFAULT 0
+)
+"#;
+
+/// 素材逻辑位置是按来源历史推导的缓存；历史修订变化时重建，不以处理时钟代替发生时钟。
+pub const MATERIAL_POSITION_MIGRATION: &str = r#"
+CREATE TABLE memory_material_positions (
+ material_id TEXT PRIMARY KEY REFERENCES memory_materials(material_id),
+ history_revision INTEGER NOT NULL CHECK(history_revision BETWEEN 0 AND 9007199254740991),
+ logical_position INTEGER NOT NULL CHECK(logical_position BETWEEN 0 AND 9007199254740991)
+)
+"#;
+
 /// 核验迁移后的领域表 / 索引定义，不把同名但缺约束的旧库当合法 manifest。
 /// # Errors
 /// 缺少或改变已登记结构为 corrupt，SQL 读取错误保持存储类别。
@@ -412,6 +438,9 @@ pub fn verify(conn: &rusqlite::Connection) -> aoidos_store::error::Result<()> {
         CYCLE_EVENT_MIGRATION,
         CONFIG_MIGRATION,
         CYCLE_GENERATION_MIGRATION,
+        MATERIAL_CURSOR_MIGRATION,
+        EFFECT_EVIDENCE_PROGRESS_MIGRATION,
+        MATERIAL_POSITION_MIGRATION,
     ] {
         for statement in migration
             .split(';')
@@ -480,6 +509,10 @@ mod tests {
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_GENERATION_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_GENERATION_BACKFILL).unwrap();
+        conn.execute_batch(MATERIAL_CURSOR_MIGRATION).unwrap();
+        conn.execute_batch(EFFECT_EVIDENCE_PROGRESS_MIGRATION)
+            .unwrap();
+        conn.execute_batch(MATERIAL_POSITION_MIGRATION).unwrap();
         conn
     }
 
@@ -501,6 +534,10 @@ mod tests {
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_GENERATION_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_GENERATION_BACKFILL).unwrap();
+        conn.execute_batch(MATERIAL_CURSOR_MIGRATION).unwrap();
+        conn.execute_batch(EFFECT_EVIDENCE_PROGRESS_MIGRATION)
+            .unwrap();
+        conn.execute_batch(MATERIAL_POSITION_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch("DROP INDEX memory_entries_page")
             .unwrap();
@@ -542,6 +579,15 @@ mod tests {
             .execute_batch(CYCLE_GENERATION_BACKFILL)
             .unwrap();
         missing_receipts
+            .execute_batch(MATERIAL_CURSOR_MIGRATION)
+            .unwrap();
+        missing_receipts
+            .execute_batch(EFFECT_EVIDENCE_PROGRESS_MIGRATION)
+            .unwrap();
+        missing_receipts
+            .execute_batch(MATERIAL_POSITION_MIGRATION)
+            .unwrap();
+        missing_receipts
             .execute_batch("DROP TABLE memory_batch_receipts")
             .unwrap();
         assert!(verify(&missing_receipts).is_err());
@@ -572,6 +618,15 @@ mod tests {
             .unwrap();
         missing_questions
             .execute_batch(CYCLE_GENERATION_BACKFILL)
+            .unwrap();
+        missing_questions
+            .execute_batch(MATERIAL_CURSOR_MIGRATION)
+            .unwrap();
+        missing_questions
+            .execute_batch(EFFECT_EVIDENCE_PROGRESS_MIGRATION)
+            .unwrap();
+        missing_questions
+            .execute_batch(MATERIAL_POSITION_MIGRATION)
             .unwrap();
         missing_questions
             .execute_batch("DROP TABLE memory_questions")
@@ -614,6 +669,15 @@ mod tests {
             .execute_batch(CYCLE_GENERATION_BACKFILL)
             .unwrap();
         missing_candidate_links
+            .execute_batch(MATERIAL_CURSOR_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(EFFECT_EVIDENCE_PROGRESS_MIGRATION)
+            .unwrap();
+        missing_candidate_links
+            .execute_batch(MATERIAL_POSITION_MIGRATION)
+            .unwrap();
+        missing_candidate_links
             .execute_batch("DROP TABLE memory_batch_candidate_operations")
             .unwrap();
         assert!(verify(&missing_candidate_links).is_err());
@@ -654,6 +718,10 @@ mod tests {
         conn.execute_batch(CONFIG_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_GENERATION_MIGRATION).unwrap();
         conn.execute_batch(CYCLE_GENERATION_BACKFILL).unwrap();
+        conn.execute_batch(MATERIAL_CURSOR_MIGRATION).unwrap();
+        conn.execute_batch(EFFECT_EVIDENCE_PROGRESS_MIGRATION)
+            .unwrap();
+        conn.execute_batch(MATERIAL_POSITION_MIGRATION).unwrap();
         verify(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=NULL WHERE name='memory_runs'",
