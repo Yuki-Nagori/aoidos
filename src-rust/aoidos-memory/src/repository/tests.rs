@@ -265,14 +265,18 @@ fn entries_for_subjects_returns_active_and_archived_targets_and_checks_revision(
 
 #[test]
 fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
-    let f = Fixture::new();
-    let mut insert = f
-        .conn
-        .prepare("INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')")
-        .unwrap();
-    for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
-        insert.execute(params![new_id(), f.run.run_id]).unwrap();
+    let mut f = Fixture::new_in_memory();
+    let run_id = f.run.run_id.clone();
+    let tx = f.conn.transaction().unwrap();
+    {
+        let mut insert = tx
+            .prepare("INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')")
+            .unwrap();
+        for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
+            insert.execute(params![new_id(), run_id]).unwrap();
+        }
     }
+    tx.commit().unwrap();
 
     rejected(
         f.repo.entries_for_subjects(
@@ -289,24 +293,27 @@ fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
 
 #[test]
 fn entries_for_subjects_budget_ignores_history_from_other_runs() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let version = f.version();
     let entry_id = version.entry_id.clone();
     f.commit(&f.plan(version));
     let subject_json = canonical(&Subject::PlayerPreference).unwrap();
     {
-        let mut insert = f
-            .conn
-            .prepare(
-                "INSERT INTO memory_versions(version_id,entry_id,body_hash,body_length,source_set_hash,evidence_set_hash,policy_hash,subject_json,change_kind) \
-                 VALUES(?1,?2,zeroblob(32),1,zeroblob(32),zeroblob(32),zeroblob(32),?3,'new')",
-            )
-            .unwrap();
-        for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
-            insert
-                .execute(params![new_id(), entry_id, subject_json])
+        let tx = f.conn.transaction().unwrap();
+        {
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO memory_versions(version_id,entry_id,body_hash,body_length,source_set_hash,evidence_set_hash,policy_hash,subject_json,change_kind) \
+                     VALUES(?1,?2,zeroblob(32),1,zeroblob(32),zeroblob(32),zeroblob(32),?3,'new')",
+                )
                 .unwrap();
+            for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
+                insert
+                    .execute(params![new_id(), entry_id, subject_json])
+                    .unwrap();
+            }
         }
+        tx.commit().unwrap();
     }
 
     f.port.view.session_id = new_id();

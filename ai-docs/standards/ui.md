@@ -1,6 +1,13 @@
 # UI 风格规范
 
-更新日期：2026-10-11。定义 Aoidos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Aoidos 品牌调整）。状态：**基线已接线**——task 004 已把 app.css 按本规范落地（token 真源 + Tailwind v4 映射 + 多主题 + 星云背景）；025 的界面基础实现已接通，真实 WebView、辅助技术、DPI 与三平台验收仍待完成，偏差回写。
+更新日期：2026-10-19。定义 Aoidos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Aoidos 品牌调整）。状态：**基线已接线**——task 004 已把 app.css 按本规范落地（token 真源 + Tailwind v4 映射 + 多主题 + 星云背景）；025 的界面基础实现已接通，真实 WebView、辅助技术、DPI 与三平台验收仍待完成，偏差回写。整体界面视觉目标以用户维护的 `aoidos-art` 设计仓库为准，移植任务见 [052](../task/052-aoidos-art-vue-port.md)。
+
+## 设计稿移植
+
+- `aoidos-art` 的 `screens/`、`components.html` 与 `assets/app.css` 是目标视觉和页面状态的参考；静态页面用于设计校对，不直接作为产品运行时，不以 iframe 嵌入，也不复制其评审工具栏、预览脚本或 `localStorage` 状态。
+- 移植为语义化 Vue 组件，交互通过 Aoidos 现有 composables / API / i18n / 主题能力实现。设计稿中不存在后端能力的页面只能呈现已定义的只读、禁用或说明状态；不得伪造成功结果或本地假数据冒充产品状态。
+- `aoidos-art/assets/tokens.css` 仅作视觉对照。正式 token 仍以 Aoidos 主题架构与生成结果为准；`--x-*` 预览派生值只有经正式主题设计登记后才能进入产品。文案使用 Aoidos `locales/` 与剧本目录本地化资源，不复制设计仓库的生成字典。
+- 以设计稿覆盖的主题、语言、窗口尺寸、界面状态逐页验收；页面状态不等于产品路由，按产品状态机决定何时呈现。实现时保留现有业务行为和可访问性要求，先确认真实 WebView 渲染，再记录必要视觉偏差。
 
 ## 设计基调
 

@@ -779,35 +779,52 @@ fn failed_completion_markers_leave_reconciliation_unconfirmed() {
 
 #[test]
 fn effect_reconciliation_stops_at_its_fixed_row_page() {
-    let mut f = Fixture::new();
-    for seq in 1..=256 {
-        for _ in 0..5 {
-            let source = source_at(&f, seq);
-            f.repo
-                .complete_round(&mut f.conn, &f.port, &f.run.run_id, &new_id(), &source)
+    let mut run_policy = policy();
+    // 本例验证固定分页边界；缩短重复窗口，避免为无关的算法间隔构造额外时钟行。
+    run_policy.repeat_window_rounds = 1;
+    let mut f = Fixture::new_in_memory_with_policy(run_policy);
+    // 每个来源只需一条完成回执；用一笔事务准备 257 个分页边界样本。
+    let run_id = f.run.run_id.clone();
+    let mut source = f.source();
+    let tx = f.conn.transaction().unwrap();
+    {
+        let mut insert = tx
+            .prepare(
+                "INSERT INTO memory_clock_receipts(run_id,round_id,source_json,logical_position) VALUES(?1,?2,?3,?4)",
+            )
+            .unwrap();
+        for position in 1_u64..=257 {
+            source.record_seq = position;
+            insert
+                .execute(params![
+                    run_id,
+                    new_id(),
+                    canonical(&source).unwrap(),
+                    position
+                ])
                 .unwrap();
         }
     }
+    tx.execute(
+        "UPDATE memory_runs SET logical_clock=257 WHERE run_id=?1",
+        [&run_id],
+    )
+    .unwrap();
+    tx.commit().unwrap();
     let version = f.version();
     f.commit(&f.plan(version.clone()));
     let current_version = version.version_id.clone();
-    f.conn
-        .execute(
-            "UPDATE memory_runs SET logical_clock=1280 WHERE run_id=?1",
-            [&f.run.run_id],
-        )
-        .unwrap();
-    for (state_revision, start) in (1_u64..).zip([1_u64, 129, 257]) {
-        let end = (start + 127).min(257);
+    for (state_revision, (start, end)) in (1_u64..).zip([(1_u64, 128_u64), (129, 256), (257, 257)])
+    {
         let effects = (start..=end)
-            .map(|seq| {
+            .map(|position| {
                 let mut source = f.source();
-                source.record_seq = seq;
+                source.record_seq = position;
                 Effect {
                     effect_id: new_id(),
                     kind: EffectKind::Gain,
                     source,
-                    logical_position: (seq - 1) * 5,
+                    logical_position: position - 1,
                     gain: 1,
                     evidence: vec![],
                 }
@@ -819,15 +836,13 @@ fn effect_reconciliation_stops_at_its_fixed_row_page() {
         plan.targets[0].expected.state_revision = state_revision;
         plan.targets[0].next = None;
         plan.targets[0].effects = effects;
-        plan.expected_logical_clock = 1_280;
+        plan.expected_logical_clock = 257;
         f.commit(&plan);
     }
 
     let mut boundary = f.port.view.clone();
     boundary.history_revision = 1;
-    f.repo
-        .reconcile_clock(&mut f.conn, &f.port, &f.run, &boundary, &mut budget(1))
-        .unwrap();
+    let mut first_page_budget = budget(257);
     assert!(
         !f.repo
             .reconcile_effects(
@@ -836,10 +851,11 @@ fn effect_reconciliation_stops_at_its_fixed_row_page() {
                 &f.run,
                 &boundary,
                 &version.entry_id,
-                &mut budget(256),
+                &mut first_page_budget,
             )
             .unwrap()
     );
+    assert_eq!(first_page_budget.versions, 1);
     assert!(
         f.repo
             .reconcile_effects(
