@@ -13,7 +13,7 @@ use aoidos_memory::{
     model::ProposalContext,
     repository::BatchSnapshot,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// 序列化输入和最终 prompt 共用同一字节上限。
 pub const MAX_MEMORY_PROMPT_BYTES: usize = 64 * 1024;
@@ -28,15 +28,19 @@ pub struct MemoryPrompt {
 
 /// 从不可变批次快照构造提案 prompt；来源文本按数据转义，不允许伪造外层标记。
 ///
-/// 输入中的 `snapshot.input` 必须是引擎在冻结时生成的完整白名单 / 旧记忆快照；
-/// 本函数不查询仓储、不扩大授权，也不估算模型 token 数。
+/// `snapshot.input.proposalContext` 必须是引擎在冻结时生成的完整白名单；
+/// 旧记忆与其他上下文也必须在同一冻结输入中。本函数不查询仓储、不扩大授权，
+/// 也不估算模型 token 数。
 /// # Errors
-/// 批次结构无效、序列化失败或转义后的 prompt 超过 64 KiB 时拒绝构造。
-pub fn build_memory_prompt(
-    snapshot: &BatchSnapshot,
-    context: &ProposalContext,
-    mode: RequestMode,
-) -> Result<MemoryPrompt> {
+/// 冻结 context 缺失 / 无效、批次结构无效、序列化失败或 prompt 超过 64 KiB 时拒绝构造。
+pub fn build_memory_prompt(snapshot: &BatchSnapshot, mode: RequestMode) -> Result<MemoryPrompt> {
+    let context_value = snapshot
+        .input
+        .get("proposalContext")
+        .cloned()
+        .ok_or(Error::Rejected(Reason::InvalidSchema))?;
+    let context: ProposalContext = aoidos_json::from_value(context_value)
+        .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;
     let source_ids = snapshot
         .spans
         .iter()
@@ -101,12 +105,6 @@ pub fn build_memory_prompt(
             })
         })
         .collect::<Vec<_>>();
-    let mut context_snapshot = BTreeMap::new();
-    context_snapshot.insert("snapshot".to_owned(), snapshot.input.clone());
-    context_snapshot.insert(
-        "proposalContext".to_owned(),
-        aoidos_json::to_value(context).map_err(|_| Error::Rejected(Reason::InvalidSchema))?,
-    );
     let frozen_input = serde_json::json!({
         "version": snapshot.version,
         "batchId": snapshot.batch_id,
@@ -116,7 +114,7 @@ pub fn build_memory_prompt(
         "evidenceRevision": snapshot.evidence_revision,
         "policyHash": snapshot.policy_hash,
         "sources": sources,
-        "context": context_snapshot,
+        "context": snapshot.input,
     });
     let serialized = aoidos_json::canonical_string(&frozen_input)
         .map_err(|_| Error::Rejected(Reason::InvalidSchema))?;

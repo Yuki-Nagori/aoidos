@@ -58,7 +58,7 @@
 
 2026-10-18：按确认的素材范围强化 `freeze_batch`：在 SQLite `IMMEDIATE` 事务内核验素材仍为 eligible、来源和正文仍有效、未处理且未被其他非 rejected 批次占用；单批次重复素材也会被拒绝。queued / dispatched / received / completed / unknown 批次继续占用来源，rejected 批次释放占用；同 batchId、同快照重放仍返回原摘要。新增占用、显式拒绝后重试、已处理来源拒绝、unknown 保留占用和原批次重放测试；`cargo test -p aoidos-memory` 267 项通过。
 
-2026-10-18：接入 Engine 分页素材扫描与 Tauri / TypeScript IPC。每页最多读取 256 条 / 4 MiB，有固定记录上界和 historyRevision 游标；超字节预算时停在上一条完整记录并返回续页游标，长正文按 2048 字节 UTF-8 边界稳定切片并复用来源 ordinal，正文不通过 IPC 暴露。SourcePort 对同页来源文本与 hash 做最多 256 条 / 4 MiB 缓存，避免每个片段重复读盘和解析。查询面板新增“收集记忆素材”，每次最多连续处理 16 页，明确说明本地扫描不会发送模型请求；可续扫余下历史。随后加入纯 Rust `MemoryProposal` prompt 构造器：Completion / Chat 均有专用输入形态，冻结 proposal 白名单随上下文传入，历史 / 玩家文本按统一语法转义，输出绑定专用 close 护栏并限制完整 prompt 为 64 KiB；测试覆盖转义、双输入形态、结构和字节上限。独立评审发现的输出 schema 说明不足已补齐。当前仍待可信上下文组装、原子冻结输入、显式发送动作及私有费用请求接线；本地收集按钮仍不调用模型。
+2026-10-18：接入 Engine 分页素材扫描与 Tauri / TypeScript IPC。每页最多读取 256 条 / 4 MiB，有固定记录上界和 historyRevision 游标；超字节预算时停在上一条完整记录并返回续页游标，长正文按 2048 字节 UTF-8 边界稳定切片并复用来源 ordinal，正文不通过 IPC 暴露。SourcePort 对同页来源文本与 hash 做最多 256 条 / 4 MiB 缓存，避免每个片段重复读盘和解析。查询面板新增“收集记忆素材”，每次最多连续处理 16 页，明确说明本地扫描不会发送模型请求；可续扫余下历史。随后加入纯 Rust `MemoryProposal` prompt 构造器：Completion / Chat 均有专用输入形态，`ProposalContext` 从批次冻结输入严格恢复，不再单独传入，防止批次与授权上下文错配；历史 / 玩家文本按统一语法转义，输出绑定专用 close 护栏并限制完整 prompt 为 64 KiB。测试覆盖转义、双输入形态、冻结 context、白名单边界和字节上限。独立评审发现的输出 schema 说明不足已补齐。当前仍待可信上下文组装、原子冻结输入、显式发送动作及私有费用请求接线；本地收集按钮仍不调用模型。
 
 同日增加仓储内部的 `collectible_materials_page`：按 `recordSeq / ordinal` 稳定分页，每次最多扫描 128 条，只返回当前来源仍有效、未处理且未被非 rejected 批次占用的素材；复合键游标绑定 run、historyRevision 与首次读取的上界，过滤后的空页仍可续读，后续新素材不进入本轮遍历。此游标只固定遍历范围，不承诺跨页 SQLite 快照；每页按读取时资格筛选，最终冻结在事务中重新核验。素材排序与批次占用查询使用对应索引。此 API 为后续锁内组装和冻结提供有界读取，不暴露正文或 UI 命令；分页和占用行为测试通过。可信提案上下文与完整冻结仍待接入。
 
