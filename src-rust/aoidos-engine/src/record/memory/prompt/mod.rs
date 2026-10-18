@@ -105,6 +105,7 @@ pub fn build_memory_prompt(snapshot: &BatchSnapshot, mode: RequestMode) -> Resul
                 || !is_canonical_uuid(&target.entry_id)
                 || !is_canonical_uuid(&target.version_id)
                 || target.state_revision > 9_007_199_254_740_991
+                || target.state == aoidos_memory::model::EntryState::Unavailable
                 || target.summary.trim().is_empty()
                 || target.summary.len() > 4096
                 || !context.subjects.contains(&match &target.subject {
@@ -167,6 +168,7 @@ pub fn build_memory_prompt(snapshot: &BatchSnapshot, mode: RequestMode) -> Resul
         attitude 只能是 unexpressed、believed、\
         doubtful、denied。targetRef 结构为 {\"entryId\",\"expectedVersionId\",\
         \"expectedStateRevision\"}，每个值必须复制自输入。\n\
+        既有目标包含 active / archived 状态；archived 目标只能作为 repeat 候选，不能用 supplement 或 correction 直接改写。\n\
         每个候选只使用协议字段 candidateId、classification、sourceIds、subjectRef、entityIds、\
         evidenceIds、targetRef、dimension、summary、attitude、attitudeEvidenceIds、inferred、reason。\
         每项必填 candidateId、classification、sourceIds（至少一个）、subjectRef、reason。new 必须\

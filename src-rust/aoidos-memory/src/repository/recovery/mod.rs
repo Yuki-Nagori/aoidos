@@ -3,11 +3,12 @@
 use super::reconciliation::Budget;
 use super::*;
 
-/// 扫描游标绑定周目 / 历史修订与固定 rowid 上界；新记录不挤入旧分页。
+/// 扫描游标绑定周目、记录 / 证据修订与固定 rowid 上界；新记录不挤入旧分页。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanCursor {
     pub run_id: String,
     pub history_revision: u64,
+    pub evidence_revision: u64,
     pub through: u64,
     pub after: u64,
     pub through_operations: u64,
@@ -51,6 +52,7 @@ impl Repository {
         let mut scan = cursor.cloned().unwrap_or(ScanCursor {
             run_id: run_id.into(),
             history_revision: boundary.history_revision,
+            evidence_revision: boundary.evidence_revision,
             through,
             after: 0,
             through_operations,
@@ -58,6 +60,7 @@ impl Repository {
         });
         if scan.run_id != run_id
             || scan.history_revision != boundary.history_revision
+            || scan.evidence_revision != boundary.evidence_revision
             || scan.after > scan.through
             || scan.through > through
             || scan.after_operation > scan.through_operations

@@ -91,6 +91,8 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     aoidos_memory::schema::CYCLE_GENERATION_MIGRATION,
     aoidos_memory::schema::CYCLE_GENERATION_BACKFILL,
     aoidos_memory::schema::MATERIAL_CURSOR_MIGRATION,
+    aoidos_memory::schema::EFFECT_EVIDENCE_PROGRESS_MIGRATION,
+    aoidos_memory::schema::MATERIAL_POSITION_MIGRATION,
 ];
 
 pub struct Storage {

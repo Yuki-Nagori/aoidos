@@ -292,17 +292,9 @@ impl Version {
             {
                 let mut seen = BTreeSet::new();
                 for evidence in &self.evidence {
-                    if !valid_id(&evidence.evidence_id)
-                        || evidence.subject_id != *id
+                    if !valid_evidence(evidence, id)
                         || !self.sources.contains(&evidence.source)
                         || !seen.insert(&evidence.evidence_id)
-                        || !valid_name(&evidence.scope)
-                        || !valid_name(&evidence.rule_id)
-                        || evidence
-                            .informant_id
-                            .as_ref()
-                            .is_some_and(|id| !valid_name(id))
-                        || (evidence.kind == KnowledgeKind::Told && evidence.informant_id.is_none())
                     {
                         return Err(reject());
                     }
@@ -315,6 +307,20 @@ impl Version {
         }
         Ok(())
     }
+}
+
+pub(crate) fn valid_evidence(evidence: &KnowledgeEvidence, subject_id: &str) -> bool {
+    valid_id(&evidence.evidence_id)
+        && valid_name(&evidence.subject_id)
+        && evidence.subject_id == subject_id
+        && valid_name(&evidence.scope)
+        && valid_name(&evidence.rule_id)
+        && evidence
+            .informant_id
+            .as_ref()
+            .is_none_or(|id| valid_name(id))
+        && (evidence.kind != KnowledgeKind::Told || evidence.informant_id.is_some())
+        && evidence.source.validate().is_ok()
 }
 /// 调用方持有记录锁；状态与来源验证不能来自模型声明或跨锁缓存。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,6 +413,9 @@ pub struct Effect {
     pub source: SourceRef,
     pub logical_position: u64,
     pub gain: u64,
+    /// 角色为何获知该记忆；随操作计划冻结并在恢复 / 读取时重新核验。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<KnowledgeEvidence>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

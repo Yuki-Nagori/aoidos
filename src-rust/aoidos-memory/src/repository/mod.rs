@@ -307,7 +307,7 @@ impl Repository {
         ids.iter().map(|id| self.entry(conn, run_id, id)).collect()
     }
 
-    /// 按当前提案主体读取有限的活动记忆目标；不读取无关主体或历史版本。
+    /// 按当前提案主体读取有限的活动与归档记忆目标；不读取无关主体或历史版本。
     /// # Errors
     /// 历史修订、主体集合或查询上限不合法时拒绝读取。
     pub fn entries_for_subjects(
@@ -347,8 +347,8 @@ impl Repository {
         let query = format!(
             "WITH bounded_entries AS MATERIALIZED (\
                  SELECT entry_id,current_version_id FROM memory_entries \
-                 WHERE run_id=?1 AND status='active' \
-                 ORDER BY entry_id LIMIT ?2\
+                 WHERE run_id=?1 AND status IN ('active','archived') \
+                 ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,entry_id LIMIT ?2\
              ), matched_entries AS MATERIALIZED (\
                  SELECT e.entry_id FROM bounded_entries e \
                  JOIN memory_versions v ON v.entry_id=e.entry_id \

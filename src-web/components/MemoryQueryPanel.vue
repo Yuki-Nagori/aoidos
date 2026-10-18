@@ -65,6 +65,7 @@ const candidateReasonLabels = computed<Record<string, string>>(() => ({
   "memory.candidate.shared_target": t("memoryQuery.reasons.sharedTarget"),
   "memory.candidate.duplicate_anchor": t("memoryQuery.reasons.duplicateAnchor"),
   "memory.operation.rejected": t("memoryQuery.reasons.operationRejected"),
+  "policy.capacity_blocked": t("memoryQuery.reasons.capacityBlocked"),
 }));
 const canPrepareBatch = computed(
   () =>

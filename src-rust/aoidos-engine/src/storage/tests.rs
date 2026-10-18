@@ -713,6 +713,231 @@ fn received_memory_candidate_is_applied_once_from_the_frozen_proposal() {
     let entries = storage.memory_entries(&run.run_id, None, 10).unwrap();
     assert_eq!(entries.entries.len(), 1);
 
+    let repeated_seq = session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "钟声仍让我安心。".into(),
+            mode: Some(crate::record::format::InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let uncertain_seq = session
+        .lock()
+        .unwrap()
+        .append(crate::record::format::Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "我记不清钟声来自哪里。".into(),
+            mode: Some(crate::record::format::InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let repeat_batch_id = new_memory_id();
+    let repeat_snapshot = storage
+        .with_memory_context(
+            &session_id,
+            &catalog,
+            |repository, connection, port, _, _| {
+                let source = port.reference(&run.run_id, repeated_seq)?;
+                let material_id = repository.register_material(connection, port, &source, 0)?;
+                let uncertain_source = port.reference(&run.run_id, uncertain_seq)?;
+                let uncertain_material_id =
+                    repository.register_material(connection, port, &uncertain_source, 0)?;
+                let boundary = port.boundary()?;
+                Ok(BatchSnapshot {
+                    logical_clock: repository.clock(connection, port, &run.run_id)?,
+                    version: 1,
+                    batch_id: repeat_batch_id.clone(),
+                    run_id: run.run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    spans: vec![
+                        Span {
+                            source_id: "s1".into(),
+                            material_id,
+                            source,
+                            text: "钟声仍让我安心。".into(),
+                            context: false,
+                            continuation: false,
+                        },
+                        Span {
+                            source_id: "s2".into(),
+                            material_id: uncertain_material_id,
+                            source: uncertain_source,
+                            text: "我记不清钟声来自哪里。".into(),
+                            context: false,
+                            continuation: false,
+                        },
+                    ],
+                    input: serde_json::json!({}),
+                })
+            },
+        )
+        .unwrap();
+    storage
+        .freeze_memory_batch(&catalog, repeat_snapshot)
+        .unwrap();
+    let repeat_frozen = storage
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            repository
+                .batch(connection, &repeat_batch_id)
+                .map(|(snapshot, _)| snapshot)
+        })
+        .unwrap();
+    let repeat_context: ProposalContext =
+        aoidos_json::from_value(repeat_frozen.input["proposalContext"].clone()).unwrap();
+    let target = repeat_context.targets.values().next().unwrap();
+    let repeat = aoidos_memory::model::Candidate {
+        candidate_id: "repeat-1".into(),
+        classification: aoidos_memory::model::Classification::Repeat,
+        source_ids: vec!["s1".into()],
+        subject_ref: aoidos_memory::model::SubjectRef::PlayerPreference,
+        entity_ids: vec![],
+        evidence_ids: vec![],
+        target_ref: Some(aoidos_memory::model::TargetRef {
+            entry_id: target.entry_id.clone(),
+            expected_version_id: target.version_id.clone(),
+            expected_state_revision: target.state_revision,
+        }),
+        dimension: None,
+        summary: None,
+        attitude: None,
+        attitude_evidence_ids: vec![],
+        inferred: None,
+        reason: "再次确认同一偏好".into(),
+    };
+    let uncertain = aoidos_memory::model::Candidate {
+        candidate_id: "uncertain-1".into(),
+        classification: aoidos_memory::model::Classification::Uncertain,
+        source_ids: vec!["s2".into()],
+        summary: Some("钟声来源尚不确定".into()),
+        target_ref: None,
+        reason: "无法确认是否为新信息".into(),
+        ..repeat.clone()
+    };
+    let repeat_proposal = aoidos_memory::model::Proposal {
+        version: 1,
+        candidates: vec![repeat, uncertain],
+        cycle_marks: vec![],
+    };
+    repeat_proposal.validate(&repeat_context).unwrap();
+    let response = aoidos_json::canonical_string(&repeat_proposal).unwrap();
+    let turn_id = new_memory_id();
+    let request_id = new_memory_id();
+    storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            repository.dispatch_batch(connection, port, &repeat_batch_id, &turn_id, &request_id)?;
+            repository.receive_batch(
+                connection,
+                &repeat_batch_id,
+                &turn_id,
+                &request_id,
+                response.as_bytes(),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &repeat_batch_id,
+        )
+        .unwrap()
+    );
+    assert!(
+        !crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &repeat_batch_id,
+        )
+        .unwrap()
+    );
+    // 模拟候选操作已提交、批次完成回执尚未提交时崩溃后的状态。
+    storage
+        .with_memory(&session_id, &catalog, |_, connection, _| {
+            connection
+                .execute(
+                    "UPDATE memory_batch_receipts SET completion_json=NULL,completion_hash=NULL WHERE batch_id=?1",
+                    [&repeat_batch_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE memory_batches SET status='received' WHERE batch_id=?1",
+                    [&repeat_batch_id],
+                )
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &repeat_batch_id,
+        )
+        .unwrap()
+    );
+    let completion = storage
+        .memory_batch_status(&run.run_id, &repeat_batch_id)
+        .unwrap();
+    let outcomes = completion.completion.as_ref().unwrap().outcomes.clone();
+    assert_eq!(outcomes.len(), 2);
+    assert_eq!(
+        outcomes[0].outcome,
+        aoidos_memory::repository::CandidateOutcome::Applied
+    );
+    assert_eq!(outcomes[1].candidate_id, "uncertain-1");
+    assert_eq!(
+        outcomes[1].outcome,
+        aoidos_memory::repository::CandidateOutcome::Deferred
+    );
+    // 延期结果可在本地成功绑定操作；再次恢复时必须读取已有计划而非重算 Repeat。
+    let mut deferred_completion = completion.completion.unwrap();
+    deferred_completion.outcomes[0].outcome = aoidos_memory::repository::CandidateOutcome::Deferred;
+    deferred_completion.outcomes[0].reason_code = Some("policy.capacity_blocked".into());
+    let bytes = aoidos_json::canonical_string(&deferred_completion).unwrap();
+    let digest = aoidos_memory::model::hash(bytes.as_bytes());
+    storage
+        .with_memory(&session_id, &catalog, |_, connection, _| {
+            connection
+                .execute(
+                    "UPDATE memory_batch_receipts SET completion_json=?1,completion_hash=?2 WHERE batch_id=?3",
+                    rusqlite::params![bytes.as_bytes(), digest.as_slice(), repeat_batch_id],
+                )
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        !crate::record::memory::processing::complete_received_batch(
+            &storage,
+            &session_id,
+            &catalog,
+            &repeat_batch_id,
+        )
+        .unwrap()
+    );
+    let applied_effects = storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            repository.effects(connection, port, &run.run_id, &target.entry_id, 0, 32)
+        })
+        .unwrap();
+    assert_eq!(applied_effects.len(), 1);
+    assert_eq!(
+        applied_effects[0].1.kind,
+        aoidos_memory::model::EffectKind::Gain
+    );
+    assert_eq!(applied_effects[0].1.gain, run.policy.reinforcement_gain);
+    assert_eq!(applied_effects[0].1.logical_position, 0);
+
     storage.close().unwrap();
     drop(storage);
     std::fs::remove_dir_all(root).unwrap();

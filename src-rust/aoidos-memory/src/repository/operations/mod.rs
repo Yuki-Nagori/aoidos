@@ -1,6 +1,10 @@
 //! 计划登记、不可变正文准备和同事务 CAS；回执丢失只核验原计划，不另造身份。
 
 use super::*;
+use crate::algorithm::{
+    AcceptedReinforcement, ReinforcementKind, effect_source_id, reinforcement_increment,
+    revival_allowed,
+};
 impl Repository {
     /// # Errors
     /// 身份冲突为损坏；来源、策略或任一目标版本过期时拒绝整个依赖组。
@@ -140,7 +144,18 @@ impl Repository {
             let mut source_effects = BTreeSet::new();
             for effect in &target.effects {
                 effect.source.validate()?;
+                let evidence_ids = effect
+                    .evidence
+                    .iter()
+                    .map(|evidence| evidence.evidence_id.as_str())
+                    .collect::<BTreeSet<_>>();
                 if !valid_id(&effect.effect_id)
+                    || effect.evidence.len() > 128
+                    || evidence_ids.len() != effect.evidence.len()
+                    || effect
+                        .evidence
+                        .iter()
+                        .any(|evidence| !valid_evidence(evidence, &evidence.subject_id))
                     || !effects.insert(&effect.effect_id)
                     || effect.logical_position > MAX_INTEGER
                     || effect.gain > 1_000_000
@@ -183,6 +198,7 @@ impl Repository {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
         self.validate_batch_candidates(conn, plan)?;
+        let mut active_delta = 0_i64;
         for target in &plan.targets {
             let mut subject = target.next.as_ref().map(|version| version.subject.clone());
             let current=conn.query_row("SELECT run_id,current_version_id,state_revision FROM memory_entries WHERE entry_id=?1",[&target.entry_id],read_expected).optional().map_err(sql)?;
@@ -195,6 +211,13 @@ impl Repository {
                     && target.expected.state_revision == 0 => {}
                 _ => return Err(Error::Rejected(Reason::StaleVersion)),
             }
+            let previous_state = if target.expected.version_id.is_some() {
+                Some(self.entry(conn, &plan.run_id, &target.entry_id)?.state)
+            } else {
+                None
+            };
+            active_delta += i64::from(target.state == EntryState::Active)
+                - i64::from(previous_state == Some(EntryState::Active));
             if let Some(current_id) = &target.expected.version_id {
                 let confirmed: Option<u64> = conn
                     .query_row(
@@ -204,6 +227,18 @@ impl Repository {
                     )
                     .map_err(sql)?;
                 if confirmed != Some(view.history_revision) {
+                    return Err(Error::Rejected(Reason::RecoveryRequired));
+                }
+                let evidence_confirmed: Option<u64> = conn
+                    .query_row(
+                        "SELECT confirmed_evidence_revision FROM memory_effect_evidence_progress WHERE entry_id=?1 AND confirmed_history_revision=?2",
+                        params![target.entry_id, view.history_revision],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(sql)?
+                    .flatten();
+                if evidence_confirmed != Some(view.evidence_revision) {
                     return Err(Error::Rejected(Reason::RecoveryRequired));
                 }
                 let metadata = self.version_metadata(conn, &target.entry_id, current_id)?;
@@ -238,20 +273,67 @@ impl Repository {
             }
             if !target.effects.is_empty() {
                 let subject = subject.ok_or(Error::Corrupt)?;
-                if matches!(subject, Subject::Character { .. }) {
-                    // v1 效果尚未持久化主体获知证据，因此角色效果必须失败关闭。
-                    return Err(Error::Rejected(Reason::PolicyUnavailable));
+                for effect in &target.effects {
+                    match &subject {
+                        Subject::PlayerPreference if effect.evidence.is_empty() => {}
+                        Subject::Character { id } if !effect.evidence.is_empty() => {
+                            for evidence in &effect.evidence {
+                                if !valid_evidence(evidence, id)
+                                    || !port.valid_evidence_with_connection(evidence, conn)?
+                                {
+                                    return Err(Error::Rejected(Reason::InvalidSource));
+                                }
+                            }
+                        }
+                        _ => return Err(Error::Rejected(Reason::InvalidSource)),
+                    }
                 }
+                self.check_effect_policy(conn, port, &run, target, previous_state)?;
             }
             for effect in &target.effects {
+                if effect.logical_position > plan.expected_logical_clock {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
                 if !self.valid_sources(&run, std::slice::from_ref(&effect.source), port)? {
                     return Err(Error::Rejected(Reason::InvalidSource));
+                }
+                let source_position =
+                    self.source_logical_position(conn, port, &run, &view, &effect.source)?;
+                if source_position != effect.logical_position {
+                    return Err(Error::Rejected(Reason::InvalidSource));
+                }
+                if let Some(batch_id) = &plan.batch_id {
+                    let frozen_material: bool = conn
+                        .query_row(
+                            "SELECT EXISTS(
+                                SELECT 1 FROM memory_spans s
+                                JOIN memory_materials m USING(material_id)
+                                WHERE s.batch_id=?1 AND m.run_id=?2 AND m.source_json=?3
+                            )",
+                            params![batch_id, plan.run_id, canonical(&effect.source)?],
+                            |row| row.get(0),
+                        )
+                        .map_err(sql)?;
+                    if !frozen_material {
+                        return Err(Error::Rejected(Reason::InvalidSource));
+                    }
                 }
                 let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM memory_effects WHERE run_id=?1 AND entry_id=?2 AND session_id=?3 AND record_seq=?4 AND kind=?5)",params![plan.run_id,target.entry_id,effect.source.session_id,effect.source.record_seq,enum_text(effect.kind)?],read_bool).map_err(sql)?;
                 if exists {
                     return Err(Error::Rejected(Reason::InvalidSource));
                 }
             }
+        }
+        let active_entries: u64 = conn
+            .query_row(
+                "SELECT count(*) FROM memory_entries WHERE run_id=?1 AND status='active'",
+                [&plan.run_id],
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        let final_active = i128::from(active_entries) + i128::from(active_delta);
+        if final_active < 0 || final_active > i128::from(run.policy.active_capacity) {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
         }
         for material in &plan.processed_materials {
             let source = self.material_source(conn, &plan.run_id, material)?;
@@ -268,6 +350,99 @@ impl Repository {
             if processed {
                 return Err(Error::Rejected(Reason::StaleVersion));
             }
+        }
+        Ok(())
+    }
+
+    fn check_effect_policy(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run: &Run,
+        target: &Target,
+        previous_state: Option<EntryState>,
+    ) -> Result<()> {
+        let mut state = previous_state.unwrap_or(EntryState::Active);
+        let mut accepted = Vec::new();
+        let mut after = 0;
+        if target.expected.version_id.is_some() {
+            loop {
+                let page = self.effects(conn, port, &run.run_id, &target.entry_id, after, 32)?;
+                if page.is_empty() {
+                    break;
+                }
+                let page_len = page.len();
+                after = page.last().map(|(rowid, _)| *rowid).ok_or(Error::Corrupt)?;
+                accepted.extend(
+                    page.into_iter()
+                        .map(|(_, effect)| {
+                            Ok(AcceptedReinforcement {
+                                source_id: effect_source_id(&run.run_id, &effect.source)?,
+                                logical_position: effect.logical_position,
+                                kind: match effect.kind {
+                                    EffectKind::Gain => ReinforcementKind::Gain {
+                                        amount: effect.gain,
+                                    },
+                                    EffectKind::Revival => ReinforcementKind::Revival,
+                                },
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                );
+                if accepted.len() > crate::algorithm::MAX_ARCHIVE_CANDIDATES {
+                    return Err(Error::Rejected(Reason::CapacityBlocked));
+                }
+                if page_len < 32 {
+                    break;
+                }
+            }
+        }
+
+        for effect in &target.effects {
+            let source = effect_source_id(&run.run_id, &effect.source)?;
+            match state {
+                EntryState::Active => {
+                    let expected = reinforcement_increment(
+                        &run.policy,
+                        &source,
+                        effect.logical_position,
+                        &accepted,
+                    )?;
+                    if effect.kind != EffectKind::Gain || expected != Some(effect.gain) {
+                        return Err(Error::Rejected(Reason::InvalidSource));
+                    }
+                }
+                EntryState::Archived => {
+                    if effect.kind != EffectKind::Revival
+                        || effect.gain != 0
+                        || !revival_allowed(
+                            &run.policy,
+                            &source,
+                            effect.logical_position,
+                            &accepted,
+                        )?
+                    {
+                        return Err(Error::Rejected(Reason::InvalidSource));
+                    }
+                    state = EntryState::Active;
+                }
+                EntryState::Unavailable => {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+            }
+            accepted.push(AcceptedReinforcement {
+                source_id: source,
+                logical_position: effect.logical_position,
+                kind: match effect.kind {
+                    EffectKind::Gain => ReinforcementKind::Gain {
+                        amount: effect.gain,
+                    },
+                    EffectKind::Revival => ReinforcementKind::Revival,
+                },
+            });
+        }
+        if target.state != state {
+            return Err(Error::Rejected(Reason::InvalidSource));
         }
         Ok(())
     }
@@ -450,6 +625,11 @@ impl Repository {
             for effect in &target.effects {
                 tx.execute("INSERT INTO memory_effects(effect_id,operation_id,entry_id,run_id,session_id,record_seq,kind,logical_position,gain,source_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![effect.effect_id,plan.operation_id,target.entry_id,plan.run_id,effect.source.session_id,effect.source.record_seq,enum_text(effect.kind)?,effect.logical_position,effect.gain,canonical(&effect.source)?]).map_err(sql)?;
             }
+            tx.execute(
+                "INSERT INTO memory_effect_evidence_progress(entry_id,confirmed_history_revision,confirmed_evidence_revision) VALUES(?1,?2,?3) ON CONFLICT(entry_id) DO UPDATE SET confirmed_history_revision=excluded.confirmed_history_revision,confirmed_evidence_revision=excluded.confirmed_evidence_revision,recovery_history_revision=NULL,recovery_evidence_revision=NULL,recovery_after=0",
+                params![target.entry_id, plan.history_revision, plan.evidence_revision],
+            )
+            .map_err(sql)?;
         }
         for material in &plan.processed_materials {
             tx.execute(

@@ -1,5 +1,8 @@
 use super::*;
-use aoidos_memory::model::{Dimension, InputMode, Policy, SubjectRef, hash, new_id};
+use aoidos_memory::model::{
+    Attitude, Dimension, Effect, EffectKind, EntryState, InputMode, Policy, Subject, SubjectRef,
+    TargetSnapshot, hash, new_id,
+};
 use aoidos_memory::repository::Span;
 
 fn run(run_id: &str, session_id: &str) -> Run {
@@ -230,4 +233,232 @@ fn unresolved_candidate_defers_its_entire_shared_material_group() {
             .iter()
             .all(|result| result.outcome == CandidateOutcome::Deferred)
     );
+}
+
+#[test]
+fn repeat_sources_across_candidates_are_applied_in_global_material_order() {
+    let seed = batch(&new_id(), &new_id());
+    let run = run(&seed.run_id, &seed.spans[0].source.session_id);
+    let mut previous = build_plans(
+        &seed,
+        &Proposal {
+            version: 1,
+            candidates: vec![preference_candidate()],
+            cycle_marks: vec![],
+        },
+        &context(),
+        &run,
+        &BTreeMap::new(),
+    )
+    .unwrap()
+    .operations
+    .remove(0)
+    .plan
+    .targets
+    .remove(0)
+    .next
+    .unwrap();
+    previous.entry_id = new_id();
+    previous.version_id = new_id();
+
+    let mut snapshot = seed.clone();
+    snapshot.batch_id = new_id();
+    snapshot.logical_clock = 10;
+    snapshot.spans.clear();
+    for (source_id, record_seq) in [("s1", 1), ("s2", 2), ("s10", 10)] {
+        let mut span = seed.spans[0].clone();
+        span.source_id = source_id.into();
+        span.material_id = new_id();
+        span.source.record_seq = record_seq;
+        snapshot.spans.push(span);
+    }
+
+    let reference = aoidos_memory::model::TargetRef {
+        entry_id: previous.entry_id.clone(),
+        expected_version_id: previous.version_id.clone(),
+        expected_state_revision: 3,
+    };
+    let target_snapshot = TargetSnapshot {
+        entry_id: previous.entry_id.clone(),
+        version_id: previous.version_id.clone(),
+        state_revision: 3,
+        state: EntryState::Active,
+        subject: Subject::PlayerPreference,
+        dimension: Dimension::PlayerPreference,
+        summary: previous.summary.clone(),
+        attitude: Attitude::Believed,
+        inferred: false,
+    };
+    let mut proposal_context = context();
+    proposal_context.source_ids = ["s1".into(), "s2".into(), "s10".into()].into();
+    proposal_context
+        .targets
+        .insert(previous.entry_id.clone(), target_snapshot);
+
+    let mut first = preference_candidate();
+    first.candidate_id = "repeat_1".into();
+    first.classification = Classification::Repeat;
+    first.source_ids = vec!["s1".into(), "s10".into()];
+    first.target_ref = Some(reference.clone());
+    first.dimension = None;
+    first.summary = None;
+    first.attitude = None;
+    first.inferred = None;
+
+    let mut second = first.clone();
+    second.candidate_id = "repeat_2".into();
+    second.source_ids = vec!["s2".into()];
+
+    let material_positions = snapshot
+        .spans
+        .iter()
+        .map(|span| (span.material_id.clone(), span.source.record_seq))
+        .collect();
+    let plan_set = build_plans_with_history(
+        &snapshot,
+        &Proposal {
+            version: 1,
+            candidates: vec![first, second],
+            cycle_marks: vec![],
+        },
+        &proposal_context,
+        &run,
+        &BTreeMap::from([(previous.entry_id.clone(), previous)]),
+        &BTreeMap::new(),
+        &material_positions,
+    )
+    .unwrap();
+
+    assert_eq!(plan_set.operations.len(), 1);
+    let effects = &plan_set.operations[0].plan.targets[0].effects;
+    assert_eq!(
+        effects
+            .iter()
+            .map(|effect| effect.source.record_seq)
+            .collect::<Vec<_>>(),
+        [1, 2, 10]
+    );
+}
+
+#[test]
+fn repeat_candidate_creates_one_deterministic_effect_at_the_material_anchor() {
+    let snapshot = batch(&new_id(), &new_id());
+    let run = run(&snapshot.run_id, &snapshot.spans[0].source.session_id);
+    let entry_id = new_id();
+    let mut previous = build_plans(
+        &snapshot,
+        &Proposal {
+            version: 1,
+            candidates: vec![preference_candidate()],
+            cycle_marks: vec![],
+        },
+        &context(),
+        &run,
+        &BTreeMap::new(),
+    )
+    .unwrap()
+    .operations
+    .remove(0)
+    .plan
+    .targets
+    .remove(0)
+    .next
+    .unwrap();
+    previous.entry_id = entry_id.clone();
+    previous.version_id = new_id();
+    let target_snapshot = TargetSnapshot {
+        entry_id: entry_id.clone(),
+        version_id: previous.version_id.clone(),
+        state_revision: 3,
+        state: EntryState::Active,
+        subject: Subject::PlayerPreference,
+        dimension: Dimension::PlayerPreference,
+        summary: previous.summary.clone(),
+        attitude: Attitude::Believed,
+        inferred: false,
+    };
+    let mut context = context();
+    context.targets.insert(entry_id.clone(), target_snapshot);
+    let mut candidate = preference_candidate();
+    candidate.candidate_id = "repeat_1".into();
+    candidate.classification = Classification::Repeat;
+    candidate.target_ref = Some(aoidos_memory::model::TargetRef {
+        entry_id: entry_id.clone(),
+        expected_version_id: previous.version_id.clone(),
+        expected_state_revision: 3,
+    });
+    candidate.dimension = None;
+    candidate.summary = None;
+    candidate.attitude = None;
+    candidate.inferred = None;
+    let proposal = Proposal {
+        version: 1,
+        candidates: vec![candidate],
+        cycle_marks: vec![],
+    };
+    let positions = BTreeMap::from([(snapshot.spans[0].material_id.clone(), 7)]);
+    let previous_versions = BTreeMap::from([(entry_id.clone(), previous)]);
+
+    let first = build_plans_with_history(
+        &snapshot,
+        &proposal,
+        &context,
+        &run,
+        &previous_versions,
+        &BTreeMap::new(),
+        &positions,
+    )
+    .unwrap();
+    let second = build_plans_with_history(
+        &snapshot,
+        &proposal,
+        &context,
+        &run,
+        &previous_versions,
+        &BTreeMap::new(),
+        &positions,
+    )
+    .unwrap();
+    assert_eq!(first.operations[0].plan, second.operations[0].plan);
+    let target = &first.operations[0].plan.targets[0];
+    assert_eq!(target.entry_id, entry_id);
+    assert!(target.expected.version_id.is_some());
+    assert_eq!(target.expected.state_revision, 3);
+    assert!(target.next.is_none());
+    assert_eq!(target.state, EntryState::Active);
+    assert_eq!(target.effects.len(), 1);
+    assert_eq!(target.effects[0].logical_position, 7);
+    assert_eq!(target.effects[0].gain, run.policy.reinforcement_gain);
+    assert!(first.operations[0].no_op_candidates.is_empty());
+
+    let mut archived_snapshot = snapshot.clone();
+    archived_snapshot.spans[0].source.record_seq = 2;
+    archived_snapshot.spans[0].material_id = new_id();
+    let mut archived_context = context;
+    archived_context.targets.get_mut(&entry_id).unwrap().state = EntryState::Archived;
+    let prior_effect = Effect {
+        effect_id: new_id(),
+        kind: EffectKind::Gain,
+        source: snapshot.spans[0].source.clone(),
+        logical_position: 0,
+        gain: run.policy.reinforcement_gain,
+        evidence: vec![],
+    };
+    let effects = BTreeMap::from([(entry_id.clone(), vec![(1, prior_effect)])]);
+    let positions = BTreeMap::from([(archived_snapshot.spans[0].material_id.clone(), 0)]);
+    let revived = build_plans_with_history(
+        &archived_snapshot,
+        &proposal,
+        &archived_context,
+        &run,
+        &previous_versions,
+        &effects,
+        &positions,
+    )
+    .unwrap();
+    let revived_target = &revived.operations[0].plan.targets[0];
+    assert_eq!(revived_target.state, EntryState::Active);
+    assert_eq!(revived_target.effects.len(), 1);
+    assert_eq!(revived_target.effects[0].kind, EffectKind::Revival);
+    assert_eq!(revived_target.effects[0].gain, 0);
 }

@@ -187,7 +187,7 @@ fn page_cursor_is_omitted_when_the_last_page_is_full() {
 }
 
 #[test]
-fn entries_for_subjects_returns_only_active_current_targets_and_checks_revision() {
+fn entries_for_subjects_returns_active_and_archived_targets_and_checks_revision() {
     let mut f = Fixture::new();
     let character_id = "bellkeeper";
     let mut character = f.version();
@@ -233,11 +233,22 @@ fn entries_for_subjects_returns_only_active_current_targets_and_checks_revision(
             .iter()
             .map(|entry| entry.entry_id.as_str())
             .collect::<BTreeSet<_>>(),
-        [character_entry.as_str(), preference_entry.as_str()]
-            .into_iter()
-            .collect()
+        [
+            character_entry.as_str(),
+            preference_entry.as_str(),
+            archived_entry.as_str()
+        ]
+        .into_iter()
+        .collect()
     );
-    assert!(!entries.iter().any(|entry| entry.entry_id == archived_entry));
+    assert_eq!(
+        entries
+            .iter()
+            .find(|entry| entry.entry_id == archived_entry)
+            .unwrap()
+            .state,
+        EntryState::Archived
+    );
 
     rejected(
         f.repo

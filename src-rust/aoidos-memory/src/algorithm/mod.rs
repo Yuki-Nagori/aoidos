@@ -2,12 +2,53 @@
 
 use crate::{
     error::{Error, Reason, Result},
-    model::{Algorithm, MAX_CANDIDATES, MAX_INTEGER, Policy, reject, valid_id, valid_short_id},
+    model::{
+        Algorithm, Hash, MAX_CANDIDATES, MAX_INTEGER, Policy, SourceRef, hash, reject, valid_id,
+        valid_short_id,
+    },
 };
 
 const FIXED_SCALE: u64 = 1_000_000;
 pub const MAX_ARCHIVE_CANDIDATES: usize = 10_000;
 const MAX_OPERATION_TARGETS: usize = 16;
+
+/// 为同一周目中的会话记录生成稳定强化来源身份。
+pub fn effect_source_id(run_id: &str, source: &SourceRef) -> Result<String> {
+    if !valid_id(run_id) {
+        return Err(reject());
+    }
+    source.validate()?;
+    let digest: Hash = hash(
+        format!(
+            "aoidos-memory-v1\0effect-source\0{run_id}\0{}\0{}",
+            source.session_id, source.record_seq
+        )
+        .as_bytes(),
+    );
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
+}
 
 /// 已提交到当前有效路径的效果；这里只传入调用方已完成来源核验的记录。
 #[derive(Debug, Clone, PartialEq, Eq)]

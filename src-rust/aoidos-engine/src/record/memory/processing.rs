@@ -27,6 +27,40 @@ enum ReceiveFailure {
     Uncertain(Fault),
 }
 
+fn operation_rejection_results(
+    candidate_ids: &[String],
+    reason: Reason,
+) -> std::result::Result<Vec<CandidateResult>, Error> {
+    let (outcome, reason_code) = match reason {
+        Reason::CapacityBlocked => (CandidateOutcome::Deferred, "policy.capacity_blocked"),
+        Reason::RecoveryRequired | Reason::PolicyUnavailable => {
+            return Err(Error::Rejected(reason));
+        }
+        _ => (CandidateOutcome::Rejected, "memory.operation.rejected"),
+    };
+    Ok(candidate_ids
+        .iter()
+        .map(|candidate_id| CandidateResult {
+            candidate_id: candidate_id.clone(),
+            outcome,
+            reason_code: Some(reason_code.into()),
+        })
+        .collect())
+}
+
+fn finish_prepared_operation(
+    mut state: OperationState,
+    mut advance: impl FnMut(OperationState) -> aoidos_memory::error::Result<OperationState>,
+) -> aoidos_memory::error::Result<OperationState> {
+    if state == OperationState::Prepared {
+        state = advance(state)?;
+    }
+    if state == OperationState::Ready {
+        state = advance(state)?;
+    }
+    Ok(state)
+}
+
 struct SqliteBatchPersistence {
     storage: Arc<Storage>,
     session_id: String,
@@ -306,6 +340,22 @@ pub fn complete_received_batch(
                 if !matches!(state, BatchState::Received | BatchState::Completed) {
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
+                let receipt = repository.batch_receipt(connection, batch_id)?;
+                if receipt.state != state {
+                    return Err(Error::Rejected(Reason::StaleVersion));
+                }
+                let deferred_candidates = if state == BatchState::Completed {
+                    repository
+                        .deferred_candidates(connection, batch_id)?
+                        .into_iter()
+                        .map(|candidate| candidate.candidate_id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                } else {
+                    std::collections::BTreeSet::new()
+                };
+                if state == BatchState::Completed && deferred_candidates.is_empty() {
+                    return Ok(false);
+                }
                 let rebuilt =
                     super::build_proposal_authority_context(super::ProposalContextInput {
                         connection,
@@ -321,22 +371,29 @@ pub fn complete_received_batch(
                 if !same_proposal_authority(&rebuilt, &frozen)? {
                     return Err(Error::Rejected(Reason::StaleVersion));
                 }
-                let receipt = repository.batch_receipt(connection, batch_id)?;
-                if receipt.state != state {
-                    return Err(Error::Rejected(Reason::StaleVersion));
-                }
                 let response = receipt.response.as_deref().ok_or(Error::Corrupt)?;
-                let proposal = Proposal::parse(response, &frozen)?;
-                let cycle_marks = proposal
-                    .cycle_marks
-                    .iter()
-                    .map(|candidate| {
-                        Ok(CycleMarkCommit {
-                            candidate_id: candidate.candidate_id.clone(),
-                            mark: candidate.materialize(&frozen)?,
+                let mut proposal = Proposal::parse(response, &frozen)?;
+                if state == BatchState::Completed {
+                    proposal
+                        .candidates
+                        .retain(|candidate| deferred_candidates.contains(&candidate.candidate_id));
+                    // 已完成批次中的刻痕已与原回执原子提交；本次只重试仍 deferred 的普通候选。
+                    proposal.cycle_marks.clear();
+                }
+                let cycle_marks = if state == BatchState::Received {
+                    proposal
+                        .cycle_marks
+                        .iter()
+                        .map(|candidate| {
+                            Ok(CycleMarkCommit {
+                                candidate_id: candidate.candidate_id.clone(),
+                                mark: candidate.materialize(&frozen)?,
+                            })
                         })
-                    })
-                    .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
+                        .collect::<aoidos_memory::error::Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
+                };
 
                 let mut previous_versions = std::collections::BTreeMap::new();
                 for (entry_id, target) in &frozen.targets {
@@ -375,50 +432,203 @@ pub fn complete_received_batch(
                         previous_versions.insert(target.entry_id.clone(), previous);
                     }
                 }
-                let plans = super::candidate_operations::build_plans(
+                let repeat_target_ids = proposal
+                    .candidates
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.classification == aoidos_memory::model::Classification::Repeat
+                    })
+                    .filter_map(|candidate| {
+                        candidate
+                            .target_ref
+                            .as_ref()
+                            .map(|target| target.entry_id.clone())
+                    })
+                    .collect::<std::collections::BTreeSet<_>>();
+                let mut previous_effects = std::collections::BTreeMap::new();
+                for entry_id in repeat_target_ids {
+                    let mut after = 0;
+                    let mut effects = Vec::new();
+                    loop {
+                        let page = repository.effects(
+                            connection,
+                            port,
+                            &run.run_id,
+                            &entry_id,
+                            after,
+                            32,
+                        )?;
+                        let Some((last, _)) = page.last() else {
+                            break;
+                        };
+                        after = *last;
+                        effects.extend(page);
+                        if effects.len() > aoidos_memory::algorithm::MAX_ARCHIVE_CANDIDATES {
+                            return Err(Error::Rejected(Reason::CapacityBlocked));
+                        }
+                        if effects.len() % 32 != 0 {
+                            break;
+                        }
+                    }
+                    previous_effects.insert(entry_id, effects);
+                }
+                let mut material_positions = std::collections::BTreeMap::new();
+                for span in &snapshot.spans {
+                    if proposal.candidates.iter().any(|candidate| {
+                        candidate.classification == aoidos_memory::model::Classification::Repeat
+                            && candidate.source_ids.contains(&span.source_id)
+                    }) {
+                        let position = repository.material_logical_position(
+                            connection,
+                            port,
+                            &run.run_id,
+                            &span.material_id,
+                        )?;
+                        material_positions.insert(span.material_id.clone(), position);
+                    }
+                }
+                let mut claimed_candidates = std::collections::BTreeSet::new();
+                let candidate_by_id = proposal
+                    .candidates
+                    .iter()
+                    .map(|candidate| (candidate.candidate_id.as_str(), candidate))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let mut persisted_groups = std::collections::BTreeMap::new();
+                for candidate in &proposal.candidates {
+                    let Some(operation_id) = repository.candidate_operation(
+                        connection,
+                        batch_id,
+                        &candidate.candidate_id,
+                    )?
+                    else {
+                        continue;
+                    };
+                    if persisted_groups.contains_key(&operation_id) {
+                        continue;
+                    }
+                    let (plan, operation_state) =
+                        repository.operation(connection, &operation_id)?;
+                    if state == BatchState::Completed
+                        && matches!(
+                            operation_state,
+                            OperationState::Applied | OperationState::Rejected
+                        )
+                    {
+                        claimed_candidates.extend(plan.candidate_ids);
+                        continue;
+                    }
+                    let group_candidates = plan
+                        .candidate_ids
+                        .iter()
+                        .map(|candidate_id| {
+                            candidate_by_id
+                                .get(candidate_id.as_str())
+                                .copied()
+                                .ok_or(Error::Corrupt)
+                        })
+                        .collect::<aoidos_memory::error::Result<Vec<_>>>()?;
+                    claimed_candidates.extend(plan.candidate_ids.iter().cloned());
+                    persisted_groups.insert(
+                        operation_id,
+                        super::candidate_operations::persisted_group(
+                            &snapshot,
+                            plan,
+                            &group_candidates,
+                        )?,
+                    );
+                }
+                let fresh_candidates = proposal
+                    .candidates
+                    .iter()
+                    .filter(|candidate| !claimed_candidates.contains(&candidate.candidate_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let mut fresh_proposal = proposal.clone();
+                fresh_proposal.candidates = fresh_candidates;
+                let plans = super::candidate_operations::build_plans_with_history(
                     &snapshot,
-                    &proposal,
+                    &fresh_proposal,
                     &frozen,
                     &run,
                     &previous_versions,
+                    &previous_effects,
+                    &material_positions,
                 )?;
                 let mut outcomes = plans.immediate_results;
-                for group in plans.operations {
+                let mut operations = persisted_groups.into_values().collect::<Vec<_>>();
+                operations.extend(plans.operations);
+                operations.sort_by(|left, right| {
+                    fn first_source(
+                        plan: &aoidos_memory::model::Plan,
+                        proposal: &Proposal,
+                        snapshot: &aoidos_memory::repository::BatchSnapshot,
+                    ) -> (u64, String) {
+                        let position = plan
+                            .candidate_ids
+                            .iter()
+                            .filter_map(|id| {
+                                proposal
+                                    .candidates
+                                    .iter()
+                                    .find(|item| &item.candidate_id == id)
+                            })
+                            .flat_map(|candidate| {
+                                candidate.source_ids.iter().filter_map(|source_id| {
+                                    snapshot
+                                        .spans
+                                        .iter()
+                                        .find(|span| &span.source_id == source_id)
+                                })
+                            })
+                            .map(|span| span.source.record_seq)
+                            .min()
+                            .unwrap_or(u64::MAX);
+                        let candidate_id = plan
+                            .candidate_ids
+                            .iter()
+                            .min_by(|left, right| left.as_bytes().cmp(right.as_bytes()))
+                            .cloned()
+                            .unwrap_or_default();
+                        (position, candidate_id)
+                    }
+                    first_source(&left.plan, &proposal, &snapshot).cmp(&first_source(
+                        &right.plan,
+                        &proposal,
+                        &snapshot,
+                    ))
+                });
+                for group in operations {
                     // 独立组逐个提交会推进逻辑时钟；每次执行前读取当前值，
                     // 避免同一批次的后续组沿用冻结时的旧时钟而被误拒绝。
                     let mut plan = group.plan;
-                    plan.expected_logical_clock =
-                        repository.clock(connection, port, &run.run_id)?;
+                    if !group.persisted {
+                        plan.expected_logical_clock =
+                            repository.clock(connection, port, &run.run_id)?;
+                    }
                     let state = match repository.prepare(connection, port, &plan) {
                         Ok(state) => state,
-                        Err(Error::Rejected(_)) => {
-                            outcomes.extend(plan.candidate_ids.iter().map(|candidate_id| {
-                                CandidateResult {
-                                    candidate_id: candidate_id.clone(),
-                                    outcome: CandidateOutcome::Rejected,
-                                    reason_code: Some("memory.operation.rejected".into()),
-                                }
-                            }));
+                        Err(Error::Rejected(reason)) => {
+                            outcomes
+                                .extend(operation_rejection_results(&plan.candidate_ids, reason)?);
                             continue;
                         }
                         Err(error) => return Err(error),
                     };
-                    let state = if state == OperationState::Prepared {
-                        let state = repository.write_versions(connection, &plan.operation_id)?;
-                        if state == OperationState::Ready {
-                            match repository.apply(connection, port, &plan.operation_id) {
-                                Ok(state) => state,
-                                Err(Error::Rejected(_)) => {
-                                    repository.operation(connection, &plan.operation_id)?.1
-                                }
-                                Err(error) => return Err(error),
-                            }
-                        } else {
-                            state
+                    let state = finish_prepared_operation(state, |state| match state {
+                        OperationState::Prepared => {
+                            repository.write_versions(connection, &plan.operation_id)
                         }
-                    } else {
-                        state
-                    };
+                        OperationState::Ready => {
+                            match repository.apply(connection, port, &plan.operation_id) {
+                                Ok(state) => Ok(state),
+                                Err(Error::Rejected(_)) => repository
+                                    .operation(connection, &plan.operation_id)
+                                    .map(|value| value.1),
+                                Err(error) => Err(error),
+                            }
+                        }
+                        _ => Ok(state),
+                    })?;
                     match state {
                         OperationState::Applied => {
                             outcomes.extend(plan.candidate_ids.iter().map(|candidate_id| {
@@ -451,6 +661,10 @@ pub fn complete_received_batch(
                 }
                 let completion = super::candidate_operations::completion(outcomes, Vec::new());
 
+                // completed 回执不可改写；deferred 候选只复用已保存响应做本地操作。
+                if state == BatchState::Completed {
+                    return Ok(false);
+                }
                 if cycle_marks.is_empty() {
                     let bytes = aoidos_json::canonical_string(&completion)
                         .map_err(|_| Error::Rejected(Reason::InvalidSchema))?
@@ -677,6 +891,50 @@ mod tests {
         fn settle(&self, _: &AttemptIdentity, _: &AttemptOutcome) {
             self.calls.lock().unwrap().push("settle".into());
         }
+    }
+
+    #[test]
+    fn capacity_rejection_stays_deferred_and_recovery_errors_do_not_finish_the_batch() {
+        let candidate_ids = vec!["candidate_1".into()];
+        let results = operation_rejection_results(&candidate_ids, Reason::CapacityBlocked).unwrap();
+        assert_eq!(results[0].outcome, CandidateOutcome::Deferred);
+        assert_eq!(
+            results[0].reason_code.as_deref(),
+            Some("policy.capacity_blocked")
+        );
+
+        let results = operation_rejection_results(&candidate_ids, Reason::StaleVersion).unwrap();
+        assert_eq!(results[0].outcome, CandidateOutcome::Rejected);
+        assert_eq!(
+            results[0].reason_code.as_deref(),
+            Some("memory.operation.rejected")
+        );
+        assert!(matches!(
+            operation_rejection_results(&candidate_ids, Reason::RecoveryRequired),
+            Err(Error::Rejected(Reason::RecoveryRequired))
+        ));
+    }
+
+    #[test]
+    fn ready_operation_recovery_applies_without_rewriting_versions() {
+        let mut writes = 0;
+        let mut applies = 0;
+        let state = finish_prepared_operation(OperationState::Ready, |state| match state {
+            OperationState::Prepared => {
+                writes += 1;
+                Ok(OperationState::Ready)
+            }
+            OperationState::Ready => {
+                applies += 1;
+                Ok(OperationState::Applied)
+            }
+            _ => Ok(state),
+        })
+        .unwrap();
+
+        assert_eq!(state, OperationState::Applied);
+        assert_eq!(writes, 0);
+        assert_eq!(applies, 1);
     }
 
     #[tokio::test]

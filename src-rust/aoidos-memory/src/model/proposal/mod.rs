@@ -183,6 +183,7 @@ pub struct TargetSnapshot {
     pub entry_id: String,
     pub version_id: String,
     pub state_revision: u64,
+    pub state: super::EntryState,
     pub subject: Subject,
     pub dimension: Dimension,
     pub summary: String,
@@ -469,6 +470,12 @@ fn validate_target(candidate: &Candidate, context: &ProposalContext) -> Result<(
     if snapshot.entry_id != reference.entry_id
         || snapshot.version_id != reference.expected_version_id
         || snapshot.state_revision != reference.expected_state_revision
+        || snapshot.state == super::EntryState::Unavailable
+        || (snapshot.state == super::EntryState::Archived
+            && matches!(
+                candidate.classification,
+                Classification::Supplement | Classification::Correction
+            ))
         || !candidate.subject_ref.matches_subject(&snapshot.subject)
         || candidate
             .dimension

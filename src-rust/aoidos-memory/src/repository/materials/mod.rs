@@ -1,6 +1,7 @@
 //! 稳定素材及批次短引用映射；恢复复用原始身份，不重新切片或发请求。
 
 use super::*;
+use crate::algorithm::MAX_ARCHIVE_CANDIDATES;
 use crate::model::{MAX_INTEGER, MAX_PROPOSAL_BYTES, ProposalContext};
 use serde::{Deserialize, Serialize};
 
@@ -330,17 +331,20 @@ impl Repository {
         source: &SourceRef,
         ordinal: u64,
     ) -> Result<String> {
-        let (run, _) = self.boundary(conn, &source.run_id, port)?;
+        let (run, boundary) = self.boundary(conn, &source.run_id, port)?;
         self.ensure_writable(conn, &run.run_id)?;
         if ordinal > MAX_INTEGER || !self.valid_sources(&run, std::slice::from_ref(source), port)? {
             return Err(Error::Rejected(Reason::InvalidSource));
         }
+        self.clock(conn, port, &run.run_id)?;
+        let logical_position = self.source_logical_position(conn, port, &run, &boundary, source)?;
         let encoded = canonical(source)?;
         let previous=conn.query_row("SELECT material_id,length(source_json),source_json FROM memory_materials WHERE run_id=?1 AND session_id=?2 AND record_seq=?3 AND unit_ordinal=?4",params![source.run_id,source.session_id,source.record_seq,ordinal],read_material).optional().map_err(sql)?;
         if let Some((id, bytes)) = previous {
             if bytes.into_result()? != encoded {
                 return Err(Error::Corrupt);
             }
+            self.save_material_position(conn, &id, boundary.history_revision, logical_position)?;
             return Ok(id);
         }
         let duplicate = conn
@@ -367,7 +371,96 @@ impl Repository {
             ],
         )
         .map_err(sql)?;
+        self.save_material_position(conn, &id, boundary.history_revision, logical_position)?;
         Ok(id)
+    }
+
+    /// 返回素材在当前因果历史中的发生回合；历史修订变化时重新从已核验回合回执推导。
+    pub fn material_logical_position(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run_id: &str,
+        material_id: &str,
+    ) -> Result<u64> {
+        let (run, boundary) = self.boundary(conn, run_id, port)?;
+        self.clock(conn, port, run_id)?;
+        let stored: Option<(u64, u64)> = conn
+            .query_row(
+                "SELECT history_revision,logical_position FROM memory_material_positions WHERE material_id=?1",
+                [material_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql)?;
+        if let Some((revision, position)) = stored
+            && revision == boundary.history_revision
+        {
+            return Ok(position);
+        }
+        let source = self.material_source(conn, run_id, material_id)?;
+        let position = self.source_logical_position(conn, port, &run, &boundary, &source)?;
+        self.save_material_position(conn, material_id, boundary.history_revision, position)?;
+        Ok(position)
+    }
+
+    pub(super) fn source_logical_position(
+        &self,
+        conn: &Connection,
+        port: &dyn CausalPort,
+        run: &Run,
+        boundary: &Boundary,
+        source: &SourceRef,
+    ) -> Result<u64> {
+        let mut statement = conn
+            .prepare(
+                "SELECT round_id,length(source_json),source_json,logical_position FROM memory_clock_receipts WHERE run_id=?1 AND valid=1 ORDER BY rowid LIMIT ?2",
+            )
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(
+                params![run.run_id, MAX_ARCHIVE_CANDIDATES + 1],
+                read_clock_source,
+            )
+            .map_err(sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql)?;
+        drop(statement);
+        if rows.len() > MAX_ARCHIVE_CANDIDATES {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        let mut position = 0_u64;
+        for (round_id, length, bytes, _) in rows {
+            if length > 32 * 1024 {
+                return Err(Error::Corrupt);
+            }
+            let receipt_source: SourceRef = decode(&bytes.into_result()?, 32 * 1024)?;
+            if receipt_source.record_seq < source.record_seq
+                && self.valid_sources(run, std::slice::from_ref(&receipt_source), port)?
+                && port.completed_round(&round_id, &receipt_source)?
+            {
+                position = position.checked_add(1).ok_or(Error::Corrupt)?;
+            }
+        }
+        if position > MAX_INTEGER || boundary.history_revision > MAX_INTEGER {
+            return Err(Error::Corrupt);
+        }
+        Ok(position)
+    }
+
+    fn save_material_position(
+        &self,
+        conn: &Connection,
+        material_id: &str,
+        history_revision: u64,
+        logical_position: u64,
+    ) -> Result<()> {
+        conn.execute(
+            "INSERT INTO memory_material_positions(material_id,history_revision,logical_position) VALUES(?1,?2,?3) ON CONFLICT(material_id) DO UPDATE SET history_revision=excluded.history_revision,logical_position=excluded.logical_position",
+            params![material_id, history_revision, logical_position],
+        )
+        .map_err(sql)?;
+        Ok(())
     }
     pub(super) fn material_source(
         &self,
@@ -1116,6 +1209,20 @@ impl Repository {
             })
             .collect()
     }
+    /// 读取候选已绑定的持久操作身份，用于恢复时复用原计划。
+    /// # Errors
+    /// 候选 / 批次身份无效或持久映射损坏时返回错误。
+    pub fn candidate_operation(
+        &self,
+        conn: &Connection,
+        batch_id: &str,
+        candidate_id: &str,
+    ) -> Result<Option<String>> {
+        if !valid_id(batch_id) || !valid_short_id(candidate_id) {
+            return Err(reject());
+        }
+        candidate_operation(conn, batch_id, candidate_id)
+    }
     /// 只登记已确认的场内完成回执；回退时钟由有效来源重建，不按墙钟增加。
     /// # Errors
     /// 调用方须从可信 completed 场内回合构造来源，重复 round 不重新计时。
@@ -1527,6 +1634,16 @@ fn read_material_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<(BoundedBlo
     Ok((
         read_bounded_blob(row, 0, 1, 32 * 1024)?,
         row.get(2)?,
+        row.get(3)?,
+    ))
+}
+fn read_clock_source(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, usize, BoundedBlob, u64)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        read_bounded_blob(row, 1, 2, 32 * 1024)?,
         row.get(3)?,
     ))
 }

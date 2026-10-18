@@ -185,6 +185,53 @@ fn material_identity_and_frozen_batch_survive_replays() {
 }
 
 #[test]
+fn material_anchor_uses_preceding_valid_completed_rounds_and_rebuilds_after_rollback() {
+    let mut f = Fixture::new();
+    let mut completed = f.source();
+    completed.record_seq = 2;
+    f.repo
+        .complete_round(&mut f.conn, &f.port, &f.run.run_id, &new_id(), &completed)
+        .unwrap();
+    let mut later_completed = f.source();
+    later_completed.record_seq = 4;
+    f.repo
+        .complete_round(
+            &mut f.conn,
+            &f.port,
+            &f.run.run_id,
+            &new_id(),
+            &later_completed,
+        )
+        .unwrap();
+
+    let mut material_source = f.source();
+    material_source.record_seq = 5;
+    let material = f
+        .repo
+        .register_material(&f.conn, &f.port, &material_source, 0)
+        .unwrap();
+    assert_eq!(
+        f.repo
+            .material_logical_position(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap(),
+        2
+    );
+
+    f.port.view.history_revision += 1;
+    f.port.invalid_records.borrow_mut().insert(2);
+    f.repo
+        .recover(&mut f.conn, &f.port, &f.run.run_id, None)
+        .unwrap();
+    assert_eq!(f.repo.clock(&f.conn, &f.port, &f.run.run_id).unwrap(), 1);
+    assert_eq!(
+        f.repo
+            .material_logical_position(&f.conn, &f.port, &f.run.run_id, &material)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn queued_batch_reserves_material_until_rejected_and_processed_material_cannot_be_frozen() {
     let mut f = Fixture::new();
     let source = f.source();

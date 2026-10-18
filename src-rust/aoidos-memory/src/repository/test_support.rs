@@ -92,20 +92,23 @@ pub(super) fn policy() -> Policy {
         app_config_version: 1,
         algorithm: Algorithm::Exponential,
         base_strength: 200_000,
-        reinforcement_gain: 50_000,
+        reinforcement_gain: 1,
         reinforcement_cap: 500_000,
         strength_cap: 1_000_000,
         half_life_rounds: 100,
         repeat_window_rounds: 5,
         repeat_limit: 2,
         revival_cooldown_rounds: 10,
-        active_capacity: 100,
+        active_capacity: 10_000,
         rate_table_version: 1,
         decay_rate: 990_000,
     }
 }
 impl Fixture {
     pub(super) fn new() -> Self {
+        Self::with_policy(policy())
+    }
+    pub(super) fn with_policy(run_policy: Policy) -> Self {
         let root = std::env::temp_dir().join(format!("aoidos-memory-test-{}", new_id()));
         std::fs::create_dir_all(&root).unwrap();
         let conn = Connection::open(root.join("memory.sqlite")).unwrap();
@@ -114,15 +117,15 @@ impl Fixture {
             .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
-        Self::with_connection(root, conn)
+        Self::with_connection(root, conn, run_policy)
     }
     /// 不涉及文件耐久性的用例使用内存数据库，避免把 SQLite WAL 刷盘成本算进规则测试。
     pub(super) fn new_in_memory() -> Self {
         let root = std::env::temp_dir().join(format!("aoidos-memory-test-{}", new_id()));
         let conn = Connection::open_in_memory().unwrap();
-        Self::with_connection(root, conn)
+        Self::with_connection(root, conn, policy())
     }
-    fn with_connection(root: PathBuf, mut conn: Connection) -> Self {
+    fn with_connection(root: PathBuf, mut conn: Connection, run_policy: Policy) -> Self {
         let repo = Repository::new(&root);
         conn.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE store_applied(id TEXT PRIMARY KEY,content_hash TEXT NOT NULL);").unwrap();
         conn.execute_batch(crate::schema::SCHEMA).unwrap();
@@ -147,6 +150,10 @@ impl Fixture {
             .unwrap();
         conn.execute_batch(crate::schema::MATERIAL_CURSOR_MIGRATION)
             .unwrap();
+        conn.execute_batch(crate::schema::EFFECT_EVIDENCE_PROGRESS_MIGRATION)
+            .unwrap();
+        conn.execute_batch(crate::schema::MATERIAL_POSITION_MIGRATION)
+            .unwrap();
         let port = Port {
             view: Boundary {
                 script_id: "mistbell".into(),
@@ -163,7 +170,7 @@ impl Fixture {
             alias_entities: RefCell::new(BTreeMap::new()),
             canonical_names: RefCell::new(BTreeMap::new()),
         };
-        let run = repo.create_run(&mut conn, &port, policy()).unwrap();
+        let run = repo.create_run(&mut conn, &port, run_policy).unwrap();
         Self {
             root,
             repo,

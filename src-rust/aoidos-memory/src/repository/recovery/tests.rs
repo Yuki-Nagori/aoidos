@@ -160,6 +160,7 @@ fn source_loss_marks_unavailable_and_history_bound_queries_reject_stale_views() 
         after_operation: 0,
         run_id: f.run.run_id.clone(),
         history_revision: 1,
+        evidence_revision: f.port.view.evidence_revision,
         through: 0,
         after: 0,
     };
@@ -260,6 +261,7 @@ fn recovery_scan_has_fixed_upper_bound_and_rejects_invalid_cursor() {
         after_operation: 0,
         run_id: f.run.run_id.clone(),
         history_revision: 0,
+        evidence_revision: f.port.view.evidence_revision,
         through: 1,
         after: 0,
     };
@@ -272,6 +274,13 @@ fn recovery_scan_has_fixed_upper_bound_and_rejects_invalid_cursor() {
     assert_eq!(page.checked_entries, 1);
     assert!(page.next.is_none());
     let mut bad = cursor.clone();
+    bad.evidence_revision += 1;
+    rejected(
+        f.repo
+            .recover(&mut f.conn, &f.port, &f.run.run_id, Some(&bad)),
+        Reason::StaleVersion,
+    );
+    bad = cursor.clone();
     bad.after = 2;
     rejected(
         f.repo
@@ -780,6 +789,7 @@ fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
     let mut cursor = ScanCursor {
         run_id: f.run.run_id.clone(),
         history_revision: 0,
+        evidence_revision: f.port.view.evidence_revision,
         through: 0,
         after: 0,
         through_operations,
@@ -814,6 +824,7 @@ fn recovery_paginates_fixed_operation_and_entry_upper_bounds() {
     let cursor = ScanCursor {
         run_id: f.run.run_id.clone(),
         history_revision: 0,
+        evidence_revision: f.port.view.evidence_revision,
         through,
         after: 0,
         through_operations: 0,
@@ -907,6 +918,21 @@ fn impossible_prepared_relation_size_is_corrupt_instead_of_yielding_forever() {
 fn effect_reconciliation_exhaustion_defers_entry_scan_and_resumes_without_double_revision() {
     // 此用例验证回退分页和幂等修订；不验证 SQLite WAL 耐久性。
     let mut f = Fixture::new_in_memory();
+    for seq in 1..=5 {
+        for _ in 0..5 {
+            let mut source = f.source();
+            source.record_seq = seq;
+            f.repo
+                .complete_round(&mut f.conn, &f.port, &f.run.run_id, &new_id(), &source)
+                .unwrap();
+        }
+    }
+    f.conn
+        .execute(
+            "UPDATE memory_runs SET logical_clock=25 WHERE run_id=?1",
+            [&f.run.run_id],
+        )
+        .unwrap();
     for _ in 0..33 {
         let mut plan = f.plan(f.version());
         for seq in 1..=6 {
@@ -916,10 +942,12 @@ fn effect_reconciliation_exhaustion_defers_entry_scan_and_resumes_without_double
                 effect_id: new_id(),
                 kind: EffectKind::Gain,
                 source,
-                logical_position: 0,
+                logical_position: (seq - 1) * 5,
                 gain: 1,
+                evidence: vec![],
             });
         }
+        plan.expected_logical_clock = 25;
         f.commit(&plan);
     }
     f.port.view.history_revision = 1;

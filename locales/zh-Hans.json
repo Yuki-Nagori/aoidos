@@ -124,7 +124,8 @@
       "review": "此分类需要后续复核。",
       "sharedTarget": "存在冲突的候选项，已整体延后。",
       "duplicateAnchor": "同一来源已锚定相同主体与维度的记忆；请复核既有条目，或在新提案中将其关联为更新。",
-      "operationRejected": "目标已变化，或操作无法安全应用。"
+      "operationRejected": "目标已变化，或操作无法安全应用。",
+      "capacityBlocked": "容量已满，未应用此记忆；容量释放后可从原提案重新处理。"
     },
     "noneQuestions": "当前没有待确认问题。",
     "noneEntries": "当前没有已提交记忆。",

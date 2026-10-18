@@ -411,7 +411,9 @@ fn legacy_context_without_entity_snapshots_fails_closed_for_entity_ids() {
 
 #[test]
 fn prompt_accepts_only_well_formed_targets_for_frozen_subjects() {
-    use aoidos_memory::model::{Attitude, Dimension, Subject, SubjectRef, TargetSnapshot};
+    use aoidos_memory::model::{
+        Attitude, Dimension, EntryState, Subject, SubjectRef, TargetSnapshot,
+    };
 
     let entry_id = uuid::Uuid::new_v4().to_string();
     let version_id = uuid::Uuid::new_v4().to_string();
@@ -423,6 +425,7 @@ fn prompt_accepts_only_well_formed_targets_for_frozen_subjects() {
             entry_id: entry_id.clone(),
             version_id: version_id.clone(),
             state_revision: 1,
+            state: EntryState::Active,
             subject: Subject::PlayerPreference,
             dimension: Dimension::PlayerPreference,
             summary: "玩家希望保留海风意象".into(),

@@ -124,7 +124,8 @@
       "review": "This classification needs a later review.",
       "sharedTarget": "Conflicting candidates were deferred together.",
       "duplicateAnchor": "This source already anchors a memory for the same subject and dimension; review the existing entry or associate this as an update.",
-      "operationRejected": "The target changed or the operation could not be safely applied."
+      "operationRejected": "The target changed or the operation could not be safely applied.",
+      "capacityBlocked": "Memory capacity is full. This item was deferred and can be retried from the saved proposal after capacity is available."
     },
     "noneQuestions": "No pending questions.",
     "noneEntries": "No committed memories.",

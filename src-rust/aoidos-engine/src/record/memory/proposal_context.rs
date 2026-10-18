@@ -134,6 +134,7 @@ fn add_existing_targets(
                 entry_id: entry.entry_id,
                 version_id: version.version_id,
                 state_revision: entry.state_revision,
+                state: entry.state,
                 subject: version.subject,
                 dimension: version.dimension,
                 summary: version.summary,

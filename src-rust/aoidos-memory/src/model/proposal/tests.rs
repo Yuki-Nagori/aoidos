@@ -59,6 +59,7 @@ fn context() -> ProposalContext {
                 entry_id: entry,
                 version_id: new_id(),
                 state_revision: 3,
+                state: super::super::EntryState::Active,
                 subject: Subject::Character { id: "guard".into() },
                 dimension: Dimension::Story,
                 summary: "在旧港相信守门人".into(),
