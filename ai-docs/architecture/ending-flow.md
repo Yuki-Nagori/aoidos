@@ -55,4 +55,4 @@ UI 消费权威 `EndingSnapshot`：规则就绪状态、是否满足终局、冻
 
 ## 对接文档
 
-[剧本格式](../standards/scenarios.md)登记字段与标签规则文件；[阶段机](turn-state-machine.md)登记终局触发位置与恢复阶段；[记录引擎](record-engine.md)登记类型化终局锚点与回退语义；[记忆架构](memory.md)登记落幕摘要 / AI 叙事的素材过滤；[计费架构](billing.md)登记开局规则生成与结局叙事请求计费；[通信契约](ipc-contract.md)登记命令与同型 DTO；具体阶段状态及验收由 056 跟踪。
+[剧本格式](../standards/scenarios.md)登记字段与标签规则文件；[阶段机](turn-state-machine.md)登记终局触发位置与恢复阶段；[记录引擎](record-engine.md)登记类型化终局锚点与回退语义；[记忆架构](memory.md)登记落幕摘要 / AI 叙事的素材过滤；[计费架构](billing.md)登记开局规则生成与结局叙事请求计费；[通信契约](ipc-contract.md)登记已评审的快照与叙事重试方向，精确命令 / DTO 由 056 实现设计补齐；具体阶段状态及验收由 056 跟踪。
