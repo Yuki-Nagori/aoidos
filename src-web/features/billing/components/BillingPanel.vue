@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import type { Locale } from "../../../api/locale";
 import { formatDate, formatExactCurrency } from "../../../shared/utils/format";
 import type { useBilling } from "../composables/useBilling";
+import { summarizeRunUsage } from "../utils/run-usage";
 import { billingErrorDescriptor } from "../utils/billing-error";
 import { formatPeakSchedule } from "../utils/price-schedule";
 
@@ -20,6 +21,12 @@ const locale = computed(() => props.locale);
 const active = computed(() => props.active);
 const providerId = computed(() => props.providerId);
 const view = computed(() => props.view ?? "all");
+const runTotals = computed(() =>
+  summarizeRunUsage(props.billing.period.value?.items ?? [], {
+    CNY: props.billing.settings.value?.cnyLimit ?? null,
+    USD: props.billing.settings.value?.usdLimit ?? null,
+  }),
+);
 function billingAmount(amount: string | null, currency: "CNY" | "USD"): string {
   return amount === null
     ? t("billing.unknown")
@@ -49,13 +56,26 @@ const billingErrorMessage = computed(() => {
 });
 </script>
 <template>
-  <section v-if="active" class="grid gap-4">
+  <section v-if="active" class="billing-panel grid gap-4">
     <h4 v-if="view === 'all' || view === 'billing'" class="font-semibold">
       {{ t("billing.title") }}
     </h4>
     <template v-if="view === 'all' || view === 'billing'">
       <p class="text-sm text-muted">{{ t("billing.explanation") }}</p>
       <p class="text-sm text-muted">{{ t("billing.referenceHint") }}</p>
+      <div v-if="runTotals.length" class="billing-summary-grid" :aria-label="t('billing.usage')">
+        <article v-for="total in runTotals" :key="total.currency" class="billing-summary-card">
+          <span class="billing-summary-label">
+            {{ t(total.currency === "CNY" ? "billing.currencyCny" : "billing.currencyUsd") }}
+          </span>
+          <strong class="billing-summary-amount mono">
+            {{ billingAmount(total.amount, total.currency) }}
+          </strong>
+          <span v-if="total.limit" class="billing-summary-limit mono">
+            / {{ billingAmount(total.limit, total.currency) }}
+          </span>
+        </article>
+      </div>
     </template>
     <section
       v-if="(view === 'all' || view === 'balance') && providerId === 'deepseek'"
@@ -103,7 +123,7 @@ const billingErrorMessage = computed(() => {
       {{ t("billing.balanceUnsupported") }}
     </p>
     <template v-if="view === 'all' || view === 'billing'">
-      <form class="grid gap-3" @submit.prevent="billing.saveSettings">
+      <form class="billing-form grid gap-3" @submit.prevent="billing.saveSettings">
         <label>
           {{ t("billing.cnyLimit") }}
           <input v-model="billing.cnyLimit.value" inputmode="decimal" autocomplete="off" />
@@ -112,7 +132,7 @@ const billingErrorMessage = computed(() => {
           {{ t("billing.usdLimit") }}
           <input v-model="billing.usdLimit.value" inputmode="decimal" autocomplete="off" />
         </label>
-        <button type="submit" :disabled="billing.busy.value">
+        <button type="submit" class="btn primary" :disabled="billing.busy.value">
           {{ billing.settings.value ? t("billing.saveLimits") : t("billing.setLimits") }}
         </button>
       </form>
@@ -176,7 +196,12 @@ const billingErrorMessage = computed(() => {
             })
           }}
         </p>
-        <button type="button" :disabled="billing.busy.value" @click="billing.loadPeriod">
+        <button
+          type="button"
+          class="btn ghost"
+          :disabled="billing.busy.value"
+          @click="billing.loadPeriod"
+        >
           {{ t("billing.refreshUsage") }}
         </button>
         <hr class="my-2 border-line" />
@@ -404,7 +429,12 @@ const billingErrorMessage = computed(() => {
             {{ t("billing.incomplete", { count: item.incompleteRequests }) }}
           </p>
         </article>
-        <button type="button" :disabled="billing.busy.value" @click="billing.loadMonthly">
+        <button
+          type="button"
+          class="btn ghost"
+          :disabled="billing.busy.value"
+          @click="billing.loadMonthly"
+        >
           {{ t("billing.refreshMonthly") }}
         </button>
       </section>

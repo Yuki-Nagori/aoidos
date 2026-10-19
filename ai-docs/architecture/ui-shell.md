@@ -22,7 +22,7 @@ Vue 页面按窗口级顶栏、居中 16:9 舞台和右侧浮动面板组合，�
 
 舞台内容使用 aspect-ratio 与容器尺寸计算；不支持容器查询时用 ResizeObserver 更新可用矩形。不把浏览器页面缩放值当设备像素比。默认窗口为 960 × 640，最小客户区为 640 × 480 CSS 像素；桌面舞台锁定 16:9，高度不足时优先等比缩小，不用最小高度撑破比例。窄屏改为占满可用纵向空间。
 
-当前 `app/App.vue` 组合产品、主题、语言、费用、记忆偏好和页面状态；无会话时由 `app/components/WelcomeScreen.vue` 按 `aoidos-art/screens/welcome.html` 的双栏层级展示介绍、只读剧本 / 模型摘要与开局操作，开局必须由用户显式触发，且需要真实密钥状态为已设置。顶栏齿轮打开 `app/components/SetupPanel.vue` 右侧设置抽屉，密钥状态经 `llm_get_key_status` 查询；读取失败保持未知并阻止开局，不将失败误报为缺少密钥。设置区按设计稿分组，并通过插槽承载记忆设置和查询。费用明细由 `features/billing/components/BillingPanel.vue` 持有，随活动会话和供应商属性更新；尚未开始会话时显示不可用说明。`features/game/components/GameWorkspace.vue` 管理对局内状态和交互；记忆查询仅在用户打开设置抽屉后挂载。`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览位于 game feature 的 utils，定时器与偏好写入由 composables 管理。052 按设计 HTML 的主要 DOM / 布局逐项复现，再将静态示例替换为真实数据与已有操作；不得以自由改版替代视觉移植，也不展示设计稿演示数据或把缺失服务伪装为可用状态。
+当前 `app/App.vue` 组合产品、主题、语言、费用、记忆偏好和页面状态；无会话时由 `app/components/WelcomeScreen.vue` 按 `aoidos-art/screens/welcome.html` 的双栏层级展示介绍、只读剧本 / 模型摘要与开局操作，开局必须由用户显式触发，且需要真实密钥状态为已设置。顶栏齿轮打开 `app/components/SetupPanel.vue` 右侧设置抽屉，密钥状态经 `llm_get_key_status` 查询；读取失败保持未知并阻止开局，不将失败误报为缺少密钥。设置区按设计稿分组，并通过插槽承载记忆设置和查询。费用视图由 `features/billing/components/BillingPanel.vue` 持有，活动会话内按原币显示本局 CNY / USD 用量和各自上限，并提供请求明细、月报及供应商余额；金额汇总复用账本用量函数，不进行跨币换算。尚未开始会话时显示不可用说明。`features/game/components/GameWorkspace.vue` 管理对局内状态和交互；记忆查询仅在用户打开设置抽屉后挂载。`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览位于 game feature 的 utils，定时器与偏好写入由 composables 管理。052 按设计 HTML 的主要 DOM / 布局逐项复现，再将静态示例替换为真实数据与已有操作；不得以自由改版替代视觉移植，也不展示设计稿演示数据或把缺失服务伪装为可用状态。
 
 ## 面板四态
 
