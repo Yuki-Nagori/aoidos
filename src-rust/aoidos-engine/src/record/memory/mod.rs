@@ -35,6 +35,9 @@ use aoidos_memory::{
 
 const DIRECT_DIALOGUE_SCOPE: &str = "directDialogue";
 const DIRECT_DIALOGUE_RULE: &str = "directDialogueV1";
+// 场景溯源只读取系统事实；单独设较高上限以覆盖长局，同时限制总扫描字节。
+const MAX_SCENE_HISTORY_SCAN: usize = 10_000;
+const MAX_SCENE_INDEX_SCAN: usize = 100_000;
 
 /// 引擎持有会话锁时借用；角色证据只认可完整记录的定向角色对话。
 pub struct SourcePort<'a> {
@@ -77,9 +80,23 @@ pub(crate) fn scene_entry_seq_before(
     scene_id: &str,
     before_seq: u64,
 ) -> Result<u64> {
-    let mut scanned = 0usize;
+    let mut index_scanned = 0usize;
+    let mut system_scanned = 0usize;
     let mut bytes = 0usize;
-    for (&seq, index) in session.index.range(..before_seq).rev().take(MAX_SCAN) {
+    for (&seq, index) in session
+        .index
+        .range(..before_seq)
+        .rev()
+        .take(MAX_SCENE_INDEX_SCAN)
+    {
+        index_scanned += 1;
+        if index.kind != "system" {
+            continue;
+        }
+        if system_scanned >= MAX_SCENE_HISTORY_SCAN {
+            return Err(Error::Rejected(Reason::RecoveryRequired));
+        }
+        system_scanned += 1;
         bytes = bytes.saturating_add(index.len);
         if bytes > MAX_SCAN_BYTES {
             return Err(Error::Rejected(Reason::RecoveryRequired));
@@ -87,7 +104,6 @@ pub(crate) fn scene_entry_seq_before(
         if !session.includes_record(seq, index) {
             continue;
         }
-        scanned += 1;
         let record = session.known(seq)?;
         if let Body::System { code, data, .. } = record.body
             && let Fact::SceneAdvanced { position, .. } = Fact::decode(&code, &data)?
@@ -99,7 +115,7 @@ pub(crate) fn scene_entry_seq_before(
             };
         }
     }
-    if scanned == MAX_SCAN {
+    if index_scanned >= MAX_SCENE_INDEX_SCAN || system_scanned >= MAX_SCENE_HISTORY_SCAN {
         return Err(Error::Rejected(Reason::RecoveryRequired));
     }
     if scene_catalog

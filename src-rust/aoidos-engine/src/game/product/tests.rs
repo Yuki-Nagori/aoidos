@@ -76,6 +76,58 @@ use crate::{
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Default)]
+struct StressProvider {
+    starts: AtomicUsize,
+}
+impl aoidos_llm::provider::Provider for StressProvider {
+    fn capabilities(
+        &self,
+        model: &str,
+        _mode: aoidos_llm::provider::RequestMode,
+    ) -> aoidos_llm::provider::ProviderCapabilities {
+        aoidos_llm::provider::ProviderCapabilities {
+            model: model.into(),
+            context_limit: Some(1_000_000),
+            completion: true,
+            chat: true,
+            prefix: false,
+            thinking: false,
+            stop_limit: 16,
+            max_output_tokens: 4096,
+            temperature_effective: true,
+            temperature_min: 0.0,
+            temperature_max: 2.0,
+        }
+    }
+
+    fn start<'a>(
+        &'a self,
+        request: aoidos_llm::provider::ProviderRequest,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> aoidos_llm::provider::StartFuture<'a> {
+        use aoidos_llm::provider::{ProviderDelta, ProviderFinish, ProviderInput, ProviderStream};
+
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        let text = match request.input {
+            ProviderInput::Completion(input)
+                if input.prompt.contains("[AOIDOS:CHECK-PROPOSAL]")
+                    || input.prompt.contains("[AOIDOS:SCENE-PROPOSAL]") =>
+            {
+                "{\"kind\":\"noCheck\"}"
+            }
+            _ => "灯光照亮了房间。",
+        };
+        Box::pin(async move {
+            let deltas = vec![
+                Ok(ProviderDelta::Text(text.into())),
+                Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
+            ];
+            Ok(Box::pin(futures::stream::iter(deltas)) as ProviderStream)
+        })
+    }
+}
+
+#[derive(Default)]
 struct Events(AtomicU64);
 impl MigrationEvents for Events {
     fn prepare(&self, _: &MigrationEvent) -> Result<u64, Fault> {
@@ -148,9 +200,16 @@ struct Fixture {
     factory: Arc<ProfileFactory>,
     product: Arc<Product>,
     service: Arc<Service>,
+    stress_provider: Option<Arc<StressProvider>>,
 }
 impl Fixture {
     fn new() -> Self {
+        Self::build(None)
+    }
+    fn with_stress_provider() -> Self {
+        Self::build(Some(Arc::new(StressProvider::default())))
+    }
+    fn build(stress_provider: Option<Arc<StressProvider>>) -> Self {
         let root = std::env::temp_dir().join(format!("aoidos-product-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let storage = Arc::new(Storage::new(
@@ -167,12 +226,18 @@ impl Fixture {
             provider_id: Mutex::new("deepseek".into()),
             gate: Mutex::new(None),
         });
+        let builder: Arc<ProviderBuilder> = if let Some(provider) = &stress_provider {
+            let provider = provider.clone();
+            Arc::new(move |_, _, _| Ok(provider.clone() as Arc<dyn aoidos_llm::provider::Provider>))
+        } else {
+            Arc::new(production_provider)
+        };
         let factory = ProfileFactory::with_builder(
             source.clone(),
             storage.clone(),
             SystemProxySnapshot::default(),
             Arc::new(Mutex::new(Calibration::default())),
-            Arc::new(production_provider),
+            builder,
             Arc::new(AllowAll),
         );
         let product = Arc::new(Product::new(
@@ -191,6 +256,7 @@ impl Fixture {
             factory,
             product,
             service,
+            stress_provider,
         }
     }
     async fn open(&self, new: bool) -> Result<OpenedSession, Fault> {
@@ -342,6 +408,133 @@ async fn restarting_reopens_saved_identity_without_implicitly_advancing() {
         bytes
     );
     fixture.close().await;
+}
+
+#[tokio::test]
+#[ignore = "显式运行的同一产品会话 Engine / SQLite 长回合探索"]
+async fn memory_runtime_product_rounds_collect_into_the_same_disk_sqlite_run() {
+    for rounds in [50, 100, 200] {
+        let fixture = Fixture::with_stress_provider();
+        let opened = fixture.open(false).await.unwrap();
+        let started = std::time::Instant::now();
+
+        for index in 0..rounds {
+            let text = format!("查看第 {index} 个线索");
+            let accepted = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    match fixture
+                        .service
+                        .submit_input(&opened.session_id, text.clone())
+                        .await
+                    {
+                        Ok(accepted) => break accepted,
+                        Err(error) if error.code == "app.busy" => {
+                            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        }
+                        Err(error) => panic!("合成产品回合无法接纳：{error}"),
+                    }
+                }
+            })
+            .await
+            .expect("前一合成回合应及时释放运行门");
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let state = fixture.service.get_phase(&opened.session_id).unwrap().state;
+                    if let Some(operation) = state.last_operation
+                        && operation.operation_id == accepted.operation_id
+                    {
+                        match operation.outcome {
+                            crate::game::state::OperationOutcome::Accepted => {}
+                            crate::game::state::OperationOutcome::Completed
+                                if state.phase == crate::game::state::Phase::Idle
+                                    && state.in_flight.is_none() =>
+                            {
+                                break;
+                            }
+                            crate::game::state::OperationOutcome::Completed => {}
+                            outcome => {
+                                let record_count = fixture.storage.records.get(&opened.session_id)
+                                    .ok()
+                                    .and_then(|session| session.try_lock().ok().map(|session| {
+                                        let count = session.next_sequence().saturating_sub(1);
+                                        let facts = (1..=count).filter_map(|seq| {
+                                            let parsed = session.read(seq).ok()?;
+                                            let body = parsed.body?.body;
+                                            let crate::record::format::Body::System { code, data, .. } = body else { return None; };
+                                            let crate::record::facts::Fact::SceneAdvanced { position, .. } = crate::record::facts::Fact::decode(&code, &data).ok()? else { return None; };
+                                            Some((seq, position.scene_id))
+                                        }).collect::<Vec<_>>();
+                                        (count, facts)
+                                    }));
+                                panic!(
+                                "第 {index} 个合成回合以非成功终态结束：{outcome:?}，错误：{:?}，当前场景：{:?}，初始场景：{:?}，记录数与场景事实：{:?}",
+                                operation.error,
+                                state.scene.as_ref().map(|scene| &scene.scene_id),
+                                fixture
+                                    .storage
+                                    .memory_catalog_for_run(&opened.memory_run_id)
+                                    .unwrap()
+                                    .1
+                                    .presence_policy()
+                                    .map(|policy| policy.initial_scene_id()),
+                                    record_count
+                                )
+                            },
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .expect("合成产品回合应在有界时间内完成");
+        }
+        let rounds_elapsed_ms = started.elapsed().as_millis();
+
+        let mut cursor = None;
+        let mut eligible_materials = 0;
+        let scan_started = std::time::Instant::now();
+        loop {
+            let page = fixture
+                .storage
+                .collect_memory_materials(&opened.memory_run_id, cursor)
+                .unwrap();
+            eligible_materials += page.eligible_count;
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let scan_ms = scan_started.elapsed().as_millis();
+        let provider_starts = fixture
+            .stress_provider
+            .as_ref()
+            .expect("压力测试应使用合成 Provider")
+            .starts
+            .load(Ordering::SeqCst);
+        let record_path = fixture
+            .root
+            .join("workspaces/mistbell/transcript")
+            .join(format!("{}.jsonl", opened.session_id));
+        let record_bytes = std::fs::metadata(record_path)
+            .expect("产品会话记录应落到工作区磁盘")
+            .len();
+        let sqlite_bytes = std::fs::metadata(fixture.root.join("storage.sqlite"))
+            .expect("产品会话的记忆应写入 SQLite")
+            .len();
+        let wal_bytes = std::fs::metadata(fixture.root.join("storage.sqlite-wal"))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+
+        assert_eq!(provider_starts, rounds * 2);
+        assert_eq!(eligible_materials, rounds * 5);
+        assert!(sqlite_bytes > 0);
+        assert!(record_bytes > 0);
+        println!(
+            "{{\"rounds\":{rounds},\"syntheticProviderStarts\":{provider_starts},\"eligibleMaterials\":{eligible_materials},\"roundsElapsedMs\":{rounds_elapsed_ms},\"materialScanMs\":{scan_ms},\"totalElapsedMs\":{},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes}}}",
+            started.elapsed().as_millis()
+        );
+        fixture.close().await;
+    }
 }
 
 #[tokio::test]

@@ -1067,6 +1067,30 @@ fn cycle_scene_entry_requires_an_effective_scene_advance_fact() {
 }
 
 #[test]
+fn initial_scene_remains_available_after_many_non_system_records() {
+    let mut fixture = Fixture::new();
+    let entities = crate::game::assets::entity_directory("mistbell").unwrap();
+    let catalog = crate::game::builtin::memory_scene_catalog("雾钟地窖".into(), entities).unwrap();
+    let mut before_seq = 0;
+    for index in 0..(MAX_SCAN + 1) {
+        before_seq = fixture
+            .session
+            .append(Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: format!("线索 {index}"),
+                mode: Some(RecordMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+
+    assert_eq!(
+        scene_entry_seq_before(&fixture.session, &catalog, "entry", before_seq + 1).unwrap(),
+        0
+    );
+}
+
+#[test]
 fn completed_round_is_bound_to_the_latest_matching_scene_entry() {
     let mut fixture = Fixture::new();
     let original_entry = advance_scene(&mut fixture, "start", "mistbell");

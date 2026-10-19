@@ -20,7 +20,7 @@
     "test:visual": "bun scripts/visual-regression.mts",
     "test:visual:install": "bunx playwright install --only-shell chromium",
     "memory:calibration:validate": "bun scripts/memory-calibration.ts",
-    "memory:stress": "bun scripts/cargo.mts test -p aoidos-engine --test memory-runtime -- --ignored --nocapture",
+    "memory:stress": "bun scripts/cargo.mts test -p aoidos-engine --lib game::product::tests::memory_runtime_product_rounds_collect_into_the_same_disk_sqlite_run -- --ignored --nocapture && bun scripts/cargo.mts test -p aoidos-engine --test memory-runtime -- --ignored --nocapture",
     "test:rust:affected": "bun scripts/ci-scope.mts test --rust-only",
     "format:affected": "bun scripts/ci-scope.mts format",
     "theme:defaults:build": "bun scripts/theme-defaults.mts --write",
