@@ -551,7 +551,27 @@ fn target_references_require_valid_ids_registered_targets_and_matching_subjects(
 fn proposal_context_accepts_128_targets_and_rejects_129() {
     let mut context = context();
     let template = context.targets.values().next().unwrap().clone();
-    for _ in 1..MAX_PROPOSAL_TARGETS {
+    for _ in context.targets.len()..64 {
+        let entry_id = new_id();
+        let mut target = template.clone();
+        target.entry_id = entry_id.clone();
+        target.version_id = new_id();
+        context.targets.insert(entry_id, target);
+    }
+    assert_eq!(context.targets.len(), 64);
+    assert!(proposal(character_candidate()).validate(&context).is_ok());
+
+    for _ in 64..65 {
+        let entry_id = new_id();
+        let mut target = template.clone();
+        target.entry_id = entry_id.clone();
+        target.version_id = new_id();
+        context.targets.insert(entry_id, target);
+    }
+    assert_eq!(context.targets.len(), 65);
+    assert!(proposal(character_candidate()).validate(&context).is_ok());
+
+    for _ in 65..MAX_PROPOSAL_TARGETS {
         let entry_id = new_id();
         let mut target = template.clone();
         target.entry_id = entry_id.clone();

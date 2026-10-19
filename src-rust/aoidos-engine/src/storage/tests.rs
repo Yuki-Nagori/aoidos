@@ -300,7 +300,7 @@ fn memory_collection_registers_stable_utf8_units_without_exposing_source_text() 
 }
 
 #[test]
-fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
+fn proposal_targets_above_64_are_frozen_and_completion_survives_target_changes() {
     let root = std::env::temp_dir().join(format!("aoidos-memory-targets-{}", uuid::Uuid::new_v4()));
     let storage = Storage::new(
         &root,
@@ -332,52 +332,61 @@ fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
             |repository, connection, port, _, _| {
                 let source = port.reference(&run.run_id, prior_seq)?;
                 let sources = vec![source];
-                let version = Version {
-                    version: 1,
-                    entry_id: new_memory_id(),
-                    version_id: new_memory_id(),
-                    parent_version_id: None,
-                    restored_from_version_id: None,
-                    subject: Subject::PlayerPreference,
-                    dimension: Dimension::PlayerPreference,
-                    summary: "用户喜欢海风".into(),
-                    attitude: Attitude::Believed,
-                    inferred: false,
-                    change: ChangeKind::New,
-                    source_set_hash: set_hash(&sources)?,
-                    evidence_set_hash: set_hash::<aoidos_memory::model::KnowledgeEvidence>(&[])?,
-                    sources,
-                    evidence: vec![],
-                    policy_hash: run.policy_hash,
-                };
-                let boundary = port.boundary()?;
-                let plan = Plan {
-                    expected_logical_clock: repository.clock(connection, port, &run.run_id)?,
-                    operation_id: new_memory_id(),
-                    run_id: run.run_id.clone(),
-                    history_revision: boundary.history_revision,
-                    entity_revision: boundary.entity_revision,
-                    evidence_revision: boundary.evidence_revision,
-                    policy_hash: run.policy_hash,
-                    batch_id: None,
-                    candidate_ids: vec![],
-                    targets: vec![Target {
-                        entry_id: version.entry_id.clone(),
-                        expected: Expected {
-                            version_id: None,
-                            state_revision: 0,
-                        },
-                        next: Some(version.clone()),
-                        state: EntryState::Active,
-                        effects: vec![],
-                    }],
-                    processed_materials: vec![],
-                    reason: "test target snapshot".into(),
-                };
-                repository.prepare(connection, port, &plan)?;
-                repository.write_versions(connection, &plan.operation_id)?;
-                repository.apply(connection, port, &plan.operation_id)?;
-                Ok((version.entry_id, version.version_id))
+                let versions = (0..65)
+                    .map(|_| Version {
+                        version: 1,
+                        entry_id: new_memory_id(),
+                        version_id: new_memory_id(),
+                        parent_version_id: None,
+                        restored_from_version_id: None,
+                        subject: Subject::PlayerPreference,
+                        dimension: Dimension::PlayerPreference,
+                        summary: "用户喜欢海风".into(),
+                        attitude: Attitude::Believed,
+                        inferred: false,
+                        change: ChangeKind::New,
+                        source_set_hash: set_hash(&sources).unwrap(),
+                        evidence_set_hash: set_hash::<aoidos_memory::model::KnowledgeEvidence>(&[])
+                            .unwrap(),
+                        sources: sources.clone(),
+                        evidence: vec![],
+                        policy_hash: run.policy_hash,
+                    })
+                    .collect::<Vec<_>>();
+                let first = versions.first().unwrap();
+                for versions in versions.chunks(16) {
+                    let boundary = port.boundary()?;
+                    let plan = Plan {
+                        expected_logical_clock: repository.clock(connection, port, &run.run_id)?,
+                        operation_id: new_memory_id(),
+                        run_id: run.run_id.clone(),
+                        history_revision: boundary.history_revision,
+                        entity_revision: boundary.entity_revision,
+                        evidence_revision: boundary.evidence_revision,
+                        policy_hash: run.policy_hash,
+                        batch_id: None,
+                        candidate_ids: vec![],
+                        targets: versions
+                            .iter()
+                            .map(|version| Target {
+                                entry_id: version.entry_id.clone(),
+                                expected: Expected {
+                                    version_id: None,
+                                    state_revision: 0,
+                                },
+                                next: Some(version.clone()),
+                                state: EntryState::Active,
+                                effects: vec![],
+                            })
+                            .collect(),
+                        processed_materials: vec![],
+                        reason: "test target snapshot".into(),
+                    };
+                    repository.prepare(connection, port, &plan)?;
+                    repository.write_versions(connection, &plan.operation_id)?;
+                    repository.apply(connection, port, &plan.operation_id)?;
+                }
+                Ok((first.entry_id.clone(), first.version_id.clone()))
             },
         )
         .unwrap();
@@ -434,6 +443,8 @@ fn proposal_targets_are_frozen_and_completion_survives_target_changes() {
         .unwrap();
     let context: ProposalContext =
         aoidos_json::from_value(frozen.input["proposalContext"].clone()).unwrap();
+    assert_eq!(context.targets.len(), 65);
+    assert_eq!(context.target_search.as_ref().unwrap().matched_entries, 65);
     let target = &context.targets[&entry_id];
     assert_eq!(target.version_id, version_id);
     assert_eq!(target.summary, "用户喜欢海风");

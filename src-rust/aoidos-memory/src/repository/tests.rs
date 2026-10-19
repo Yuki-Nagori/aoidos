@@ -271,6 +271,31 @@ fn entries_for_subjects_returns_active_and_archived_targets_and_checks_revision(
 }
 
 #[test]
+fn entries_for_subjects_returns_more_than_the_old_64_target_limit() {
+    let mut f = Fixture::new_in_memory();
+    for _ in 0..65 {
+        let version = f.version();
+        let plan = f.plan(version);
+        f.commit(&plan);
+    }
+
+    let scan = f
+        .repo
+        .entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGET_SCAN + 1,
+        )
+        .unwrap();
+
+    assert_eq!(scan.entries.len(), 65);
+    assert_eq!(scan.scanned_entries, 65);
+}
+
+#[test]
 fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
     let mut f = Fixture::new_in_memory();
     let run_id = f.run.run_id.clone();
