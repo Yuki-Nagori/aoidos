@@ -9,6 +9,10 @@
 
 实现 [053](053-memory-query-search-design.md) 定稿的全量有界记忆检索，并在 Vue `shared/` 提供无领域语义的受控搜索输入组件。搜索结果必须覆盖当前周目固定快照的所有页，不得只过滤已加载列表或泄露来源正文。
 
+## 对照设计
+
+`aoidos-art` 基线 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde` 中的 `memory-list.html`、`memory-pending.html`、`settings.html#memory-list` 与快捷键速查筛选是视觉 / 操作参考。检索语义仍以 053 的冻结协议为准：全量有界快照、明确未完成游标、仅匹配获准字段。设置页候选确认继续复用既有 API；不能为匹配截图伪造结果或扩大返回字段。
+
 ## 必读
 
 [053 记忆检索设计](053-memory-query-search-design.md) · [记忆架构](../architecture/memory.md) · [通信契约](../architecture/ipc-contract.md) · [界面架构](../architecture/ui-shell.md) · [分层规范](../standards/layering.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。

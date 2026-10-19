@@ -69,7 +69,7 @@ prefers-reduced-motion 时取消位移动画，使用 120ms 淡入淡出；LED �
 
 面板是非模态 aside，有可读标题；按钮提供 aria-expanded / aria-controls，钉住按钮提供 aria-pressed。Tab 在可见界面自然行进，不为面板锁焦点；需要确认破坏性回退时才使用模态并恢复原焦点。新记录不自动抢焦点；状态提示用简短 polite live region，正文流不逐 token 朗读。错误和三档结果同时有文字 / 图标，不只靠颜色区分。
 
-键盘打开面板用 Ctrl+Shift+M（macOS 为 Cmd+Shift+M）；Escape 优先级为 IME → 指令菜单 / 上下文菜单 → 模态 → 非钉住面板。焦点处于 input、textarea、select、contenteditable 或模态时，舞台快捷键全部停用；菜单触发箭头键只由菜单处理。
+键盘打开面板用 Ctrl+Shift+M（macOS 为 Cmd+Shift+M）；Escape 优先级为 IME → 指令菜单 / 上下文菜单 → 模态 → 非钉住面板。焦点处于 input、textarea、select、contenteditable 或模态时，舞台快捷键全部停用；菜单触发箭头键只由菜单处理。全局快捷键、平台提示、速查浮层与改键尚未实现；设计基线 `aoidos-art` 提交 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde` 已明确完整键位与保留键边界，由 [057](../task/057-keyboard-shortcuts-impl.md) 承接。实现必须让 IME 组字优先、保留系统编辑键、不为付费或破坏性操作提供快捷键，并在组件卸载时移除全局监听。
 
 文档层（`html` / `body`）固定视口并禁用滚动与 overscroll，避免 macOS WKWebView 整页橡皮筋回弹；页面滚动只发生在明确的内部内容区。记录滚动区使用 overscroll-behavior: contain；不要在 window 上统一 preventDefault。面板外滚轮归舞台，面板 / 菜单内滚轮不穿透；面板的非滚动 chrome 消费其区域滚轮，避免操作标题时舞台缩放。键盘 / 指针捕获以及全局快捷键监听在卸载时释放。
 

@@ -1,0 +1,42 @@
+{
+  "source": {
+    "name": "aoidos-art",
+    "commit": "1f19504ebc7390b7d9954b1c597fc3d98b6b7fde",
+    "screens": ["screens/welcome.html", "screens/settings.html"]
+  },
+  "layout": {
+    "headerHeight": 48,
+    "desktop": {
+      "960": {
+        "heroLeft": 44,
+        "heroWidth": 468,
+        "setupLeft": 548,
+        "setupWidth": 384,
+        "columnGap": 36
+      },
+      "1440": {
+        "heroLeft": 44,
+        "heroWidth": 948,
+        "setupLeft": 1028,
+        "setupWidth": 384,
+        "columnGap": 36
+      }
+    },
+    "narrow": {
+      "width": 640,
+      "heroLeft": 16,
+      "heroWidth": 608,
+      "setupLeft": 16,
+      "setupWidth": 608,
+      "columnGap": 14
+    },
+    "settings": {
+      "top": 56,
+      "right": 8,
+      "desktopWidth": 720,
+      "desktopNavWidth": 168,
+      "narrowMaxWidth": 720,
+      "narrowNavWidth": 136
+    }
+  }
+}
