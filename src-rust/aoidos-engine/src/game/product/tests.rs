@@ -83,6 +83,9 @@ use aoidos_memory::{
 };
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+#[path = "../../../tests/support/disk_metrics.rs"]
+mod disk_metrics;
+
 #[derive(Default)]
 struct StressProvider {
     starts: AtomicUsize,
@@ -535,13 +538,17 @@ async fn memory_runtime_product_rounds_collect_into_the_same_disk_sqlite_run() {
         let wal_bytes = std::fs::metadata(fixture.root.join("storage.sqlite-wal"))
             .map(|metadata| metadata.len())
             .unwrap_or(0);
+        let files_after_rounds = disk_metrics::disk_summary(&fixture.root);
 
         assert_eq!(provider_starts, rounds * 2);
         assert_eq!(eligible_materials, rounds * 5);
         assert!(sqlite_bytes > 0);
         assert!(record_bytes > 0);
+        let peak_rss = disk_metrics::peak_rss_bytes()
+            .map(|bytes| bytes.to_string())
+            .unwrap_or_else(|| "null".into());
         println!(
-            "{{\"rounds\":{rounds},\"syntheticProviderStarts\":{provider_starts},\"eligibleMaterials\":{eligible_materials},\"roundsElapsedMs\":{rounds_elapsed_ms},\"materialScanMs\":{scan_ms},\"totalElapsedMs\":{},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes}}}",
+            "{{\"rounds\":{rounds},\"syntheticProviderStarts\":{provider_starts},\"eligibleMaterials\":{eligible_materials},\"roundsElapsedMs\":{rounds_elapsed_ms},\"materialScanMs\":{scan_ms},\"totalElapsedMs\":{},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"processPeakRssBytes\":{peak_rss},\"filesAfterRounds\":{files_after_rounds}}}",
             started.elapsed().as_millis()
         );
         fixture.close().await;
@@ -817,8 +824,12 @@ async fn memory_runtime_product_session_retrieves_target_after_1000_active_entri
     let wal_bytes = std::fs::metadata(reopened.root.join("storage.sqlite-wal"))
         .map(|metadata| metadata.len())
         .unwrap_or(0);
+    let peak_rss = disk_metrics::peak_rss_bytes()
+        .map(|bytes| bytes.to_string())
+        .unwrap_or_else(|| "null".into());
+    let files_after_reopen = disk_metrics::disk_summary(&reopened.root);
     println!(
-        "{{\"activeEntries\":{ENTRY_COUNT},\"completedBatches\":{completed_batches},\"createMs\":{create_ms},\"lookupPreparationMs\":{lookup_preparation_ms},\"reopenValidationMs\":{reopen_validation_ms},\"longGameRounds\":200,\"longGameMs\":{long_game_ms},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"providerStarts\":{}}}",
+        "{{\"activeEntries\":{ENTRY_COUNT},\"completedBatches\":{completed_batches},\"createMs\":{create_ms},\"lookupPreparationMs\":{lookup_preparation_ms},\"reopenValidationMs\":{reopen_validation_ms},\"longGameRounds\":200,\"longGameMs\":{long_game_ms},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"processPeakRssBytes\":{peak_rss},\"filesAfterReopen\":{files_after_reopen},\"providerStarts\":{}}}",
         provider_starts,
     );
     reopened.close().await;
@@ -1144,8 +1155,12 @@ async fn memory_runtime_product_session_reopens_at_10000_active_entries() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
         Err(error) => panic!("读取 SQLite WAL 大小失败：{error}"),
     };
+    let peak_rss = disk_metrics::peak_rss_bytes()
+        .map(|bytes| bytes.to_string())
+        .unwrap_or_else(|| "null".into());
+    let files_after_reopen = disk_metrics::disk_summary(&reopened.root);
     println!(
-        "{{\"activeEntries\":{ENTRY_COUNT},\"seedMs\":{seed_ms},\"reopenValidationMs\":{reopen_validation_ms},\"turnsAfterReopen\":{},\"turnsMs\":{turns_ms},\"targetBudgetRefused\":true,\"lookupMs\":{lookup_ms},\"providerStarts\":{provider_starts},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes}}}",
+        "{{\"activeEntries\":{ENTRY_COUNT},\"seedMs\":{seed_ms},\"reopenValidationMs\":{reopen_validation_ms},\"turnsAfterReopen\":{},\"turnsMs\":{turns_ms},\"targetBudgetRefused\":true,\"lookupMs\":{lookup_ms},\"providerStarts\":{provider_starts},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"processPeakRssBytes\":{peak_rss},\"filesAfterReopen\":{files_after_reopen}}}",
         ROUNDS_AFTER_REOPEN * 2,
     );
     reopened.close().await;
