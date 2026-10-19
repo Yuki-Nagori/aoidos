@@ -25,6 +25,7 @@ function dataset() {
       const sourceId = `source-event-${index.toString().padStart(2, "0")}`;
       return {
         groupId,
+        leakageGroupId: `leakage-group-${index.toString().padStart(2, "0")}`,
         split: index < 42 ? "tuning" : "holdout",
         categories: [categories[index % categories.length]!],
         sources: [{ sourceId, kind: "player-input", text: `原始事件 ${index}` }],
@@ -67,6 +68,18 @@ describe("memory calibration dataset validation", () => {
     );
   });
 
+  it("keeps human-linked source and paraphrase groups in the same split", () => {
+    const value = dataset();
+    value.groups[1]!.leakageGroupId = value.groups[0]!.leakageGroupId;
+    expect(validateDataset(value)).toEqual([]);
+
+    value.groups[59]!.leakageGroupId = value.groups[0]!.leakageGroupId;
+
+    expect(validateDataset(value)).toContain(
+      "groups[59].leakageGroupId 与关联事件组分属不同数据集分区",
+    );
+  });
+
   it("requires all risk categories and keeps annotation sources inside their event group", () => {
     const value = dataset();
     for (const group of value.groups) group.categories = ["ordinary-detail"];
@@ -100,11 +113,13 @@ describe("memory calibration dataset validation", () => {
   it("rejects non-string identifiers without coercing malformed values", () => {
     const value = dataset();
     value.groups[0]!.groupId = Symbol("event-group") as unknown as string;
+    value.groups[0]!.leakageGroupId = 42 as unknown as string;
     value.groups[1]!.sources[0]!.sourceId = { toString: null } as unknown as string;
 
     expect(() => validateDataset(value)).not.toThrow();
     const issues = validateDataset(value);
     expect(issues).toContain("groups[0].groupId 格式无效");
+    expect(issues).toContain("groups[0].leakageGroupId 格式无效");
     expect(issues).toContain("groups[1].sources[0].sourceId 格式无效");
   });
 
