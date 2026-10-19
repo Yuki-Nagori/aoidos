@@ -70,6 +70,7 @@
 - 2026-10-19，费用面板新增按 CNY / USD 分开的本局用量与上限卡片，汇总复用顶栏账本函数，不换算币种；限制输入改为两列响应式表单，并统一费用面板按钮状态。BillingPanel 组件测试覆盖模型用量与已登记原币上限的显示；针对性 Vitest 2 项、类型检查、`bun run lint:affected`、`bun run format:affected` 通过。
 - 2026-10-19，剧本署名页改为设计稿中的信息卡结构，展示所选剧本的真实本地化名称、ID 与署名正文；不虚构当前 API 未提供的作者、许可证或资源清单。App 行为测试验证名称和署名来自 `engine_list_scripts`；针对性 Vitest 3 项、类型检查、lint 与格式检查通过。
 - 2026-10-19，价格登记页增加当前 Provider 展示名、模型 ID、币种和价格可用状态上下文；输入项按登记信息、基础价格、峰时价格分组并适配窄窗口。Provider 名称复用产品目录，价格版本仍不可变且沿用原有校验。BillingPanel 测试覆盖当前模型身份及价格状态；相关 Vitest 5 项、类型检查、`bun run lint:affected`（含 i18n / Vite / native fixture）和格式检查通过。
+- 2026-10-19，设置抽屉标题与关闭操作改为跟随当前内容区，导航栏仅承担页签切换；各页面共用 `SettingsSectionHeading`，删除不再使用的侧栏关闭样式。App 行为测试覆盖 API 页关闭抽屉；Vitest 3 项、类型检查、lint 与格式检查通过。
 - `bun run verify`：未执行。
 - WebView / DPI / 键盘与辅助技术检查：未执行，按适用平台留证。
 

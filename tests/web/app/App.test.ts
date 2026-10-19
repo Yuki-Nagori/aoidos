@@ -182,7 +182,7 @@ describe("App", () => {
     );
     await wrapper.get(".model-settings").trigger("click");
     expect(wrapper.find('.settings-nav button[aria-current="page"]').text()).toBe("模型与 API");
-    await wrapper.get('button[aria-label="关闭"]').trigger("click");
+    await wrapper.get("#api .settings-section-close").trigger("click");
     expect(wrapper.find("textarea").exists()).toBe(false);
     expect(
       vi

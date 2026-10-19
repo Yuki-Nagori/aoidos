@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import BillingPanel from "../../features/billing/components/BillingPanel.vue";
+import SettingsSectionHeading from "./SettingsSectionHeading.vue";
 import { useI18n } from "vue-i18n";
 import type { useProduct } from "../../features/product/composables/useProduct";
 import type { useTheme } from "../../features/theme/composables/useTheme";
@@ -145,14 +146,6 @@ function themeName(id: string, fallback: string): string {
         <nav class="settings-nav" :aria-label="t('settings.title')">
           <div class="settings-nav-heading">
             <h2 id="settings-heading">{{ t("settings.title") }}</h2>
-            <button
-              type="button"
-              class="settings-close"
-              :aria-label="t('common.close')"
-              @click="emit('close')"
-            >
-              <span aria-hidden="true">×</span>
-            </button>
           </div>
           <button
             v-for="section in sections"
@@ -168,7 +161,10 @@ function themeName(id: string, fallback: string): string {
         </nav>
         <div class="settings-content">
           <section v-show="activeSection === 'appearance'" id="appearance" class="settings-section">
-            <h3>{{ t("settings.sections.appearance") }}</h3>
+            <SettingsSectionHeading
+              :title="t('settings.sections.appearance')"
+              @close="emit('close')"
+            />
             <label>
               {{ t("settings.theme") }}
               <select
@@ -269,7 +265,7 @@ function themeName(id: string, fallback: string): string {
           </section>
 
           <section v-show="activeSection === 'api'" id="api" class="settings-section">
-            <h3>{{ t("settings.sections.api") }}</h3>
+            <SettingsSectionHeading :title="t('settings.sections.api')" @close="emit('close')" />
             <div class="settings-form-grid">
               <label>
                 {{ t("settings.provider") }}
@@ -346,7 +342,10 @@ function themeName(id: string, fallback: string): string {
           </section>
 
           <section v-show="activeSection === 'gameplay'" id="gameplay" class="settings-section">
-            <h3>{{ t("settings.sections.gameplay") }}</h3>
+            <SettingsSectionHeading
+              :title="t('settings.sections.gameplay')"
+              @close="emit('close')"
+            />
             <label>
               {{ t("settings.script") }}
               <select v-model="product.scriptId.value" :disabled="product.busy.value">
@@ -420,7 +419,7 @@ function themeName(id: string, fallback: string): string {
             id="billing"
             class="settings-section"
           >
-            <h3>{{ activeSectionTitle }}</h3>
+            <SettingsSectionHeading :title="activeSectionTitle" @close="emit('close')" />
             <BillingPanel
               :billing="billing"
               :locale="locale.resolved.value"
@@ -436,7 +435,7 @@ function themeName(id: string, fallback: string): string {
           </section>
 
           <section v-show="activeSection === 'memory'" id="memory" class="settings-section">
-            <h3>{{ t("settings.sections.memory") }}</h3>
+            <SettingsSectionHeading :title="t('settings.sections.memory')" @close="emit('close')" />
             <slot name="memory-settings" />
             <p v-if="!product.session.value" class="text-sm text-muted">
               {{ t("settings.memoryAfterStart") }}
@@ -448,7 +447,7 @@ function themeName(id: string, fallback: string): string {
             id="memory-query"
             class="settings-section"
           >
-            <h3>{{ activeSectionTitle }}</h3>
+            <SettingsSectionHeading :title="activeSectionTitle" @close="emit('close')" />
             <slot name="memory-query" :section="activeSection" />
             <p v-if="!product.session.value" class="text-sm text-muted">
               {{ t("settings.memoryAfterStart") }}
@@ -456,7 +455,10 @@ function themeName(id: string, fallback: string): string {
           </section>
 
           <section v-show="activeSection === 'scenario'" id="scenario" class="settings-section">
-            <h3>{{ t("settings.sections.scenario") }}</h3>
+            <SettingsSectionHeading
+              :title="t('settings.sections.scenario')"
+              @close="emit('close')"
+            />
             <div v-if="selectedScript" class="card scenario-script-card">
               <span class="script-ic" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
