@@ -27,6 +27,7 @@ const decisions = new Set(["remember", "not-worthy", "ask"]);
 type Source = { sourceId: string; kind: string; text: string };
 type Group = {
   groupId: string;
+  leakageGroupId: string;
   split: "tuning" | "holdout";
   categories: string[];
   sources: Source[];
@@ -69,6 +70,7 @@ function validateDataset(value: unknown): string[] {
   const groupIds = new Set<string>();
   const sourceIds = new Set<string>();
   const splitByText = new Map<string, string>();
+  const splitByLeakageGroup = new Map<string, "tuning" | "holdout">();
   const presentCategories = new Set<string>();
   const categoriesBySplit = new Map<"tuning" | "holdout", Set<string>>([
     ["tuning", new Set()],
@@ -90,6 +92,17 @@ function validateDataset(value: unknown): string[] {
       issues.push(`${path}.groupId 重复`);
     } else {
       groupIds.add(group.groupId);
+    }
+
+    if (!isValidId(group.leakageGroupId)) {
+      issues.push(`${path}.leakageGroupId 格式无效`);
+    } else if (group.split === "tuning" || group.split === "holdout") {
+      const previousSplit = splitByLeakageGroup.get(group.leakageGroupId);
+      if (previousSplit && previousSplit !== group.split) {
+        issues.push(`${path}.leakageGroupId 与关联事件组分属不同数据集分区`);
+      } else {
+        splitByLeakageGroup.set(group.leakageGroupId, group.split);
+      }
     }
 
     if (group.split === "tuning") tuningCount += 1;

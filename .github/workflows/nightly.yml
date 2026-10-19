@@ -59,3 +59,6 @@ jobs:
         run: bun run test:visual:install
       - name: Run complete local verification suite
         run: bun run verify
+      - name: Run long-run memory stress experiments
+        timeout-minutes: 20
+        run: bun run memory:stress

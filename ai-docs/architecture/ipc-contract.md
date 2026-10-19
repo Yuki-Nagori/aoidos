@@ -413,6 +413,8 @@ else showGenericError(err);
 - 前端分支**反例**：`err.message.includes("rate")`（文案漂移即坏）；`switch (err.code)` 不写 default。
 - 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../standards/comments.md) 为映射器补直测（参照 `aoidos-store` 的 `err_*` + stage_mappers 模式）。
 
+### 记忆配置、查询与批次命令（031 / 033 / 053）
+
 031 已注册记忆配置、待确认问题与条目查询命令，DTO 与 TypeScript 同型；周目初始化随 `engine_open_session` 完成并在 `OpenedSession` 返回 `memoryRunId`。设置和记忆查询界面已接入显式读取 / 保存；批次状态只读恢复命令已接入，执行入口仍由 030 的私有批次调度边界承接，产品授权入口尚未接入。
 
 - `memory_get_app_config`：无参数；返回 `AppConfig`，包含当前确认的 `parameters` 和只读 `defaultParameters`。首次读取返回版本 1 的开发初值，不写库；损坏配置不回退。设置页恢复应用默认只重置草稿，仍须显式保存。
@@ -433,13 +435,13 @@ else showGenericError(err);
 
 `MemoryBatchStatus` 的状态为 `queued | dispatched | received | completed | rejected | unknown`，并包含 `batchId`、`runId`、`historyRevision`、可空 `completion` 与可空 `diagnosticCode`。以上命令统一经过存储就绪检查；未知身份或会话不匹配按 not-found 处理，参数 / 状态不允许按 bad-request 处理，活动 lease 冲突为 `app.busy`，底层持久化错误保留对应 `store.*` 错误。供应商调用只存在于显式发送命令，恢复与查询不消耗新的模型请求。
 
+版本冲突或参数非法为 `app.bad-request`，未登记 / 非法剧本身份为 `app.bad-request`，配置损坏为 `store.corrupt`，存储初始化不可用为 `app.not-ready`。配置历史按 scope/version 留存并校验规范 JSON 哈希；当前版本通过 head 指针读取。`PolicyParameters` 数值均限制为 JavaScript 安全整数范围，Rust 负责完整领域校验，TypeScript 只声明类型且 `invoke` 透传。
+
 ## 结局快照与叙事操作（054 已定稿，056 待实现）
 
 以下为已评审的 IPC 方向，当前尚无结局命令或 DTO 实现；精确命令名、字段类型与错误映射由 056 实现设计登记。`EndingSnapshot` 由引擎从当前有效周目与持久化结局记录构造，供界面读取：包含周目结局模式与生命周期阶段、规则就绪状态、是否满足可信终局条件、已冻结结局事实 / 公开标签，以及独立的 AI 叙事状态、可选文本和白名单诊断码。未生成或未应用的事实不得伪装成已完成快照；隐藏属性原值、私有标签、提示词和供应商原始响应不进入 UI DTO。
 
 界面只读取权威快照，不能提交自选结局 ID，也不能直接宣布周目结束。引擎仅在可信终局事实已提交后按周目冻结规则求值；规范摘要与 `endingResolved` 应用后才进入 ended。AI 叙事重试是显式操作，绑定原 `resolutionId` 与 `summaryHash`，为新的物理请求分配新 `requestId`；不得重新判定标签、改写规范摘要或重复提交终态。查询与恢复不隐式请求模型、不重试供应商调用；具体恢复状态遵循 [结局规则与周目落幕](ending-flow.md) 与 054 的冻结协议。
-
-版本冲突或参数非法为 `app.bad-request`，未登记 / 非法剧本身份为 `app.bad-request`，配置损坏为 `store.corrupt`，存储初始化不可用为 `app.not-ready`。配置历史按 scope/version 留存并校验规范 JSON 哈希；当前版本通过 head 指针读取。`PolicyParameters` 数值均限制为 JavaScript 安全整数范围，Rust 负责完整领域校验，TypeScript 只声明类型且 `invoke` 透传。
 
 ## 工程纪律（可检查版）
 

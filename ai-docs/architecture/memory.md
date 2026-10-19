@@ -600,7 +600,7 @@ engine 的 `process_authorized_batch` 接收可信调用方按冻结输入构造
 
 审计同时核验效果 / 已处理素材的完整集合和效果来源的 run / session / recordSeq 去重索引；已应用目标缺失按损坏冻结，不能透传为普通未知身份。效果查询返回前审计本页关联的已应用操作，每页最多 32 个效果和 32 份有界计划，同一操作只核验一次；集合核验使用 operation 索引，避免扫描全周目效果。来源因回退失效仍按原规则过滤，不以重新计算放大原 gain。
 
-当前 `Effect` 只持有一般来源，不能证明某个角色通过其获知权限得到强化，因此 Character 目标效果仍以 `policyUnavailable` 拒绝。只有后续实现补齐主体绑定的 `KnowledgeEvidence` 存储，并在最终提交、审计和恢复时重新核验，才可开放此类效果；这不属于已完成的 030 范围。
+Character 目标效果必须携带与目标主体绑定、并经 `SourcePort` 核验的 `KnowledgeEvidence`；效果提交、审计和恢复均校验该证据。缺失、主体不匹配或来源无效时以 `invalidSource` 拒绝，不将角色效果一律视为不可用策略。`policyUnavailable` 保留给未知策略版本或未支持 payload 等情况。
 
 entries 当前指向 versions，并保存 stateRevision；正文指向、强度效果、归档 / 复活状态等任一确认变化都递增它，避免正文未变时旧数值计划仍通过 CAS。versions 保留父版本、正文 hash / 长度与有效来源；effects 保留 event / source 依据及加分 / 复活原因，计算时仅装载当前有效路径。外键、唯一幂等索引与 `(run_id,status,entry_id)` 分页索引在迁移中建立；应用字段长度校验与 SQL CHECK 联合保证合法状态。状态 / applied / targets 在同一事务更新，不依赖内存标记。没有正文变化的 no-op / notWorthy 仅事务保存处理结果；需要正文时才准备新 version 文件，不能为记一个拒绝原因反复复制正文。
 

@@ -34,6 +34,11 @@ use std::{
     time::Instant,
 };
 
+#[path = "support/disk_metrics.rs"]
+mod disk_metrics;
+
+use disk_metrics::{disk_sizes, disk_summary};
+
 #[derive(Default)]
 struct Events(AtomicU64);
 
@@ -90,6 +95,7 @@ fn memory_runtime_process_termination_recovers_received_batch() {
         unreachable!("子进程必须在持久化阶段后立即退出");
     }
 
+    let mut child_peak_rss_bytes = None;
     for stage in ["queued", "dispatched", "received"] {
         let temp_dir = TempDirectory::new();
         let child = Command::new(std::env::current_exe().unwrap())
@@ -106,6 +112,14 @@ fn memory_runtime_process_termination_recovers_received_batch() {
             .status()
             .expect("启动记忆恢复子进程");
         assert_eq!(child.code(), Some(CHILD_EXIT), "阶段 {stage} 未按预期终止");
+        if let Some(bytes) =
+            std::fs::read_to_string(temp_dir.path().join(format!("peak-rss-{stage}")))
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+        {
+            child_peak_rss_bytes =
+                Some(child_peak_rss_bytes.map_or(bytes, |peak: u64| peak.max(bytes)));
+        }
 
         let migration_events = Arc::new(Events::default());
         let record_events = Arc::new(Events::default());
@@ -192,6 +206,12 @@ fn memory_runtime_process_termination_recovers_received_batch() {
         }
         reopened.close().unwrap();
     }
+    println!(
+        "{{\"experiment\":\"process-termination-recovery\",\"stages\":[\"queued\",\"dispatched\",\"received\"],\"childPeakRssBytes\":{}}}",
+        child_peak_rss_bytes
+            .map(|bytes| bytes.to_string())
+            .unwrap_or_else(|| "null".into()),
+    );
 }
 
 fn prepare_and_terminate_batch(root: &Path, stage: &str, exit_code: i32) {
@@ -290,6 +310,10 @@ fn prepare_and_terminate_batch(root: &Path, stage: &str, exit_code: i32) {
         }
     }
 
+    if let Some(bytes) = disk_metrics::peak_rss_bytes() {
+        std::fs::write(root.join(format!("peak-rss-{stage}")), bytes.to_string())
+            .expect("保存恢复子进程 RSS 样本");
+    }
     std::process::exit(exit_code);
 }
 
@@ -422,7 +446,7 @@ fn run_trace(record_pairs: usize) -> serde_json::Value {
         "reopenValidationMs": reopen_validation_ms,
         "filesWhileOpen": files_while_open,
         "filesAfterReopen": files_after_reopen,
-        "rssPeakBytes": null,
+        "processPeakRssBytes": disk_metrics::peak_rss_bytes(),
         "crashInjection": false,
     })
 }
@@ -586,6 +610,7 @@ fn run_target_retrieval_capacity(entry_count: usize) -> serde_json::Value {
         "filesAfterReopen": files_after_reopen,
         "providerRequests": 0,
         "completedGameRounds": 0,
+        "processPeakRssBytes": disk_metrics::peak_rss_bytes(),
     })
 }
 
@@ -845,80 +870,4 @@ impl Drop for TempDirectory {
             );
         }
     }
-}
-
-fn disk_sizes(root: &Path) -> serde_json::Value {
-    let mut files = serde_json::Map::new();
-    visit_files(root, root, &mut files).expect("读取压力实验文件大小");
-    assert!(
-        files.contains_key("storage.sqlite"),
-        "未采集到 SQLite 主数据库"
-    );
-    assert!(
-        files.keys().any(|path| path.contains("/transcript/")),
-        "未采集到记录正文文件"
-    );
-    serde_json::Value::Object(files)
-}
-
-fn disk_summary(root: &Path) -> serde_json::Value {
-    let files = disk_sizes(root);
-    let files = files.as_object().expect("磁盘文件列表应为对象");
-    let mut total_bytes = 0_u64;
-    let mut sqlite_bytes = 0_u64;
-    let mut backup_bytes = 0_u64;
-    let mut memory_bytes = 0_u64;
-    let mut transcript_bytes = 0_u64;
-    let mut wal_bytes = 0_u64;
-    let mut shm_bytes = 0_u64;
-    for (path, value) in files {
-        let bytes = value.as_u64().expect("文件大小应为非负整数");
-        total_bytes += bytes;
-        if path == "storage.sqlite" {
-            sqlite_bytes = bytes;
-        } else if path.starts_with("backups/") {
-            backup_bytes += bytes;
-        } else if path.contains("/memory/") {
-            memory_bytes += bytes;
-        } else if path.contains("/transcript/") {
-            transcript_bytes += bytes;
-        } else if path == "storage.sqlite-wal" {
-            wal_bytes = bytes;
-        } else if path == "storage.sqlite-shm" {
-            shm_bytes = bytes;
-        }
-    }
-    serde_json::json!({
-        "fileCount": files.len(),
-        "totalBytes": total_bytes,
-        "sqliteBytes": sqlite_bytes,
-        "backupBytes": backup_bytes,
-        "memoryBytes": memory_bytes,
-        "transcriptBytes": transcript_bytes,
-        "walBytes": wal_bytes,
-        "shmBytes": shm_bytes,
-    })
-}
-
-fn visit_files(
-    root: &Path,
-    path: &Path,
-    files: &mut serde_json::Map<String, serde_json::Value>,
-) -> io::Result<()> {
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            visit_files(root, &path, files)?;
-        } else {
-            let metadata = entry.metadata()?;
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            files.insert(relative, serde_json::json!(metadata.len()));
-        }
-    }
-    Ok(())
 }

@@ -73,7 +73,18 @@ use crate::{
     ports::{EventPort, PreparedEvent, TurnEvent},
     record::{facts::DiceMode, test_support::Events as RecordEvents},
 };
+use aoidos_memory::{
+    model::{
+        Attitude, Candidate, CausalPort, ChangeKind, Classification, Dimension, EntryState,
+        Expected, InputMode as MemoryInputMode, Plan, PolicyOverrides, Proposal, ProposalContext,
+        Subject, SubjectRef, Target, Version, new_id, set_hash,
+    },
+    repository::{BatchState, MAX_PROPOSAL_TARGET_SEARCH_BYTES},
+};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+#[path = "../../../tests/support/disk_metrics.rs"]
+mod disk_metrics;
 
 #[derive(Default)]
 struct StressProvider {
@@ -211,6 +222,9 @@ impl Fixture {
     }
     fn build(stress_provider: Option<Arc<StressProvider>>) -> Self {
         let root = std::env::temp_dir().join(format!("aoidos-product-{}", uuid::Uuid::new_v4()));
+        Self::build_at(root, stress_provider)
+    }
+    fn build_at(root: PathBuf, stress_provider: Option<Arc<StressProvider>>) -> Self {
         std::fs::create_dir_all(&root).unwrap();
         let storage = Arc::new(Storage::new(
             &root,
@@ -524,16 +538,805 @@ async fn memory_runtime_product_rounds_collect_into_the_same_disk_sqlite_run() {
         let wal_bytes = std::fs::metadata(fixture.root.join("storage.sqlite-wal"))
             .map(|metadata| metadata.len())
             .unwrap_or(0);
+        let files_after_rounds = disk_metrics::disk_summary(&fixture.root);
 
         assert_eq!(provider_starts, rounds * 2);
         assert_eq!(eligible_materials, rounds * 5);
         assert!(sqlite_bytes > 0);
         assert!(record_bytes > 0);
+        let peak_rss = disk_metrics::peak_rss_bytes()
+            .map(|bytes| bytes.to_string())
+            .unwrap_or_else(|| "null".into());
         println!(
-            "{{\"rounds\":{rounds},\"syntheticProviderStarts\":{provider_starts},\"eligibleMaterials\":{eligible_materials},\"roundsElapsedMs\":{rounds_elapsed_ms},\"materialScanMs\":{scan_ms},\"totalElapsedMs\":{},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes}}}",
+            "{{\"rounds\":{rounds},\"syntheticProviderStarts\":{provider_starts},\"eligibleMaterials\":{eligible_materials},\"roundsElapsedMs\":{rounds_elapsed_ms},\"materialScanMs\":{scan_ms},\"totalElapsedMs\":{},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"processPeakRssBytes\":{peak_rss},\"filesAfterRounds\":{files_after_rounds}}}",
             started.elapsed().as_millis()
         );
         fixture.close().await;
+    }
+}
+
+#[tokio::test]
+async fn product_session_can_commit_player_memory_from_authorized_input() {
+    let fixture = Fixture::with_stress_provider();
+    let config = fixture.storage.memory_script_config("mistbell").unwrap();
+    fixture
+        .storage
+        .save_memory_script_config(
+            "mistbell",
+            config.config_version,
+            config.app_config_version,
+            PolicyOverrides {
+                active_capacity: Some(1_000),
+                ..PolicyOverrides::default()
+            },
+        )
+        .unwrap();
+    let opened = fixture.open(false).await.unwrap();
+    for index in 0..2 {
+        complete_product_stress_round(
+            &fixture,
+            &opened.session_id,
+            &format!("/ooc memorytoken{index:04} 玩家偏好实验记录"),
+            index,
+        )
+        .await;
+    }
+
+    let page = fixture
+        .storage
+        .collect_memory_materials(&opened.memory_run_id, None)
+        .unwrap();
+    assert!(page.eligible_count >= 2);
+    let snapshot = fixture
+        .storage
+        .prepare_collectible_memory_batch(&opened.memory_run_id)
+        .unwrap();
+    let batch_id = snapshot.batch_id.clone();
+    let catalog = fixture
+        .storage
+        .memory_catalog_for_run(&opened.memory_run_id)
+        .unwrap()
+        .1;
+    fixture
+        .storage
+        .freeze_memory_batch(&catalog, snapshot)
+        .unwrap();
+
+    let added = submit_product_stress_batch(
+        &fixture.storage,
+        &opened.session_id,
+        &catalog,
+        &batch_id,
+        true,
+    );
+    assert_eq!(added, 2);
+    assert_eq!(
+        count_active_memory_entries(&fixture.storage, &opened.memory_run_id),
+        2
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+#[ignore = "显式运行的同一产品会话 1,000 条活动记忆目标检索探索"]
+async fn memory_runtime_product_session_retrieves_target_after_1000_active_entries() {
+    const ENTRY_COUNT: usize = 1_000;
+
+    let fixture = Fixture::with_stress_provider();
+    let config = fixture.storage.memory_script_config("mistbell").unwrap();
+    fixture
+        .storage
+        .save_memory_script_config(
+            "mistbell",
+            config.config_version,
+            config.app_config_version,
+            PolicyOverrides {
+                active_capacity: Some(ENTRY_COUNT as u64),
+                ..PolicyOverrides::default()
+            },
+        )
+        .unwrap();
+    let opened = fixture.open(false).await.unwrap();
+    let catalog = fixture
+        .storage
+        .memory_catalog_for_run(&opened.memory_run_id)
+        .unwrap()
+        .1;
+
+    // 以合成的既有 OOC 记录注入容量负载，批次仍走真实 Storage 冻结和完成路径。
+    {
+        let session = fixture.storage.records.get(&opened.session_id).unwrap();
+        let mut session = session.lock().unwrap();
+        for index in 0..ENTRY_COUNT {
+            session
+                .append(crate::record::format::Body::PlayerSpeech {
+                    player_id: "player".into(),
+                    text: format!("memorytoken{index:04}"),
+                    mode: Some(crate::record::format::InputMode::OutOfCharacter),
+                    content_range: None,
+                })
+                .unwrap();
+        }
+    }
+
+    let mut cursor = None;
+    let mut collected_materials = 0;
+    loop {
+        let page = fixture
+            .storage
+            .collect_memory_materials(&opened.memory_run_id, cursor)
+            .unwrap();
+        collected_materials += page.eligible_count;
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(collected_materials, ENTRY_COUNT);
+
+    let create_started = std::time::Instant::now();
+    let mut completed_batches = 0;
+    for _ in 0..ENTRY_COUNT.div_ceil(16) {
+        let snapshot = fixture
+            .storage
+            .prepare_collectible_memory_batch(&opened.memory_run_id)
+            .unwrap();
+        assert!(!snapshot.spans.is_empty(), "应仍有未处理的合成素材");
+        let batch_id = snapshot.batch_id.clone();
+        fixture
+            .storage
+            .freeze_memory_batch(&catalog, snapshot)
+            .unwrap();
+        let added = submit_product_stress_batch(
+            &fixture.storage,
+            &opened.session_id,
+            &catalog,
+            &batch_id,
+            true,
+        );
+        assert!(added > 0, "容量批次应提交至少一条合成活动记忆");
+        completed_batches += 1;
+    }
+    let create_ms = create_started.elapsed().as_millis();
+    assert_eq!(completed_batches, ENTRY_COUNT.div_ceil(16));
+    assert_eq!(
+        count_active_memory_entries(&fixture.storage, &opened.memory_run_id),
+        ENTRY_COUNT
+    );
+
+    let lookup_started = std::time::Instant::now();
+    {
+        let session = fixture.storage.records.get(&opened.session_id).unwrap();
+        session
+            .lock()
+            .unwrap()
+            .append(crate::record::format::Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "memorytoken0999 检索确认".into(),
+                mode: Some(crate::record::format::InputMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let mut cursor = None;
+    let mut lookup_materials = 0;
+    loop {
+        let page = fixture
+            .storage
+            .collect_memory_materials(&opened.memory_run_id, cursor)
+            .unwrap();
+        lookup_materials += page.eligible_count;
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(lookup_materials, 1);
+    let lookup = fixture
+        .storage
+        .prepare_collectible_memory_batch(&opened.memory_run_id)
+        .unwrap();
+    assert_eq!(lookup.spans.len(), 1);
+    let lookup_batch_id = lookup.batch_id.clone();
+    fixture
+        .storage
+        .freeze_memory_batch(&catalog, lookup)
+        .unwrap();
+    let context = read_frozen_proposal_context(
+        &fixture.storage,
+        &opened.session_id,
+        &catalog,
+        &lookup_batch_id,
+    );
+    let search = context.target_search.as_ref().unwrap();
+    assert_eq!(search.scanned_entries, ENTRY_COUNT as u32);
+    assert_eq!(search.matched_entries, 1);
+    assert_eq!(context.targets.len(), 1);
+    assert_eq!(
+        context.targets.values().next().unwrap().summary,
+        "memorytoken0999"
+    );
+    let lookup_preparation_ms = lookup_started.elapsed().as_millis();
+    submit_product_stress_batch(
+        &fixture.storage,
+        &opened.session_id,
+        &catalog,
+        &lookup_batch_id,
+        false,
+    );
+
+    let (snapshot_before_close, _) = fixture
+        .storage
+        .with_memory(&opened.session_id, &catalog, |repository, connection, _| {
+            repository.batch(connection, &lookup_batch_id)
+        })
+        .unwrap();
+    fixture.storage.records.close(&opened.session_id).unwrap();
+    fixture.close().await;
+    let reopen_started = std::time::Instant::now();
+    let reopened = Fixture::build_at(fixture.root.clone(), fixture.stress_provider.clone());
+    let reopened_session = reopened.open(false).await.unwrap();
+    assert_eq!(reopened_session.session_id, opened.session_id);
+    assert_eq!(reopened_session.memory_run_id, opened.memory_run_id);
+    let snapshot_after_reopen = reopened
+        .storage
+        .with_memory(&opened.session_id, &catalog, |repository, connection, _| {
+            repository.batch(connection, &lookup_batch_id)
+        })
+        .unwrap()
+        .0;
+    assert_eq!(snapshot_after_reopen, snapshot_before_close);
+    assert_eq!(
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
+        ENTRY_COUNT
+    );
+    let reopen_validation_ms = reopen_started.elapsed().as_millis();
+    let long_game_started = std::time::Instant::now();
+    for index in 0..200 {
+        complete_product_stress_round(
+            &reopened,
+            &opened.session_id,
+            &format!("查看第 {index} 个线索"),
+            index,
+        )
+        .await;
+    }
+    let long_game_ms = long_game_started.elapsed().as_millis();
+    assert_eq!(
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
+        ENTRY_COUNT,
+        "长对局不应改变已提交的活动记忆数"
+    );
+    let provider_starts = reopened
+        .stress_provider
+        .as_ref()
+        .unwrap()
+        .starts
+        .load(Ordering::SeqCst);
+    assert_eq!(provider_starts, 400, "200 个产品回合应各执行两次合成生成");
+    let sqlite_path = reopened.root.join("storage.sqlite");
+    let record_path = reopened
+        .root
+        .join("workspaces/mistbell/transcript")
+        .join(format!("{}.jsonl", opened.session_id));
+    let sqlite_bytes = std::fs::metadata(&sqlite_path).unwrap().len();
+    let record_bytes = std::fs::metadata(&record_path).unwrap().len();
+    let wal_bytes = std::fs::metadata(reopened.root.join("storage.sqlite-wal"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let peak_rss = disk_metrics::peak_rss_bytes()
+        .map(|bytes| bytes.to_string())
+        .unwrap_or_else(|| "null".into());
+    let files_after_reopen = disk_metrics::disk_summary(&reopened.root);
+    println!(
+        "{{\"activeEntries\":{ENTRY_COUNT},\"completedBatches\":{completed_batches},\"createMs\":{create_ms},\"lookupPreparationMs\":{lookup_preparation_ms},\"reopenValidationMs\":{reopen_validation_ms},\"longGameRounds\":200,\"longGameMs\":{long_game_ms},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"processPeakRssBytes\":{peak_rss},\"filesAfterReopen\":{files_after_reopen},\"providerStarts\":{}}}",
+        provider_starts,
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
+#[ignore = "显式运行的同一产品会话 10,000 条活动记忆重开与预算拒绝探索"]
+async fn memory_runtime_product_session_reopens_at_10000_active_entries() {
+    const ENTRY_COUNT: usize = 10_000;
+    const ROUNDS_AFTER_REOPEN: usize = 6;
+
+    let fixture = Fixture::with_stress_provider();
+    let config = fixture.storage.memory_script_config("mistbell").unwrap();
+    fixture
+        .storage
+        .save_memory_script_config(
+            "mistbell",
+            config.config_version,
+            config.app_config_version,
+            PolicyOverrides {
+                active_capacity: Some(ENTRY_COUNT as u64),
+                ..PolicyOverrides::default()
+            },
+        )
+        .unwrap();
+    let opened = fixture.open(false).await.unwrap();
+    let catalog = fixture
+        .storage
+        .memory_catalog_for_run(&opened.memory_run_id)
+        .unwrap()
+        .1;
+    let source_seq = {
+        let session = fixture.storage.records.get(&opened.session_id).unwrap();
+        session
+            .lock()
+            .unwrap()
+            .append(crate::record::format::Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "用于满负载记忆容量探索的合成来源".into(),
+                mode: Some(crate::record::format::InputMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap()
+    };
+
+    // 使用生产版本校验与 SQLite 操作写入完整有效条目，避免把 NULL 版本行误当成容量证据。
+    let seed_started = std::time::Instant::now();
+    fixture
+        .storage
+        .with_memory_context(
+            &opened.session_id,
+            &catalog,
+            |repository, connection, port, _, _| {
+                let run = repository.run(connection, &opened.memory_run_id)?;
+                let source = port.reference(&opened.memory_run_id, source_seq)?;
+                let source_set_hash = set_hash(std::slice::from_ref(&source))?;
+                let evidence_set_hash = set_hash::<aoidos_memory::model::KnowledgeEvidence>(&[])?;
+                let versions = (0..ENTRY_COUNT)
+                    .map(|index| Version {
+                        version: 1,
+                        entry_id: new_id(),
+                        version_id: new_id(),
+                        parent_version_id: None,
+                        restored_from_version_id: None,
+                        subject: Subject::PlayerPreference,
+                        dimension: Dimension::PlayerPreference,
+                        summary: format!("合成长期容量记忆 {index:05}"),
+                        attitude: Attitude::Believed,
+                        inferred: false,
+                        change: ChangeKind::New,
+                        sources: vec![source.clone()],
+                        evidence: vec![],
+                        source_set_hash,
+                        evidence_set_hash,
+                        policy_hash: run.policy_hash,
+                    })
+                    .collect::<Vec<_>>();
+
+                for versions in versions.chunks(16) {
+                    let boundary = port.boundary()?;
+                    let targets = versions
+                        .iter()
+                        .map(|version| Target {
+                            entry_id: version.entry_id.clone(),
+                            expected: Expected {
+                                version_id: None,
+                                state_revision: 0,
+                            },
+                            next: Some(version.clone()),
+                            state: EntryState::Active,
+                            effects: vec![],
+                        })
+                        .collect();
+                    let plan = Plan {
+                        expected_logical_clock: repository.clock(
+                            connection,
+                            port,
+                            &opened.memory_run_id,
+                        )?,
+                        operation_id: new_id(),
+                        run_id: opened.memory_run_id.clone(),
+                        history_revision: boundary.history_revision,
+                        entity_revision: boundary.entity_revision,
+                        evidence_revision: boundary.evidence_revision,
+                        policy_hash: run.policy_hash,
+                        batch_id: None,
+                        candidate_ids: vec![],
+                        targets,
+                        processed_materials: vec![],
+                        reason: "10,000 条产品容量测试夹具".into(),
+                    };
+                    repository.prepare(connection, port, &plan)?;
+                    repository.write_versions(connection, &plan.operation_id)?;
+                    repository.apply(connection, port, &plan.operation_id)?;
+                }
+                let extra_version = Version {
+                    version: 1,
+                    entry_id: new_id(),
+                    version_id: new_id(),
+                    parent_version_id: None,
+                    restored_from_version_id: None,
+                    subject: Subject::PlayerPreference,
+                    dimension: Dimension::PlayerPreference,
+                    summary: "超出活动容量的合成记忆".into(),
+                    attitude: Attitude::Believed,
+                    inferred: false,
+                    change: ChangeKind::New,
+                    sources: vec![source.clone()],
+                    evidence: vec![],
+                    source_set_hash,
+                    evidence_set_hash,
+                    policy_hash: run.policy_hash,
+                };
+                let boundary = port.boundary()?;
+                let overflow_plan = Plan {
+                    expected_logical_clock: repository.clock(
+                        connection,
+                        port,
+                        &opened.memory_run_id,
+                    )?,
+                    operation_id: new_id(),
+                    run_id: opened.memory_run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    batch_id: None,
+                    candidate_ids: vec![],
+                    targets: vec![Target {
+                        entry_id: extra_version.entry_id.clone(),
+                        expected: Expected {
+                            version_id: None,
+                            state_revision: 0,
+                        },
+                        next: Some(extra_version),
+                        state: EntryState::Active,
+                        effects: vec![],
+                    }],
+                    processed_materials: vec![],
+                    reason: "验证活动记忆容量上限".into(),
+                };
+                assert!(matches!(
+                    repository.prepare(connection, port, &overflow_plan),
+                    Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::CapacityBlocked
+                    ))
+                ));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        count_active_memory_entries(&fixture.storage, &opened.memory_run_id),
+        ENTRY_COUNT
+    );
+    let seed_ms = seed_started.elapsed().as_millis();
+
+    fixture.storage.records.close(&opened.session_id).unwrap();
+    fixture.close().await;
+    let reopen_started = std::time::Instant::now();
+    let reopened = Fixture::build_at(fixture.root.clone(), fixture.stress_provider.clone());
+    let reopened_session = reopened.open(false).await.unwrap();
+    assert_eq!(reopened_session.session_id, opened.session_id);
+    assert_eq!(reopened_session.memory_run_id, opened.memory_run_id);
+    assert_eq!(
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
+        ENTRY_COUNT
+    );
+    let reopen_validation_ms = reopen_started.elapsed().as_millis();
+
+    let turns_started = std::time::Instant::now();
+    for index in 0..ROUNDS_AFTER_REOPEN {
+        complete_product_stress_round(
+            &reopened,
+            &opened.session_id,
+            &format!("检查满负载后的第 {index} 条线索"),
+            index,
+        )
+        .await;
+    }
+    let mut turns_ms = turns_started.elapsed().as_millis();
+
+    {
+        let session = reopened.storage.records.get(&opened.session_id).unwrap();
+        session
+            .lock()
+            .unwrap()
+            .append(crate::record::format::Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "合成长期容量记忆 00000 检索确认".into(),
+                mode: Some(crate::record::format::InputMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let collected = reopened
+        .storage
+        .collect_memory_materials(&opened.memory_run_id, None)
+        .unwrap();
+    assert!(collected.eligible_count > 0, "查询输入应登记为可处理素材");
+    let lookup_started = std::time::Instant::now();
+    let target_search_catalog = reopened
+        .storage
+        .memory_catalog_for_run(&opened.memory_run_id)
+        .unwrap()
+        .1;
+    let target_search_refused_for_body_budget = reopened
+        .storage
+        .with_memory_context(
+            &opened.session_id,
+            &target_search_catalog,
+            |repository, connection, port, _, _| {
+                let history_revision = port.boundary()?.history_revision;
+                let (scanned_entries, distinct_subjects, body_bytes): (i64, i64, i64) = connection
+                    .query_row(
+                        "SELECT COUNT(*), COUNT(DISTINCT v.subject_json), SUM(v.body_length) \
+                         FROM memory_entries e JOIN memory_versions v \
+                           ON v.entry_id=e.entry_id AND v.version_id=e.current_version_id \
+                         WHERE e.run_id=?1 AND e.status IN ('active','archived')",
+                        [&opened.memory_run_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .map_err(|error| {
+                        aoidos_memory::error::Error::from(aoidos_store::db::sqlite_error(error))
+                    })?;
+                assert_eq!(usize::try_from(scanned_entries).unwrap(), ENTRY_COUNT);
+                assert_eq!(distinct_subjects, 1);
+                assert!(
+                    usize::try_from(body_bytes).unwrap() > MAX_PROPOSAL_TARGET_SEARCH_BYTES,
+                    "同一主体的版本正文总量应超过目标检索预算"
+                );
+                Ok(matches!(
+                    repository.entries_for_subjects(
+                        connection,
+                        port,
+                        &opened.memory_run_id,
+                        history_revision,
+                        &[Subject::PlayerPreference],
+                        aoidos_memory::model::MAX_PROPOSAL_TARGET_SCAN + 1,
+                    ),
+                    Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::CapacityBlocked
+                    ))
+                ))
+            },
+        )
+        .unwrap();
+    assert!(
+        target_search_refused_for_body_budget,
+        "目标扫描应由版本正文总字节预算拒绝"
+    );
+    let lookup_error = reopened
+        .storage
+        .prepare_collectible_memory_batch(&opened.memory_run_id)
+        .expect_err("超过目标正文扫描预算时应在准备阶段失败关闭");
+    assert_eq!(lookup_error.code, "app.bad-request");
+    let lookup_ms = lookup_started.elapsed().as_millis();
+    assert!(
+        reopened
+            .storage
+            .active_memory_batch_status(&opened.memory_run_id)
+            .unwrap()
+            .is_none(),
+        "上下文超限不得冻结批次或占用素材"
+    );
+
+    let turns_after_refusal_started = std::time::Instant::now();
+    for index in ROUNDS_AFTER_REOPEN..(ROUNDS_AFTER_REOPEN * 2) {
+        complete_product_stress_round(
+            &reopened,
+            &opened.session_id,
+            &format!("检查预算拒绝后的第 {index} 条线索"),
+            index,
+        )
+        .await;
+    }
+    turns_ms += turns_after_refusal_started.elapsed().as_millis();
+    let provider_starts = reopened
+        .stress_provider
+        .as_ref()
+        .unwrap()
+        .starts
+        .load(Ordering::SeqCst);
+    assert_eq!(provider_starts, ROUNDS_AFTER_REOPEN * 4);
+    assert_eq!(
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
+        ENTRY_COUNT,
+        "回合与失败关闭的记忆请求都不应改变已提交容量"
+    );
+    let sqlite_bytes = std::fs::metadata(reopened.root.join("storage.sqlite"))
+        .unwrap()
+        .len();
+    let record_bytes = std::fs::metadata(
+        reopened
+            .root
+            .join("workspaces/mistbell/transcript")
+            .join(format!("{}.jsonl", opened.session_id)),
+    )
+    .unwrap()
+    .len();
+    let wal_bytes = match std::fs::metadata(reopened.root.join("storage.sqlite-wal")) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => panic!("读取 SQLite WAL 大小失败：{error}"),
+    };
+    let peak_rss = disk_metrics::peak_rss_bytes()
+        .map(|bytes| bytes.to_string())
+        .unwrap_or_else(|| "null".into());
+    let files_after_reopen = disk_metrics::disk_summary(&reopened.root);
+    println!(
+        "{{\"activeEntries\":{ENTRY_COUNT},\"seedMs\":{seed_ms},\"reopenValidationMs\":{reopen_validation_ms},\"turnsAfterReopen\":{},\"turnsMs\":{turns_ms},\"targetBudgetRefused\":true,\"lookupMs\":{lookup_ms},\"providerStarts\":{provider_starts},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"processPeakRssBytes\":{peak_rss},\"filesAfterReopen\":{files_after_reopen}}}",
+        ROUNDS_AFTER_REOPEN * 2,
+    );
+    reopened.close().await;
+}
+
+async fn complete_product_stress_round(
+    fixture: &Fixture,
+    session_id: &str,
+    text: &str,
+    index: usize,
+) {
+    let accepted = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match fixture
+                .service
+                .submit_input(session_id, text.to_owned())
+                .await
+            {
+                Ok(accepted) => break accepted,
+                Err(error) if error.code == "app.busy" => {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                Err(error) => panic!("第 {index} 个合成产品回合无法接纳：{error}"),
+            }
+        }
+    })
+    .await
+    .expect("前一合成产品回合应及时释放运行门");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let state = fixture.service.get_phase(session_id).unwrap().state;
+            if let Some(operation) = state.last_operation
+                && operation.operation_id == accepted.operation_id
+            {
+                match operation.outcome {
+                    crate::game::state::OperationOutcome::Accepted => {}
+                    crate::game::state::OperationOutcome::Completed
+                        if state.phase == crate::game::state::Phase::Idle
+                            && state.in_flight.is_none() =>
+                    {
+                        break;
+                    }
+                    crate::game::state::OperationOutcome::Completed => {}
+                    outcome => panic!(
+                        "第 {index} 个合成产品回合失败：{outcome:?}，{:?}",
+                        operation.error
+                    ),
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("合成产品回合应在有界时间内完成");
+}
+
+fn submit_product_stress_batch(
+    storage: &Storage,
+    session_id: &str,
+    catalog: &crate::game::catalog::SceneCatalog,
+    batch_id: &str,
+    classify_ooc_as_new: bool,
+) -> usize {
+    let snapshot = storage
+        .with_memory(session_id, catalog, |repository, connection, _| {
+            repository.batch(connection, batch_id)
+        })
+        .unwrap()
+        .0;
+    let context = read_frozen_proposal_context(storage, session_id, catalog, batch_id);
+    let mut added = 0;
+    let proposal = Proposal {
+        version: 1,
+        candidates: snapshot
+            .spans
+            .iter()
+            .enumerate()
+            .map(|(index, span)| {
+                let is_player_preference = classify_ooc_as_new
+                    && span.source.mode == Some(MemoryInputMode::OutOfCharacter);
+                if is_player_preference {
+                    added += 1;
+                }
+                Candidate {
+                    candidate_id: format!("product-stress-{index}"),
+                    classification: if is_player_preference {
+                        Classification::New
+                    } else {
+                        Classification::NotWorthy
+                    },
+                    source_ids: vec![span.source_id.clone()],
+                    subject_ref: SubjectRef::PlayerPreference,
+                    entity_ids: vec![],
+                    evidence_ids: vec![],
+                    target_ref: None,
+                    dimension: is_player_preference.then_some(Dimension::PlayerPreference),
+                    summary: is_player_preference.then(|| span.text.clone()),
+                    attitude: None,
+                    attitude_evidence_ids: vec![],
+                    inferred: is_player_preference.then_some(false),
+                    reason: "产品链路探索的确定性合成响应，不用于语义质量评估".into(),
+                }
+            })
+            .collect(),
+        cycle_marks: vec![],
+    };
+    proposal
+        .validate(&context)
+        .expect("合成产品提案应符合冻结上下文");
+    let response = aoidos_json::canonical_string(&proposal).unwrap();
+    let turn_id = new_id();
+    let request_id = new_id();
+    storage
+        .with_memory(session_id, catalog, |repository, connection, port| {
+            assert!(repository.dispatch_batch(
+                connection,
+                port,
+                batch_id,
+                &turn_id,
+                &request_id,
+            )?);
+            repository.receive_batch(
+                connection,
+                batch_id,
+                &turn_id,
+                &request_id,
+                response.as_bytes(),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        crate::record::memory::processing::complete_received_batch(
+            storage, session_id, catalog, batch_id,
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        storage
+            .memory_batch_status(&snapshot.run_id, batch_id)
+            .unwrap()
+            .state,
+        BatchState::Completed
+    );
+    added
+}
+
+fn read_frozen_proposal_context(
+    storage: &Storage,
+    session_id: &str,
+    catalog: &crate::game::catalog::SceneCatalog,
+    batch_id: &str,
+) -> ProposalContext {
+    storage
+        .with_memory(session_id, catalog, |repository, connection, _| {
+            let (snapshot, _) = repository.batch(connection, batch_id)?;
+            aoidos_json::from_value(snapshot.input["proposalContext"].clone())
+                .map_err(|_| aoidos_memory::error::Error::Corrupt)
+        })
+        .unwrap()
+}
+
+fn count_active_memory_entries(storage: &Storage, run_id: &str) -> usize {
+    let mut cursor = None;
+    let mut active = 0;
+    loop {
+        let page = storage.memory_entries(run_id, cursor, 32).unwrap();
+        active += page
+            .entries
+            .iter()
+            .filter(|entry| entry.state == aoidos_memory::model::EntryState::Active)
+            .count();
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return active;
+        }
     }
 }
 
