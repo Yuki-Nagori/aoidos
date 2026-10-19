@@ -148,17 +148,30 @@ function validateDataset(value: unknown): string[] {
     }
     const expected = group.expected;
     if (!decisions.has(expected.decision)) issues.push(`${path}.expected.decision 无效`);
-    for (const field of [
-      "sourceIds",
-      "visibleSubjectIds",
-      "requiredClaims",
-      "forbiddenClaims",
-      "allowedSummary",
-    ] as const) {
+    for (const field of ["requiredClaims", "forbiddenClaims", "allowedSummary"] as const) {
       if (!strings(expected[field])) {
         issues.push(`${path}.expected.${field} 必须是字符串数组`);
       } else if (expected[field].some((item) => item.trim().length === 0)) {
         issues.push(`${path}.expected.${field} 不得包含空白项`);
+      }
+    }
+    for (const field of ["sourceIds", "visibleSubjectIds"] as const) {
+      const identifiers = expected[field];
+      if (!strings(identifiers)) {
+        issues.push(`${path}.expected.${field} 必须是字符串数组`);
+        continue;
+      }
+      const seen = new Set<string>();
+      for (const identifier of identifiers) {
+        if (identifier.trim().length === 0) {
+          issues.push(`${path}.expected.${field} 不得包含空白项`);
+        } else if (!isValidId(identifier)) {
+          issues.push(`${path}.expected.${field} 含无效 ID`);
+        }
+        if (seen.has(identifier)) {
+          issues.push(`${path}.expected.${field} 含重复 ID ${identifier}`);
+        }
+        seen.add(identifier);
       }
     }
     if (typeof expected.rationale !== "string" || expected.rationale.trim().length === 0) {

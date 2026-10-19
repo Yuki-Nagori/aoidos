@@ -108,6 +108,17 @@ describe("memory calibration dataset validation", () => {
     expect(issues).toContain("groups[1].sources[0].sourceId 格式无效");
   });
 
+  it("requires referenced source and visible-subject identifiers to be valid and unique", () => {
+    const value = dataset();
+    value.groups[0]!.expected.sourceIds = ["bad id", "bad id"];
+    value.groups[0]!.expected.visibleSubjectIds = ["player", "player"];
+
+    const issues = validateDataset(value);
+    expect(issues).toContain("groups[0].expected.sourceIds 含无效 ID");
+    expect(issues).toContain("groups[0].expected.sourceIds 含重复 ID bad id");
+    expect(issues).toContain("groups[0].expected.visibleSubjectIds 含重复 ID player");
+  });
+
   it("requires positive labels to define source, visibility and summary boundaries", () => {
     const value = dataset();
     const expected = value.groups[0]!.expected;
