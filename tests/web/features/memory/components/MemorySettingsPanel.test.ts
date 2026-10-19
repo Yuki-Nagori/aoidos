@@ -54,6 +54,22 @@ describe("MemorySettingsPanel", () => {
     vi.mocked(saveMemoryScriptConfig).mockResolvedValue({ configVersion: 3 });
   });
 
+  it("shows application and scenario settings without a redundant outer disclosure", async () => {
+    const wrapper = mount(MemorySettingsPanel, {
+      props: { scriptId: "mistbell" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.element.tagName).toBe("DIV");
+    expect(wrapper.findAll("details")).toHaveLength(2);
+    expect(wrapper.findAll("summary").map((summary) => summary.text())).toEqual([
+      "Application defaults",
+      "Scenario overrides · mistbell",
+    ]);
+    wrapper.unmount();
+  });
+
   it("saves the edited application policy with its observed version", async () => {
     const wrapper = mount(MemorySettingsPanel, {
       props: { scriptId: "mistbell" },

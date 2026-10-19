@@ -82,13 +82,24 @@ const workspace = ref<InstanceType<typeof GameWorkspace>>();
 const settingsOpen = ref(false);
 const settingsSection = ref("appearance");
 const settingsTrigger = ref<HTMLButtonElement>();
-function openSettings(section = "appearance"): void {
+const settingsReturnFocus = ref<HTMLElement>();
+function openSettings(section = "appearance", trigger?: HTMLElement): void {
+  const activeElement = document.activeElement;
+  settingsReturnFocus.value =
+    trigger ??
+    (activeElement instanceof HTMLElement && activeElement !== document.body
+      ? activeElement
+      : settingsTrigger.value);
   settingsSection.value = section;
   settingsOpen.value = true;
 }
 function closeSettings(): void {
   settingsOpen.value = false;
-  void nextTick(() => settingsTrigger.value?.focus());
+  void nextTick(() => {
+    const target = settingsReturnFocus.value;
+    if (target?.isConnected) target.focus();
+    else settingsTrigger.value?.focus();
+  });
 }
 void product.load();
 void preferences.load();
@@ -120,7 +131,7 @@ void preferences.load();
             class="btn icon ghost gear"
             :aria-label="t('settings.title')"
             :aria-expanded="settingsOpen"
-            @click="openSettings()"
+            @click="openSettings('appearance', $event.currentTarget as HTMLElement)"
           >
             <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="12" cy="12" r="3" />
@@ -141,17 +152,18 @@ void preferences.load();
         ref="workspace"
         :session="product.session.value"
         :product-busy="product.busy.value"
+        :error-message="errorMessage"
         :preferences="preferences"
         @error="gameError = $event as AppFault"
         @history-revision="historyRevision = $event"
-        @open-settings="openSettings()"
+        @open-settings="openSettings('appearance', $event)"
       >
         <template #summary>
           <button
             type="button"
             class="chip hide-narrow mono game-model-chip"
             :aria-label="t('billing.title')"
-            @click="openSettings('billing')"
+            @click="openSettings('billing', $event.currentTarget as HTMLElement)"
           >
             <span>{{ product.providerId.value }}</span>
             <template v-if="billingChip">

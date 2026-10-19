@@ -9,7 +9,7 @@ const props = defineProps<{
   locale: Locale;
   errorMessage?: string;
 }>();
-const emit = defineEmits<{ openSettings: [section: string] }>();
+const emit = defineEmits<{ openSettings: [section: string, trigger: HTMLElement] }>();
 const { t } = useI18n();
 const principles = computed(() => [
   {
@@ -89,7 +89,7 @@ const canStart = computed(
           <button
             type="button"
             class="small muted welcome-text-button"
-            @click="emit('openSettings', 'scenario')"
+            @click="emit('openSettings', 'scenario', $event.currentTarget as HTMLElement)"
           >
             {{ t("settings.credits") }}
           </button>
@@ -142,7 +142,7 @@ const canStart = computed(
           <button
             type="button"
             class="btn ghost model-settings"
-            @click="emit('openSettings', 'api')"
+            @click="emit('openSettings', 'api', $event.currentTarget as HTMLElement)"
           >
             {{ t("welcome.changeInSettings") }}
           </button>
@@ -151,7 +151,11 @@ const canStart = computed(
 
       <p v-if="product.keyStatus.value?.set === false" class="welcome-notice" role="status">
         {{ t("settings.startNeedsKey") }}
-        <button type="button" class="welcome-text-button" @click="emit('openSettings', 'api')">
+        <button
+          type="button"
+          class="welcome-text-button"
+          @click="emit('openSettings', 'api', $event.currentTarget as HTMLElement)"
+        >
           {{ t("settings.openSettings") }}
         </button>
       </p>
@@ -183,7 +187,11 @@ const canStart = computed(
         </button>
       </div>
       <div class="hr" />
-      <button type="button" class="settings-hint" @click="emit('openSettings', 'appearance')">
+      <button
+        type="button"
+        class="settings-hint"
+        @click="emit('openSettings', 'appearance', $event.currentTarget as HTMLElement)"
+      >
         <svg class="i sm" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="12" r="3" />
           <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" />

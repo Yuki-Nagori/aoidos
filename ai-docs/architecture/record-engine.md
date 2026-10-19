@@ -1,6 +1,6 @@
 # 对局记录与上下文引擎
 
-更新日期：2026-10-13；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。实现由 [022](../task/022-record-engine-impl.md) 承接，阶段决策归 [012](../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../task/045-scene-presence-dialogue-impl.md) 承接。
+更新日期：2026-10-19；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。实现由 [022](../task/022-record-engine-impl.md) 承接，阶段决策归 [012](../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../task/045-scene-presence-dialogue-impl.md) 承接。
 
 ## 方案与边界
 
@@ -70,7 +70,7 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 
 ### 阶段因果事实与有效路径
 
-012 注册的 roundAccepted / checkPlanned / checkSkipped / settlementPlanned / roundSettled / roundEnded、sceneAdvanced / sceneStayed / sessionEnded、abandonCheckpoint 与 historyFork 均为类型化 system.code，具体 data 和控制顺序以[阶段机](turn-state-machine.md)为准。未知 system.code / 不支持的 data.version 可能承载控制含义，按未知 kind 只读处理，不继续投影生成或修改世界；诊断行也须登记，不接纳任意日志码。
+012 注册的 roundAccepted / checkPlanned / checkSkipped / settlementPlanned / roundSettled / roundEnded、sceneAdvanced / sceneStayed / sessionEnded、abandonCheckpoint 与 historyFork 均为类型化 system.code，具体 data 和控制顺序以[阶段机](turn-state-machine.md)为准。054 设计新增的 `endingResolved` 仅用于 `endingMode=enabled` 的周目，须在 056 实施时登记完整 data schema；disabled 与缺少 mode 的旧存档不生成该记录。未知 system.code / 不支持的 data.version 可能承载控制含义，按未知 kind 只读处理，不继续投影生成或修改世界；诊断行也须登记，不接纳任意日志码。
 
 公共 branchSeq 省略表示根路径，存在时须引用此前已 applied historyFork。rewind 不删除旧行，不复用物理 seq；投影 / record page 读取当前有效路径，历史导出保留原行。fork applied 后更换 viewEpoch，淘汰旧 cursor / bodyRef / 请求；lastRecordSeq 仍为物理最高 seq。recap 仅在覆盖范围仍有效且 sourceHash 匹配时进入 prompt，不能把已回退后果带回来。022 提供受控读写 / 重放基础，023 接入控制执行及世界解释器；解释器缺失必须拒绝，不能先启用命令。
 
@@ -266,6 +266,10 @@ from / to 在 progress 中表示该步版本，在 done / 快照中表示整个�
 store_get_migration 运行期快照包含 migrationId、phase、from?、to、current?、lastStep?、failedStep?、seq { progress, done, failed } 、error? 和 deliveryError?，字段详见契约。新流先注册监听再取当前快照，跨 migrationId 用新快照替换；迁移提交已经先于回调发生：回调同步准备 / 预留事件、更新 current 与基线，窗口投递排队到事务外；不套用记录增量的“预留后写盘”顺序，投递失败不重跑迁移。快照保存当前流和最近终态，不做事件重放；终态生产者退出后再清退旧 migrationId 的 seq，不复用 id。
 
 数据库打开 / 迁移错误必须收尾 failed 并更新快照；平台载荷准备、序号或投递失败记录 deliveryError=app.event-failed，保留数据库真实 completed / failed 状态，不把已提交迁移伪装为回滚失败。序号不可用时仍保存 current / 终态并释放门禁，不能谎报未提交版本。真实迁移失败导致业务库不开放，所需业务存储的后续命令按[通信契约](ipc-contract.md)报 app.not-ready；只读迁移诊断快照仍可查询，前端主动取快照展示失败，不持续轮询。最终事件全部丢失的检测限制沿用 IPC 契约，窗口重连 / 主动恢复可重新取快照，不暗加轮询。
+
+## 周目结局记录边界（054 已定稿，056 待实现）
+
+结局规则快照与结局 resolution 是类型化的产品事实，绑定 run、script revision / hash、`endingRulesHash`、有效历史锚点及已应用回执，使用 022 的持久化 / 恢复协议。结局规范摘要属于权威记录；AI 结局叙事是绑定 `resolutionId` 的独立展示产物，不注册为普通 narration，不进入正文、因果投影或 033 可收集素材。重试只能复用已冻结摘要，不能重新求值标签或重复提交终态。规则与记录的具体状态机由 [结局架构](ending-flow.md) 和 056 实施。
 
 ## UI 映射与验收
 

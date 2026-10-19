@@ -1,6 +1,6 @@
 # 回合与阶段状态机
 
-更新日期：2026-10-18。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/aoidos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
+更新日期：2026-10-19。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/aoidos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
 
 实现位于 `aoidos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](README.md#阶段机基础链路)，验证证据见 [023](../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
 
@@ -141,6 +141,10 @@ dice 包含 `planId`、`rng`、`modifiers`；check 包含 `planId`，result 包�
 
 sceneAdvanced / sessionEnded 的世界变更只允许对应注册类型，沿用 006 mutationId / applied 协议；上述表不建立世界属性 schema。completedSteps 固定来自 proposal / check / narration / settlement / advance，不接收模型任意字符串；它是派生的审计摘要，读取时与对应记录引用核验，不能单靠它越过缺失事实。恢复 roundAccepted 的 target 沿用检查点，profile 是新操作冻结值。
 
+`endingResolved` 只在 enabled run 的 `sessionEnded` 已 applied 后追加；同一终局锚点及冻结规则恢复出同一 resolutionId。无规则 sidecar 的新 run 与缺少 endingMode 的旧 run 保持原有 sessionEnded 终态，不进入结局解析补交流程。完整规则冻结、结束摘要及恢复顺序见[结局架构](ending-flow.md)。
+
+054 / 056 另行登记 `endingResolved` system.code，仅用于 `endingMode=enabled`；data 固定包含 resolutionId、terminal anchor、冻结 rule / tag provenance、公开事实、summaryLocale、模板版本、规范摘要与 summaryHash，AI 叙事不写入此记录。
+
 044 / 045 在 `settlementPlanned.mutations` 中扩展经登记的 presence 与获知事件类型，不新增旁路状态写入。`scenePresenceChanged` 更新可信成员集合；已 applied 且仍在当前有效路径的变更持续决定在场状态，即使该回合后来 failed / cancelled。`observed` / `rumorDelivered` 只有来源回合成功、settlement 已应用且事件仍位于当前有效路径时才可供 030 消费；取消、失败、partial、未应用或已回退分支不能生成有效获知。定向 `roundAccepted` 将 `presenceRevision` 与 target 一起保存，旁白省略；取消恢复 / 重生成原样沿用已接纳目标及 revision，此举只保持对话路由，不重新产生 `told`，也不意味着在恢复时新观察到信息。
 
 `derive_phase(EffectiveHistory, AppliedWorld, LiveOwner?)` 为纯函数。正常打开先由 006 核验 / 封 partial、恢复已知 pending mutation，再对有效因果路径投影：
@@ -238,6 +242,10 @@ phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件
 无场景时 rewind 仍可恢复到有场景的合法检查点；cancel / 查询也不要求场景存在。submit / interrupt 检查活动场景；resume / regenerate 校验检查点中的场景，允许从已提交 sessionEnded 的未完成 advance 步骤补收尾，或从 ended 历史恢复到有场景的检查点。错误优先级：参数结构 / 限额校验（bad-request）→ id 存在性（not-found）→ 与其他 lease 冲突（busy）→ 无活动场景（no-scene）→ 目标阶段 / 检查点 / pending 不允许（invalid-phase）。interrupt / cancel / submit_check 是本 lease 的受控例外，不归为第二个在飞回合；resume / regenerate / rewind 不能抢占活动 lease。存储损坏仍为 store.corrupt，底层 IO 为对应 store.*，不统统包装成 invalid-phase。engine.interrupted 仅是重启后的历史错误。
 
 监听者先订阅四事件、缓存最多 32 条，再取 phase 快照；每 session 至多一个恢复请求，新事件只合并恢复标记；具体载荷上限引用通信契约，不在消费方重复维护数值。处理独立 seq 缺口后再按 phaseRevision 应用状态，旧 revision 只推进对应事件基线，不倒退 UI；同 revision 合并完整状态数据。切换 session / stateEpoch / historyRevision 后忽略旧请求，卸载释放全部监听。最后所有事件丢失仍需重连 / 主动恢复，没有持续轮询；与 005 / 006 相同限制如实保留。
+
+## 周目结局边界（054 已定稿，056 待实现）
+
+结局规则快照在新周目进入可玩状态前由 engine 校验并冻结；终局触发是独立于五个对话 phase 的生命周期事件，不增加第六种回合 phase。engine 仅在可信终局条件已提交后，按该周目锁定的规则对已提交隐藏状态求值，冻结标签和规范事实摘要。恢复、历史回退和重试沿用原规则快照与终局锚点，不因剧本更新重新计算；AI 叙事失败不撤销权威终态。实现状态、事件与失败恢复由 [054 / 056](ending-flow.md) 及对应 task 定义。
 
 ## 对接与实现验收
 

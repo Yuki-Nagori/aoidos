@@ -11,11 +11,12 @@ const props = defineProps<{
   session: OpenedSession;
   productBusy: boolean;
   preferences: ReturnType<typeof useUiPreferences>;
+  errorMessage?: string;
 }>();
 const emit = defineEmits<{
   error: [unknown];
   historyRevision: [number];
-  openSettings: [];
+  openSettings: [trigger: HTMLElement];
 }>();
 const composer = ref<{ focus(): void }>();
 const recordsFeed = ref<HTMLElement>();
@@ -27,7 +28,7 @@ const {
   composerSubmitDisabled, composerSubmitLabel, scenePath, olderCursor, game, generation, preview,
   hasTextSelection, updateFollowState, onReadingPointerDown, jumpToLatest, onComposerKeydown,
   interruptDraft, submitComposer, confirmOperation, chooseSlashCommand, closePanel, loadOlder,
-  phaseName, reconnect,
+  phaseName, reconnect, connectionFailed,
 } = useGameWorkspace({
   session: toRef(props, "session"),
   composer,
@@ -67,7 +68,7 @@ defineExpose({ reconnect });
       @pin="panel.pin"
       @unpin="panel.unpin"
       @close="closePanel"
-      @settings="emit('openSettings')"
+      @settings="emit('openSettings', $event)"
     >
       <template #summary>
         <slot name="summary" />
@@ -126,6 +127,22 @@ defineExpose({ reconnect });
           @keyup="panelProtected = hasTextSelection()"
           @pointerdown="onReadingPointerDown"
         >
+          <p
+            v-if="props.errorMessage"
+            class="mx-3 mt-3 rounded-lg border border-danger bg-panel p-3 text-sm text-danger"
+            role="alert"
+          >
+            {{ props.errorMessage }}
+            <button
+              v-if="connectionFailed"
+              type="button"
+              class="ml-2 underline"
+              :disabled="phase.connecting.value"
+              @click="reconnect"
+            >
+              {{ t("common.reconnect") }}
+            </button>
+          </p>
           <div
             v-if="!game.historyPending.value"
             ref="recordsFeed"

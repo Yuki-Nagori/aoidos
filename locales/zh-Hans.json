@@ -103,7 +103,6 @@
     "credits": "剧本署名与许可"
   },
   "memorySettings": {
-    "title": "记忆策略",
     "explanation": "这些尚未标定的开发默认参数只用于新周目；已有周目继续使用创建时冻结的策略。参数组合不合法时会整体拒绝保存。",
     "appDefaults": "应用默认值",
     "scriptOverrides": "剧本覆盖 · {script}",
@@ -196,6 +195,35 @@
     "propose": "提议新名称",
     "name": "提议名称",
     "details": "读取当前记忆",
+    "hideDetails": "收起详情",
+    "entryStates": {
+      "active": "有效",
+      "archived": "已归档",
+      "unavailable": "不可用"
+    },
+    "subjectKinds": {
+      "character": "角色",
+      "playerPreference": "玩家偏好"
+    },
+    "dimensions": {
+      "story": "经历",
+      "relationship": "关系",
+      "playerPreference": "玩家偏好",
+      "foreshadowing": "伏笔"
+    },
+    "attitudes": {
+      "unexpressed": "未表达",
+      "believed": "相信",
+      "doubtful": "存疑",
+      "denied": "否认"
+    },
+    "changes": {
+      "new": "新记忆",
+      "supplement": "补充",
+      "correction": "修正",
+      "restore": "恢复"
+    },
+    "inferred": "推断",
     "sources": "原始来源",
     "sourceRecord": "记录 {sequence}",
     "noSources": "没有来源记录。",

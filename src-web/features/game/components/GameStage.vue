@@ -36,7 +36,7 @@ const emit = defineEmits<{
   pin: [];
   unpin: [];
   close: [];
-  settings: [];
+  settings: [trigger: HTMLElement];
 }>();
 const trigger = ref<HTMLButtonElement>();
 let returningFocus = false;
@@ -111,7 +111,7 @@ onScopeDispose(() => window.removeEventListener("keydown", onKeydown));
         type="button"
         class="btn icon ghost gear"
         :aria-label="props.settingsLabel"
-        @click="emit('settings')"
+        @click="emit('settings', $event.currentTarget as HTMLElement)"
       >
         <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="12" cy="12" r="3" />

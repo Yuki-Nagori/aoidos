@@ -45,22 +45,46 @@ watch(
     if (!isOpen) return;
     activeSection.value = initialSection;
     await nextTick();
-    panel.value?.querySelector<HTMLElement>("button, select, input")?.focus();
+    focusableElements()[0]?.focus();
   },
 );
+function isVisible(element: HTMLElement): boolean {
+  const collapsedDetails = element.closest("details:not([open])");
+  if (collapsedDetails && !element.matches("summary")) return false;
+  let current: HTMLElement | null = element;
+  while (current && panel.value?.contains(current)) {
+    const style = getComputedStyle(current);
+    if (
+      current.hidden ||
+      current.inert ||
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse"
+    ) {
+      return false;
+    }
+    current = current.parentElement;
+  }
+  return true;
+}
+function focusableElements(): HTMLElement[] {
+  if (!panel.value) return [];
+  return Array.from(
+    panel.value.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter(isVisible);
+}
 function onKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
   if (event.key === "Escape") {
+    if (event.isComposing || event.keyCode === 229) return;
     event.preventDefault();
     emit("close");
     return;
   }
   if (event.key !== "Tab" || !panel.value) return;
-  const focusable = Array.from(
-    panel.value.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), select:not(:disabled), input:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter((element) => getComputedStyle(element).display !== "none");
+  const focusable = focusableElements();
   const first = focusable[0];
   const last = focusable.at(-1);
   if (!first || !last) return;

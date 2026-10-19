@@ -79,6 +79,7 @@ describe("GameWorkspace", () => {
       session: computed(() => session),
       t: (key: string, values?: Record<string, string>) => i18n.global.t(key, values ?? {}),
       phase: { connecting: ref(false) },
+      connectionFailed: ref(true),
       records,
       current,
       presence: {
@@ -135,7 +136,12 @@ describe("GameWorkspace", () => {
       return fixture;
     });
     const wrapper = mount(GameWorkspace, {
-      props: { session, productBusy: false, preferences: prefs },
+      props: {
+        session,
+        productBusy: false,
+        errorMessage: "No price is registered for this model.",
+        preferences: prefs,
+      },
       global: { plugins: [i18n], stubs: { RecordFeed: true, ActionComposer: true } },
     });
     await wrapper.vm.$nextTick();
@@ -144,6 +150,12 @@ describe("GameWorkspace", () => {
     expect(wrapper.find(".game-topbar .phase-pill").exists()).toBe(true);
     expect(wrapper.find(".stage-area .stage-art").exists()).toBe(true);
     expect(wrapper.text()).toContain(session.title);
+    expect(wrapper.get('[role="alert"]').text()).toContain(
+      "No price is registered for this model.",
+    );
+    expect(wrapper.get('[role="alert"]').text()).toContain(i18n.global.t("common.reconnect"));
+    await wrapper.get('[role="alert"] button').trigger("click");
+    expect(fixture.reconnect).toHaveBeenCalledOnce();
     expect((wrapper.get(".work").element as HTMLDetailsElement).open).toBe(false);
     expect(wrapper.get(".work").text()).toContain(i18n.global.t("game.workProcess"));
     expect(wrapper.get(".work").text()).toContain("第一幕 · 塔门");

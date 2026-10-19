@@ -158,9 +158,13 @@ describe("MemoryQueryPanel", () => {
     });
     await flushPromises();
 
+    expect(wrapper.element.tagName).toBe("DIV");
+    expect(wrapper.find("details").exists()).toBe(false);
     expect(wrapper.text()).toContain(i18n.global.t(visibleKey));
     expect(wrapper.text()).not.toContain(i18n.global.t(hiddenKey));
-    expect(wrapper.text()).not.toContain(i18n.global.t("memoryQuery.prepareBatch"));
+    expect(wrapper.text().includes(i18n.global.t("memoryQuery.prepareBatch"))).toBe(
+      view === "list",
+    );
     wrapper.unmount();
   });
 
@@ -308,12 +312,26 @@ describe("MemoryQueryPanel", () => {
     const detailButton = wrapper
       .findAll("button")
       .find((button) => button.text().includes("读取当前记忆"));
+    expect(detailButton!.attributes("aria-expanded")).toBe("false");
     await detailButton!.trigger("click");
     await flushPromises();
     expect(getMemoryEntry).toHaveBeenCalledWith("run-1", "entry-1", "version-1");
-    expect(wrapper.text()).toContain("在钟声响起时守住了地窖入口。");
-    expect(wrapper.text()).toContain("记录 42");
-    expect(wrapper.text()).toContain("直接告知");
+    expect(detailButton!.attributes("aria-expanded")).toBe("true");
+    const entryCard = wrapper
+      .findAll("article")
+      .find((article) => article.text().includes("entry-1"));
+    expect(entryCard?.text()).toContain("有效");
+    expect(entryCard?.text()).toContain("在钟声响起时守住了地窖入口。");
+    expect(entryCard?.text()).toContain("角色");
+    expect(entryCard?.text()).toContain("经历");
+    expect(entryCard?.text()).toContain("相信");
+    expect(entryCard?.text()).toContain("新记忆");
+    expect(entryCard?.text()).not.toContain("character · story");
+    expect(entryCard?.text()).toContain("记录 42");
+    expect(entryCard?.text()).toContain("直接告知");
+    await detailButton!.trigger("click");
+    expect(detailButton!.attributes("aria-expanded")).toBe("false");
+    expect(entryCard?.text()).not.toContain("在钟声响起时守住了地窖入口。");
     wrapper.unmount();
   });
 

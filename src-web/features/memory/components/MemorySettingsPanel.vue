@@ -279,10 +279,9 @@ watch(
 </script>
 
 <template>
-  <details class="glass-panel">
-    <summary>{{ t("memorySettings.title") }}</summary>
+  <div class="grid gap-3">
     <p class="text-sm text-muted">{{ t("memorySettings.explanation") }}</p>
-    <details>
+    <details class="glass-panel">
       <summary>{{ t("memorySettings.appDefaults") }}</summary>
       <p v-if="appError" role="alert">
         {{ t("memorySettings.error") }}
@@ -327,7 +326,7 @@ watch(
       <p v-if="!appError && !appDraft" role="status">{{ t("common.loading") }}</p>
     </details>
 
-    <details>
+    <details class="glass-panel">
       <summary>{{ t("memorySettings.scriptOverrides", { script: scriptId }) }}</summary>
       <p v-if="scriptError" role="alert">
         {{ t("memorySettings.error") }}
@@ -405,5 +404,5 @@ watch(
       </form>
       <p v-if="!scriptError && !scriptConfig" role="status">{{ t("common.loading") }}</p>
     </details>
-  </details>
+  </div>
 </template>

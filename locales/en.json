@@ -103,7 +103,6 @@
     "credits": "Scenario credits and license"
   },
   "memorySettings": {
-    "title": "Memory policy",
     "explanation": "These uncalibrated development defaults apply to new runs. Existing runs keep their frozen policy. Invalid combinations are rejected as a whole.",
     "appDefaults": "Application defaults",
     "scriptOverrides": "Scenario overrides · {script}",
@@ -196,6 +195,35 @@
     "propose": "Suggest a new name",
     "name": "Name to suggest",
     "details": "Read current memory",
+    "hideDetails": "Hide details",
+    "entryStates": {
+      "active": "Active",
+      "archived": "Archived",
+      "unavailable": "Unavailable"
+    },
+    "subjectKinds": {
+      "character": "Character",
+      "playerPreference": "Player preference"
+    },
+    "dimensions": {
+      "story": "Story",
+      "relationship": "Relationship",
+      "playerPreference": "Player preference",
+      "foreshadowing": "Foreshadowing"
+    },
+    "attitudes": {
+      "unexpressed": "Unexpressed",
+      "believed": "Believed",
+      "doubtful": "Doubtful",
+      "denied": "Denied"
+    },
+    "changes": {
+      "new": "New",
+      "supplement": "Supplement",
+      "correction": "Correction",
+      "restore": "Restored"
+    },
+    "inferred": "Inferred",
     "sources": "Original sources",
     "sourceRecord": "Record {sequence}",
     "noSources": "No source records.",

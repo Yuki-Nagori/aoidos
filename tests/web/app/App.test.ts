@@ -132,6 +132,29 @@ describe("App", () => {
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
     expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(10);
+    const dialog = wrapper.get('[role="dialog"]');
+    const focusable = Array.from(
+      dialog.element.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => {
+      let parent: HTMLElement | null = element;
+      while (parent && dialog.element.contains(parent)) {
+        if (getComputedStyle(parent).display === "none") return false;
+        parent = parent.parentElement;
+      }
+      return true;
+    });
+    focusable[0]!.focus();
+    await focusable[0]!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
+    );
+    expect(document.activeElement).toBe(focusable.at(-1));
+    await wrapper.get('select[aria-label="Theme"]').trigger("keydown", {
+      key: "Escape",
+      isComposing: true,
+    });
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
     expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
     expect(wrapper.get(".settings-form-grid").findAll("select")).toHaveLength(2);
     const theme = wrapper.get('select[aria-label="Theme"]');
@@ -184,6 +207,9 @@ describe("App", () => {
     await wrapper.get(".model-settings").trigger("click");
     expect(wrapper.find('.settings-nav button[aria-current="page"]').text()).toBe("模型与 API");
     await wrapper.get("#api .settings-section-close").trigger("click");
+    await vi.waitFor(() =>
+      expect(wrapper.get(".model-settings").element).toBe(document.activeElement),
+    );
     expect(wrapper.find("textarea").exists()).toBe(false);
     expect(
       vi

@@ -270,11 +270,16 @@ export function useProduct(transport: Transport = defaults) {
   }
   function configureKey(): Promise<void> {
     return run(async () => {
-      const status = await transport.key(providerId.value, "set");
-      if (!disposed) {
-        keyStatus.value = status;
-        keyStatusLoading.value = false;
-        credentialRevision.value += 1;
+      const provider = providerId.value;
+      const request = ++keyStatusRequest;
+      try {
+        const status = await transport.key(provider, "set");
+        if (!disposed && request === keyStatusRequest && provider === providerId.value) {
+          keyStatus.value = status;
+          credentialRevision.value += 1;
+        }
+      } finally {
+        if (!disposed && request === keyStatusRequest) keyStatusLoading.value = false;
       }
     });
   }
