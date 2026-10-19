@@ -2,10 +2,11 @@ import { effectScope } from "vue";
 import { expect, it, vi } from "vitest";
 import { useProduct } from "../../../../../src-web/features/product/composables/useProduct";
 import type { LlmProfile } from "../../../../../src-web/api/llm";
-import { listProfiles, saveProfile, setKey } from "../../../../../src-web/api/llm";
+import { getKeyStatus, listProfiles, saveProfile, setKey } from "../../../../../src-web/api/llm";
 import { listScripts, openSession } from "../../../../../src-web/api/engine";
 
 vi.mock("../../../../../src-web/api/llm", () => ({
+  getKeyStatus: vi.fn(),
   listProfiles: vi.fn(),
   saveProfile: vi.fn(),
   setKey: vi.fn(),
@@ -50,6 +51,7 @@ function deferred<T>() {
 function transport() {
   return {
     profiles: vi.fn().mockResolvedValue({ items: [profile] }),
+    keyStatus: vi.fn().mockResolvedValue({ set: true, hint: "1234" }),
     scripts: vi.fn().mockResolvedValue(scripts),
     save: vi.fn().mockImplementation(async (saved: LlmProfile) => saved),
     key: vi.fn().mockResolvedValue({ set: true, hint: "1234" }),
@@ -58,6 +60,7 @@ function transport() {
 }
 it("defaults to Flash and exposes supported providers and model choices", async () => {
   vi.mocked(listProfiles).mockResolvedValue({ items: [profile] });
+  vi.mocked(getKeyStatus).mockResolvedValue({ set: true, hint: "1234" });
   vi.mocked(listScripts).mockResolvedValue(scripts);
   vi.mocked(setKey).mockResolvedValue({ set: true, hint: null });
   vi.mocked(openSession).mockResolvedValue(opened);
@@ -217,6 +220,27 @@ it("selects OpenCode Go independently with its chat model, credential and profil
   );
   scope.stop();
 });
+it("does not let an older provider key-status response replace the current provider", async () => {
+  const older = deferred<{ set: boolean; hint: string | null }>();
+  const current = deferred<{ set: boolean; hint: string | null }>();
+  const api = transport();
+  api.keyStatus.mockResolvedValueOnce({ set: false, hint: null });
+  const scope = effectScope();
+  const product = scope.run(() => useProduct(api))!;
+  await product.load();
+  api.keyStatus.mockImplementation((provider) =>
+    provider === "opencode-go" ? older.promise : current.promise,
+  );
+
+  product.providerId.value = "opencode-go";
+  product.providerId.value = "opencode-zen";
+  current.resolve({ set: false, hint: null });
+  await vi.waitFor(() => expect(product.keyStatus.value).toEqual({ set: false, hint: null }));
+  older.resolve({ set: true, hint: "1234" });
+  await vi.waitFor(() => expect(api.keyStatus).toHaveBeenCalledTimes(3));
+  expect(product.keyStatus.value).toEqual({ set: false, hint: null });
+  scope.stop();
+});
 it("exposes the documented OpenCode Zen catalog with DeepSeek V4.1 Flash first", async () => {
   const api = transport(),
     scope = effectScope(),
@@ -335,7 +359,7 @@ it.each(["load", "save", "key", "open"] as const)(
     await running;
     expect(product.profiles.value).toEqual([profile]);
     expect(product.profileId.value).toBe("default");
-    expect(product.keyStatus.value).toBeUndefined();
+    expect(product.keyStatus.value).toEqual({ set: true, hint: "1234" });
     expect(product.session.value).toBeUndefined();
     if (operation === "save") expect(api.open).not.toHaveBeenCalled();
   },

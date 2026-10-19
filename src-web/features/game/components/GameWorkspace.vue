@@ -12,7 +12,11 @@ const props = defineProps<{
   productBusy: boolean;
   preferences: ReturnType<typeof useUiPreferences>;
 }>();
-const emit = defineEmits<{ error: [unknown]; historyRevision: [number] }>();
+const emit = defineEmits<{
+  error: [unknown];
+  historyRevision: [number];
+  openSettings: [];
+}>();
 const composer = ref<{ focus(): void }>();
 const recordsFeed = ref<HTMLElement>();
 const confirmDialog = ref<HTMLDialogElement>();
@@ -63,6 +67,14 @@ defineExpose({ reconnect });
         <span class="ml-auto truncate text-xs text-muted">
           {{ t("game.phase", { phase: current ? phaseName(current.phase) : t("common.loading") }) }}
         </span>
+        <button
+          type="button"
+          class="app-settings-trigger stage-settings-trigger"
+          :aria-label="t('settings.title')"
+          @click="emit('openSettings')"
+        >
+          <span aria-hidden="true">⚙</span>
+        </button>
       </template>
       <template #scene>
         <div class="max-w-lg text-center">

@@ -6,9 +6,61 @@
     "reconnect": "Reconnect",
     "retry": "Retry",
     "cancel": "Cancel",
+    "close": "Close",
     "unknownError": "Something went wrong"
   },
+  "welcome": {
+    "eyebrow": "AI tabletop storytelling",
+    "headline": "Perform a story with AI — one that truly begins and ends.",
+    "lede": "You are not chatting with an AI; you are staging a story together — with causes, momentum and an ending. Start from a premise, and the world remembers every choice.",
+    "principles": "Game principles",
+    "pillars": {
+      "agency": {
+        "title": "Freedom",
+        "code": "agency",
+        "description": "No fixed script — describe actions in plain words"
+      },
+      "causality": {
+        "title": "Causality",
+        "code": "causality",
+        "description": "Every choice has consequences"
+      },
+      "duet": {
+        "title": "Duet",
+        "code": "duet",
+        "description": "The AI is your scene partner"
+      },
+      "ending": {
+        "title": "Ending",
+        "code": "ending",
+        "description": "Stories end instead of dragging on"
+      }
+    },
+    "startTitle": "Start a run",
+    "selectedScenario": "Selected · {id}",
+    "changeInSettings": "Change in Settings",
+    "settingsHint": "Language, theme, API, dice and limits all live in Settings"
+  },
   "settings": {
+    "title": "Settings",
+    "sections": {
+      "appearance": "Appearance & language",
+      "api": "Model & API",
+      "gameplay": "Game",
+      "billing": "Cost & limits",
+      "price": "Price registration",
+      "balance": "Provider balance",
+      "memory": "Memory",
+      "memory-list": "Memory query",
+      "memory-pending": "Pending confirmations",
+      "scenario": "Scenario & license"
+    },
+    "keyChecking": "Checking saved key…",
+    "keyUnknown": "Key status is unavailable. Retry the check before starting.",
+    "billingAfterStart": "Cost details become available after a game starts.",
+    "memoryAfterStart": "Memory settings and history are available after a game starts.",
+    "openSettings": "Open settings",
+    "startNeedsKey": "Set an API key in settings to start.",
     "language": "Interface language",
     "systemLanguageCurrent": "System default ({locale})",
     "chinese": "简体中文",
@@ -202,6 +254,7 @@
     "commitBackfill": "Apply local recovery",
     "backfillUnavailable": "Only complete saved usage can be recovered. No provider request will be sent.",
     "queryBalance": "Query DeepSeek balance",
+    "balanceUnsupported": "Balance queries are not connected for this provider.",
     "balanceStatus": "Provider balance status: {status}",
     "balanceAvailable": "available",
     "balanceUnavailable": "unavailable",

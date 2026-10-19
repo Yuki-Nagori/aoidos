@@ -148,6 +148,22 @@ describe("MemoryQueryPanel", () => {
     vi.mocked(completeMemoryBatch).mockResolvedValue(batchStatus("completed"));
   });
 
+  it.each([
+    ["pending", "memoryQuery.questions", "memoryQuery.entries"],
+    ["list", "memoryQuery.entries", "memoryQuery.questions"],
+  ] as const)("shows only the %s design section", async (view, visibleKey, hiddenKey) => {
+    const wrapper = mount(MemoryQueryPanel, {
+      props: { runId: "run-1", historyRevision: 5, view },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(i18n.global.t(visibleKey));
+    expect(wrapper.text()).not.toContain(i18n.global.t(hiddenKey));
+    expect(wrapper.text()).not.toContain(i18n.global.t("memoryQuery.prepareBatch"));
+    wrapper.unmount();
+  });
+
   it("only sends a prepared proposal after the player explicitly clicks send", async () => {
     const wrapper = mount(MemoryQueryPanel, {
       props: { runId: "run-1", historyRevision: 5 },

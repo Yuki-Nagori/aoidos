@@ -1,12 +1,13 @@
 import { computed, onScopeDispose, ref, shallowRef, watch } from "vue";
 import type { LlmProfile, KeyStatus } from "../../../api/llm";
-import { listProfiles, saveProfile, setKey } from "../../../api/llm";
+import { getKeyStatus, listProfiles, saveProfile, setKey } from "../../../api/llm";
 import type { OpenedSession, ScriptInfo } from "../../../api/engine";
 import { listScripts, openSession } from "../../../api/engine";
 import { safeError } from "../../../shared/utils/error";
 
 interface Transport {
   profiles: typeof listProfiles;
+  keyStatus: typeof getKeyStatus;
   scripts: typeof listScripts;
   save: typeof saveProfile;
   key: typeof setKey;
@@ -14,6 +15,7 @@ interface Transport {
 }
 const defaults: Transport = {
   profiles: listProfiles,
+  keyStatus: getKeyStatus,
   scripts: listScripts,
   save: saveProfile,
   key: setKey,
@@ -184,15 +186,18 @@ export function useProduct(transport: Transport = defaults) {
         profiles.value.find(
           (profile) => profile.providerId === provider && profile.model === model.value,
         )?.profileId ?? "";
+      void refreshKeyStatus(provider);
     },
     { flush: "sync" },
   );
   const session = shallowRef<OpenedSession>();
   const keyStatus = shallowRef<KeyStatus>();
+  const keyStatusLoading = ref(false);
   const credentialRevision = ref(0);
   const busy = ref(false);
   const error = shallowRef<{ code: string; message: string }>();
   let disposed = false;
+  let keyStatusRequest = 0;
   onScopeDispose(() => {
     disposed = true;
   });
@@ -218,7 +223,23 @@ export function useProduct(transport: Transport = defaults) {
         saved.items.find(
           (profile) => profile.providerId === providerId.value && profile.model === model.value,
         )?.profileId ?? "";
+      await refreshKeyStatus();
     });
+  }
+  async function refreshKeyStatus(provider = providerId.value): Promise<void> {
+    const request = ++keyStatusRequest;
+    keyStatusLoading.value = true;
+    keyStatus.value = undefined;
+    try {
+      const status = await transport.keyStatus(provider);
+      if (!disposed && request === keyStatusRequest && provider === providerId.value) {
+        keyStatus.value = status;
+      }
+    } catch {
+      // 密钥状态不可读时保持未知，不能将读取失败误报为“未设置”。
+    } finally {
+      if (!disposed && request === keyStatusRequest) keyStatusLoading.value = false;
+    }
   }
   async function selectProfile(): Promise<string> {
     const defaultProfileId =
@@ -252,6 +273,7 @@ export function useProduct(transport: Transport = defaults) {
       const status = await transport.key(providerId.value, "set");
       if (!disposed) {
         keyStatus.value = status;
+        keyStatusLoading.value = false;
         credentialRevision.value += 1;
       }
     });
@@ -277,11 +299,13 @@ export function useProduct(transport: Transport = defaults) {
     model,
     session,
     keyStatus,
+    keyStatusLoading,
     credentialRevision,
     busy,
     error,
     load,
     models,
+    refreshKeyStatus,
     configureKey,
     open,
   };

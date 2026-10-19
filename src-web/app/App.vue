@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import SetupPanel from "./components/SetupPanel.vue";
 import MemorySettingsPanel from "../features/memory/components/MemorySettingsPanel.vue";
 import MemoryQueryPanel from "../features/memory/components/MemoryQueryPanel.vue";
 import GameWorkspace from "../features/game/components/GameWorkspace.vue";
+import WelcomeScreen from "./components/WelcomeScreen.vue";
 import { useProduct } from "../features/product/composables/useProduct";
 import { useTheme } from "../features/theme/composables/useTheme";
 import { useLocale } from "../features/locale/composables/useLocale";
@@ -60,37 +61,93 @@ const errorMessage = computed(() => {
   }
 });
 const workspace = ref<InstanceType<typeof GameWorkspace>>();
+const settingsOpen = ref(false);
+const settingsSection = ref("appearance");
+const settingsTrigger = ref<HTMLButtonElement>();
+function openSettings(section = "appearance"): void {
+  settingsSection.value = section;
+  settingsOpen.value = true;
+}
+function closeSettings(): void {
+  settingsOpen.value = false;
+  void nextTick(() => settingsTrigger.value?.focus());
+}
 void product.load();
 void preferences.load();
 </script>
 <template>
-  <main class="mx-auto grid min-h-screen max-w-4xl gap-6 p-6 text-ink">
+  <div class="app-root">
+    <main class="app-shell" :inert="settingsOpen">
+      <header v-if="!product.session.value" class="topbar">
+        <svg class="logo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".3" />
+          <path
+            d="M6.5 15.5c2-6 9-9 11-7"
+            stroke="var(--accent)"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
+          <circle cx="17.5" cy="8.5" r="1.6" fill="var(--accent-violet)" />
+        </svg>
+        <span class="brand-word">{{ t("common.appName") }}</span>
+        <span class="spacer" />
+        <div class="app-header-actions">
+          <button
+            ref="settingsTrigger"
+            type="button"
+            class="btn icon ghost gear"
+            :aria-label="t('settings.title')"
+            :aria-expanded="settingsOpen"
+            @click="openSettings()"
+          >
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" />
+            </svg>
+          </button>
+        </div>
+      </header>
+      <WelcomeScreen
+        v-if="!product.session.value"
+        :product="product"
+        :locale="locale.resolved.value"
+        :error-message="errorMessage"
+        @open-settings="openSettings"
+      />
+      <GameWorkspace
+        v-if="product.session.value"
+        ref="workspace"
+        :session="product.session.value"
+        :product-busy="product.busy.value"
+        :preferences="preferences"
+        @error="gameError = $event as AppFault"
+        @history-revision="historyRevision = $event"
+        @open-settings="openSettings()"
+      />
+    </main>
     <SetupPanel
+      :open="settingsOpen"
+      :initial-section="settingsSection"
       :product="product"
       :theme="theme"
       :locale="locale"
       :billing="billing"
       :error-message="errorMessage"
       @reconnect="workspace?.reconnect()"
+      @close="closeSettings"
     >
       <template #memory-settings>
         <MemorySettingsPanel :script-id="product.scriptId.value" />
       </template>
+      <template #memory-query="{ section }">
+        <MemoryQueryPanel
+          v-if="product.session.value"
+          :key="product.session.value.memoryRunId"
+          :run-id="product.session.value.memoryRunId"
+          :history-revision="historyRevision"
+          :view="section === 'memory-list' ? 'list' : 'pending'"
+        />
+      </template>
     </SetupPanel>
-    <MemoryQueryPanel
-      v-if="product.session.value"
-      :key="product.session.value.memoryRunId"
-      :run-id="product.session.value.memoryRunId"
-      :history-revision="historyRevision"
-    />
-    <GameWorkspace
-      v-if="product.session.value"
-      ref="workspace"
-      :session="product.session.value"
-      :product-busy="product.busy.value"
-      :preferences="preferences"
-      @error="gameError = $event as AppFault"
-      @history-revision="historyRevision = $event"
-    />
-  </main>
+  </div>
 </template>

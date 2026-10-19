@@ -83,7 +83,620 @@
 }
 
 @layer components {
-  /* 示例页玻璃面板：工具类之外沉淀的第一个小组件类（ui.md 禁则约定）。 */
+  .app-root {
+    min-height: 100dvh;
+    background: var(--app-bg) fixed;
+  }
+
+  .app-shell {
+    position: relative;
+    display: grid;
+    width: min(100%, 60rem);
+    height: 100dvh;
+    min-height: 30rem;
+    grid-template-rows: 3rem minmax(0, 1fr);
+    margin-inline: auto;
+    overflow: hidden;
+    container: app-shell / inline-size;
+    color: var(--ink);
+  }
+
+  .topbar {
+    display: flex;
+    height: 3rem;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0 0.5rem 0 1rem;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .app-header-actions {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .topbar .spacer {
+    flex: 1;
+    min-width: 0.25rem;
+  }
+
+  .logo {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: none;
+  }
+
+  .brand-word {
+    font-size: 0.875rem;
+    font-weight: 650;
+    letter-spacing: 0.03em;
+  }
+
+  .settings-close {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    flex: none;
+    place-items: center;
+    border: 1px solid var(--hairline);
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--ink);
+    font-size: 1.1rem;
+  }
+
+  .stage-settings-trigger {
+    width: 2rem;
+    height: 2rem;
+    margin-left: 0.25rem;
+    font-size: 0.95rem;
+  }
+
+  .i {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.7;
+  }
+
+  .i.sm {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+  .i.lg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+  .small {
+    font-size: 0.71875rem;
+  }
+  .muted {
+    color: var(--muted);
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+  }
+  .row.wrap {
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    display: inline-flex;
+    min-height: 2rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.5rem;
+    background: color-mix(in srgb, var(--ink) 4%, transparent);
+    padding: 0 0.625rem;
+    color: var(--ink);
+    cursor: pointer;
+    font-size: 0.75rem;
+    transition:
+      background-color 140ms ease,
+      border-color 140ms ease;
+  }
+
+  .btn:hover {
+    background: color-mix(in srgb, var(--ink) 8%, transparent);
+  }
+  .btn.primary {
+    border-color: transparent;
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  .btn.primary:hover {
+    background: color-mix(in srgb, var(--accent) 88%, var(--ink));
+  }
+  .btn.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+  }
+  .btn.ghost:hover {
+    background: color-mix(in srgb, var(--ink) 5%, transparent);
+    color: var(--ink);
+  }
+  .btn.lg {
+    min-height: 2.375rem;
+    padding-inline: 1rem;
+    font-size: 0.8125rem;
+  }
+  .btn.icon {
+    width: 2rem;
+    min-height: 2rem;
+    padding: 0;
+  }
+  .btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+  .btn:focus-visible,
+  .welcome-text-button:focus-visible,
+  .settings-hint:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .led {
+    width: 0.375rem;
+    height: 0.375rem;
+    flex: none;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+
+  .led.accent {
+    background: var(--led-active);
+  }
+
+  /* 欢迎页按 aoidos-art/screens/welcome.html 的 DOM 层级复现，模板绑定真实剧本与模型状态。 */
+  .welcome-body {
+    position: absolute;
+    inset: 3rem 0 0;
+    display: flex;
+    align-items: center;
+    gap: 2.25rem;
+    overflow: auto;
+    padding: 1.25rem 1.75rem 1.25rem 2.75rem;
+  }
+
+  .hero {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .welcome-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .welcome-eyebrow > span {
+    width: 1.125rem;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  .hero h1 {
+    margin: 0;
+    font-size: 2.125rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+
+  .hero .lede {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.875rem;
+    line-height: 1.65;
+  }
+
+  .pillars {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.625rem;
+  }
+
+  .pillar {
+    display: grid;
+    gap: 0.1875rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--ink) 5%, transparent);
+    padding: 0.6875rem 0.875rem;
+  }
+
+  .pillar-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.78125rem;
+    font-weight: 600;
+  }
+
+  .dot {
+    width: 0.4375rem;
+    height: 0.4375rem;
+    flex: none;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .dot-causality {
+    background: var(--accent-violet);
+  }
+  .dot-duet {
+    background: var(--accent-warm);
+  }
+  .dot-ending {
+    background: var(--led-active);
+  }
+
+  .pillar-code {
+    margin-left: auto;
+    color: var(--muted);
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.625rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .pillar-description {
+    color: var(--muted);
+    font-size: 0.71875rem;
+  }
+
+  .setup {
+    display: flex;
+    width: 24rem;
+    flex: none;
+    flex-direction: column;
+    gap: 0.8125rem;
+    padding: 1.25rem;
+  }
+
+  .glass {
+    border: 1px solid var(--hairline);
+    border-radius: 1rem;
+    background: var(--panel);
+  }
+
+  .setup-heading,
+  .script-copy,
+  .model-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .setup-title {
+    font-size: 1.1875rem;
+    font-weight: 640;
+  }
+
+  .note {
+    color: var(--muted);
+    font-size: 0.71875rem;
+    line-height: 1.45;
+  }
+
+  .field {
+    display: grid;
+    min-width: 0;
+    gap: 0.375rem;
+  }
+
+  .lbl {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    color: var(--muted);
+    font-size: 0.71875rem;
+  }
+
+  .welcome-text-button,
+  .settings-hint {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .welcome-text-button {
+    padding: 0;
+  }
+  .welcome-text-button:hover {
+    color: var(--ink);
+  }
+
+  .card {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--ink) 4%, transparent);
+    padding: 0.625rem 0.75rem;
+  }
+
+  .script-ic {
+    display: grid;
+    width: 2.75rem;
+    height: 2.75rem;
+    flex: none;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--accent-warm) 35%, transparent);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--accent-warm) 14%, transparent);
+    color: var(--accent-warm);
+  }
+
+  .script-ic svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+  .script-copy {
+    flex: 1;
+    gap: 0.125rem;
+  }
+  .script-copy strong {
+    overflow: hidden;
+    font-size: 0.84375rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .script-copy > span {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.6875rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .muted-icon {
+    color: var(--muted);
+  }
+
+  .model-card {
+    gap: 0.625rem;
+    padding: 0.625rem 0.625rem 0.625rem 0.75rem;
+  }
+  .model-copy {
+    flex: 1;
+    gap: 0.125rem;
+  }
+  .model-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-provider {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  .model-settings {
+    height: 1.625rem;
+    flex: none;
+    padding-inline: 0.5rem;
+    font-size: 0.7rem;
+  }
+
+  .welcome-notice {
+    margin: 0;
+    color: var(--warning);
+    font-size: 0.75rem;
+  }
+
+  .start-actions {
+    gap: 0.5rem;
+  }
+  .start-actions > button {
+    flex: 1 1 auto;
+  }
+  .hr {
+    height: 1px;
+    background: var(--hairline);
+  }
+
+  .settings-hint {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--muted);
+    font-size: 0.71875rem;
+    text-decoration: none;
+  }
+
+  .settings-hint:hover {
+    color: var(--ink);
+  }
+  .settings-hint .spacer {
+    flex: 1;
+  }
+
+  .settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+  }
+
+  .settings-backdrop {
+    position: fixed;
+    z-index: 50;
+    inset: 3rem 0 0;
+    display: flex;
+    justify-content: flex-end;
+    background: rgba(3, 8, 14, 0.56);
+    backdrop-filter: blur(3px);
+  }
+
+  .settings-dialog {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    width: min(45rem, calc(100vw - 1rem));
+    height: calc(100% - 1rem);
+    grid-template-rows: minmax(0, 1fr) auto;
+    overflow: hidden;
+    margin: 0.5rem 0.5rem 0.5rem 0;
+    border: 1px solid var(--hairline);
+    border-radius: 1rem;
+    background: color-mix(in srgb, var(--panel) 97%, transparent);
+    box-shadow: -1rem 0 4rem rgba(0, 0, 0, 0.25);
+    color: var(--ink);
+    outline: none;
+  }
+
+  .settings-layout {
+    display: grid;
+    min-height: 0;
+    grid-template-columns: 10.5rem minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    overflow: auto;
+    border-right: 1px solid var(--hairline);
+    padding: 0.75rem 0.65rem;
+  }
+
+  .settings-nav-heading {
+    display: flex;
+    min-height: 2rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.4rem 0.5rem;
+  }
+
+  .settings-nav-heading h2 {
+    font-size: 0.8125rem;
+    font-weight: 650;
+  }
+
+  .settings-nav button {
+    display: flex;
+    min-height: 2rem;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 0.65rem;
+    padding: 0.4375rem 0.625rem;
+    color: var(--muted);
+    font-size: 0.78125rem;
+    text-align: left;
+  }
+
+  .settings-nav button.is-subsection {
+    padding-left: 1.875rem;
+    font-size: 0.75rem;
+  }
+
+  .settings-nav button[aria-current="page"]::before {
+    width: 0.375rem;
+    height: 0.375rem;
+    flex: none;
+    border-radius: 50%;
+    background: var(--accent);
+    content: "";
+  }
+
+  .settings-nav button[aria-current="page"] {
+    border-color: var(--hairline);
+    background: color-mix(in srgb, var(--accent-violet) 12%, var(--panel));
+    color: var(--ink);
+  }
+
+  .settings-content {
+    overflow: auto;
+    padding: 1rem 1.125rem 1.25rem;
+  }
+
+  .settings-section {
+    display: grid;
+    align-content: start;
+    gap: 1rem;
+  }
+
+  .settings-section h3 {
+    margin-bottom: 0.25rem;
+    font-size: 1rem;
+    font-weight: 650;
+  }
+
+  .settings-section > label {
+    display: grid;
+    gap: 0.45rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  .settings-section select,
+  .settings-section input {
+    min-height: 2.6rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.65rem;
+    background: var(--panel);
+    padding: 0.5rem 0.7rem;
+    color: var(--ink);
+  }
+
+  .settings-section > button,
+  .settings-actions button {
+    justify-self: start;
+    border: 1px solid var(--hairline);
+    border-radius: 0.65rem;
+    background: color-mix(in srgb, var(--panel) 86%, transparent);
+    padding: 0.55rem 0.8rem;
+    color: var(--ink);
+  }
+
+  .settings-section :where(.glass-panel) {
+    justify-items: stretch;
+    padding: 1rem;
+    text-align: left;
+  }
+
+  .settings-credits pre {
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    padding-top: 0.75rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  .settings-error {
+    border-top: 1px solid var(--hairline);
+    padding: 0.75rem 1.25rem;
+    color: var(--danger);
+  }
+
+  /* 玻璃面板复用主题面板色，减少页面之间不必要的表面差异。 */
   .glass-panel {
     display: grid;
     gap: 16px;
@@ -100,32 +713,6 @@
 
   .glass-panel:not([open]) {
     padding: 1rem 1.25rem;
-  }
-
-  .setup-summary {
-    display: grid;
-    gap: 0.75rem;
-    justify-items: center;
-    list-style: none;
-    cursor: pointer;
-  }
-
-  .setup-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .glass-panel:not([open]) .setup-summary {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .glass-panel:not([open]) .setup-summary h1 {
-    font-size: 1.125rem;
-  }
-
-  .glass-panel:not([open]) .setup-summary p {
-    display: none;
   }
 
   .led-dot {
@@ -390,7 +977,66 @@
     backdrop-filter: blur(3px);
   }
 
+  @container app-shell (max-width: 720px) {
+    .welcome-body {
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: 0.875rem;
+      padding: 1rem;
+    }
+
+    .hero h1 {
+      font-size: 1.5rem;
+    }
+    .hero .lede,
+    .hero .pillars {
+      display: none;
+    }
+    .setup {
+      width: auto;
+    }
+    .model-settings {
+      padding-inline: 0.25rem;
+      font-size: 0.65rem;
+    }
+  }
+
   @media (max-width: 680px) {
+    .settings-dialog {
+      width: min(45rem, calc(100vw - 1rem));
+      height: calc(100% - 1rem);
+      margin: 0.5rem 0.5rem 0.5rem 0;
+    }
+
+    .settings-layout {
+      grid-template-columns: 8rem minmax(0, 1fr);
+    }
+
+    .settings-nav {
+      flex-direction: column;
+      overflow-x: hidden;
+      border-right: 1px solid var(--hairline);
+      border-bottom: 0;
+      padding: 0.5rem 0.375rem;
+    }
+
+    .settings-nav button {
+      white-space: normal;
+    }
+    .settings-nav button.is-subsection {
+      padding-left: 0.875rem;
+    }
+
+    .settings-nav button {
+      flex: none;
+      white-space: nowrap;
+    }
+
+    .settings-content {
+      padding: 1rem 0.75rem;
+    }
+
     .game-stage {
       width: 100%;
       min-height: min(42rem, calc(100dvh - 1rem));

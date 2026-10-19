@@ -40,9 +40,9 @@ describe("BillingPanel", () => {
       global: { plugins: [i18n] },
     });
 
-    expect(wrapper.find("details").exists()).toBe(false);
+    expect(wrapper.find("h4").exists()).toBe(false);
     await wrapper.setProps({ active: true });
-    expect(wrapper.find("details").exists()).toBe(true);
+    expect(wrapper.get("h4").text()).toBe(i18n.global.t("billing.title"));
     expect(wrapper.text()).not.toContain(i18n.global.t("billing.queryBalance"));
 
     await wrapper.setProps({ providerId: "deepseek" });
@@ -50,5 +50,30 @@ describe("BillingPanel", () => {
     expect(wrapper.text()).toContain(formatExactCurrency("12.50", "USD", "en"));
     await wrapper.setProps({ locale: "zh-Hans" });
     expect(wrapper.text()).toContain(formatExactCurrency("12.50", "USD", "zh-Hans"));
+  });
+
+  it("shows only the selected design section in the settings drawer", async () => {
+    const billing = new Proxy(
+      {},
+      {
+        get: (_target, key) => {
+          if (key === "__v_isRef" || key === "then") return undefined;
+          if (typeof key === "string" && key.includes("input")) return ref("");
+          return ref(false);
+        },
+      },
+    ) as ReturnType<typeof useBilling>;
+    const wrapper = mount(BillingPanel, {
+      props: { billing, locale: "en", active: true, providerId: "deepseek", view: "price" },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.text()).toContain(i18n.global.t("billing.savePrice"));
+    expect(wrapper.text()).not.toContain(i18n.global.t("billing.cnyLimit"));
+    expect(wrapper.text()).not.toContain(i18n.global.t("billing.queryBalance"));
+
+    await wrapper.setProps({ view: "balance" });
+    expect(wrapper.text()).toContain(i18n.global.t("billing.queryBalance"));
+    expect(wrapper.text()).not.toContain(i18n.global.t("billing.savePrice"));
   });
 });

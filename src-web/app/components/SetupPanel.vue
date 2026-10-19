@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import BillingPanel from "../../features/billing/components/BillingPanel.vue";
 import { useI18n } from "vue-i18n";
 import type { useProduct } from "../../features/product/composables/useProduct";
@@ -8,14 +8,66 @@ import type { useLocale } from "../../features/locale/composables/useLocale";
 import type { useBilling } from "../../features/billing/composables/useBilling";
 
 const { t } = useI18n();
-const { product, theme, locale, billing, errorMessage } = defineProps<{
+const { open, initialSection, product, theme, locale, billing, errorMessage } = defineProps<{
+  open: boolean;
+  initialSection: string;
   product: ReturnType<typeof useProduct>;
   theme: ReturnType<typeof useTheme>;
   locale: ReturnType<typeof useLocale>;
   billing: ReturnType<typeof useBilling>;
   errorMessage?: string;
 }>();
-const emit = defineEmits<{ reconnect: [] }>();
+const emit = defineEmits<{ reconnect: []; close: [] }>();
+const panel = ref<HTMLElement>();
+const activeSection = ref("appearance");
+const sections = computed(() => [
+  { id: "appearance", label: t("settings.sections.appearance") },
+  { id: "api", label: t("settings.sections.api") },
+  { id: "gameplay", label: t("settings.sections.gameplay") },
+  { id: "billing", label: t("settings.sections.billing") },
+  { id: "price", label: t("settings.sections.price") },
+  { id: "balance", label: t("settings.sections.balance") },
+  { id: "memory", label: t("settings.sections.memory") },
+  { id: "memory-list", label: t("settings.sections.memory-list") },
+  { id: "memory-pending", label: t("settings.sections.memory-pending") },
+  { id: "scenario", label: t("settings.sections.scenario") },
+]);
+const activeSectionTitle = computed(
+  () => sections.value.find((section) => section.id === activeSection.value)?.label ?? t("settings.title"),
+);
+watch(
+  () => open,
+  async (isOpen) => {
+    if (!isOpen) return;
+    activeSection.value = initialSection;
+    await nextTick();
+    panel.value?.querySelector<HTMLElement>("button, select, input")?.focus();
+  },
+);
+function onKeydown(event: KeyboardEvent): void {
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    emit("close");
+    return;
+  }
+  if (event.key !== "Tab" || !panel.value) return;
+  const focusable = Array.from(
+    panel.value.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), select:not(:disabled), input:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => getComputedStyle(element).display !== "none");
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (!first || !last) return;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 const selectedScript = computed(() =>
   product.scripts.value.find((script) => script.scriptId === product.scriptId.value),
 );
@@ -72,126 +124,225 @@ function themeName(id: string, fallback: string): string {
 }
 </script>
 <template>
-  <details class="glass-panel" :open="!product.session.value">
-    <summary class="setup-summary">
-      <h1 class="text-2xl font-semibold">{{ t("common.appName") }}</h1>
-      <p class="text-sm text-muted">{{ t("game.intro") }}</p>
-    </summary>
-    <div class="flex gap-3">
-      <label>
-        {{ t("settings.theme") }}
-        <select
-          :value="theme.theme.value"
-          :aria-label="t('settings.theme')"
-          :disabled="theme.saving.value"
-          @change="theme.setTheme(($event.target as HTMLSelectElement).value)"
-        >
-          <option v-for="option in theme.themes.value" :key="option.id" :value="option.id">
-            {{ themeName(option.id, option.name) }}
-          </option>
-        </select>
-      </label>
-      <button
-        type="button"
-        v-if="product.scriptId.value === 'mistbell'"
-        @click="theme.toggleSkin"
-      >
-        {{ theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin") }}
-      </button>
-    </div>
-    <p v-if="themeErrorMessage" role="status">{{ themeErrorMessage }}</p>
-    <p v-if="skinErrorMessage" role="status">{{ skinErrorMessage }}</p>
-    <p v-else-if="theme.warningCount.value">
-      {{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}
-    </p>
-    <label>
-      {{ t("settings.language") }}
-      <select
-        :value="locale.choice.value"
-        :aria-label="t('settings.language')"
-        :disabled="!locale.ready.value || locale.saving.value"
-        @change="locale.setChoice(
-          ($event.target as HTMLSelectElement).value as 'system' | 'zh-Hans' | 'en',
-        )"
-      >
-        <option value="system">
-          {{
-            t("settings.systemLanguageCurrent", {
-              locale: t(
-                locale.resolved.value === "zh-Hans" ? "settings.chinese" : "settings.english",
-              ),
-            })
-          }}
-        </option>
-        <option value="zh-Hans">{{ t("settings.chinese") }}</option>
-        <option value="en">{{ t("settings.english") }}</option>
-      </select>
-    </label>
-    <p v-if="localeNotice" role="status">{{ localeNotice }}</p>
-    <label>
-      {{ t("settings.provider") }}
-      <select
-        v-model="product.providerId.value"
-        :aria-label="t('settings.provider')"
-        :disabled="product.busy.value"
-      >
-        <option
-          v-for="provider in product.providerOptions"
-          :key="provider.id"
-          :value="provider.id"
-        >
-          {{ provider.label }}
-        </option>
-      </select>
-    </label>
-    <label>
-      {{ t("settings.model") }}
-      <select
-        v-model="product.model.value"
-        :aria-label="t('settings.model')"
-        :disabled="product.busy.value"
-      >
-        <option v-for="model in product.models.value" :key="model.id" :value="model.id">
-          {{ model.label }}
-        </option>
-      </select></label>
-    <button type="button" :disabled="product.busy.value" @click="product.configureKey">
-      {{ t("settings.setApiKey") }}
-    </button>
-    <p v-if="product.keyStatus.value">
-      {{ product.keyStatus.value.set ? t("settings.keySet") : t("settings.keyMissing") }}
-    </p>
-    <label>
-      {{ t("settings.script") }}
-      <select v-model="product.scriptId.value" :disabled="product.busy.value">
-        <option
-          v-for="script in product.scripts.value"
-          :key="script.scriptId"
-          :value="script.scriptId"
-        >
-          {{ script.displayNames[locale.resolved.value] ?? script.title }}
-        </option>
-      </select></label>
-    <slot name="memory-settings" />
-    <div class="flex gap-4">
-      <button type="button" :disabled="product.busy.value" @click="product.open(false)">
-        {{ t("game.restart") }}
-      </button>
-      <button type="button" :disabled="product.busy.value" @click="product.open(true)">
-        {{ t("game.newCycle") }}
-      </button>
-      <button type="button" @click="emit('reconnect')">{{ t("common.reconnect") }}</button>
-    </div>
-    <BillingPanel
-      :billing="billing"
-      :locale="locale.resolved.value"
-      :active="Boolean(product.session.value)"
-      :provider-id="product.providerId.value"
-    />
-    <details v-if="selectedScript">
-      <summary>{{ t("settings.credits") }}</summary>
-      <pre class="whitespace-pre-wrap text-sm">{{ selectedScript.attributions }}</pre>
-    </details>
-    <p v-if="errorMessage" role="alert">{{ errorMessage }}</p>
-  </details>
+  <div v-if="open" class="settings-backdrop">
+    <section
+      ref="panel"
+      class="settings-dialog"
+      role="dialog"
+      aria-modal="true"
+      :aria-labelledby="'settings-heading'"
+      tabindex="-1"
+      @keydown="onKeydown"
+    >
+      <div class="settings-layout">
+        <nav class="settings-nav" :aria-label="t('settings.title')">
+          <div class="settings-nav-heading">
+            <h2 id="settings-heading">{{ t("settings.title") }}</h2>
+            <button
+              type="button"
+              class="settings-close"
+              :aria-label="t('common.close')"
+              @click="emit('close')"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+          <button
+            v-for="section in sections"
+            :key="section.id"
+            type="button"
+            :aria-current="activeSection === section.id ? 'page' : undefined"
+            :class="{ 'is-subsection': ['price', 'balance', 'memory-list', 'memory-pending'].includes(section.id) }"
+            :aria-controls="['price', 'balance'].includes(section.id) ? 'billing' : ['memory-list', 'memory-pending'].includes(section.id) ? 'memory-query' : section.id"
+            @click="activeSection = section.id"
+          >
+            {{ section.label }}
+          </button>
+        </nav>
+        <div class="settings-content">
+          <section v-show="activeSection === 'appearance'" id="appearance" class="settings-section">
+            <h3>{{ t("settings.sections.appearance") }}</h3>
+            <label>
+              {{ t("settings.theme") }}
+              <select
+                :value="theme.theme.value"
+                :aria-label="t('settings.theme')"
+                :disabled="theme.saving.value"
+                @change="theme.setTheme(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="option in theme.themes.value" :key="option.id" :value="option.id">
+                  {{ themeName(option.id, option.name) }}
+                </option>
+              </select>
+            </label>
+            <button
+              v-if="product.scriptId.value === 'mistbell'"
+              type="button"
+              @click="theme.toggleSkin"
+            >
+              {{ theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin") }}
+            </button>
+            <p v-if="themeErrorMessage" role="status">{{ themeErrorMessage }}</p>
+            <p v-if="skinErrorMessage" role="status">{{ skinErrorMessage }}</p>
+            <p v-else-if="theme.warningCount.value">
+              {{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}
+            </p>
+            <label>
+              {{ t("settings.language") }}
+              <select
+                :value="locale.choice.value"
+                :aria-label="t('settings.language')"
+                :disabled="!locale.ready.value || locale.saving.value"
+                @change="locale.setChoice(
+                  ($event.target as HTMLSelectElement).value as 'system' | 'zh-Hans' | 'en',
+                )"
+              >
+                <option value="system">
+                  {{
+                    t("settings.systemLanguageCurrent", {
+                      locale: t(
+                        locale.resolved.value === "zh-Hans" ? "settings.chinese" : "settings.english",
+                      ),
+                    })
+                  }}
+                </option>
+                <option value="zh-Hans">{{ t("settings.chinese") }}</option>
+                <option value="en">{{ t("settings.english") }}</option>
+              </select>
+            </label>
+            <p v-if="localeNotice" role="status">{{ localeNotice }}</p>
+          </section>
+
+          <section v-show="activeSection === 'api'" id="api" class="settings-section">
+            <h3>{{ t("settings.sections.api") }}</h3>
+            <label>
+              {{ t("settings.provider") }}
+              <select
+                v-model="product.providerId.value"
+                :aria-label="t('settings.provider')"
+                :disabled="product.busy.value"
+              >
+                <option
+                  v-for="provider in product.providerOptions"
+                  :key="provider.id"
+                  :value="provider.id"
+                >
+                  {{ provider.label }}
+                </option>
+              </select>
+            </label>
+            <label>
+              {{ t("settings.model") }}
+              <select
+                v-model="product.model.value"
+                :aria-label="t('settings.model')"
+                :disabled="product.busy.value"
+              >
+                <option v-for="model in product.models.value" :key="model.id" :value="model.id">
+                  {{ model.label }}
+                </option>
+              </select>
+            </label>
+            <button type="button" :disabled="product.busy.value" @click="product.configureKey">
+              {{ t("settings.setApiKey") }}
+            </button>
+            <p v-if="product.keyStatusLoading.value" role="status">
+              {{ t("settings.keyChecking") }}
+            </p>
+            <p v-else-if="product.keyStatus.value" role="status">
+              {{ product.keyStatus.value.set ? t("settings.keySet") : t("settings.keyMissing") }}
+            </p>
+            <p v-else role="status">{{ t("settings.keyUnknown") }}</p>
+            <button
+              v-if="!product.keyStatus.value && !product.keyStatusLoading.value"
+              type="button"
+              @click="product.refreshKeyStatus()"
+            >
+              {{ t("common.retry") }}
+            </button>
+          </section>
+
+          <section v-show="activeSection === 'gameplay'" id="gameplay" class="settings-section">
+            <h3>{{ t("settings.sections.gameplay") }}</h3>
+            <label>
+              {{ t("settings.script") }}
+              <select v-model="product.scriptId.value" :disabled="product.busy.value">
+                <option
+                  v-for="script in product.scripts.value"
+                  :key="script.scriptId"
+                  :value="script.scriptId"
+                >
+                  {{ script.displayNames[locale.resolved.value] ?? script.title }}
+                </option>
+              </select>
+            </label>
+            <div class="settings-actions">
+              <button
+                type="button"
+                :disabled="product.busy.value || product.keyStatus.value?.set !== true"
+                @click="product.open(false)"
+              >
+                {{ t("game.restart") }}
+              </button>
+              <button
+                type="button"
+                :disabled="product.busy.value || product.keyStatus.value?.set !== true"
+                @click="product.open(true)"
+              >
+                {{ t("game.newCycle") }}
+              </button>
+              <button type="button" @click="emit('reconnect')">{{ t("common.reconnect") }}</button>
+            </div>
+          </section>
+
+          <section
+            v-show="['billing', 'price', 'balance'].includes(activeSection)"
+            id="billing"
+            class="settings-section"
+          >
+            <h3>{{ activeSectionTitle }}</h3>
+            <BillingPanel
+              :billing="billing"
+              :locale="locale.resolved.value"
+              :active="Boolean(product.session.value)"
+              :provider-id="product.providerId.value"
+              :view="activeSection === 'price' || activeSection === 'balance' ? activeSection : 'billing'"
+            />
+            <p v-if="!product.session.value" class="text-sm text-muted">
+              {{ t("settings.billingAfterStart") }}
+            </p>
+          </section>
+
+          <section v-show="activeSection === 'memory'" id="memory" class="settings-section">
+            <h3>{{ t("settings.sections.memory") }}</h3>
+            <slot name="memory-settings" />
+            <p v-if="!product.session.value" class="text-sm text-muted">
+              {{ t("settings.memoryAfterStart") }}
+            </p>
+          </section>
+
+          <section
+            v-show="activeSection === 'memory-list' || activeSection === 'memory-pending'"
+            id="memory-query"
+            class="settings-section"
+          >
+            <h3>{{ activeSectionTitle }}</h3>
+            <slot name="memory-query" :section="activeSection" />
+            <p v-if="!product.session.value" class="text-sm text-muted">
+              {{ t("settings.memoryAfterStart") }}
+            </p>
+          </section>
+
+          <section v-show="activeSection === 'scenario'" id="scenario" class="settings-section">
+            <h3>{{ t("settings.sections.scenario") }}</h3>
+            <details v-if="selectedScript" class="settings-credits">
+              <summary>{{ t("settings.credits") }}</summary>
+              <pre>{{ selectedScript.attributions }}</pre>
+            </details>
+          </section>
+        </div>
+      </div>
+      <p v-if="errorMessage" class="settings-error" role="alert">{{ errorMessage }}</p>
+    </section>
+  </div>
 </template>

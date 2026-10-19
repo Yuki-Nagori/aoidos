@@ -14,7 +14,7 @@ IPC 薄调用与 Rust 同型的 TS 载荷类型放 `src-web/api/`，不在组件
 
 Composable 遵循 [Vue 官方约定](https://vuejs.org/guide/reusability/composables.html#conventions-and-best-practices)：`use` 前缀、接受 ref / getter、用 watch 跟踪输入、返回包含 refs 的普通对象。必须在 setup 或活动 effectScope 中同步调用；资源通过 [onScopeDispose](https://vuejs.org/api/reactivity-advanced.html#onscopedispose) 清理。桌面事件订阅不读取挂载后的 DOM，不增加 SSR 承诺或无需求的全局 store。
 
-回合消费者通过 `useLlmTurn` 管理已知 turnId 的订阅与重连；消费和恢复规则在 utils，通过注入端口独立测试。当前产品组合由 `app/App.vue` 组合产品设置、记忆面板和对局工作区；跨 feature 的设置展示留在 `app/components/SetupPanel.vue`。`features/game/` 持有 `GameWorkspace`、舞台、记录、输入与对应状态；其他功能按 `features/<feature>/` 归档。纯面板转换 / 输入预览留在 `features/game/utils/`，多个 feature 共用的格式化与订阅清理位于 `shared/utils/`。`recoveryError` 表示读取失败，不能覆盖 Rust 回合 outcome / error。架构拆分由 051 承接，Aoidos-art 视觉与页面移植由 052 承接；025 的三平台实机与辅助技术验收仍在任务中跟踪。
+回合消费者通过 `useLlmTurn` 管理已知 turnId 的订阅与重连；消费和恢复规则在 utils，通过注入端口独立测试。当前产品组合由 `app/App.vue` 组合产品、主题、语言、费用、记忆和对局功能；`WelcomeScreen.vue` 负责未开局空态，`SetupPanel.vue` 负责跨 feature 设置抽屉，并通过插槽承载记忆设置 / 查询。抽屉仅在打开时挂载，未开始会话时费用和记忆的会话数据明确不可用。`features/game/` 持有 `GameWorkspace`、舞台、记录、输入与对应状态；其他功能按 `features/<feature>/` 归档。纯面板转换 / 输入预览留在 `features/game/utils/`，多个 feature 共用的格式化与订阅清理位于 `shared/utils/`。`recoveryError` 表示读取失败，不能覆盖 Rust 回合 outcome / error。架构拆分由 051 承接，Aoidos-art 视觉与页面移植由 052 承接；025 的三平台实机与辅助技术验收仍在任务中跟踪。
 
 ## SFC 与类型
 

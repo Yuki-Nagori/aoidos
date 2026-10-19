@@ -221,10 +221,10 @@ useEnginePhase → api/engine + listener-group
     → phase-consumer（独立事件基线与跨流修订）
 
 app/App.vue（跨功能组合）
-  ├─ app/components/SetupPanel（产品、主题、语言与跨功能设置）
+  ├─ app/components/SetupPanel（统一设置抽屉；仅在显式打开时挂载）
   │    ├─ features/billing/BillingPanel（费用与供应商用量）
-  │    └─ memory 设置由 app 插槽装配
-  ├─ features/memory/MemoryQueryPanel（与游戏区并列）
+  │    └─ features/memory 的设置与查询由 app 插槽装配
+  ├─ app/components/WelcomeScreen（未开局摘要与显式开局）
   └─ features/game/GameWorkspace
        ├─ useGameView / useGameInput / useGameControls
        ├─ useUiPreferences 由 app 创建并注入
@@ -249,7 +249,7 @@ aoidos-art（固定版本的静态设计输入）
   → 使用 Aoidos 已有 Rust / IPC 状态；尚未实现的能力不伪装为可用
 ```
 
-目录边界和实现顺序由 [051](../task/051-web-ui-architecture-refactor.md) / [052](../task/052-aoidos-art-vue-port.md) 跟踪。设计 HTML、预览工具和生成文案不进入产品运行时；正式 token、locale 与交互状态继续分别由主题、i18n 和产品架构持有。App 层可以组合 feature，但 shared 不依赖 feature，feature 不循环依赖。
+目录边界和实现顺序由 [051](../task/051-web-ui-architecture-refactor.md) / [052](../task/052-aoidos-art-vue-port.md) 跟踪。052 按设计 HTML 的主要 DOM 层级、排布与响应式断点用 Vue 重实现；设计 HTML、预览工具和生成文案不进入产品运行时，不能以自由改版代替视觉移植。正式 token、locale 与交互状态继续分别由主题、i18n 和产品架构持有。App 层可以组合 feature，但 shared 不依赖 feature，feature 不循环依赖。
 
 ## 文档职责
 

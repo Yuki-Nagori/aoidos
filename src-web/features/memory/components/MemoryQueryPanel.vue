@@ -26,8 +26,13 @@ import {
   sendMemoryBatch,
 } from "../../../api/memory";
 
-const props = defineProps<{ runId: string; historyRevision: number }>();
+const props = defineProps<{
+  runId: string;
+  historyRevision: number;
+  view?: "all" | "list" | "pending";
+}>();
 const { t } = useI18n();
+const panelView = computed(() => props.view ?? "all");
 const classificationLabels = computed(() => ({
   repeat: t("memoryQuery.classifications.repeat"),
   supplement: t("memoryQuery.classifications.supplement"),
@@ -404,9 +409,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <details class="glass-panel">
-    <summary>{{ t("memoryQuery.title") }}</summary>
-    <section class="grid gap-2 p-2">
+  <details class="glass-panel" :open="panelView !== 'all'">
+    <summary v-if="panelView === 'all'">{{ t("memoryQuery.title") }}</summary>
+    <section v-if="panelView === 'all'" class="grid gap-2 p-2">
       <div class="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -490,7 +495,7 @@ onBeforeUnmount(() => {
         {{ t("memoryQuery.reload") }}
       </button>
     </p>
-    <section class="grid gap-2 p-2">
+    <section v-if="panelView === 'all' || panelView === 'pending'" class="grid gap-2 p-2">
       <div class="flex items-center justify-between gap-2">
         <h2 class="font-semibold">{{ t("memoryQuery.questions") }}</h2>
         <button type="button" :disabled="questionBusy" @click="loadQuestions()">
@@ -567,7 +572,7 @@ onBeforeUnmount(() => {
       </button>
     </section>
 
-    <section class="grid gap-2 p-2">
+    <section v-if="panelView === 'all' || panelView === 'list'" class="grid gap-2 p-2">
       <div class="flex items-center justify-between gap-2">
         <h2 class="font-semibold">{{ t("memoryQuery.entries") }}</h2>
         <button type="button" :disabled="entryBusy" @click="loadEntries()">
