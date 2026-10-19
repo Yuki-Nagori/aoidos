@@ -68,6 +68,7 @@ fn context() -> ProposalContext {
             },
         )]
         .into(),
+        target_search: None,
         cycle_rules: BTreeMap::new(),
         cycle_sources: BTreeMap::new(),
     }
@@ -544,6 +545,30 @@ fn target_references_require_valid_ids_registered_targets_and_matching_subjects(
         !SubjectRef::Character { id: "guard".into() }.matches_subject(&Subject::PlayerPreference)
     );
     assert!(SubjectRef::PlayerPreference.matches_subject(&Subject::PlayerPreference));
+}
+
+#[test]
+fn proposal_context_accepts_128_targets_and_rejects_129() {
+    let mut context = context();
+    let template = context.targets.values().next().unwrap().clone();
+    for _ in 1..MAX_PROPOSAL_TARGETS {
+        let entry_id = new_id();
+        let mut target = template.clone();
+        target.entry_id = entry_id.clone();
+        target.version_id = new_id();
+        context.targets.insert(entry_id, target);
+    }
+    assert_eq!(context.targets.len(), MAX_PROPOSAL_TARGETS);
+    assert!(proposal(character_candidate()).validate(&context).is_ok());
+
+    let entry_id = new_id();
+    let mut target = template;
+    target.entry_id = entry_id.clone();
+    context.targets.insert(entry_id, target);
+    assert!(matches!(
+        proposal(character_candidate()).validate(&context),
+        Err(Error::Rejected(Reason::CapacityBlocked))
+    ));
 }
 
 #[test]

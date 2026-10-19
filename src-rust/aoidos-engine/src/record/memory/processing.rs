@@ -715,6 +715,9 @@ fn same_proposal_authority(
     // targets 是候选更新使用的 CAS 基线；本批操作应用后这些目标会自然改变。
     current.targets.clear();
     frozen.targets.clear();
+    // 检索计数描述同一目标集合；目标应用后仅比较非目标授权时一并移除。
+    current.target_search = None;
+    frozen.target_search = None;
     same_proposal_context(&current, &frozen)
 }
 
@@ -1146,5 +1149,21 @@ mod tests {
         assert_eq!(error.code, "llm.bad-response");
         assert_eq!(sends.load(Ordering::SeqCst), 1);
         assert!(persistence.unknown.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn authority_comparison_ignores_target_search_metadata_after_target_application() {
+        let current = ProposalContext::default();
+        let mut frozen = current.clone();
+        frozen.target_search = Some(aoidos_memory::model::TargetSearchSnapshot {
+            strategy_version: 1,
+            scanned_entries: 128,
+            matched_entries: 0,
+        });
+
+        assert!(same_proposal_authority(&current, &frozen).unwrap());
+
+        frozen.source_ids.insert("changed-source".into());
+        assert!(!same_proposal_authority(&current, &frozen).unwrap());
     }
 }

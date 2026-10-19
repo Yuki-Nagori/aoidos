@@ -9,11 +9,11 @@ use aoidos_memory::{
     error::{Error, Reason, Result},
     model::{
         CausalPort, EntityCategory, EntitySnapshot, EvidenceSnapshot, InputMode, KnowledgeKind,
-        ProposalContext, Run, SourceRef, Subject, SubjectRef, TargetSnapshot,
+        ProposalContext, Run, SourceRef, Subject, SubjectRef, TargetSearchSnapshot, TargetSnapshot,
     },
     repository::BatchSnapshot,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_PROPOSAL_ENTITIES: usize = 128;
 const MAX_PROPOSAL_EVIDENCE: usize = 128;
@@ -106,18 +106,31 @@ fn add_existing_targets(
             SubjectRef::Character { id } => Subject::Character { id: id.clone() },
         })
         .collect::<Vec<_>>();
-    let entries = input.repository.entries_for_subjects(
+    let scan = input.repository.entries_for_subjects(
         input.connection,
         input.source_port,
         &input.run.run_id,
         input.batch.history_revision,
         &subjects,
-        aoidos_memory::model::MAX_PROPOSAL_TARGETS + 1,
+        aoidos_memory::model::MAX_PROPOSAL_TARGET_SCAN + 1,
     )?;
-    if entries.len() > aoidos_memory::model::MAX_PROPOSAL_TARGETS {
-        return Err(Error::Rejected(Reason::CapacityBlocked));
+    let mut terms = target_search_terms(&input.batch.spans)?;
+    for subject in &context.subjects {
+        let SubjectRef::Character { id } = subject else {
+            continue;
+        };
+        if let Some(entity) = context.entities.get(id) {
+            terms.extend(target_text_terms(&entity.canonical_name));
+            for alias in &entity.aliases {
+                terms.extend(target_text_terms(alias));
+            }
+        }
+        if terms.len() > MAX_TARGET_SEARCH_TERMS {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
     }
-    for entry in entries {
+    let mut matched_entries = 0usize;
+    for entry in scan.entries {
         let version = match input.repository.current(
             input.connection,
             input.source_port,
@@ -128,22 +141,139 @@ fn add_existing_targets(
             Err(Error::Rejected(Reason::InvalidSource)) => continue,
             Err(error) => return Err(error),
         };
-        context.targets.insert(
-            entry.entry_id.clone(),
-            TargetSnapshot {
-                entry_id: entry.entry_id,
-                version_id: version.version_id,
-                state_revision: entry.state_revision,
-                state: entry.state,
-                subject: version.subject,
-                dimension: version.dimension,
-                summary: version.summary,
-                attitude: version.attitude,
-                inferred: version.inferred,
-            },
-        );
+        if target_matches(&terms, &version.summary) {
+            context.targets.insert(
+                entry.entry_id.clone(),
+                TargetSnapshot {
+                    entry_id: entry.entry_id,
+                    version_id: version.version_id,
+                    state_revision: entry.state_revision,
+                    state: entry.state,
+                    subject: version.subject,
+                    dimension: version.dimension,
+                    summary: version.summary,
+                    attitude: version.attitude,
+                    inferred: version.inferred,
+                },
+            );
+            matched_entries += 1;
+        }
     }
+    if matched_entries > aoidos_memory::model::MAX_PROPOSAL_TARGETS {
+        return Err(Error::Rejected(Reason::CapacityBlocked));
+    }
+    context.target_search = Some(TargetSearchSnapshot {
+        strategy_version: 1,
+        scanned_entries: u32::try_from(scan.scanned_entries)
+            .map_err(|_| Error::Rejected(Reason::CapacityBlocked))?,
+        matched_entries: u32::try_from(matched_entries)
+            .map_err(|_| Error::Rejected(Reason::CapacityBlocked))?,
+    });
     Ok(())
+}
+
+const MAX_TARGET_SEARCH_QUERY_BYTES: usize = 64 * 1024;
+const MAX_TARGET_SEARCH_TERMS: usize = 4096;
+
+/// 从本批文本提取有界字面词与非 ASCII 相邻二元词；只用于候选排序，不判断记忆语义。
+fn target_search_terms(spans: &[aoidos_memory::repository::Span]) -> Result<BTreeSet<String>> {
+    let mut query_bytes = 0usize;
+    let mut terms = BTreeSet::new();
+    for span in spans {
+        query_bytes = query_bytes
+            .checked_add(span.text.len())
+            .ok_or(Error::Rejected(Reason::CapacityBlocked))?;
+        if query_bytes > MAX_TARGET_SEARCH_QUERY_BYTES {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+        let span_terms = target_text_terms(&span.text);
+        terms.extend(span_terms);
+        if terms.len() > MAX_TARGET_SEARCH_TERMS {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
+    }
+    Ok(terms)
+}
+
+fn target_text_terms(text: &str) -> BTreeSet<String> {
+    let mut terms = BTreeSet::new();
+    let mut ascii = String::new();
+    let mut unicode = Vec::new();
+    let flush_ascii = |ascii: &mut String, terms: &mut BTreeSet<String>| {
+        if ascii.chars().count() >= 3 && !is_common_search_term(ascii) {
+            terms.insert(std::mem::take(ascii));
+        } else {
+            ascii.clear();
+        }
+    };
+    let flush_unicode = |unicode: &mut Vec<char>, terms: &mut BTreeSet<String>| {
+        if unicode.len() >= 2 {
+            for pair in unicode.windows(2) {
+                let term = pair.iter().collect::<String>();
+                if !is_common_search_term(&term) {
+                    terms.insert(term);
+                }
+            }
+        }
+        unicode.clear();
+    };
+    for character in text.to_lowercase().chars() {
+        if character.is_ascii_alphanumeric() {
+            flush_unicode(&mut unicode, &mut terms);
+            ascii.push(character);
+        } else if character.is_alphanumeric() {
+            flush_ascii(&mut ascii, &mut terms);
+            unicode.push(character);
+        } else {
+            flush_ascii(&mut ascii, &mut terms);
+            flush_unicode(&mut unicode, &mut terms);
+        }
+    }
+    flush_ascii(&mut ascii, &mut terms);
+    flush_unicode(&mut unicode, &mut terms);
+    terms
+}
+
+fn target_matches(terms: &BTreeSet<String>, summary: &str) -> bool {
+    if terms.is_empty() {
+        return false;
+    }
+    let summary_terms = target_text_terms(summary);
+    !terms.is_disjoint(&summary_terms)
+}
+
+fn is_common_search_term(term: &str) -> bool {
+    matches!(
+        term,
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "from"
+            | "that"
+            | "this"
+            | "have"
+            | "been"
+            | "were"
+            | "would"
+            | "could"
+            | "should"
+            | "这个"
+            | "那个"
+            | "因为"
+            | "所以"
+            | "但是"
+            | "可以"
+            | "已经"
+            | "现在"
+            | "感觉"
+            | "我们"
+            | "他们"
+            | "你们"
+            | "应该"
+            | "如果"
+            | "然后"
+    )
 }
 
 fn add_scene_evidence(
@@ -463,5 +593,43 @@ fn entity_category(kind: crate::game::catalog::EntityKind) -> EntityCategory {
         crate::game::catalog::EntityKind::Organization => EntityCategory::Organization,
         crate::game::catalog::EntityKind::Item => EntityCategory::Item,
         crate::game::catalog::EntityKind::Term => EntityCategory::Term,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{target_matches, target_text_terms};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn local_target_search_matches_reordered_chinese_terms_and_ascii_case() {
+        let query = target_text_terms("李雷把钥匙交给守门人，DeepSeek 已准备好。");
+        assert!(target_matches(&query, "守门人记得李雷曾交付钥匙"));
+        assert!(target_matches(&query, "deepseek 已准备好"));
+        assert!(!target_matches(&query, "山谷里的钟声响起"));
+    }
+
+    #[test]
+    fn local_target_search_ignores_common_words_and_single_characters() {
+        let query = target_text_terms("这个，然后，可以，我，你");
+        assert_eq!(query, BTreeSet::new());
+        assert!(!target_matches(&query, "这个可以"));
+    }
+
+    #[test]
+    fn local_target_search_finds_a_relevant_summary_after_one_thousand_unrelated_entries() {
+        let query = target_text_terms("李雷把钥匙交给守门人");
+        let summaries = (0..1_000)
+            .map(|index| format!("无关记录 {index}：山谷里响起钟声"))
+            .chain(std::iter::once("守门人记得李雷曾交付钥匙".into()))
+            .collect::<Vec<_>>();
+        let matches = summaries
+            .iter()
+            .enumerate()
+            .filter(|(_, summary)| target_matches(&query, summary))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+
+        assert_eq!(matches, [1_000]);
     }
 }

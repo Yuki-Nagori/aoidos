@@ -13,7 +13,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_PROPOSAL_BYTES: usize = 64 * 1024;
 pub const MAX_CANDIDATES: usize = 128;
 pub const MAX_REFERENCES: usize = 128;
-pub const MAX_PROPOSAL_TARGETS: usize = 64;
+/// 单次请求可冻结的目标快照硬上限；不代表每次请求都应填满。
+pub const MAX_PROPOSAL_TARGETS: usize = 128;
+/// 单次构造提案时可扫描的当前周目目标条目总数。
+pub const MAX_PROPOSAL_TARGET_SCAN: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,10 +107,22 @@ pub struct ProposalContext {
     pub subjects: BTreeSet<SubjectRef>,
     pub evidence: BTreeMap<String, EvidenceSnapshot>,
     pub targets: BTreeMap<String, TargetSnapshot>,
+    /// 本次本地目标检索的覆盖范围；仅记录扫描事实，不宣称语义召回完整。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_search: Option<TargetSearchSnapshot>,
     /// 只包含当前剧本、当前周目及当前记忆批次可使用的刻痕授权。
     pub cycle_rules: BTreeMap<String, CycleMarkAuthorization>,
     /// 批次短 ID 到已核验原始来源的映射。
     pub cycle_sources: BTreeMap<String, CycleSourceRef>,
+}
+
+/// 冻结本批主体目标检索的有界扫描结果，便于模型理解候选集合的来源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetSearchSnapshot {
+    pub strategy_version: u32,
+    pub scanned_entries: u32,
+    pub matched_entries: u32,
 }
 
 /// 由当前完整实体目录冻结的可展示身份信息；map key 是稳定 entityId。
@@ -206,6 +221,15 @@ impl Proposal {
     /// # Errors
     /// 未支持版本、重复候选身份、未知来源 / 证据 / 实体和过期目标均拒绝。
     pub fn validate(&self, context: &ProposalContext) -> Result<()> {
+        if context.targets.len() > MAX_PROPOSAL_TARGETS
+            || context.target_search.as_ref().is_some_and(|search| {
+                search.strategy_version != 1
+                    || search.scanned_entries as usize > MAX_PROPOSAL_TARGET_SCAN
+                    || search.matched_entries as usize != context.targets.len()
+            })
+        {
+            return Err(Error::Rejected(Reason::CapacityBlocked));
+        }
         if self.version != 1 {
             return Err(Error::Rejected(Reason::PolicyUnavailable));
         }

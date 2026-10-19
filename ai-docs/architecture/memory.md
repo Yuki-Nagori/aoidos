@@ -462,8 +462,10 @@ manifest 关联条目身份、正文版本与校验信息、状态、来源、�
 | SourceSpan        | batchId + 短引用 ID `s1…sN`、SourceRef、片段正文 / 上下文角色；引用 ID 的唯一约束包含 batchId                                                                       |
 | KnowledgeEvidence | 引擎分配的 evidenceId、subjectId、SourceRef、获知方式、告知者（适用时）、范围及所依据的可信规则 / 记录身份                                                          |
 | EntitySnapshot    | entityId 对应的受信类别、scope 与 canonicalName；动态身份使用目录登记的稳定 ID，不要求模型猜 UUID 与正文名称的映射                                                  |
-| ProposalContext   | 来源、主体、实体 / 获知证据、刻痕授权与最多 64 个当前目标快照；目标绑定 entryId、versionId、stateRevision 与摘要                                                    |
+| ProposalContext   | 来源、主体、实体 / 获知证据、刻痕授权与最多 128 个检索目标快照；单次目标量级以 8–16 条为设计参考，目标绑定 entryId、versionId、stateRevision 与摘要                 |
 | MemoryVersion     | entryId、versionId、parentVersionId（首版省略）、restoredFromVersionId（恢复时必有）、subject、dimension、summary、attitude、inferred、来源集合、可信证据集合、hash |
+
+当前 ProposalContext 在本地按本批主体读取同周目的活动 / 归档目标，扫描最多 10,000 条，并限制当前版本文件总量 4 MiB；再从本批来源提取有界词项 / 相邻字符片段，对已校验摘要做词面匹配，仅冻结命中项。目标 map 按 entryId 稳定序列化；检索策略版本、扫描数和命中数也保存在冻结上下文中。8–16 条是单次请求的设计目标量级，不是检索截断规则；实现按实际词面命中返回目标，超过 64 条也照常纳入，硬上限为 128。词项召回只能提供候选，不能证明语义召回完整；模型提示说明检索为空不等于没有旧记忆。超过扫描 / 字节 / 目标上限时失败关闭，最终 Provider 输入仍受 64 KiB 限制，不静默截断后按新记忆提交。原 64 项全量装配上限曾导致单一玩家偏好主体每批新增 8 条的探索轨迹，在已有 72 条活动条目后于下一批返回 `app.bad-request`；该步长下的失败探索不构成容量验收，1,000 条活动记忆仍待端到端验证。
 
 recordSeq / historyRevision 沿用 006 / 012 的安全整数范围；正文 hash 为原始正文 SHA-256，不与 006 recap 的整行 sourceHash 混用。mode、完成状态、speakerId 从原始记录读取，模型不能覆盖。来源有效性必须调用 022 提供的有效路径视图，并核验 hash、区间、提交状态和素材资格。
 
@@ -574,7 +576,7 @@ selectArchive(entries, capacity, relevance) -> ArchivePlan | CapacityBlocked
 
 `Storage::freeze_memory_batch` 在 session → SQLite 锁区重建受信 `ProposalContext`，忽略调用方 prompt 内容，并在仓储事务中冻结来源、上下文与占用状态。冻结前同时验证 Chat / Completion 转义后的最终输入不超过 64 KiB；相同 batchId / 快照重放幂等。上下文包含精确命中的实体与有效确认别名、定向对话获知证据、来源区间完整覆盖的场景观察 / 传闻、玩家偏好及 032 刻痕授权。实体快照保存稳定 ID、类别、范围、规范名与别名；场景证据保存世界事件 ID，并在冻结、发送准备和响应完成时重建核验。
 
-当前主体的活动既有记忆按当前周目的活动条目读取，并以有界 `TargetSnapshot` 冻结 `entryId`、`versionId`、`stateRevision` 和摘要。上限为 64 项；发现第 65 项时拒绝冻结，避免截断目标后把更新误判为新建。扫描通过 `memory_entries_page(run_id,status,entry_id)` 索引最多检查当前周目的活动与已归档条目合计 10,001 条，先活动后归档；超过 10,000 条的预算时失败关闭，不能截断目标集。其他周目不消耗本次预算。Prompt 校验目标身份、修订、主体和摘要。已收到响应通过受信候选操作和版本 CAS 提交；Repeat 按冻结策略生成效果，uncertain 仍暂缓处理。
+当前实现通过 SQLite 限定同周目与当前主体，最多扫描 10,000 条活动 / 归档 entry；命中目标版本文件的总读取预算为 4 MiB，扫描或字节预算耗尽即拒绝，不从部分结果继续。仓储按摘要词项及非 ASCII 相邻字符片段做本地相关性召回；Engine 只把命中目标的 `TargetSnapshot`（`entryId`、`versionId`、`stateRevision`、主体、维度与摘要）冻结到请求。平分按状态及 entryId 稳定排序；超过 128 项失败关闭。检索策略版本、扫描数和命中数一并冻结，并在重建时校验；其余周目不消耗扫描预算。此词面策略不能保证召回语义改写，模型提示明确“未命中不证明是新记忆”，语义漏召回与重复新增仍需样本验收。完整 Prompt 通过 64 KiB 序列化预算检查；目标数量不能覆盖字节预算。已收到响应通过受信候选操作和版本 CAS 提交；Repeat 按冻结策略生成效果，uncertain 仍暂缓处理。
 
 发请求准备时，系统重建完整上下文并要求与冻结值完全一致。响应完成时重建并比较实体、来源、获知证据和规则授权等非目标权限；候选始终按原冻结目标解析，因为本批已提交的更新会改变当前目标版本或集合。目标操作必须以冻结的 `versionId` / `stateRevision` 做 CAS，竞争更新不能覆盖新状态；操作回执由仓储在完成时审计。历史批次仍可读取；缺少必要实体或场景事件快照的历史批次在继续处理时失败关闭，不从当前运行态补造权限。查询面板可本地收集、显式发送，并读取 / 恢复未终结批次；没有持续轮询。`record::memory::prompt` 提供纯 Rust Prompt 构造器：Completion / Chat 均从 `BatchSnapshot.input.proposalContext` 恢复白名单，不接收独立 context 参数；Prompt 使用 `[AOIDOS:MEMORY-PROPOSAL]` 护栏、全角括号转义，输入上限为 64 KiB。构造器不查库、不扩大权限。
 
