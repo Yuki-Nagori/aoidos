@@ -927,7 +927,7 @@
     color: var(--ink);
   }
 
-  @media (max-width: 36rem) {
+  @media (max-width: 45rem) {
     .billing-summary-grid,
     .billing-form,
     .billing-price-form,
@@ -1623,15 +1623,26 @@
     }
   }
 
+  @media (max-width: 720px) {
+    .settings-layout {
+      grid-template-columns: 8.5rem minmax(0, 1fr);
+    }
+
+    .settings-nav button {
+      min-width: 0;
+      white-space: normal;
+    }
+
+    .settings-nav button.is-subsection {
+      padding-left: 0.875rem;
+    }
+  }
+
   @media (max-width: 680px) {
     .settings-dialog {
       width: min(45rem, calc(100vw - 1rem));
       height: calc(100% - 1rem);
       margin: 0.5rem 0.5rem 0.5rem 0;
-    }
-
-    .settings-layout {
-      grid-template-columns: 8rem minmax(0, 1fr);
     }
 
     .settings-nav {
@@ -1643,15 +1654,7 @@
     }
 
     .settings-nav button {
-      white-space: normal;
-    }
-    .settings-nav button.is-subsection {
-      padding-left: 0.875rem;
-    }
-
-    .settings-nav button {
       flex: none;
-      white-space: nowrap;
     }
 
     .settings-content {

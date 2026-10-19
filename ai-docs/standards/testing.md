@@ -18,7 +18,7 @@
 
 ### 界面视觉布局回归
 
-`bun run test:visual` 使用 Playwright Chromium 运行真实 Vite 页面，并通过测试专用 Tauri IPC fixture 提供稳定启动数据；fixture 只用于布局，不证明后端行为。`tests/visual/welcome-layout.json` 只保存经核对的几何数值锚点、设计来源提交和页面名；测试运行不读取、克隆或请求设计仓库。960×640 下覆盖三种主题、两种语言和 Mistbell 皮肤开 / 关组合；640×480 与 1440×900 另以 dark / en / 皮肤开启检查窄窗和宽窗布局。密钥缺失与剧本读取失败在 960×640 下验证告警及按钮状态。断言检查桌面双栏比例、窄窗布局、居中关系、根节点和内容容器的水平溢出、实际颜色 / 文案及启动按钮语义；不保存脆弱的逐像素快照。剧本动态摘要按真实 API 字段显示，不为匹配设计预览而填入假资料。首次运行前执行 `bun run test:visual:install` 安装 Chromium headless shell。完整 `bun run verify` 包含该套件；Nightly 只在 Ubuntu 安装浏览器并执行完整 verify，不增加每次 PR 的浏览器安装时间。
+`bun run test:visual` 使用 Playwright Chromium 运行真实 Vite 页面，并通过测试专用 Tauri IPC fixture 提供稳定启动数据；fixture 只用于布局，不证明后端行为。`tests/visual/welcome-layout.json` 只保存经核对的几何数值锚点、设计来源提交和页面名；测试运行不读取、克隆或请求设计仓库。960×640 下覆盖欢迎页三种主题、两种语言和 Mistbell 皮肤开 / 关组合；640×480 与 1440×900 另以 dark / en / 皮肤开启检查窄窗和宽窗布局。密钥缺失与剧本读取失败在 960×640 下验证告警及按钮状态。设置抽屉在 960×640、700×640 与 640×480 检查位置、宽度、导航宽度和内容溢出，并逐一打开十个设置分区验证单选状态及横向可达性。断言检查桌面双栏比例、窄窗布局、居中关系、根节点和内容容器的水平溢出、实际颜色 / 文案及启动按钮语义；不保存脆弱的逐像素快照。剧本动态摘要按真实 API 字段显示，不为匹配设计预览而填入假资料。首次运行前执行 `bun run test:visual:install` 安装 Chromium headless shell。完整 `bun run verify` 包含该套件；Nightly 只在 Ubuntu 安装浏览器并执行完整 verify，不增加每次 PR 的浏览器安装时间。
 
 ### Rust 集成测试的位置
 

@@ -1,8 +1,8 @@
 {
   "source": {
     "name": "aoidos-art",
-    "commit": "f068466692a2256a4814d6f8bbf06dabcda83abe",
-    "screen": "screens/welcome.html"
+    "commit": "1f19504ebc7390b7d9954b1c597fc3d98b6b7fde",
+    "screens": ["screens/welcome.html", "screens/settings.html"]
   },
   "layout": {
     "headerHeight": 48,
@@ -29,6 +29,14 @@
       "setupLeft": 16,
       "setupWidth": 608,
       "columnGap": 14
+    },
+    "settings": {
+      "top": 56,
+      "right": 8,
+      "desktopWidth": 720,
+      "desktopNavWidth": 168,
+      "narrowMaxWidth": 720,
+      "narrowNavWidth": 136
     }
   }
 }

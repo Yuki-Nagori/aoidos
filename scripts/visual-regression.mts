@@ -9,7 +9,7 @@ type Locale = "en" | "zh-Hans";
 type Viewport = { width: number; height: number };
 type Box = { x: number; y: number; width: number; height: number };
 type LayoutBaseline = {
-  source: { name: string; commit: string; screen: string };
+  source: { name: string; commit: string; screens: string[] };
   layout: {
     headerHeight: number;
     desktop: Record<
@@ -30,19 +30,31 @@ type LayoutBaseline = {
       setupWidth: number;
       columnGap: number;
     };
+    settings: {
+      top: number;
+      right: number;
+      desktopWidth: number;
+      desktopNavWidth: number;
+      narrowMaxWidth: number;
+      narrowNavWidth: number;
+    };
   };
 };
 type Fixture = {
   theme: ThemeId;
   locale: Locale;
   skin: boolean;
+  activeSession?: boolean;
   keySet?: boolean;
   scriptsFail?: boolean;
   skinTokens: Record<string, string>;
   themes: { id: ThemeId; name: string; colorScheme: "dark" | "light" }[];
 };
 type BrowserBridge = {
-  __TAURI_INTERNALS__: { invoke: (command: string) => Promise<unknown> };
+  __TAURI_INTERNALS__: {
+    invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    transformCallback: (callback: (...args: unknown[]) => void, once?: boolean) => number;
+  };
   __AOIDOS_THEME_BOOTSTRAP__?: { version: number; theme: ThemeId; colorScheme: "dark" | "light" };
   __AOIDOS_LOCALE_BOOTSTRAP__?: { version: number; locale: Locale };
   __VISUAL_CALLS__?: string[];
@@ -160,17 +172,135 @@ async function openWelcome(
       bridge.__VISUAL_CALLS__ = [];
       let currentTheme = data.theme;
       let currentLocale = data.locale;
+      const callbacks = new Map<number, (...args: unknown[]) => void>();
+      let nextCallbackId = 1;
+      const session = {
+        sessionId: "00000000-0000-4000-8000-000000000001",
+        memoryRunId: "00000000-0000-4000-8000-000000000002",
+        profileId: "visual-profile",
+        scriptId: "mistbell",
+        title: "雾钟地窖",
+      };
+      const phase = {
+        sessionId: session.sessionId,
+        stateEpoch: "00000000-0000-4000-8000-000000000003",
+        phaseRevision: 1,
+        historyRevision: 1,
+        phase: "idle",
+        scene: {
+          sceneId: "threshold",
+          path: [{ kind: "scene", id: "threshold", title: "塔门与石阶" }],
+        },
+        needsRecovery: false,
+        resumeRequired: false,
+        seq: { phaseChanged: 0, sceneAdvanced: 0, operationDone: 0, operationFailed: 0 },
+      };
+      const records = {
+        sessionId: session.sessionId,
+        items: [
+          {
+            recordSeq: 2,
+            kind: "narration",
+            createdAt: "2026-10-19T00:00:00Z",
+            body: {
+              text: "塔门后的呼吸声停了一瞬。",
+              turnId: "00000000-0000-4000-8000-000000000004",
+              outcome: "completed",
+              finishReason: "stop",
+            },
+            turnId: "00000000-0000-4000-8000-000000000004",
+            outcome: "completed",
+          },
+          {
+            recordSeq: 1,
+            kind: "playerSpeech",
+            createdAt: "2026-10-19T00:00:00Z",
+            body: { playerId: "player", text: "我先观察门缝。", mode: "inCharacter" },
+          },
+        ],
+        lastSeq: 0,
+        lastRecordSeq: 2,
+        viewEpoch: "00000000-0000-4000-8000-000000000005",
+        needsRecovery: false,
+      };
+      const memoryParameters = {
+        algorithm: "exponential",
+        baseStrength: 500_000,
+        reinforcementGain: 150_000,
+        reinforcementCap: 500_000,
+        strengthCap: 1_000_000,
+        halfLifeRounds: 100,
+        repeatWindowRounds: 20,
+        repeatLimit: 2,
+        revivalCooldownRounds: 20,
+        activeCapacity: 1_000,
+        rateTableVersion: 1,
+        decayRate: 993_092,
+      };
+      const question = {
+        questionId: "visual-question",
+        runId: session.memoryRunId,
+        questionKey: Array(32).fill(1),
+        revision: 1,
+        draft: {
+          version: 1,
+          identity: { kind: "entityAssociation", eventSlot: 1, sources: [] },
+          historyRevision: 1,
+          entityRevision: 1,
+          evidenceRevision: 1,
+          mentionedName: "洛苇",
+          candidates: [{ kind: "entity", entityId: "keeper", displayName: "洛苇" }],
+        },
+        status: "pending",
+        answer: null,
+      };
+      const memoryEntry = {
+        entryId: "visual-entry",
+        currentVersionId: "visual-version",
+        stateRevision: 1,
+        state: "active",
+      };
+      const transformCallback = (callback: (...args: unknown[]) => void) => {
+        const id = nextCallbackId++;
+        callbacks.set(id, callback);
+        return id;
+      };
       bridge.__TAURI_INTERNALS__ = {
+        transformCallback,
         invoke: async (command: string, args?: Record<string, unknown>) => {
           bridge.__VISUAL_CALLS__?.push(command);
           switch (command) {
+            case "plugin:event|listen":
+              return nextCallbackId++;
+            case "plugin:event|unlisten":
+              callbacks.delete(args?.eventId as number);
+              return null;
             case "llm_list_profiles":
               return { items: [] };
+            case "llm_save_profile":
+              return args?.profile;
             case "llm_get_key_status":
               return { set: data.keySet ?? true, hint: data.keySet === false ? null : "1234" };
             case "engine_list_scripts":
               if (data.scriptsFail) throw { code: "store.io", message: "visual fixture failure" };
               return [data.script];
+            case "engine_open_session":
+              if (!data.activeSession)
+                throw new Error("Unexpected session open in welcome fixture");
+              return session;
+            case "engine_get_phase":
+              return phase;
+            case "engine_get_record_view":
+              return records;
+            case "engine_get_scene_presence":
+              return {
+                sessionId: session.sessionId,
+                sceneId: "threshold",
+                presenceRevision: "visual-presence-v1",
+                characters: [
+                  { id: "keeper", kind: "character", scope: "global", canonicalName: "洛苇" },
+                ],
+              };
             case "store_get_ui_preferences":
               return { version: 1, panelPinned: false, diceMode: "manual" };
             case "theme_get_preference":
@@ -202,6 +332,70 @@ async function openWelcome(
                 resolvedLocale: currentLocale,
                 nativeStatus: "applied",
               };
+            case "budget_get_settings":
+              return { runId: session.memoryRunId, cnyLimit: "20", usdLimit: "5", revision: 1 };
+            case "budget_get_selected_price":
+            case "budget_get_price":
+              return { price: null };
+            case "budget_get_provider_balance":
+              return {
+                providerId: "deepseek",
+                queriedAt: "2026-10-19T00:00:00Z",
+                stale: false,
+                status: "available",
+                accounts: [{ currency: "CNY", total: "10.00", granted: "0", toppedUp: "10.00" }],
+              };
+            case "budget_get_period":
+              return {
+                runId: session.memoryRunId,
+                items: [
+                  {
+                    providerId: "deepseek",
+                    currency: "CNY",
+                    modelId: "deepseek-flash",
+                    settledAmount: "1.25",
+                    reservedAmount: "0",
+                    knownTokens: 2400,
+                    incompleteRequests: 0,
+                    requestCount: 1,
+                  },
+                ],
+                warnings: [],
+              };
+            case "budget_get_monthly":
+              return { month: "2026-10", timeZone: "Asia/Shanghai", items: [] };
+            case "budget_get_suggested_limits":
+              return {
+                cny: "20",
+                usd: "5",
+                referenceInputTokens: 1000000,
+                referenceOutputTokens: 100000,
+              };
+            case "budget_list_requests":
+              return { revision: "visual-ledger-v1", items: [] };
+            case "memory_get_app_config":
+              return {
+                configVersion: 1,
+                algorithmVersion: 1,
+                parameters: memoryParameters,
+                defaultParameters: memoryParameters,
+              };
+            case "memory_get_script_config":
+              return {
+                scriptId: "mistbell",
+                configVersion: 1,
+                appConfigVersion: 1,
+                algorithmVersion: 1,
+                overrides: {},
+                inherited: memoryParameters,
+                effective: memoryParameters,
+              };
+            case "memory_get_active_batch":
+              return null;
+            case "memory_list_entries":
+              return { entries: [memoryEntry], nextCursor: null, historyRevision: 1 };
+            case "memory_list_questions":
+              return { questions: [question], nextCursor: null, historyRevision: 1 };
             default:
               throw new Error(`Unexpected visual fixture IPC: ${command}`);
           }
@@ -243,6 +437,34 @@ async function measure(page: Page) {
       hero: box(".hero"),
       setup: box(".setup"),
       calls: (window as unknown as Window & BrowserBridge).__VISUAL_CALLS__ ?? [],
+    };
+  });
+}
+
+async function measureSettings(page: Page) {
+  return page.evaluate(() => {
+    const dialog = document.querySelector(".settings-dialog");
+    const nav = document.querySelector(".settings-nav");
+    const content = document.querySelector(".settings-content");
+    if (
+      !(dialog instanceof HTMLElement) ||
+      !(nav instanceof HTMLElement) ||
+      !(content instanceof HTMLElement)
+    )
+      throw new Error("Settings dialog landmarks are missing");
+    return {
+      dialog: (() => {
+        const { x, y, width, height } = dialog.getBoundingClientRect();
+        return { x, y, width, height };
+      })(),
+      nav: (() => {
+        const { width } = nav.getBoundingClientRect();
+        return { width, scrollWidth: nav.scrollWidth, clientWidth: nav.clientWidth };
+      })(),
+      content: { scrollWidth: content.scrollWidth, clientWidth: content.clientWidth },
+      visibleSections: Array.from(
+        document.querySelectorAll<HTMLElement>(".settings-section"),
+      ).filter((section) => getComputedStyle(section).display !== "none").length,
     };
   });
 }
@@ -371,8 +593,119 @@ try {
     await page.close();
   }
 
+  for (const viewport of [
+    { width: 960, height: 640 },
+    { width: 700, height: 640 },
+    { width: 640, height: 480 },
+  ]) {
+    const { page, pageErrors } = await openWelcome(browser, viewport, {
+      theme: "dark",
+      locale: "en",
+      skin: false,
+      skinTokens,
+      themes,
+      activeSession: true,
+    });
+    await page.locator(".welcome-start").click();
+    await page.locator(".game-stage").waitFor();
+    await page.locator('.topbar button[aria-label="Settings"]').click();
+    await page.getByRole("dialog").waitFor();
+
+    const layout = await measureSettings(page);
+    const narrow = viewport.width <= baseline.layout.settings.narrowMaxWidth;
+    near(
+      layout.dialog.x,
+      narrow
+        ? baseline.layout.settings.right
+        : viewport.width - baseline.layout.settings.desktopWidth - baseline.layout.settings.right,
+      "settings drawer left",
+    );
+    near(layout.dialog.y, baseline.layout.settings.top, "settings drawer top");
+    near(
+      layout.dialog.width,
+      narrow
+        ? viewport.width - baseline.layout.settings.right * 2
+        : baseline.layout.settings.desktopWidth,
+      "settings drawer width",
+    );
+    near(
+      layout.nav.width,
+      narrow ? baseline.layout.settings.narrowNavWidth : baseline.layout.settings.desktopNavWidth,
+      "settings navigation width",
+    );
+    assert.ok(
+      layout.nav.scrollWidth <= layout.nav.clientWidth,
+      "Settings navigation must not clip horizontally",
+    );
+    assert.ok(
+      layout.content.scrollWidth <= layout.content.clientWidth,
+      "Settings section must not overflow horizontally",
+    );
+
+    const sections = [
+      { id: "appearance", target: "appearance" },
+      { id: "api", target: "api" },
+      { id: "gameplay", target: "gameplay" },
+      { id: "billing", target: "billing" },
+      { id: "price", target: "billing" },
+      { id: "balance", target: "billing" },
+      { id: "memory", target: "memory" },
+      { id: "memory-list", target: "memory-query" },
+      { id: "memory-pending", target: "memory-query" },
+      { id: "scenario", target: "scenario" },
+    ];
+    for (const [index, section] of sections.entries()) {
+      const button = page.locator(".settings-nav button").nth(index);
+      await button.click();
+      assert.equal(await button.getAttribute("aria-current"), "page");
+      if (section.id === "billing")
+        await page.locator("#billing .billing-summary-card").first().waitFor();
+      if (section.id === "price") await page.locator("#billing .billing-price-form").waitFor();
+      if (section.id === "balance") {
+        await page.getByRole("button", { name: /query deepseek balance/i }).click();
+        await page.locator("#billing .billing-balance-card").waitFor();
+      }
+      if (section.id === "memory") {
+        await page.locator("#memory summary").nth(0).click();
+        await page.locator("#memory summary").nth(1).click();
+        await page.locator("#memory input[type=number]").first().waitFor();
+      }
+      if (section.id === "memory-list")
+        await page.locator('#memory-query button[aria-controls^="memory-entry-"]').waitFor();
+      if (section.id === "memory-pending") await page.locator("#memory-query article").waitFor();
+      const sectionLayout = await measureSettings(page);
+      assert.equal(
+        sectionLayout.visibleSections,
+        1,
+        `Only the ${section.id} section should be visible`,
+      );
+      assert.equal(await button.getAttribute("aria-controls"), section.target);
+      assert.equal(await page.locator(`#${section.target}`).isVisible(), true);
+      if (section.id === "billing")
+        assert.ok(await page.locator("#billing .billing-summary-card").count());
+      if (section.id === "price")
+        assert.ok(await page.locator("#billing .billing-price-form").count());
+      if (section.id === "balance")
+        assert.ok(await page.locator("#billing .billing-balance-card").count());
+      if (section.id === "memory")
+        assert.ok(await page.locator("#memory input[type=number]").count());
+      if (section.id === "memory-list")
+        assert.ok(
+          await page.locator('#memory-query button[aria-controls^="memory-entry-"]').count(),
+        );
+      if (section.id === "memory-pending")
+        assert.ok(await page.locator("#memory-query article").count());
+      assert.ok(
+        sectionLayout.content.scrollWidth <= sectionLayout.content.clientWidth,
+        `${section.id} must not overflow horizontally at ${viewport.width}px (scrollWidth=${sectionLayout.content.scrollWidth}, clientWidth=${sectionLayout.content.clientWidth})`,
+      );
+    }
+    assert.deepEqual(pageErrors, [], "Settings sections must render without uncaught errors");
+    await page.close();
+  }
+
   console.log(
-    `欢迎页视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个窗口和 2 种失败状态。`,
+    `欢迎页与设置视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个欢迎页窗口、3 个真实会话设置窗口、10 个分区（含账单 / 记忆数据）和 2 种失败状态。`,
   );
 } finally {
   await browser?.close();

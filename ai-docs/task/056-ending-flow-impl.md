@@ -9,6 +9,10 @@
 
 实现 [054](054-ending-flow-design.md) 定稿的周目规则冻结、隐藏数值求值、语义标签、规范结局摘要、AI 叙事与可恢复落幕流程。引擎决定正史并原子封存；AI 文本不能写世界事实，也不能授权玩家从 `ending-choice.html` 固定列表选择结局。
 
+## 对照设计
+
+`aoidos-art` 基线 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde` 中的 `ending-approach.html`、`cycle-init.html`、`cycle-init-failed.html`、`ending-pending.html`、`ending.html`、`ending-narrating.html` 与 `ending-narration-failed.html` 展示冻结规则、终局恢复及可选叙事的视觉状态。页面状态不得先于权威 engine / storage 协议实现；`ending-choice.html` 的静态选项不构成玩家选结局的授权，剧本必须先声明规则目录，缺少 sidecar 的 run 继续兼容原终态。
+
 ## 必读
 
 [054 结局生成与周目落幕设计](054-ending-flow-design.md) · [结局架构](../architecture/ending-flow.md) · [回合与阶段状态机](../architecture/turn-state-machine.md) · [记录引擎](../architecture/record-engine.md) · [剧本格式](../standards/scenarios.md) · [计费架构](../architecture/billing.md) · [记忆架构](../architecture/memory.md) · [通信契约](../architecture/ipc-contract.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
@@ -58,6 +62,8 @@
 结局规则属于周目不可变输入，旧周目不得因 parser、剧本或提示版本变化而漂移。生成文本可能误述但不得覆盖正史；若关键事实输出无法校验，使用确定性规范摘要完成落幕，并保留显式恢复 / 再生成状态。历史 branch 只恢复该 branch 的结束快照，禁止重新求值覆盖。
 
 ## 决策与工作记录
+
+- 2026-10-19：Aoidos 内嵌 Mistbell 作者稿已移除固定结局选项及代价阈值，并声明标签 / 规范摘要 / 非权威 AI 叙事边界；内容仓库作者稿已在本地分支同步。严格 sidecar、属性规则与 Python 镜像验收仍由本任务实现，不因文案更新提前启用结局模式。
 
 - 2026-10-19：根据 054 定稿登记实现。Engine 独占规则、标签与终局权威；memory、billing 和 UI 仅消费显式端口 / 结果，依赖方向不反转。
 
