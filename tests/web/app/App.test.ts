@@ -131,6 +131,7 @@ describe("App", () => {
     await wrapper.get('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
+    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(10);
     expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
     expect(wrapper.get(".settings-form-grid").findAll("select")).toHaveLength(2);
     const theme = wrapper.get('select[aria-label="Theme"]');

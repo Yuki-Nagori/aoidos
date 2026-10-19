@@ -612,13 +612,14 @@
     font-size: 0.75rem;
   }
 
-  .settings-nav button[aria-current="page"]::before {
-    width: 0.375rem;
-    height: 0.375rem;
+  .settings-nav-icon {
+    width: 1rem;
+    height: 1rem;
     flex: none;
-    border-radius: 50%;
-    background: var(--accent);
-    content: "";
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.7;
   }
 
   .settings-nav button[aria-current="page"] {

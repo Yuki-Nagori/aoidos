@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import BillingPanel from "../../features/billing/components/BillingPanel.vue";
 import SettingsSectionHeading from "./SettingsSectionHeading.vue";
+import SettingsSectionIcon from "./SettingsSectionIcon.vue";
 import { useI18n } from "vue-i18n";
 import type { useProduct } from "../../features/product/composables/useProduct";
 import type { useTheme } from "../../features/theme/composables/useTheme";
@@ -34,7 +35,7 @@ const sections = computed(() => [
   { id: "memory-list", label: t("settings.sections.memory-list") },
   { id: "memory-pending", label: t("settings.sections.memory-pending") },
   { id: "scenario", label: t("settings.sections.scenario") },
-]);
+] as const);
 const activeSectionTitle = computed(
   () => sections.value.find((section) => section.id === activeSection.value)?.label ?? t("settings.title"),
 );
@@ -156,6 +157,7 @@ function themeName(id: string, fallback: string): string {
             :aria-controls="['price', 'balance'].includes(section.id) ? 'billing' : ['memory-list', 'memory-pending'].includes(section.id) ? 'memory-query' : section.id"
             @click="activeSection = section.id"
           >
+            <SettingsSectionIcon :name="section.id" />
             {{ section.label }}
           </button>
         </nav>
