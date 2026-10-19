@@ -55,5 +55,7 @@ jobs:
         with:
           rust-components: clippy,rustfmt,llvm-tools-preview
       - uses: ./.github/actions/linux-desktop-deps
+      - name: Install Playwright Chromium
+        run: bun run test:visual:install
       - name: Run complete local verification suite
         run: bun run verify

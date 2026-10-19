@@ -1,0 +1,34 @@
+{
+  "source": {
+    "name": "aoidos-art",
+    "commit": "f068466692a2256a4814d6f8bbf06dabcda83abe",
+    "screen": "screens/welcome.html"
+  },
+  "layout": {
+    "headerHeight": 48,
+    "desktop": {
+      "960": {
+        "heroLeft": 44,
+        "heroWidth": 468,
+        "setupLeft": 548,
+        "setupWidth": 384,
+        "columnGap": 36
+      },
+      "1440": {
+        "heroLeft": 44,
+        "heroWidth": 948,
+        "setupLeft": 1028,
+        "setupWidth": 384,
+        "columnGap": 36
+      }
+    },
+    "narrow": {
+      "width": 640,
+      "heroLeft": 16,
+      "heroWidth": 608,
+      "setupLeft": 16,
+      "setupWidth": 608,
+      "columnGap": 14
+    }
+  }
+}
