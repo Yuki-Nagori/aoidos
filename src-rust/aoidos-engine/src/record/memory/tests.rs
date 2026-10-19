@@ -986,11 +986,10 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
     let source = SourcePort::new(&fixture.session)
         .reference(&run, seq)
         .unwrap();
-    assert!(
-        SourcePort::new(&fixture.session)
-            .completed_round(&round, &source)
-            .unwrap()
-    );
+    let port = SourcePort::new(&fixture.session);
+    assert!(port.completed_round(&round, &source).unwrap());
+    assert!(port.completed_round(&round, &source).unwrap());
+    assert_eq!(port.completed_round_cache.borrow().len(), 1);
     assert!(
         SourcePort::new(&fixture.session)
             .valid_completed_round(&round, "mistbell", entry_seq, seq)
@@ -1001,6 +1000,9 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
             .valid_completed_round(&round, "other-scene", entry_seq, seq)
             .unwrap()
     );
+    let wrong_round = aoidos_memory::model::new_id();
+    assert!(!port.completed_round(&wrong_round, &source).unwrap());
+    assert_eq!(port.completed_round_cache.borrow().len(), 2);
     assert!(
         !SourcePort::new(&fixture.session)
             .completed_round(&aoidos_memory::model::new_id(), &source)
@@ -1008,11 +1010,8 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
     );
     let mut invalid = source.clone();
     invalid.end_byte = 0;
-    assert!(
-        !SourcePort::new(&fixture.session)
-            .completed_round(&round, &invalid)
-            .unwrap()
-    );
+    assert!(!port.completed_round(&round, &invalid).unwrap());
+    assert_eq!(port.completed_round_cache.borrow().len(), 2);
     let evidence = KnowledgeEvidence {
         evidence_id: aoidos_memory::model::new_id(),
         subject_id: "npc".into(),
@@ -1027,6 +1026,7 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
             .valid_evidence(&evidence)
             .unwrap()
     );
+    drop(port);
     fixture.session.history_revision = 99;
     fixture.session.effective = Some([seq].into_iter().collect());
     assert!(
@@ -1603,6 +1603,7 @@ fn alias_context_does_not_trust_an_incomplete_directory() {
         entity_directory: Some(&incomplete),
         scene_catalog: None,
         text_cache: RefCell::default(),
+        completed_round_cache: RefCell::default(),
     };
     assert!(matches!(
         port.entity_alias_context("missing"),

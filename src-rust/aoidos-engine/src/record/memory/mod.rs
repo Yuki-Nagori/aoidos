@@ -38,6 +38,9 @@ const DIRECT_DIALOGUE_RULE: &str = "directDialogueV1";
 // 场景溯源只读取系统事实；单独设较高上限以覆盖长局，同时限制总扫描字节。
 const MAX_SCENE_HISTORY_SCAN: usize = 10_000;
 const MAX_SCENE_INDEX_SCAN: usize = 100_000;
+// 回合回执只在当前会话锁内缓存，并限制条目数以避免长局无界增长。
+const MAX_COMPLETED_ROUND_CACHE: usize = 10_000;
+const MAX_CACHED_ROUND_ID_BYTES: usize = 64;
 
 /// 引擎持有会话锁时借用；角色证据只认可完整记录的定向角色对话。
 pub struct SourcePort<'a> {
@@ -45,6 +48,34 @@ pub struct SourcePort<'a> {
     entity_directory: Option<&'a EntityDirectory>,
     scene_catalog: Option<&'a SceneCatalog>,
     text_cache: RefCell<TextCache>,
+    completed_round_cache: RefCell<BTreeMap<CompletedRoundCacheKey, bool>>,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct CompletedRoundCacheKey {
+    round_id: String,
+    record_seq: u64,
+    body_hash: Hash,
+    start_byte: u64,
+    end_byte: u64,
+    mode: u8,
+}
+
+impl CompletedRoundCacheKey {
+    fn new(round_id: &str, source: &SourceRef) -> Self {
+        Self {
+            round_id: round_id.into(),
+            record_seq: source.record_seq,
+            body_hash: source.body_hash,
+            start_byte: source.start_byte,
+            end_byte: source.end_byte,
+            mode: match source.mode.as_ref() {
+                None => 0,
+                Some(InputMode::InCharacter) => 1,
+                Some(InputMode::OutOfCharacter) => 2,
+            },
+        }
+    }
 }
 
 #[derive(Default)]
@@ -135,6 +166,7 @@ impl<'a> SourcePort<'a> {
             entity_directory: None,
             scene_catalog: None,
             text_cache: RefCell::default(),
+            completed_round_cache: RefCell::default(),
         }
     }
     /// 将完整剧本目录绑定到当前记录，供记忆快照冻结实体 revision。
@@ -154,6 +186,7 @@ impl<'a> SourcePort<'a> {
             entity_directory: Some(entity_directory),
             scene_catalog: None,
             text_cache: RefCell::default(),
+            completed_round_cache: RefCell::default(),
         })
     }
 
@@ -180,6 +213,7 @@ impl<'a> SourcePort<'a> {
             entity_directory: Some(entity_directory),
             scene_catalog: Some(scene_catalog),
             text_cache: RefCell::default(),
+            completed_round_cache: RefCell::default(),
         })
     }
     /// # Errors
@@ -551,6 +585,54 @@ impl<'a> SourcePort<'a> {
             && self.source_text(&evidence.source)?.is_some())
     }
 }
+
+fn validate_completed_round(
+    port: &SourcePort<'_>,
+    round_id: &str,
+    source: &SourceRef,
+) -> Result<bool> {
+    let record = port.session.known(source.record_seq)?;
+    let Body::System { code, data, .. } = record.body else {
+        return Ok(false);
+    };
+    let Fact::RoundEnded {
+        identity,
+        outcome: Outcome::Completed,
+        ..
+    } = Fact::decode(&code, &data)?
+    else {
+        return Ok(false);
+    };
+    if identity.round_id != round_id {
+        return Ok(false);
+    }
+    let mut bytes = 0;
+    // 只核验当前回合的接纳事实；超过预算不猜测场内身份。
+    for (&seq, index) in port
+        .session
+        .index
+        .range(..source.record_seq)
+        .rev()
+        .take(256)
+    {
+        bytes += index.len;
+        if bytes > 4 * 1024 * 1024 {
+            return Ok(false);
+        }
+        if !port.session.includes_record(seq, index) {
+            continue;
+        }
+        let record = port.session.known(seq)?;
+        if let Body::System { code, data, .. } = record.body
+            && let Fact::RoundAccepted { identity, mode, .. } = Fact::decode(&code, &data)?
+            && identity.round_id == round_id
+        {
+            return Ok(mode == RecordMode::InCharacter);
+        }
+    }
+    Ok(false)
+}
+
 impl CausalPort for SourcePort<'_> {
     fn boundary(&self) -> Result<Boundary> {
         if self.session.needs_recovery() {
@@ -667,46 +749,19 @@ impl CausalPort for SourcePort<'_> {
         if !self.valid_source(source)? {
             return Ok(false);
         }
-        let record = self.session.known(source.record_seq)?;
-        let Body::System { code, data, .. } = record.body else {
-            return Ok(false);
-        };
-        let Fact::RoundEnded {
-            identity,
-            outcome: Outcome::Completed,
-            ..
-        } = Fact::decode(&code, &data)?
-        else {
-            return Ok(false);
-        };
-        if identity.round_id != round_id {
-            return Ok(false);
+        if round_id.len() > MAX_CACHED_ROUND_ID_BYTES {
+            return validate_completed_round(self, round_id, source);
         }
-        let mut bytes = 0;
-        // 只核验当前回合的接纳事实；超过预算不猜测场内身份。
-        for (&seq, index) in self
-            .session
-            .index
-            .range(..source.record_seq)
-            .rev()
-            .take(256)
-        {
-            bytes += index.len;
-            if bytes > 4 * 1024 * 1024 {
-                return Ok(false);
-            }
-            if !self.session.includes_record(seq, index) {
-                continue;
-            }
-            let record = self.session.known(seq)?;
-            if let Body::System { code, data, .. } = record.body
-                && let Fact::RoundAccepted { identity, mode, .. } = Fact::decode(&code, &data)?
-                && identity.round_id == round_id
-            {
-                return Ok(mode == RecordMode::InCharacter);
-            }
+        let key = CompletedRoundCacheKey::new(round_id, source);
+        if let Some(valid) = self.completed_round_cache.borrow().get(&key) {
+            return Ok(*valid);
         }
-        Ok(false)
+        let valid = validate_completed_round(self, round_id, source)?;
+        let mut cache = self.completed_round_cache.borrow_mut();
+        if cache.len() < MAX_COMPLETED_ROUND_CACHE {
+            cache.insert(key, valid);
+        }
+        Ok(valid)
     }
 
     fn valid_scene_entry(&self, scene_id: &str, record_seq: u64) -> Result<bool> {
