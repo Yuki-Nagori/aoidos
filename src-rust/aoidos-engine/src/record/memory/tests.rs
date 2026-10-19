@@ -1091,6 +1091,51 @@ fn initial_scene_remains_available_after_many_non_system_records() {
 }
 
 #[test]
+fn scene_entry_scan_allows_the_exact_index_budget_and_rejects_older_unscanned_rows() {
+    let mut fixture = Fixture::new();
+    let entities = crate::game::assets::entity_directory("mistbell").unwrap();
+    let catalog = crate::game::builtin::memory_scene_catalog("雾钟地窖".into(), entities).unwrap();
+    for seq in 1..=MAX_SCENE_INDEX_SCAN + 1 {
+        fixture.session.index.insert(
+            seq as u64,
+            crate::record::session::Entry {
+                offset: 0,
+                len: 0,
+                hash: String::new(),
+                kind: "playerSpeech".into(),
+                created_at: String::new(),
+                turn_id: None,
+                read_only: false,
+                branch_seq: None,
+                control: false,
+            },
+        );
+    }
+
+    assert!(matches!(
+        scene_entry_seq_before(
+            &fixture.session,
+            &catalog,
+            "entry",
+            (MAX_SCENE_INDEX_SCAN + 2) as u64,
+        ),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+
+    fixture.session.index.remove(&1);
+    assert_eq!(
+        scene_entry_seq_before(
+            &fixture.session,
+            &catalog,
+            "entry",
+            (MAX_SCENE_INDEX_SCAN + 2) as u64,
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn completed_round_is_bound_to_the_latest_matching_scene_entry() {
     let mut fixture = Fixture::new();
     let original_entry = advance_scene(&mut fixture, "start", "mistbell");

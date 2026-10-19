@@ -114,6 +114,7 @@ pub(crate) fn scene_entry_seq_before(
     let mut index_scanned = 0usize;
     let mut system_scanned = 0usize;
     let mut bytes = 0usize;
+    let mut last_index_seq = None;
     for (&seq, index) in session
         .index
         .range(..before_seq)
@@ -121,6 +122,7 @@ pub(crate) fn scene_entry_seq_before(
         .take(MAX_SCENE_INDEX_SCAN)
     {
         index_scanned += 1;
+        last_index_seq = Some(seq);
         if index.kind != "system" {
             continue;
         }
@@ -146,7 +148,9 @@ pub(crate) fn scene_entry_seq_before(
             };
         }
     }
-    if index_scanned >= MAX_SCENE_INDEX_SCAN || system_scanned >= MAX_SCENE_HISTORY_SCAN {
+    let has_unscanned_index = last_index_seq
+        .is_some_and(|last_seq| session.index.range(..last_seq).next_back().is_some());
+    if index_scanned == MAX_SCENE_INDEX_SCAN && has_unscanned_index {
         return Err(Error::Rejected(Reason::RecoveryRequired));
     }
     if scene_catalog
