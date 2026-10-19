@@ -263,51 +263,79 @@ function themeName(id: string, fallback: string): string {
 
           <section v-show="activeSection === 'api'" id="api" class="settings-section">
             <h3>{{ t("settings.sections.api") }}</h3>
-            <label>
-              {{ t("settings.provider") }}
-              <select
-                v-model="product.providerId.value"
-                :aria-label="t('settings.provider')"
-                :disabled="product.busy.value"
-              >
-                <option
-                  v-for="provider in product.providerOptions"
-                  :key="provider.id"
-                  :value="provider.id"
+            <div class="settings-form-grid">
+              <label>
+                {{ t("settings.provider") }}
+                <select
+                  v-model="product.providerId.value"
+                  :aria-label="t('settings.provider')"
+                  :disabled="product.busy.value"
                 >
-                  {{ provider.label }}
-                </option>
-              </select>
-            </label>
-            <label>
-              {{ t("settings.model") }}
-              <select
-                v-model="product.model.value"
-                :aria-label="t('settings.model')"
-                :disabled="product.busy.value"
-              >
-                <option v-for="model in product.models.value" :key="model.id" :value="model.id">
-                  {{ model.label }}
-                </option>
-              </select>
-            </label>
-            <button type="button" :disabled="product.busy.value" @click="product.configureKey">
-              {{ t("settings.setApiKey") }}
-            </button>
-            <p v-if="product.keyStatusLoading.value" role="status">
-              {{ t("settings.keyChecking") }}
-            </p>
-            <p v-else-if="product.keyStatus.value" role="status">
-              {{ product.keyStatus.value.set ? t("settings.keySet") : t("settings.keyMissing") }}
-            </p>
-            <p v-else role="status">{{ t("settings.keyUnknown") }}</p>
-            <button
-              v-if="!product.keyStatus.value && !product.keyStatusLoading.value"
-              type="button"
-              @click="product.refreshKeyStatus()"
+                  <option
+                    v-for="provider in product.providerOptions"
+                    :key="provider.id"
+                    :value="provider.id"
+                  >
+                    {{ provider.label }}
+                  </option>
+                </select>
+              </label>
+              <label>
+                {{ t("settings.model") }}
+                <select
+                  v-model="product.model.value"
+                  :aria-label="t('settings.model')"
+                  :disabled="product.busy.value"
+                >
+                  <option v-for="model in product.models.value" :key="model.id" :value="model.id">
+                    {{ model.label }}
+                  </option>
+                </select>
+              </label>
+            </div>
+            <div
+              class="settings-key-card card"
+              :class="{ 'is-missing': !product.keyStatusLoading.value && product.keyStatus.value?.set !== true }"
             >
-              {{ t("common.retry") }}
-            </button>
+              <span
+                class="led"
+                :class="{
+                  accent: product.keyStatus.value?.set === true,
+                  warn: !product.keyStatusLoading.value && product.keyStatus.value?.set !== true,
+                }"
+                aria-hidden="true"
+              />
+              <span class="settings-skin-copy">
+                <strong>{{ t("settings.keyStatus") }}</strong>
+                <span class="text-sm text-muted" role="status">
+                  {{
+                    product.keyStatusLoading.value
+                    ? t("settings.keyChecking")
+                    : product.keyStatus.value?.set === true
+                      ? t("settings.keySet")
+                      : product.keyStatus.value?.set === false
+                        ? t("settings.keyMissing")
+                        : t("settings.keyUnknown")
+                  }}
+                </span>
+              </span>
+              <button
+                type="button"
+                class="btn"
+                :disabled="product.busy.value"
+                @click="product.configureKey"
+              >
+                {{ t("settings.setApiKey") }}
+              </button>
+              <button
+                v-if="!product.keyStatus.value && !product.keyStatusLoading.value"
+                type="button"
+                class="btn ghost"
+                @click="product.refreshKeyStatus()"
+              >
+                {{ t("common.retry") }}
+              </button>
+            </div>
           </section>
 
           <section v-show="activeSection === 'gameplay'" id="gameplay" class="settings-section">

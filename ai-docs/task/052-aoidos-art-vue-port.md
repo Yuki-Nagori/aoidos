@@ -65,6 +65,7 @@
 - 2026-10-19，文档层固定视口并关闭整页滚动 / overscroll，避免 WKWebView 橡皮筋回弹；`tests/web/appcss.test.ts` 增加 CSS 契约检查。顶栏账本摘要随已提交记录更新，账本并发响应按请求代次丢弃旧结果，避免旧快照覆盖新金额。`bun run test:affected` 通过，受影响 Rust workspace 测试及 Vitest 47 个文件、421 项通过；`bun run format:affected`、`bun run lint:affected`、`bun run typecheck` 均通过。lint 包含 i18n、Vite 生产构建与 native fixture 构建。
 - 2026-10-19，加入与设计稿对应的折叠式“工作过程”区域，展开呈现权威快照中的阶段、场景路径、判定状态、操作终态和失败诊断码；不显示无法绑定到当前操作的 token 用量。`ui-shell.md` 已记录当前公开数据边界，Vitest 覆盖默认折叠、场景与判定状态。
 - 2026-10-19，设置抽屉的外观与语言区改用剧本皮肤开关和原生语言单选分段；主题选项仍来自 Rust 动态目录，不硬编码选项。新增状态 / 持久化行为断言；针对性 Vitest 3 项、类型检查与格式检查通过。
+- 2026-10-19，模型 / API 设置改为并排 Provider 与模型选择，并以状态卡显示真实凭据状态，缺失 / 未知时使用警示样式；密钥仍只经 Rust 原生窗口设置。设计稿中的协议路由选择暂不呈现：当前 profile 只保存 `completion` / `chat` 形态，Provider 适配器决定协议，没有可持久化的用户路由选择能力。App 行为测试覆盖已设置与缺失密钥，针对性 Vitest、类型、lint、构建与格式检查通过。
 - `bun run verify`：未执行。
 - WebView / DPI / 键盘与辅助技术检查：未执行，按适用平台留证。
 

@@ -95,6 +95,7 @@
     "skinWarnings": "The scenario skin has {count} compatibility warnings.",
     "model": "Model",
     "provider": "Provider",
+    "keyStatus": "API key status",
     "setApiKey": "Set API key (system dialog)",
     "keySet": "Key is set",
     "keyMissing": "Key is not set",

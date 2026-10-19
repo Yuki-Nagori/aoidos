@@ -129,6 +129,8 @@ describe("App", () => {
     await wrapper.get('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
+    expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
+    expect(wrapper.get(".settings-form-grid").findAll("select")).toHaveLength(2);
     const theme = wrapper.get('select[aria-label="Theme"]');
     expect(theme.findAll("option").map((option) => option.text())).toEqual([
       "Dark",
@@ -241,6 +243,12 @@ describe("App", () => {
     expect(document.documentElement.lang).toBe("zh-Hans");
     expect(invoke).not.toHaveBeenCalledWith("locale_get_preference");
     await wrapper.get('button[aria-label="设置"]').trigger("click");
+    await wrapper
+      .findAll(".settings-nav button")
+      .find((button) => button.text() === "模型与 API")!
+      .trigger("click");
+    expect(wrapper.get(".settings-key-card").classes()).toContain("is-missing");
+    expect(wrapper.get(".settings-key-card").text()).toContain("密钥未设置");
     await wrapper
       .findAll(".settings-nav button")
       .find((button) => button.text() === "游戏")!
