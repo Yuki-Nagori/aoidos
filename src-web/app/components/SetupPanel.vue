@@ -73,6 +73,11 @@ function onKeydown(event: KeyboardEvent): void {
 const selectedScript = computed(() =>
   product.scripts.value.find((script) => script.scriptId === product.scriptId.value),
 );
+const selectedProviderLabel = computed(
+  () =>
+    product.providerOptions.find((option) => option.id === product.providerId.value)?.label ??
+    product.providerId.value,
+);
 const localeNotice = computed(() => {
   if (locale.notice.value === "pending") return t("settings.languagePending");
   if (locale.notice.value === "saveFailed") return t("settings.languageSaveFailed");
@@ -421,6 +426,8 @@ function themeName(id: string, fallback: string): string {
               :locale="locale.resolved.value"
               :active="Boolean(product.session.value)"
               :provider-id="product.providerId.value"
+              :provider-label="selectedProviderLabel"
+              :model-id="product.model.value"
               :view="activeSection === 'price' || activeSection === 'balance' ? activeSection : 'billing'"
             />
             <p v-if="!product.session.value" class="text-sm text-muted">

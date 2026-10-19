@@ -707,7 +707,82 @@
     align-items: end;
   }
 
+  .billing-form > label,
+  .billing-price-form > label,
+  .billing-scheduled-prices > label {
+    display: grid;
+    min-width: 0;
+    gap: 0.45rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
   .billing-form > button {
+    justify-self: start;
+  }
+
+  .billing-price-context {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--hairline));
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    padding: 0.75rem;
+  }
+
+  .billing-price-identity {
+    display: grid;
+    min-width: 0;
+    gap: 0.25rem;
+  }
+
+  .billing-price-identity h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .billing-price-identity p {
+    overflow-wrap: anywhere;
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+
+  .billing-price-status {
+    flex: none;
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+
+  .billing-price-form {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+  }
+
+  .billing-price-form > label:nth-of-type(-n + 2) {
+    grid-column: span 1;
+  }
+
+  .billing-scheduled-prices {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 0;
+    border: 1px solid var(--hairline);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .billing-scheduled-prices legend,
+  .billing-scheduled-prices > p {
+    grid-column: 1 / -1;
+  }
+
+  .billing-price-form > label:last-of-type {
+    grid-column: 1 / -1;
+  }
+
+  .billing-price-form > button {
     justify-self: start;
   }
 
@@ -774,8 +849,20 @@
 
   @media (max-width: 36rem) {
     .billing-summary-grid,
-    .billing-form {
+    .billing-form,
+    .billing-price-form,
+    .billing-scheduled-prices {
       grid-template-columns: minmax(0, 1fr);
+    }
+
+    .billing-price-context {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .billing-scheduled-prices > p,
+    .billing-scheduled-prices legend {
+      grid-column: 1;
     }
   }
 

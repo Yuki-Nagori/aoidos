@@ -67,11 +67,22 @@ describe("BillingPanel", () => {
       },
     ) as ReturnType<typeof useBilling>;
     const wrapper = mount(BillingPanel, {
-      props: { billing, locale: "en", active: true, providerId: "deepseek", view: "price" },
+      props: {
+        billing,
+        locale: "en",
+        active: true,
+        providerId: "deepseek",
+        providerLabel: "DeepSeek",
+        modelId: "deepseek-v4-flash",
+        view: "price",
+      },
       global: { plugins: [i18n] },
     });
 
     expect(wrapper.text()).toContain(i18n.global.t("billing.savePrice"));
+    expect(wrapper.text()).toContain("DeepSeek");
+    expect(wrapper.text()).toContain("deepseek-v4-flash");
+    expect(wrapper.find(".billing-price-context [role=status]").exists()).toBe(true);
     expect(wrapper.text()).not.toContain(i18n.global.t("billing.cnyLimit"));
     expect(wrapper.text()).not.toContain(i18n.global.t("billing.queryBalance"));
 

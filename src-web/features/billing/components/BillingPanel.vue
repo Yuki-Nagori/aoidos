@@ -14,12 +14,15 @@ const props = defineProps<{
   locale: Locale;
   active: boolean;
   providerId: string;
+  providerLabel?: string;
+  modelId?: string;
   view?: "all" | "billing" | "price" | "balance";
 }>();
 const billing = computed(() => props.billing);
 const locale = computed(() => props.locale);
 const active = computed(() => props.active);
 const providerId = computed(() => props.providerId);
+const modelId = computed(() => props.modelId);
 const view = computed(() => props.view ?? "all");
 const runTotals = computed(() =>
   summarizeRunUsage(props.billing.period.value?.items ?? [], {
@@ -440,8 +443,24 @@ const billingErrorMessage = computed(() => {
       </section>
     </template>
     <template v-if="view === 'all' || view === 'price'">
-      <p>{{ billing.priceReady.value ? t("billing.priceReady") : t("billing.priceMissing") }}</p>
-      <form class="grid gap-3" @submit.prevent="billing.savePrice">
+      <div class="billing-price-context">
+        <div class="billing-price-identity">
+          <h4>{{ t("billing.savePrice") }}</h4>
+          <p class="mono">
+            {{
+              t("billing.itemTitle", {
+                provider: props.providerLabel ?? providerId,
+                model: modelId ?? "—",
+                currency: billing.priceCurrency.value,
+              })
+            }}
+          </p>
+        </div>
+        <span role="status" class="billing-price-status">
+          {{ billing.priceReady.value ? t("billing.priceReady") : t("billing.priceMissing") }}
+        </span>
+      </div>
+      <form class="billing-price-form grid gap-3" @submit.prevent="billing.savePrice">
         <label>
           {{ t("billing.currency") }}
           <select v-model="billing.priceCurrency.value">
@@ -473,7 +492,10 @@ const billingErrorMessage = computed(() => {
           {{ t("billing.output") }}
           <input v-model="billing.output.value" inputmode="decimal" autocomplete="off" />
         </label>
-        <fieldset v-if="billing.requiresScheduledPrice.value" class="grid gap-3">
+        <fieldset
+          v-if="billing.requiresScheduledPrice.value"
+          class="billing-scheduled-prices grid gap-3"
+        >
           <legend>{{ t("billing.goPeakPrices") }}</legend>
           <p>
             {{
@@ -529,6 +551,7 @@ const billingErrorMessage = computed(() => {
         </label>
         <button
           type="submit"
+          class="btn primary"
           :disabled="billing.busy.value ||
           !billing.inputCachedWrite.value.trim() ||
           !billing.scheduledPriceComplete.value"
