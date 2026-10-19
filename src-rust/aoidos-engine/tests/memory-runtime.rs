@@ -17,7 +17,8 @@ use aoidos_engine::{
     storage::Storage,
 };
 use aoidos_memory::model::{
-    Candidate, Classification, Proposal, ProposalContext, SubjectRef, new_id,
+    Candidate, Classification, Dimension, EntryState, PolicyOverrides, Proposal, ProposalContext,
+    SubjectRef, new_id,
 };
 use aoidos_memory::repository::{BatchCompletion, CandidateOutcome};
 use std::{
@@ -67,6 +68,15 @@ fn memory_runtime_long_record_trace_reports_disk_metrics() {
     println!("{}", serde_json::to_string_pretty(&reports).unwrap());
 }
 
+#[test]
+#[ignore = "显式运行的 1,000 条活动记忆检索容量实验"]
+fn memory_runtime_target_retrieval_scans_1000_active_entries() {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&run_target_retrieval_capacity(1_000)).unwrap()
+    );
+}
+
 fn run_trace(record_pairs: usize) -> serde_json::Value {
     let temp_dir = TempDirectory::new();
     let root = temp_dir.path();
@@ -106,73 +116,7 @@ fn run_trace(record_pairs: usize) -> serde_json::Value {
     }
     let record_write_ms = start.elapsed().as_millis();
 
-    let scenario = assets::scenario("mistbell").unwrap();
-    let entities = assets::entity_directory("mistbell").unwrap();
-    let catalog_revision = "memory-stress-v1".to_owned();
-    let script_revision = entities.script_revision().to_owned();
-    let catalog = SceneCatalog::new(
-        catalog_revision.clone(),
-        script_revision,
-        BTreeMap::from([(
-            "entry".into(),
-            Node {
-                kind: "scene".into(),
-                title: scenario.title.clone(),
-                parent: None,
-            },
-        )]),
-        BTreeMap::from([(
-            "entry".into(),
-            Scene {
-                position: ScenePosition {
-                    scene_id: "entry".into(),
-                    path: vec![SceneNode {
-                        kind: "scene".into(),
-                        id: "entry".into(),
-                        title: scenario.title,
-                    }],
-                },
-                rules: SceneRuleView {
-                    scene_id: "entry".into(),
-                    catalog_revision,
-                    advance_rule_ids: vec![],
-                    progress_rule_ids: vec![],
-                    hint_rules: vec![],
-                    exit_rule_ids: vec![],
-                },
-                advance: vec![],
-                check_rule_ids: vec![],
-                actor_ids: vec!["player".into()],
-                forced_check: None,
-                dice_disabled: false,
-            },
-        )]),
-        BTreeMap::new(),
-    )
-    .unwrap()
-    .with_entity_directory(entities)
-    .unwrap()
-    .with_presence_policy(
-        PresencePolicy::new(
-            "entry".into(),
-            SceneEntryPresence {
-                rule_id: "memory-stress-entry-v1".into(),
-                rule_version: 1,
-                character_ids: vec!["player".into()],
-            },
-            BTreeMap::from([(
-                "entry".into(),
-                SceneEntryPresence {
-                    rule_id: "memory-stress-entry-v1".into(),
-                    rule_version: 1,
-                    character_ids: vec!["player".into()],
-                },
-            )]),
-            vec![],
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let catalog = stress_catalog();
     let run = storage
         .initialize_memory_run(&session_id, &catalog)
         .unwrap();
@@ -267,6 +211,238 @@ fn run_trace(record_pairs: usize) -> serde_json::Value {
     })
 }
 
+fn run_target_retrieval_capacity(entry_count: usize) -> serde_json::Value {
+    let temp_dir = TempDirectory::new();
+    let root = temp_dir.path();
+    let migration_events = Arc::new(Events::default());
+    let record_events = Arc::new(Events::default());
+    let storage = Storage::new(root, migration_events.clone(), record_events.clone());
+    storage.ready().unwrap();
+
+    let header = aoidos_engine::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header).unwrap();
+    let catalog = stress_catalog();
+    let config = storage.memory_script_config("mistbell").unwrap();
+    storage
+        .save_memory_script_config(
+            "mistbell",
+            config.config_version,
+            config.app_config_version,
+            PolicyOverrides {
+                active_capacity: Some(entry_count as u64),
+                ..PolicyOverrides::default()
+            },
+        )
+        .unwrap();
+    let session = storage.records.get(&session_id).unwrap();
+    {
+        let mut session = session.lock().unwrap();
+        for index in 0..entry_count {
+            session
+                .append(Body::PlayerSpeech {
+                    player_id: "player".into(),
+                    text: format!("memorytoken{index:04}"),
+                    mode: Some(InputMode::OutOfCharacter),
+                    content_range: None,
+                })
+                .unwrap();
+        }
+    }
+    let run = storage
+        .initialize_memory_run(&session_id, &catalog)
+        .unwrap();
+    assert_eq!(run.policy.active_capacity, entry_count as u64);
+
+    let mut cursor = None;
+    let mut eligible_materials = 0;
+    loop {
+        let page = storage
+            .collect_memory_materials(&run.run_id, cursor.clone())
+            .unwrap();
+        eligible_materials += page.eligible_count;
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(eligible_materials, entry_count);
+
+    let versions_created = Instant::now();
+    let expected_batches = entry_count.div_ceil(16);
+    let mut batches = Vec::with_capacity(expected_batches);
+    for _ in 0..expected_batches {
+        let snapshot = storage
+            .prepare_collectible_memory_batch(&run.run_id)
+            .unwrap_or_else(|error| panic!("准备合成记忆批次失败：{}", error.code));
+        let batch_id = snapshot.batch_id.clone();
+        storage.freeze_memory_batch(&catalog, snapshot).unwrap();
+        submit_synthetic_new(&storage, &session_id, &catalog, &batch_id);
+        batches.push(batch_id);
+    }
+    assert_eq!(batches.len(), expected_batches);
+    assert_active_memory_entries(&storage, &run.run_id, entry_count);
+    let version_creation_ms = versions_created.elapsed().as_millis();
+
+    let lookup_seq = session
+        .lock()
+        .unwrap()
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: format!("memorytoken{:04} 检索确认", entry_count - 1),
+            mode: Some(InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let mut cursor = None;
+    let mut lookup_materials = 0;
+    loop {
+        let page = storage
+            .collect_memory_materials(&run.run_id, cursor.clone())
+            .unwrap();
+        lookup_materials += page.eligible_count;
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(lookup_materials, 1);
+    let lookup_batch = storage
+        .prepare_collectible_memory_batch(&run.run_id)
+        .unwrap();
+    assert_eq!(lookup_batch.spans.len(), 1);
+    let lookup_batch_id = lookup_batch.batch_id.clone();
+    let freeze_started = Instant::now();
+    storage.freeze_memory_batch(&catalog, lookup_batch).unwrap();
+    let context = storage
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            let (snapshot, _) = repository.batch(connection, &lookup_batch_id)?;
+            let context: ProposalContext =
+                aoidos_json::from_value(snapshot.input["proposalContext"].clone())
+                    .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+            Ok(context)
+        })
+        .unwrap();
+    assert_eq!(lookup_seq, entry_count as u64 + 1);
+    assert_eq!(context.targets.len(), 1);
+    assert_eq!(
+        context.targets.values().next().unwrap().summary,
+        format!("memorytoken{:04}", entry_count - 1)
+    );
+    let target_search = context.target_search.clone().unwrap();
+    assert_eq!(target_search.scanned_entries as usize, entry_count);
+    assert_eq!(target_search.matched_entries as usize, 1);
+    let freeze_ms = freeze_started.elapsed().as_millis();
+    let files_while_open = disk_summary(root);
+
+    let reopen_started = Instant::now();
+    storage.close().unwrap();
+    drop(storage);
+    let reopened = Storage::new(root, migration_events, record_events);
+    reopened.records.open("mistbell", &session_id).unwrap();
+    let recovered_context = reopened
+        .with_memory(&session_id, &catalog, |repository, connection, _| {
+            let (snapshot, _) = repository.batch(connection, &lookup_batch_id)?;
+            let context: ProposalContext =
+                aoidos_json::from_value(snapshot.input["proposalContext"].clone())
+                    .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+            Ok(context)
+        })
+        .unwrap();
+    assert_active_memory_entries(&reopened, &run.run_id, entry_count);
+    assert_eq!(recovered_context.targets.len(), 1);
+    assert_eq!(recovered_context.targets, context.targets);
+    assert_eq!(recovered_context.target_search, context.target_search);
+    let reopen_validation_ms = reopen_started.elapsed().as_millis();
+    let files_after_reopen = disk_summary(root);
+    reopened.close().unwrap();
+    drop(reopened);
+
+    serde_json::json!({
+        "experiment": "bounded-target-retrieval",
+        "activeMemoryEntries": entry_count,
+        "matchingTargets": 1,
+        "scannedEntries": entry_count,
+        "versionCreationMs": version_creation_ms,
+        "targetFreezeMs": freeze_ms,
+        "reopenValidationMs": reopen_validation_ms,
+        "filesWhileOpen": files_while_open,
+        "filesAfterReopen": files_after_reopen,
+        "providerRequests": 0,
+        "completedGameRounds": 0,
+    })
+}
+
+fn stress_catalog() -> SceneCatalog {
+    let scenario = assets::scenario("mistbell").unwrap();
+    let entities = assets::entity_directory("mistbell").unwrap();
+    let catalog_revision = "memory-stress-v1".to_owned();
+    let script_revision = entities.script_revision().to_owned();
+    SceneCatalog::new(
+        catalog_revision.clone(),
+        script_revision,
+        BTreeMap::from([(
+            "entry".into(),
+            Node {
+                kind: "scene".into(),
+                title: scenario.title.clone(),
+                parent: None,
+            },
+        )]),
+        BTreeMap::from([(
+            "entry".into(),
+            Scene {
+                position: ScenePosition {
+                    scene_id: "entry".into(),
+                    path: vec![SceneNode {
+                        kind: "scene".into(),
+                        id: "entry".into(),
+                        title: scenario.title,
+                    }],
+                },
+                rules: SceneRuleView {
+                    scene_id: "entry".into(),
+                    catalog_revision,
+                    advance_rule_ids: vec![],
+                    progress_rule_ids: vec![],
+                    hint_rules: vec![],
+                    exit_rule_ids: vec![],
+                },
+                advance: vec![],
+                check_rule_ids: vec![],
+                actor_ids: vec!["player".into()],
+                forced_check: None,
+                dice_disabled: false,
+            },
+        )]),
+        BTreeMap::new(),
+    )
+    .unwrap()
+    .with_entity_directory(entities)
+    .unwrap()
+    .with_presence_policy(
+        PresencePolicy::new(
+            "entry".into(),
+            SceneEntryPresence {
+                rule_id: "memory-stress-entry-v1".into(),
+                rule_version: 1,
+                character_ids: vec!["player".into()],
+            },
+            BTreeMap::from([(
+                "entry".into(),
+                SceneEntryPresence {
+                    rule_id: "memory-stress-entry-v1".into(),
+                    rule_version: 1,
+                    character_ids: vec!["player".into()],
+                },
+            )]),
+            vec![],
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 fn submit_synthetic_not_worthy(
     storage: &Storage,
     session_id: &str,
@@ -332,6 +508,104 @@ fn submit_synthetic_not_worthy(
     );
 }
 
+fn submit_synthetic_new(
+    storage: &Storage,
+    session_id: &str,
+    catalog: &aoidos_engine::game::catalog::SceneCatalog,
+    batch_id: &str,
+) {
+    let (snapshot, context) = storage
+        .with_memory(session_id, catalog, |repository, connection, _| {
+            let (snapshot, _) = repository.batch(connection, batch_id)?;
+            let context: ProposalContext =
+                aoidos_json::from_value(snapshot.input["proposalContext"].clone())
+                    .map_err(|_| aoidos_memory::error::Error::Corrupt)?;
+            Ok((snapshot, context))
+        })
+        .unwrap();
+    let proposal = Proposal {
+        version: 1,
+        candidates: snapshot
+            .spans
+            .iter()
+            .enumerate()
+            .map(|(index, span)| Candidate {
+                candidate_id: format!("capacity-{index}"),
+                classification: Classification::New,
+                source_ids: vec![span.source_id.clone()],
+                subject_ref: SubjectRef::PlayerPreference,
+                entity_ids: vec![],
+                evidence_ids: vec![],
+                target_ref: None,
+                dimension: Some(Dimension::PlayerPreference),
+                summary: Some(span.text.clone()),
+                attitude: None,
+                attitude_evidence_ids: vec![],
+                inferred: Some(false),
+                reason: "容量实验使用的合成提案".into(),
+            })
+            .collect(),
+        cycle_marks: vec![],
+    };
+    proposal
+        .validate(&context)
+        .expect("合成提案应符合冻结白名单");
+    let response = aoidos_json::canonical_string(&proposal).unwrap();
+    let expected_candidates = proposal.candidates.len();
+    let turn_id = new_id();
+    let request_id = new_id();
+    storage
+        .with_memory(session_id, catalog, |repository, connection, port| {
+            repository.dispatch_batch(connection, port, batch_id, &turn_id, &request_id)?;
+            repository.receive_batch(
+                connection,
+                batch_id,
+                &turn_id,
+                &request_id,
+                response.as_bytes(),
+            )
+        })
+        .unwrap();
+    assert!(
+        aoidos_engine::record::memory::processing::complete_received_batch(
+            storage, session_id, catalog, batch_id,
+        )
+        .unwrap()
+    );
+    let completion = storage
+        .memory_batch_status(&snapshot.run_id, batch_id)
+        .unwrap()
+        .completion
+        .expect("容量实验批次应有持久完成回执");
+    assert_eq!(completion.outcomes.len(), expected_candidates);
+    assert!(
+        completion
+            .outcomes
+            .iter()
+            .all(|result| result.outcome == CandidateOutcome::Applied)
+    );
+}
+
+fn assert_active_memory_entries(storage: &Storage, run_id: &str, expected: usize) {
+    let mut cursor = None;
+    let mut entries = 0;
+    loop {
+        let page = storage.memory_entries(run_id, cursor.clone(), 32).unwrap();
+        assert!(
+            page.entries
+                .iter()
+                .all(|entry| entry.state == EntryState::Active),
+            "容量实验不应意外归档或弱化合成条目"
+        );
+        entries += page.entries.len();
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(entries, expected);
+}
+
 struct TempDirectory(PathBuf);
 
 impl TempDirectory {
@@ -369,6 +643,45 @@ fn disk_sizes(root: &Path) -> serde_json::Value {
         "未采集到记录正文文件"
     );
     serde_json::Value::Object(files)
+}
+
+fn disk_summary(root: &Path) -> serde_json::Value {
+    let files = disk_sizes(root);
+    let files = files.as_object().expect("磁盘文件列表应为对象");
+    let mut total_bytes = 0_u64;
+    let mut sqlite_bytes = 0_u64;
+    let mut backup_bytes = 0_u64;
+    let mut memory_bytes = 0_u64;
+    let mut transcript_bytes = 0_u64;
+    let mut wal_bytes = 0_u64;
+    let mut shm_bytes = 0_u64;
+    for (path, value) in files {
+        let bytes = value.as_u64().expect("文件大小应为非负整数");
+        total_bytes += bytes;
+        if path == "storage.sqlite" {
+            sqlite_bytes = bytes;
+        } else if path.starts_with("backups/") {
+            backup_bytes += bytes;
+        } else if path.contains("/memory/") {
+            memory_bytes += bytes;
+        } else if path.contains("/transcript/") {
+            transcript_bytes += bytes;
+        } else if path == "storage.sqlite-wal" {
+            wal_bytes = bytes;
+        } else if path == "storage.sqlite-shm" {
+            shm_bytes = bytes;
+        }
+    }
+    serde_json::json!({
+        "fileCount": files.len(),
+        "totalBytes": total_bytes,
+        "sqliteBytes": sqlite_bytes,
+        "backupBytes": backup_bytes,
+        "memoryBytes": memory_bytes,
+        "transcriptBytes": transcript_bytes,
+        "walBytes": wal_bytes,
+        "shmBytes": shm_bytes,
+    })
 }
 
 fn visit_files(
