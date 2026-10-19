@@ -1095,6 +1095,72 @@
     font-size: 0.75rem;
   }
 
+  .work {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 0.375rem;
+    border-top: 1px solid var(--hairline);
+    padding: 0.4375rem 0.875rem 0.4375rem 1.25rem;
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+
+  .work-head {
+    display: flex;
+    min-height: 1.25rem;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .work-head::-webkit-details-marker {
+    display: none;
+  }
+
+  .work .led.active {
+    background: var(--led-active);
+  }
+
+  .work .led.warn {
+    background: var(--warning);
+  }
+
+  .work-title {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .work-chevron {
+    transition: transform 120ms ease;
+  }
+
+  .work[open] .work-chevron {
+    transform: rotate(180deg);
+  }
+
+  .work ul {
+    display: grid;
+    gap: 0.1875rem;
+    margin: 0;
+    padding: 0 0 0.25rem 0.9375rem;
+    list-style: none;
+  }
+
+  .work li::before {
+    margin-right: 0.4375rem;
+    margin-left: -0.75rem;
+    color: var(--muted);
+    content: "·";
+  }
+
+  .work-value {
+    color: var(--ink);
+  }
+
   .confirmation-card {
     position: fixed;
     inset: 50% auto auto 50%;

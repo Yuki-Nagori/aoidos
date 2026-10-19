@@ -152,6 +152,62 @@ defineExpose({ reconnect });
           <button type="button" v-if="unreadRecords" class="jump-latest" @click="jumpToLatest">
             {{ t("game.newRecords") }}
           </button>
+          <details v-if="panel.state.value !== 'hover' && current" class="work">
+            <summary class="work-head mono">
+              <span
+                class="led"
+                :class="current.needsRecovery || current.resumeRequired
+                ? 'warn'
+                : current.phase === 'idle'
+                  ? ''
+                  : 'active'"
+                aria-hidden="true"
+              />
+              <span class="work-title">{{ t("game.workProcess") }} · {{
+                  phaseName(current.phase)
+                }}</span>
+              <svg class="i sm work-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </summary>
+            <ul class="mono">
+              <li>
+                <span>{{ t("game.workPhase") }}:</span>
+                <span class="work-value">{{ phaseName(current.phase) }}</span>
+              </li>
+              <li v-if="scenePath">
+                <span>{{ t("game.workScene") }}:</span>
+                <span class="work-value">{{ scenePath }}</span>
+              </li>
+              <li v-if="current.check">
+                <span>{{ t("game.workCheck") }}:</span>
+                <span class="work-value">
+                  {{
+                    current.check.status === "rolling"
+                    ? t("game.workCheckRolling", { expression: current.check.expression })
+                    : t("game.workCheckWaiting", { expression: current.check.expression })
+                  }}
+                </span>
+              </li>
+              <li v-if="current.lastOperation && current.lastOperation.outcome !== 'accepted'">
+                <span>{{ t("game.workOperation") }}:</span>
+                <span class="work-value">
+                  {{
+                    current.lastOperation.outcome === "completed"
+                    ? t("game.outcomes.completed")
+                    : current.lastOperation.outcome === "cancelled"
+                      ? t("game.outcomes.cancelled")
+                      : t("game.outcomes.failed")
+                  }}
+                </span>
+              </li>
+              <li v-if="current.lastOperation?.error">
+                <span>{{
+                  t("game.workErrorCode", { code: current.lastOperation.error.code })
+                }}</span>
+              </li>
+            </ul>
+          </details>
           <dialog
             ref="confirmDialog"
             class="confirmation-card"

@@ -1,5 +1,5 @@
 import { mount } from "@vue/test-utils";
-import { computed, ref, toValue } from "vue";
+import { computed, nextTick, ref, toValue } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenedSession } from "../../../../../src-web/api/engine";
 import type { useUiPreferences } from "../../../../../src-web/features/game/composables/useUiPreferences";
@@ -26,12 +26,27 @@ describe("GameWorkspace", () => {
       scriptId: "mistbell",
       title: "雾钟地窖",
     } as OpenedSession;
-    const current = ref({
+    const current = ref<{
+      historyRevision: number;
+      phase: string;
+      scene: { path: { kind: string; id: string; title: string }[] };
+      needsRecovery: boolean;
+      lastOperation: { roundId: string; outcome: string };
+      check?: {
+        planId: string;
+        status: "waiting" | "rolling";
+        mode: "manual" | "auto";
+        ruleId: string;
+        actorId: string;
+        expression: string;
+        modifierTotal: number;
+      };
+    }>({
       historyRevision: 8,
       phase: "idle",
       scene: { path: [] },
       needsRecovery: false,
-      lastOperation: { roundId: "round-1" },
+      lastOperation: { roundId: "round-1", outcome: "completed" },
     });
     confirmation = ref(undefined);
     const prefs = {
@@ -62,7 +77,7 @@ describe("GameWorkspace", () => {
     const records = { state: ref({ body: undefined, recovering: false }), loadBody: vi.fn() };
     const fixture = {
       session: computed(() => session),
-      t: (key: string) => i18n.global.t(key),
+      t: (key: string, values?: Record<string, string>) => i18n.global.t(key, values ?? {}),
       phase: { connecting: ref(false) },
       records,
       current,
@@ -95,7 +110,7 @@ describe("GameWorkspace", () => {
       composerPreview: {},
       composerSubmitDisabled: false,
       composerSubmitLabel: "行动",
-      scenePath: undefined,
+      scenePath: "第一幕 · 塔门",
       olderCursor: undefined,
       game: { historyPending: ref(false), recover: vi.fn() },
       generation: undefined,
@@ -129,10 +144,35 @@ describe("GameWorkspace", () => {
     expect(wrapper.find(".game-topbar .phase-pill").exists()).toBe(true);
     expect(wrapper.find(".stage-area .stage-art").exists()).toBe(true);
     expect(wrapper.text()).toContain(session.title);
+    expect((wrapper.get(".work").element as HTMLDetailsElement).open).toBe(false);
+    expect(wrapper.get(".work").text()).toContain(i18n.global.t("game.workProcess"));
+    expect(wrapper.get(".work").text()).toContain("第一幕 · 塔门");
     expect(wrapper.findComponent(ActionComposer).exists()).toBe(true);
     expect(capturedPorts.recordsFeed.value).toBeInstanceOf(HTMLDivElement);
     expect(capturedPorts.confirmDialog.value?.tagName).toBe("DIALOG");
     expect(wrapper.emitted("historyRevision")).toEqual([[8]]);
+
+    current.value = {
+      ...current.value,
+      phase: "awaitingCheck",
+      check: {
+        planId: "plan-1",
+        status: "waiting",
+        mode: "manual",
+        ruleId: "probe",
+        actorId: "player",
+        expression: "2d6+1",
+        modifierTotal: 1,
+      },
+    };
+    await nextTick();
+    await wrapper.get(".work summary").trigger("click");
+    expect(wrapper.get(".work").text()).toContain(
+      i18n.global.t("game.workCheckWaiting", { expression: "2d6+1" }),
+    );
+    expect(wrapper.get(".work").text()).toContain(i18n.global.t("game.outcomes.completed"));
+    current.value = { ...current.value, phase: "idle", check: undefined };
+    await nextTick();
 
     const regenerate = wrapper
       .findAll("button")
