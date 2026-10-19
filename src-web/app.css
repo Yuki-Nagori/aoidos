@@ -902,12 +902,47 @@
     text-align: left;
   }
 
-  .settings-credits pre {
+  .scenario-script-card {
+    width: 100%;
+  }
+
+  .scenario-script-copy {
+    display: grid;
+    min-width: 0;
+    flex: 1;
+    gap: 0.25rem;
+  }
+
+  .scenario-script-copy strong,
+  .scenario-script-copy code {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .scenario-script-copy code {
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+
+  .scenario-attributions {
+    border: 1px solid var(--hairline);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--ink) 3%, transparent);
+    padding: 0.75rem;
+  }
+
+  .scenario-attributions h4 {
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .scenario-attributions pre {
     overflow-wrap: anywhere;
     white-space: pre-wrap;
-    padding-top: 0.75rem;
     color: var(--muted);
     font-size: 0.8rem;
+    line-height: 1.6;
   }
 
   .settings-error {

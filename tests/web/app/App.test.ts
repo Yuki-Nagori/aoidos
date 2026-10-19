@@ -164,6 +164,9 @@ describe("App", () => {
     expect(skinSwitch.attributes("aria-checked")).toBe("true");
     await skinSwitch.trigger("click");
     expect(skinSwitch.attributes("aria-checked")).toBe("false");
+    await wrapper.get('.settings-nav button[aria-controls="scenario"]').trigger("click");
+    expect(wrapper.get(".scenario-script-copy").text()).toContain("雾钟地窖");
+    expect(wrapper.get(".scenario-attributions").text()).toContain("CC BY 4.0");
     await wrapper.get('.settings-nav button[aria-controls="gameplay"]').trigger("click");
     await wrapper.get('input[name="dice-mode"][value="auto"]').setValue();
     await vi.waitFor(() => {

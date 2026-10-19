@@ -450,10 +450,28 @@ function themeName(id: string, fallback: string): string {
 
           <section v-show="activeSection === 'scenario'" id="scenario" class="settings-section">
             <h3>{{ t("settings.sections.scenario") }}</h3>
-            <details v-if="selectedScript" class="settings-credits">
-              <summary>{{ t("settings.credits") }}</summary>
+            <div v-if="selectedScript" class="card scenario-script-card">
+              <span class="script-ic" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" />
+                  <path d="M10 20a2 2 0 0 0 4 0" />
+                </svg>
+              </span>
+              <div class="scenario-script-copy">
+                <strong>{{
+                  selectedScript.displayNames[locale.resolved.value] ?? selectedScript.title
+                }}</strong>
+                <code>{{ selectedScript.scriptId }}</code>
+              </div>
+            </div>
+            <section
+              v-if="selectedScript?.attributions"
+              class="scenario-attributions"
+              :aria-label="t('settings.credits')"
+            >
+              <h4>{{ t("settings.credits") }}</h4>
               <pre>{{ selectedScript.attributions }}</pre>
-            </details>
+            </section>
           </section>
         </div>
       </div>
