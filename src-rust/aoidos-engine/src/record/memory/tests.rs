@@ -986,11 +986,10 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
     let source = SourcePort::new(&fixture.session)
         .reference(&run, seq)
         .unwrap();
-    assert!(
-        SourcePort::new(&fixture.session)
-            .completed_round(&round, &source)
-            .unwrap()
-    );
+    let port = SourcePort::new(&fixture.session);
+    assert!(port.completed_round(&round, &source).unwrap());
+    assert!(port.completed_round(&round, &source).unwrap());
+    assert_eq!(port.completed_round_cache.borrow().len(), 1);
     assert!(
         SourcePort::new(&fixture.session)
             .valid_completed_round(&round, "mistbell", entry_seq, seq)
@@ -1001,6 +1000,9 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
             .valid_completed_round(&round, "other-scene", entry_seq, seq)
             .unwrap()
     );
+    let wrong_round = aoidos_memory::model::new_id();
+    assert!(!port.completed_round(&wrong_round, &source).unwrap());
+    assert_eq!(port.completed_round_cache.borrow().len(), 2);
     assert!(
         !SourcePort::new(&fixture.session)
             .completed_round(&aoidos_memory::model::new_id(), &source)
@@ -1008,11 +1010,8 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
     );
     let mut invalid = source.clone();
     invalid.end_byte = 0;
-    assert!(
-        !SourcePort::new(&fixture.session)
-            .completed_round(&round, &invalid)
-            .unwrap()
-    );
+    assert!(!port.completed_round(&round, &invalid).unwrap());
+    assert_eq!(port.completed_round_cache.borrow().len(), 2);
     let evidence = KnowledgeEvidence {
         evidence_id: aoidos_memory::model::new_id(),
         subject_id: "npc".into(),
@@ -1027,6 +1026,7 @@ fn completed_round_requires_matching_effective_in_character_acceptance() {
             .valid_evidence(&evidence)
             .unwrap()
     );
+    drop(port);
     fixture.session.history_revision = 99;
     fixture.session.effective = Some([seq].into_iter().collect());
     assert!(
@@ -1063,6 +1063,75 @@ fn cycle_scene_entry_requires_an_effective_scene_advance_fact() {
         !SourcePort::new(&fixture.session)
             .valid_scene_entry("mistbell", entry_seq + 1)
             .unwrap()
+    );
+}
+
+#[test]
+fn initial_scene_remains_available_after_many_non_system_records() {
+    let mut fixture = Fixture::new();
+    let entities = crate::game::assets::entity_directory("mistbell").unwrap();
+    let catalog = crate::game::builtin::memory_scene_catalog("雾钟地窖".into(), entities).unwrap();
+    let mut before_seq = 0;
+    for index in 0..(MAX_SCAN + 1) {
+        before_seq = fixture
+            .session
+            .append(Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: format!("线索 {index}"),
+                mode: Some(RecordMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+
+    assert_eq!(
+        scene_entry_seq_before(&fixture.session, &catalog, "entry", before_seq + 1).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn scene_entry_scan_allows_the_exact_index_budget_and_rejects_older_unscanned_rows() {
+    let mut fixture = Fixture::new();
+    let entities = crate::game::assets::entity_directory("mistbell").unwrap();
+    let catalog = crate::game::builtin::memory_scene_catalog("雾钟地窖".into(), entities).unwrap();
+    for seq in 1..=MAX_SCENE_INDEX_SCAN + 1 {
+        fixture.session.index.insert(
+            seq as u64,
+            crate::record::session::Entry {
+                offset: 0,
+                len: 0,
+                hash: String::new(),
+                kind: "playerSpeech".into(),
+                created_at: String::new(),
+                turn_id: None,
+                read_only: false,
+                branch_seq: None,
+                control: false,
+            },
+        );
+    }
+
+    assert!(matches!(
+        scene_entry_seq_before(
+            &fixture.session,
+            &catalog,
+            "entry",
+            (MAX_SCENE_INDEX_SCAN + 2) as u64,
+        ),
+        Err(Error::Rejected(Reason::RecoveryRequired))
+    ));
+
+    fixture.session.index.remove(&1);
+    assert_eq!(
+        scene_entry_seq_before(
+            &fixture.session,
+            &catalog,
+            "entry",
+            (MAX_SCENE_INDEX_SCAN + 2) as u64,
+        )
+        .unwrap(),
+        0
     );
 }
 
@@ -1579,6 +1648,7 @@ fn alias_context_does_not_trust_an_incomplete_directory() {
         entity_directory: Some(&incomplete),
         scene_catalog: None,
         text_cache: RefCell::default(),
+        completed_round_cache: RefCell::default(),
     };
     assert!(matches!(
         port.entity_alias_context("missing"),

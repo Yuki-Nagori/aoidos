@@ -11,7 +11,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const MAX_PROPOSAL_TARGET_SCAN: usize = 10_000;
+/// 读取目标摘要供本地相关性检索时的版本文件总字节预算。
+pub const MAX_PROPOSAL_TARGET_SEARCH_BYTES: usize = 4 * 1024 * 1024;
 
 mod aliases;
 mod config;
@@ -28,6 +29,13 @@ pub use materials::{
     CollectibleMaterial, CollectibleMaterialPage, CycleMarkCommit, CycleMarkResult,
     DeferredCandidate, MAX_COLLECTIBLE_MATERIAL_SCAN, MaterialCursor, Span,
 };
+
+/// 当前周目主体目标扫描结果；扫描数包含本周目中检查过的活动与归档条目。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectEntries {
+    pub entries: Vec<Entry>,
+    pub scanned_entries: usize,
+}
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -307,7 +315,7 @@ impl Repository {
         ids.iter().map(|id| self.entry(conn, run_id, id)).collect()
     }
 
-    /// 按当前提案主体读取有限的活动与归档记忆目标；不读取无关主体或历史版本。
+    /// 按当前提案主体读取有界活动与归档目标，供调用方在本地排序相关性。
     /// # Errors
     /// 历史修订、主体集合或查询上限不合法时拒绝读取。
     pub fn entries_for_subjects(
@@ -318,13 +326,13 @@ impl Repository {
         history_revision: u64,
         subjects: &[Subject],
         limit: usize,
-    ) -> Result<Vec<Entry>> {
+    ) -> Result<SubjectEntries> {
         let (_, boundary) = self.boundary(conn, run_id, port)?;
         if boundary.history_revision != history_revision {
             return Err(Error::Rejected(Reason::StaleVersion));
         }
         if limit == 0
-            || limit > crate::model::MAX_PROPOSAL_TARGETS + 1
+            || limit > crate::model::MAX_PROPOSAL_TARGET_SCAN + 1
             || subjects.len() > 129
             || subjects
                 .iter()
@@ -338,7 +346,10 @@ impl Repository {
             .map(canonical)
             .collect::<Result<BTreeSet<_>>>()?;
         if subject_json.is_empty() {
-            return Ok(Vec::new());
+            return Ok(SubjectEntries {
+                entries: Vec::new(),
+                scanned_entries: 0,
+            });
         }
         let placeholders = (3..subject_json.len() + 3)
             .map(|index| format!("?{index}"))
@@ -350,42 +361,63 @@ impl Repository {
                  WHERE run_id=?1 AND status IN ('active','archived') \
                  ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,entry_id LIMIT ?2\
              ), matched_entries AS MATERIALIZED (\
-                 SELECT e.entry_id FROM bounded_entries e \
+                 SELECT e.entry_id,v.body_length FROM bounded_entries e \
                  JOIN memory_versions v ON v.entry_id=e.entry_id \
                      AND v.version_id=e.current_version_id \
                  WHERE v.subject_json IN ({placeholders}) \
                  ORDER BY e.entry_id LIMIT ?{}\
              ), scan_stats AS (SELECT COUNT(*) AS scanned FROM bounded_entries) \
-             SELECT scan_stats.scanned,matched_entries.entry_id \
+             SELECT scan_stats.scanned,matched_entries.entry_id,matched_entries.body_length \
              FROM scan_stats LEFT JOIN matched_entries ON 1",
             subject_json.len() + 3
         );
         let mut values = Vec::with_capacity(subject_json.len() + 3);
         values.push(rusqlite::types::Value::Text(run_id.into()));
         values.push(rusqlite::types::Value::Integer(
-            (MAX_PROPOSAL_TARGET_SCAN + 1) as i64,
+            (crate::model::MAX_PROPOSAL_TARGET_SCAN + 1) as i64,
         ));
         values.extend(subject_json.into_iter().map(rusqlite::types::Value::Blob));
         values.push(rusqlite::types::Value::Integer(limit as i64));
         let mut statement = conn.prepare(&query).map_err(sql)?;
         let rows = statement
             .query_map(params_from_iter(values.iter()), |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
             })
             .map_err(sql)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(sql)?;
         let mut ids = Vec::with_capacity(limit.min(rows.len()));
-        for (scanned, entry_id) in rows {
+        let mut body_bytes = 0usize;
+        let mut scanned_entries = 0;
+        for (scanned, entry_id, body_length) in rows {
             let scanned = usize::try_from(scanned).map_err(|_| Error::Corrupt)?;
-            if scanned > MAX_PROPOSAL_TARGET_SCAN {
+            scanned_entries = scanned;
+            if scanned > crate::model::MAX_PROPOSAL_TARGET_SCAN {
                 return Err(Error::Rejected(Reason::CapacityBlocked));
             }
             if let Some(entry_id) = entry_id {
+                let body_length = usize::try_from(body_length.ok_or(Error::Corrupt)?)
+                    .map_err(|_| Error::Corrupt)?;
+                body_bytes = body_bytes
+                    .checked_add(body_length)
+                    .ok_or(Error::Rejected(Reason::CapacityBlocked))?;
+                if body_bytes > MAX_PROPOSAL_TARGET_SEARCH_BYTES {
+                    return Err(Error::Rejected(Reason::CapacityBlocked));
+                }
                 ids.push(entry_id);
             }
         }
-        ids.iter().map(|id| self.entry(conn, run_id, id)).collect()
+        Ok(SubjectEntries {
+            entries: ids
+                .iter()
+                .map(|id| self.entry(conn, run_id, id))
+                .collect::<Result<Vec<_>>>()?,
+            scanned_entries,
+        })
     }
 
     /// 返回准确的下一页标记，避免满页恰好是末页时制造空白页。

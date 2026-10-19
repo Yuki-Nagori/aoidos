@@ -224,12 +224,13 @@ fn entries_for_subjects_returns_active_and_archived_targets_and_checks_revision(
         },
         Subject::PlayerPreference,
     ];
-    let entries = f
+    let scan = f
         .repo
         .entries_for_subjects(&f.conn, &f.port, &f.run.run_id, 0, &subjects, 65)
         .unwrap();
+    assert!(scan.scanned_entries >= scan.entries.len());
     assert_eq!(
-        entries
+        scan.entries
             .iter()
             .map(|entry| entry.entry_id.as_str())
             .collect::<BTreeSet<_>>(),
@@ -242,7 +243,7 @@ fn entries_for_subjects_returns_active_and_archived_targets_and_checks_revision(
         .collect()
     );
     assert_eq!(
-        entries
+        scan.entries
             .iter()
             .find(|entry| entry.entry_id == archived_entry)
             .unwrap()
@@ -251,8 +252,14 @@ fn entries_for_subjects_returns_active_and_archived_targets_and_checks_revision(
     );
 
     rejected(
-        f.repo
-            .entries_for_subjects(&f.conn, &f.port, &f.run.run_id, 0, &subjects, 66),
+        f.repo.entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &subjects,
+            MAX_PROPOSAL_TARGET_SCAN + 2,
+        ),
         Reason::InvalidSchema,
     );
     f.port.view.history_revision = 1;
@@ -264,7 +271,32 @@ fn entries_for_subjects_returns_active_and_archived_targets_and_checks_revision(
 }
 
 #[test]
-fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
+fn entries_for_subjects_returns_more_than_the_old_64_target_limit() {
+    let mut f = Fixture::new_in_memory();
+    for _ in 0..65 {
+        let version = f.version();
+        let plan = f.plan(version);
+        f.commit(&plan);
+    }
+
+    let scan = f
+        .repo
+        .entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGET_SCAN + 1,
+        )
+        .unwrap();
+
+    assert_eq!(scan.entries.len(), 65);
+    assert_eq!(scan.scanned_entries, 65);
+}
+
+#[test]
+fn entries_for_subjects_accepts_exact_scan_budget_and_rejects_the_next_entry() {
     let mut f = Fixture::new_in_memory();
     let run_id = f.run.run_id.clone();
     let tx = f.conn.transaction().unwrap();
@@ -272,11 +304,32 @@ fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
         let mut insert = tx
             .prepare("INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')")
             .unwrap();
-        for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
+        for _ in 0..MAX_PROPOSAL_TARGET_SCAN {
             insert.execute(params![new_id(), run_id]).unwrap();
         }
     }
     tx.commit().unwrap();
+
+    let scan = f
+        .repo
+        .entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGETS + 1,
+        )
+        .unwrap();
+    assert!(scan.entries.is_empty());
+    assert_eq!(scan.scanned_entries, MAX_PROPOSAL_TARGET_SCAN);
+
+    f.conn
+        .execute(
+            "INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')",
+            params![new_id(), f.run.run_id],
+        )
+        .unwrap();
 
     rejected(
         f.repo.entries_for_subjects(
@@ -286,6 +339,117 @@ fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
             0,
             &[Subject::PlayerPreference],
             MAX_PROPOSAL_TARGETS + 1,
+        ),
+        Reason::CapacityBlocked,
+    );
+}
+
+#[test]
+fn entries_for_subjects_keeps_a_matching_target_after_unrelated_entries() {
+    let mut f = Fixture::new_in_memory();
+    let target = f.version();
+    let target_id = target.entry_id.clone();
+    f.commit(&f.plan(target));
+
+    let tx = f.conn.transaction().unwrap();
+    {
+        let mut insert = tx
+            .prepare("INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')")
+            .unwrap();
+        for index in 0..1_000 {
+            let entry_id = format!("00000000-0000-7000-8000-{index:012x}");
+            insert.execute(params![entry_id, f.run.run_id]).unwrap();
+        }
+    }
+    tx.commit().unwrap();
+
+    let scan = f
+        .repo
+        .entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGET_SCAN + 1,
+        )
+        .unwrap();
+
+    assert_eq!(scan.scanned_entries, 1_001);
+    assert_eq!(scan.entries.len(), 1);
+    assert_eq!(scan.entries[0].entry_id, target_id);
+}
+
+#[test]
+fn entries_for_subjects_accepts_exact_byte_budget_and_rejects_overflow() {
+    let mut f = Fixture::new_in_memory();
+    let subject = canonical(&Subject::PlayerPreference).unwrap();
+    let tx = f.conn.transaction().unwrap();
+    for _ in 0..128 {
+        let entry_id = new_id();
+        let version_id = new_id();
+        tx.execute(
+            "INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')",
+            params![entry_id, f.run.run_id],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO memory_versions(version_id,entry_id,body_hash,body_length,source_set_hash,evidence_set_hash,policy_hash,subject_json,change_kind) \
+             VALUES(?1,?2,zeroblob(32),32768,zeroblob(32),zeroblob(32),zeroblob(32),?3,'new')",
+            params![version_id, entry_id, subject],
+        )
+        .unwrap();
+        tx.execute(
+            "UPDATE memory_entries SET current_version_id=?1 WHERE entry_id=?2",
+            params![version_id, entry_id],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+
+    let scan = f
+        .repo
+        .entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGET_SCAN + 1,
+        )
+        .unwrap();
+    assert_eq!(scan.entries.len(), 128);
+    assert_eq!(scan.scanned_entries, 128);
+
+    let entry_id = new_id();
+    let version_id = new_id();
+    let tx = f.conn.transaction().unwrap();
+    tx.execute(
+        "INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')",
+        params![entry_id, f.run.run_id],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO memory_versions(version_id,entry_id,body_hash,body_length,source_set_hash,evidence_set_hash,policy_hash,subject_json,change_kind) \
+         VALUES(?1,?2,zeroblob(32),32768,zeroblob(32),zeroblob(32),zeroblob(32),?3,'new')",
+        params![version_id, entry_id, subject],
+    )
+    .unwrap();
+    tx.execute(
+        "UPDATE memory_entries SET current_version_id=?1 WHERE entry_id=?2",
+        params![version_id, entry_id],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+
+    rejected(
+        f.repo.entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGET_SCAN + 1,
         ),
         Reason::CapacityBlocked,
     );
@@ -329,6 +493,7 @@ fn entries_for_subjects_budget_ignores_history_from_other_runs() {
                 MAX_PROPOSAL_TARGETS + 1,
             )
             .unwrap()
+            .entries
             .is_empty()
     );
 }

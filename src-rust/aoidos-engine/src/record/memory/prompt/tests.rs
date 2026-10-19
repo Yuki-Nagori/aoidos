@@ -111,6 +111,17 @@ fn prompt_reads_only_the_context_frozen_with_its_batch() {
         build_memory_prompt(&unknown, RequestMode::Completion),
         Err(Error::Rejected(Reason::InvalidSchema))
     ));
+
+    let mut invalid_search = snapshot("source");
+    invalid_search.input["proposalContext"]["targetSearch"] = serde_json::json!({
+        "strategyVersion": 1,
+        "scannedEntries": 0,
+        "matchedEntries": 1
+    });
+    assert!(matches!(
+        build_memory_prompt(&invalid_search, RequestMode::Completion),
+        Err(Error::Rejected(Reason::InvalidSchema))
+    ));
 }
 
 #[test]

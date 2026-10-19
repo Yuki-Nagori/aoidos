@@ -83,6 +83,11 @@ pub fn build_memory_prompt(snapshot: &BatchSnapshot, mode: RequestMode) -> Resul
         })
         || context.evidence.len() > 128
         || context.targets.len() > aoidos_memory::model::MAX_PROPOSAL_TARGETS
+        || context.target_search.as_ref().is_some_and(|search| {
+            search.strategy_version != 1
+                || search.scanned_entries as usize > aoidos_memory::model::MAX_PROPOSAL_TARGET_SCAN
+                || search.matched_entries as usize != context.targets.len()
+        })
         || context.evidence.iter().any(|(id, evidence)| {
             id.is_empty()
                 || id.len() > 32
@@ -168,6 +173,9 @@ pub fn build_memory_prompt(snapshot: &BatchSnapshot, mode: RequestMode) -> Resul
         attitude 只能是 unexpressed、believed、\
         doubtful、denied。targetRef 结构为 {\"entryId\",\"expectedVersionId\",\
         \"expectedStateRevision\"}，每个值必须复制自输入。\n\
+        targetSearch 记录了本周目本次本地搜索扫描量与命中数。目标检索按正文词项和相邻字符召回，\
+        不保证包含语义近似但没有词面重合的旧记忆；目标列表为空或未命中时不能仅凭此认定内容是新的，\
+        无法判断时使用 uncertain。\n\
         既有目标包含 active / archived 状态；archived 目标只能作为 repeat 候选，不能用 supplement 或 correction 直接改写。\n\
         每个候选只使用协议字段 candidateId、classification、sourceIds、subjectRef、entityIds、\
         evidenceIds、targetRef、dimension、summary、attitude、attitudeEvidenceIds、inferred、reason。\
