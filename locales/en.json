@@ -294,7 +294,7 @@
     "intro": "Choose a scenario and model to begin. Reopening a cycle does not generate text automatically.",
     "restart": "Reopen / open for the first time",
     "newCycle": "Start a new cycle",
-    "phase": "Phase: {phase}",
+    "needsRecovery": "Recovery needed",
     "paused": "Paused. Resume explicitly to continue.",
     "historyPending": "The record is not confirmed. Reconnect to continue.",
     "recordKind": "{kind}: ",

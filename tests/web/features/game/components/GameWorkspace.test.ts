@@ -21,7 +21,11 @@ beforeEach(() => {
 
 describe("GameWorkspace", () => {
   it("装配开局后的舞台、输入、对话记录和历史修订通知", async () => {
-    const session = { sessionId: "session-1", title: "雾钟地窖" } as OpenedSession;
+    const session = {
+      sessionId: "session-1",
+      scriptId: "mistbell",
+      title: "雾钟地窖",
+    } as OpenedSession;
     const current = ref({
       historyRevision: 8,
       phase: "idle",
@@ -122,6 +126,8 @@ describe("GameWorkspace", () => {
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find(".game-stage").exists()).toBe(true);
+    expect(wrapper.find(".game-topbar .phase-pill").exists()).toBe(true);
+    expect(wrapper.find(".stage-area .stage-art").exists()).toBe(true);
     expect(wrapper.text()).toContain(session.title);
     expect(wrapper.findComponent(ActionComposer).exists()).toBe(true);
     expect(capturedPorts.recordsFeed.value).toBeInstanceOf(HTMLDivElement);

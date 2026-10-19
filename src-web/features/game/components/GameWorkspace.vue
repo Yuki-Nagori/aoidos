@@ -47,8 +47,13 @@ defineExpose({ reconnect });
       :panel-open="panel.isOpen.value"
       :modal-open="Boolean(confirmation)"
       :title="session.title"
+      :script-id="session.scriptId"
+      :scene-available="Boolean(current?.scene)"
       :scene-label="t('game.scene')"
+      :phase="current?.needsRecovery || current?.resumeRequired ? 'needsRecovery' : current?.phase ?? 'idle'"
+      :phase-label="current?.needsRecovery ? t('game.needsRecovery') : current?.resumeRequired ? t('game.paused') : current ? phaseName(current.phase) : t('common.loading')"
       :trigger-label="t('game.openPanel')"
+      :settings-label="t('settings.title')"
       :pin-label="t('game.pinPanel')"
       :unpin-label="t('game.unpinPanel')"
       :close-label="t('game.closePanel')"
@@ -62,29 +67,17 @@ defineExpose({ reconnect });
       @pin="panel.pin"
       @unpin="panel.unpin"
       @close="closePanel"
+      @settings="emit('openSettings')"
     >
-      <template #status>
-        <span class="ml-auto truncate text-xs text-muted">
-          {{ t("game.phase", { phase: current ? phaseName(current.phase) : t("common.loading") }) }}
-        </span>
-        <button
-          type="button"
-          class="app-settings-trigger stage-settings-trigger"
-          :aria-label="t('settings.title')"
-          @click="emit('openSettings')"
-        >
-          <span aria-hidden="true">⚙</span>
-        </button>
+      <template #summary>
+        <slot name="summary" />
       </template>
       <template #scene>
-        <div class="max-w-lg text-center">
-          <div class="scene-star mb-5 text-5xl text-accent-violet" aria-hidden="true" />
-          <h2 class="text-2xl font-semibold">{{ session.title }}</h2>
-          <p v-if="scenePath" class="mt-2 text-sm text-muted">{{ scenePath }}</p>
-          <p class="mt-3 text-sm text-muted">{{ t("game.scenePrompt") }}</p>
+        <div v-if="current?.scene" class="scene-hud">
+          <p v-if="scenePath" class="scene-breadcrumb">{{ scenePath }}</p>
           <button
+            class="scene-hint-button"
             type="button"
-            class="mt-4"
             :disabled="sceneHint.loading.value || !current?.scene || current.needsRecovery"
             @click="sceneHint.request"
           >
@@ -93,20 +86,24 @@ defineExpose({ reconnect });
           <p
             v-for="hint in sceneHint.hints.value"
             :key="hint.hintId"
-            class="mt-3 text-sm text-accent-violet"
+            class="scene-hint-result"
             role="status"
           >
             {{ hint.text }}
           </p>
-          <p v-if="sceneHint.unavailable.value" class="mt-3 text-sm text-muted" role="status">
+          <p v-if="sceneHint.unavailable.value" class="scene-hint-result" role="status">
             {{ t("game.hintUnavailable") }}
           </p>
-          <p v-if="sceneHint.failed.value" class="mt-3 text-sm text-warning" role="alert">
+          <p v-if="sceneHint.failed.value" class="scene-hint-result scene-hint-error" role="alert">
             {{ t("game.hintFailed") }}
           </p>
-          <p v-if="current?.resumeRequired" class="mt-4 text-sm text-warning">
+          <p v-if="current?.resumeRequired" class="scene-hint-result scene-hint-error">
             {{ t("game.paused") }}
           </p>
+        </div>
+        <div v-else class="scene-empty-state">
+          <h2>{{ session.title }}</h2>
+          <p>{{ current?.needsRecovery ? t("game.paused") : t("game.scenePrompt") }}</p>
         </div>
       </template>
       <template #panel-header>

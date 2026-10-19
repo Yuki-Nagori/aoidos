@@ -11,6 +11,8 @@ import { useTheme } from "../features/theme/composables/useTheme";
 import { useLocale } from "../features/locale/composables/useLocale";
 import { useBilling } from "../features/billing/composables/useBilling";
 import { useUiPreferences } from "../features/game/composables/useUiPreferences";
+import { summarizeRunUsage } from "../features/billing/utils/run-usage";
+import { formatExactCurrency } from "../shared/utils/format";
 
 const { t } = useI18n();
 const product = useProduct();
@@ -28,6 +30,18 @@ const billing = useBilling(
   computed(() => billingProfile.value?.model ?? product.model.value),
   product.credentialRevision,
 );
+const billingChip = computed(() =>
+  summarizeRunUsage(billing.period.value?.items ?? [], {
+    CNY: billing.settings.value?.cnyLimit ?? null,
+    USD: billing.settings.value?.usdLimit ?? null,
+  })
+    .map(({ amount, currency, limit }) =>
+      limit
+        ? `${formatExactCurrency(amount, currency, locale.resolved.value)} / ${formatExactCurrency(limit, currency, locale.resolved.value)}`
+        : formatExactCurrency(amount, currency, locale.resolved.value),
+    )
+    .join(" · "),
+);
 type AppFault = { code: string; message: string; detail?: unknown };
 const gameError = ref<AppFault>();
 const historyRevision = ref(0);
@@ -36,6 +50,10 @@ watch(sessionId, (id) => {
   gameError.value = undefined;
   historyRevision.value = 0;
 }, { flush: "sync" });
+watch([sessionId, historyRevision], ([id, revision], [previousId, previousRevision]) => {
+  // 账本摘要跟随已提交记录更新；不随流式 chunk 高频读取，也不后台轮询。
+  if (id && id === previousId && revision !== previousRevision) void billing.loadPeriod();
+});
 const error = computed(() => product.error.value ?? gameError.value);
 function faultReason(failure: unknown): string | undefined {
   if (typeof failure !== "object" || failure === null || !("detail" in failure)) return undefined;
@@ -77,7 +95,11 @@ void preferences.load();
 </script>
 <template>
   <div class="app-root">
-    <main class="app-shell" :inert="settingsOpen">
+    <main
+      class="app-shell"
+      :class="{ 'app-shell-game': Boolean(product.session.value) }"
+      :inert="settingsOpen"
+    >
       <header v-if="!product.session.value" class="topbar">
         <svg class="logo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".3" />
@@ -123,7 +145,24 @@ void preferences.load();
         @error="gameError = $event as AppFault"
         @history-revision="historyRevision = $event"
         @open-settings="openSettings()"
-      />
+      >
+        <template #summary>
+          <button
+            type="button"
+            class="chip hide-narrow mono game-model-chip"
+            :aria-label="t('billing.title')"
+            @click="openSettings('billing')"
+          >
+            <span>{{ product.providerId.value }}</span>
+            <template v-if="billingChip">
+              <span class="sep" />
+              <span>{{ billingChip }}</span>
+            </template>
+            <span class="sep" />
+            <span class="dim">{{ product.model.value }}</span>
+          </button>
+        </template>
+      </GameWorkspace>
     </main>
     <SetupPanel
       :open="settingsOpen"

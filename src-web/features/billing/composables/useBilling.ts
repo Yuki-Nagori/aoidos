@@ -114,6 +114,7 @@ export function useBilling(
   const error = ref<BillingFailure>();
   const routePolicy = computed(() => (providerId.value === "openrouter" ? "openrouter" : "direct"));
   let generation = 0;
+  let periodGeneration = 0;
   let balanceGeneration = 0;
   let priceSelectionGeneration = 0;
   let suppressNextCurrencySelection = false;
@@ -158,6 +159,7 @@ export function useBilling(
       sourceUrl.value = "";
       error.value = undefined;
       if (!activeRun) return;
+      const periodRequest = ++periodGeneration;
       try {
         const [savedSettings, savedPrice, savedPeriod, savedMonthly, suggestions, requestPage] =
           await Promise.all([
@@ -170,7 +172,7 @@ export function useBilling(
           ]);
         if (disposed || current !== generation) return;
         settings.value = savedSettings;
-        period.value = savedPeriod;
+        if (periodRequest === periodGeneration) period.value = savedPeriod;
         monthly.value = savedMonthly;
         requests.value = requestPage;
         cnyLimit.value = savedSettings?.cnyLimit ?? suggestions.cny ?? "";
@@ -364,12 +366,26 @@ export function useBilling(
   }
 
   async function loadPeriodFor(activeRun: string, current: number): Promise<void> {
+    const request = ++periodGeneration;
     try {
       const result = await getRunPeriod(activeRun);
-      if (!disposed && current === generation && activeRun === runId.value) period.value = result;
+      if (
+        !disposed &&
+        request === periodGeneration &&
+        current === generation &&
+        activeRun === runId.value
+      ) {
+        period.value = result;
+      }
     } catch (failure) {
-      if (!disposed && current === generation && activeRun === runId.value)
+      if (
+        !disposed &&
+        request === periodGeneration &&
+        current === generation &&
+        activeRun === runId.value
+      ) {
         error.value = normalizeError(failure);
+      }
     }
   }
 

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+<title>Mistbell stage background</title>
+<defs>
+<linearGradient id="asky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0e1c26"/><stop offset=".6" stop-color="#0a141b"/><stop offset="1" stop-color="#05090c"/></linearGradient>
+<radialGradient id="amoon" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#e8eef5" stop-opacity=".55"/><stop offset="1" stop-color="#e8eef5" stop-opacity="0"/></radialGradient>
+<radialGradient id="adoor" cx=".5" cy=".7" r=".6"><stop offset="0" stop-color="#f0924a" stop-opacity="0.9"/><stop offset="1" stop-color="#f0924a" stop-opacity="0"/></radialGradient>
+<radialGradient id="alamp" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#ffc98a" stop-opacity=".85"/><stop offset=".35" stop-color="#f0924a" stop-opacity=".35"/><stop offset="1" stop-color="#f0924a" stop-opacity="0"/></radialGradient>
+<filter id="ablur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="34"/></filter>
+</defs>
+<rect width="1920" height="1080" fill="url(#asky)"/>
+<ellipse cx="420" cy="80" rx="700" ry="380" fill="#8a7cf6" opacity=".12" filter="url(#ablur)"/>
+<circle cx="140" cy="90" r="1.6" fill="#e6ebf1" opacity="0.5"/><circle cx="320" cy="170" r="1.2" fill="#e6ebf1" opacity="0.35"/><circle cx="1180" cy="80" r="1.4" fill="#e6ebf1" opacity="0.45"/><circle cx="1700" cy="260" r="1.1" fill="#e6ebf1" opacity="0.4"/><circle cx="1620" cy="90" r="1.8" fill="#e6ebf1" opacity="0.5"/><circle cx="1840" cy="150" r="1.2" fill="#e6ebf1" opacity="0.3"/><circle cx="260" cy="300" r="1" fill="#e6ebf1" opacity="0.3"/><circle cx="1090" cy="210" r="1.1" fill="#e6ebf1" opacity="0.3"/>
+<circle cx="330" cy="360" r="120" fill="url(#amoon)"/><circle cx="330" cy="360" r="40" fill="#dfe6ee" opacity="0.8"/>
+<path d="M0 760q240-90 520-40t560-20q420-80 840 10v330H0z" fill="#0b1318"/>
+<path d="M0 830q300-60 640-20t640 0q340-40 640 10v260H0z" fill="#0d171c"/>
+<rect x="560" y="200" width="420" height="820" rx="10" fill="#101a20" stroke="#e2ecf6" stroke-opacity=".08" stroke-width="2"/>
+<path d="M540 210 770 70 1000 210z" fill="#0c1419" stroke="#e2ecf6" stroke-opacity=".08" stroke-width="2"/>
+<path d="M720 280q50-70 100 0v90H720z" fill="#070c10" stroke="#a88bff" stroke-opacity=".35" stroke-width="2"/>
+<path d="M745 300q25-28 50 0l6 40h-62z" fill="#a88bff" opacity=".22"/>
+<rect x="640" y="460" width="18" height="70" rx="9" fill="#05090c"/><rect x="880" y="460" width="18" height="70" rx="9" fill="#05090c"/>
+<ellipse cx="770" cy="880" rx="260" ry="200" fill="url(#adoor)"/>
+<path d="M690 1000V770q80-110 160 0v230z" fill="#0a0d10" stroke="#f0924a" stroke-opacity=".55" stroke-width="2"/>
+<path d="M768 790v210" stroke="#ffb46e" stroke-opacity="0.85" stroke-width="3"/>
+<rect x="640" y="1000" width="260" height="14" fill="#141e23"/><rect x="610" y="1014" width="320" height="14" fill="#11191d"/><rect x="580" y="1028" width="380" height="52" fill="#0e161a"/>
+<circle cx="560" cy="930" r="110" fill="url(#alamp)"/>
+<path d="M520 990q-6-80 28-110q20-14 40 0q34 30 28 110z" fill="#070b0e" stroke="#e2ecf6" stroke-opacity=".1" stroke-width="2"/>
+<circle cx="568" cy="858" r="18" fill="#070b0e" stroke="#e2ecf6" stroke-opacity=".1" stroke-width="2"/>
+<rect x="582" y="912" width="16" height="22" rx="4" fill="#ffc98a"/>
+<ellipse cx="1460" cy="980" rx="320" ry="80" fill="#5cc8b4" opacity=".08" filter="url(#ablur)"/>
+<rect x="1270" y="900" width="380" height="96" fill="#141e23"/>
+<ellipse cx="1460" cy="900" rx="190" ry="44" fill="#1a252b" stroke="#e2ecf6" stroke-opacity=".15" stroke-width="2"/>
+<ellipse cx="1460" cy="900" rx="160" ry="32" fill="#03070a" stroke="#5cc8b4" stroke-opacity=".25" stroke-width="2"/>
+<ellipse cx="1460" cy="902" rx="44" ry="12" fill="none" stroke="#a88bff" stroke-opacity=".35" stroke-width="2" stroke-dasharray="6 6"/>
+<path d="M1196 1000V836q0-34 34-34h12q34 0 34 34v164z" fill="#0b1115" stroke="#f0924a" stroke-opacity=".3" stroke-width="2"/>
+<circle cx="1236" cy="770" r="24" fill="#0b1115" stroke="#f0924a" stroke-opacity=".45" stroke-width="2"/>
+<ellipse cx="420" cy="1040" rx="700" ry="90" fill="#a9b6c4" opacity="0.34" filter="url(#ablur)"/>
+<ellipse cx="1500" cy="1060" rx="640" ry="70" fill="#a9b6c4" opacity="0.272" filter="url(#ablur)"/>
+</svg>

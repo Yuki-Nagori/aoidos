@@ -61,6 +61,8 @@
 - 2026-10-19，Vitest 全量覆盖：46 个文件、411 项通过；语句 / 分支 / 函数 / 行覆盖率为 99.63% / 99.19% / 100% / 99.73%。剩余 5 行位于既有 `useSceneHint` 与 `useScenePresence`，不在本批改动中。
 - 2026-10-19，`bun run test:affected`：通过，受影响 Rust workspace 测试与 Vitest 46 个文件、414 项全部通过。
 - 2026-10-19，`bun run format:affected`、`bun run lint:affected`、`bun run typecheck`：通过；lint 同时完成 i18n 检查、Vite 生产构建和 native fixture 构建。
+- 2026-10-19，对局工作台继续按设计稿改为全窗顶栏、居中 16:9 舞台和右侧悬浮面板；Mistbell 使用剧本专属舞台图，舞台外 HUD 只展示真实阶段、场景与提示。费用摘要从当前局账本按原币汇总，不做跨币换算；为此补充金额汇总行为测试。
+- 2026-10-19，文档层固定视口并关闭整页滚动 / overscroll，避免 WKWebView 橡皮筋回弹；`tests/web/appcss.test.ts` 增加 CSS 契约检查。顶栏账本摘要随已提交记录更新，账本并发响应按请求代次丢弃旧结果，避免旧快照覆盖新金额。`bun run test:affected` 通过，受影响 Rust workspace 测试及 Vitest 47 个文件、421 项通过；`bun run format:affected`、`bun run lint:affected`、`bun run typecheck` 均通过。lint 包含 i18n、Vite 生产构建与 native fixture 构建。
 - `bun run verify`：未执行。
 - WebView / DPI / 键盘与辅助技术检查：未执行，按适用平台留证。
 

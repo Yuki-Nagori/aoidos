@@ -10,6 +10,8 @@
 │   ├── main.ts                # 应用入口：挂载根组件
 │   ├── app/                   # App.vue 根组合、WelcomeScreen 与设置抽屉
 │   ├── features/              # game、product、billing、memory、locale、theme 功能模块
+│   │   ├── game/              # 对局舞台、记录、输入与状态编排
+│   │   │   └── assets/        # 仅由对应剧本状态选择的游戏视觉资源
 │   │   └── <feature>/         # 各自的 components/、composables/、utils/ 与类型
 │   ├── shared/                # 跨功能共享的纯逻辑 / 展示原语，不依赖 feature
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）

@@ -294,7 +294,7 @@
     "intro": "选择剧本与模型后开始。重开周目不会自动生成。",
     "restart": "重开 / 首次打开",
     "newCycle": "新建周目",
-    "phase": "阶段：{phase}",
+    "needsRecovery": "需要恢复",
     "paused": "已暂停，继续需要显式恢复。",
     "historyPending": "记录尚未确认，请重新连接。",
     "recordKind": "{kind}：",
