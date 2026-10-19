@@ -23,9 +23,10 @@ use aoidos_memory::model::{
 use aoidos_memory::repository::{BatchCompletion, CandidateOutcome};
 use std::{
     collections::BTreeMap,
-    io,
+    env, io,
     path::Path,
     path::PathBuf,
+    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -75,6 +76,221 @@ fn memory_runtime_target_retrieval_scans_1000_active_entries() {
         "{}",
         serde_json::to_string_pretty(&run_target_retrieval_capacity(1_000)).unwrap()
     );
+}
+
+#[test]
+#[ignore = "显式运行的进程终止 / 重开记忆批次恢复实验"]
+fn memory_runtime_process_termination_recovers_received_batch() {
+    const CHILD_EXIT: i32 = 73;
+    const CHILD_ROOT: &str = "AOIDOS_MEMORY_RESTART_ROOT";
+    const CHILD_STAGE: &str = "AOIDOS_MEMORY_RESTART_STAGE";
+
+    if let (Ok(root), Ok(stage)) = (env::var(CHILD_ROOT), env::var(CHILD_STAGE)) {
+        prepare_and_terminate_batch(Path::new(&root), &stage, CHILD_EXIT);
+        unreachable!("子进程必须在持久化阶段后立即退出");
+    }
+
+    for stage in ["queued", "dispatched", "received"] {
+        let temp_dir = TempDirectory::new();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "memory_runtime_process_termination_recovers_received_batch",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, temp_dir.path())
+            .env(CHILD_STAGE, stage)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("启动记忆恢复子进程");
+        assert_eq!(child.code(), Some(CHILD_EXIT), "阶段 {stage} 未按预期终止");
+
+        let migration_events = Arc::new(Events::default());
+        let record_events = Arc::new(Events::default());
+        let reopened = Storage::new(temp_dir.path(), migration_events, record_events);
+        let session_id = std::fs::read_to_string(temp_dir.path().join("session_id"))
+            .expect("子进程应保存 session ID");
+        reopened.records.open("mistbell", &session_id).unwrap();
+        let run = reopened.memory_run_for_session(&session_id).unwrap();
+        let status = reopened
+            .active_memory_batch_status(&run.run_id)
+            .unwrap()
+            .expect("未完成批次应在进程重开后保持可见");
+
+        match stage {
+            "queued" => assert_eq!(status.state, aoidos_memory::repository::BatchState::Queued),
+            "dispatched" => {
+                assert_eq!(
+                    status.state,
+                    aoidos_memory::repository::BatchState::Dispatched
+                );
+            }
+            "received" => {
+                assert_eq!(
+                    status.state,
+                    aoidos_memory::repository::BatchState::Received
+                );
+                let catalog = stress_catalog();
+                assert!(
+                    aoidos_engine::record::memory::processing::complete_received_batch(
+                        &reopened,
+                        &session_id,
+                        &catalog,
+                        &status.batch_id,
+                    )
+                    .unwrap()
+                );
+                let first_completion = reopened
+                    .memory_batch_status(&run.run_id, &status.batch_id)
+                    .unwrap()
+                    .completion
+                    .expect("首次恢复应持久完成回执");
+                let first_entries = reopened.memory_entries(&run.run_id, None, 32).unwrap();
+                assert_eq!(first_entries.entries.len(), 1);
+                assert_eq!(first_entries.entries[0].state, EntryState::Active);
+                assert!(first_entries.next_cursor.is_none());
+                assert!(
+                    !aoidos_engine::record::memory::processing::complete_received_batch(
+                        &reopened,
+                        &session_id,
+                        &catalog,
+                        &status.batch_id,
+                    )
+                    .unwrap()
+                );
+                let completed = reopened
+                    .memory_batch_status(&run.run_id, &status.batch_id)
+                    .unwrap();
+                assert_eq!(
+                    completed.state,
+                    aoidos_memory::repository::BatchState::Completed
+                );
+                let completion: BatchCompletion = completed.completion.expect("恢复后应有完成回执");
+                assert_eq!(completion, first_completion);
+                assert_eq!(completion.outcomes.len(), 1);
+                assert_eq!(completion.outcomes[0].outcome, CandidateOutcome::Applied);
+                let entries = reopened.memory_entries(&run.run_id, None, 32).unwrap();
+                assert_eq!(entries.entries.len(), first_entries.entries.len());
+                assert_eq!(
+                    entries.entries[0].entry_id,
+                    first_entries.entries[0].entry_id
+                );
+                assert_eq!(
+                    entries.entries[0].current_version_id,
+                    first_entries.entries[0].current_version_id
+                );
+                assert_eq!(
+                    entries.entries[0].state_revision,
+                    first_entries.entries[0].state_revision
+                );
+                assert_eq!(entries.entries[0].state, first_entries.entries[0].state);
+                assert!(entries.next_cursor.is_none());
+            }
+            _ => unreachable!(),
+        }
+        reopened.close().unwrap();
+    }
+}
+
+fn prepare_and_terminate_batch(root: &Path, stage: &str, exit_code: i32) {
+    let migration_events = Arc::new(Events::default());
+    let record_events = Arc::new(Events::default());
+    let storage = Storage::new(root, migration_events, record_events);
+    storage.ready().unwrap();
+
+    let header = aoidos_engine::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    std::fs::write(root.join("session_id"), &session_id).unwrap();
+    storage.records.create(header).unwrap();
+    let catalog = stress_catalog();
+    let run = storage
+        .initialize_memory_run(&session_id, &catalog)
+        .unwrap();
+    storage
+        .records
+        .get(&session_id)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .append(Body::PlayerSpeech {
+            player_id: "player".into(),
+            text: "进程终止恢复实验素材".into(),
+            mode: Some(InputMode::OutOfCharacter),
+            content_range: None,
+        })
+        .unwrap();
+    let materials = storage.collect_memory_materials(&run.run_id, None).unwrap();
+    assert_eq!(materials.eligible_count, 1);
+    let snapshot = storage
+        .prepare_collectible_memory_batch(&run.run_id)
+        .unwrap();
+    let batch_id = snapshot.batch_id.clone();
+    storage.freeze_memory_batch(&catalog, snapshot).unwrap();
+
+    if stage != "queued" {
+        let turn_id = new_id();
+        let request_id = new_id();
+        storage
+            .with_memory(&session_id, &catalog, |repository, connection, port| {
+                assert!(repository.dispatch_batch(
+                    connection,
+                    port,
+                    &batch_id,
+                    &turn_id,
+                    &request_id,
+                )?);
+                Ok(())
+            })
+            .unwrap();
+
+        if stage == "received" {
+            let (batch, _) = storage
+                .with_memory(&session_id, &catalog, |repository, connection, _| {
+                    repository.batch(connection, &batch_id)
+                })
+                .unwrap();
+            let proposal = Proposal {
+                version: 1,
+                candidates: batch
+                    .spans
+                    .iter()
+                    .map(|span| Candidate {
+                        candidate_id: "restart-noop".into(),
+                        classification: Classification::New,
+                        source_ids: vec![span.source_id.clone()],
+                        subject_ref: SubjectRef::PlayerPreference,
+                        entity_ids: vec![],
+                        evidence_ids: vec![],
+                        target_ref: None,
+                        dimension: Some(Dimension::PlayerPreference),
+                        summary: Some(span.text.clone()),
+                        attitude: None,
+                        attitude_evidence_ids: vec![],
+                        inferred: Some(false),
+                        reason: "进程恢复实验的合成偏好提案".into(),
+                    })
+                    .collect(),
+                cycle_marks: vec![],
+            };
+            let response = aoidos_json::canonical_string(&proposal).unwrap();
+            storage
+                .with_memory(&session_id, &catalog, |repository, connection, _| {
+                    repository.receive_batch(
+                        connection,
+                        &batch_id,
+                        &turn_id,
+                        &request_id,
+                        response.as_bytes(),
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        }
+    }
+
+    std::process::exit(exit_code);
 }
 
 fn run_trace(record_pairs: usize) -> serde_json::Value {
