@@ -296,7 +296,7 @@ fn entries_for_subjects_returns_more_than_the_old_64_target_limit() {
 }
 
 #[test]
-fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
+fn entries_for_subjects_accepts_exact_scan_budget_and_rejects_the_next_entry() {
     let mut f = Fixture::new_in_memory();
     let run_id = f.run.run_id.clone();
     let tx = f.conn.transaction().unwrap();
@@ -304,11 +304,32 @@ fn entries_for_subjects_stops_at_the_active_entry_scan_budget() {
         let mut insert = tx
             .prepare("INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')")
             .unwrap();
-        for _ in 0..=MAX_PROPOSAL_TARGET_SCAN {
+        for _ in 0..MAX_PROPOSAL_TARGET_SCAN {
             insert.execute(params![new_id(), run_id]).unwrap();
         }
     }
     tx.commit().unwrap();
+
+    let scan = f
+        .repo
+        .entries_for_subjects(
+            &f.conn,
+            &f.port,
+            &f.run.run_id,
+            0,
+            &[Subject::PlayerPreference],
+            MAX_PROPOSAL_TARGETS + 1,
+        )
+        .unwrap();
+    assert!(scan.entries.is_empty());
+    assert_eq!(scan.scanned_entries, MAX_PROPOSAL_TARGET_SCAN);
+
+    f.conn
+        .execute(
+            "INSERT INTO memory_entries(entry_id,run_id,current_version_id,state_revision,status) VALUES(?1,?2,NULL,0,'active')",
+            params![new_id(), f.run.run_id],
+        )
+        .unwrap();
 
     rejected(
         f.repo.entries_for_subjects(
