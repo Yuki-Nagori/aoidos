@@ -218,6 +218,9 @@ impl Fixture {
     }
     fn build(stress_provider: Option<Arc<StressProvider>>) -> Self {
         let root = std::env::temp_dir().join(format!("aoidos-product-{}", uuid::Uuid::new_v4()));
+        Self::build_at(root, stress_provider)
+    }
+    fn build_at(root: PathBuf, stress_provider: Option<Arc<StressProvider>>) -> Self {
         std::fs::create_dir_all(&root).unwrap();
         let storage = Arc::new(Storage::new(
             &root,
@@ -754,16 +757,6 @@ async fn memory_runtime_product_session_retrieves_target_after_1000_active_entri
         false,
     );
 
-    let sqlite_path = fixture.root.join("storage.sqlite");
-    let record_path = fixture
-        .root
-        .join("workspaces/mistbell/transcript")
-        .join(format!("{}.jsonl", opened.session_id));
-    let sqlite_bytes = std::fs::metadata(&sqlite_path).unwrap().len();
-    let record_bytes = std::fs::metadata(&record_path).unwrap().len();
-    let wal_bytes = std::fs::metadata(fixture.root.join("storage.sqlite-wal"))
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
     let (snapshot_before_close, _) = fixture
         .storage
         .with_memory(&opened.session_id, &catalog, |repository, connection, _| {
@@ -773,17 +766,12 @@ async fn memory_runtime_product_session_retrieves_target_after_1000_active_entri
     fixture.storage.records.close(&opened.session_id).unwrap();
     fixture.close().await;
     let reopen_started = std::time::Instant::now();
-    let reopened = Storage::new(
-        &fixture.root,
-        Arc::new(Events::default()),
-        Arc::new(RecordEvents::default()),
-    );
-    reopened.ready().unwrap();
-    reopened
-        .records
-        .open("mistbell", &opened.session_id)
-        .unwrap();
+    let reopened = Fixture::build_at(fixture.root.clone(), fixture.stress_provider.clone());
+    let reopened_session = reopened.open(false).await.unwrap();
+    assert_eq!(reopened_session.session_id, opened.session_id);
+    assert_eq!(reopened_session.memory_run_id, opened.memory_run_id);
     let snapshot_after_reopen = reopened
+        .storage
         .with_memory(&opened.session_id, &catalog, |repository, connection, _| {
             repository.batch(connection, &lookup_batch_id)
         })
@@ -791,20 +779,48 @@ async fn memory_runtime_product_session_retrieves_target_after_1000_active_entri
         .0;
     assert_eq!(snapshot_after_reopen, snapshot_before_close);
     assert_eq!(
-        count_active_memory_entries(&reopened, &opened.memory_run_id),
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
         ENTRY_COUNT
     );
-    println!(
-        "{{\"activeEntries\":{ENTRY_COUNT},\"completedBatches\":{completed_batches},\"createMs\":{create_ms},\"lookupPreparationMs\":{lookup_preparation_ms},\"reopenValidationMs\":{},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"providerStarts\":{}}}",
-        reopen_started.elapsed().as_millis(),
-        fixture
-            .stress_provider
-            .as_ref()
-            .unwrap()
-            .starts
-            .load(Ordering::SeqCst),
+    let reopen_validation_ms = reopen_started.elapsed().as_millis();
+    let long_game_started = std::time::Instant::now();
+    for index in 0..200 {
+        complete_product_stress_round(
+            &reopened,
+            &opened.session_id,
+            &format!("查看第 {index} 个线索"),
+            index,
+        )
+        .await;
+    }
+    let long_game_ms = long_game_started.elapsed().as_millis();
+    assert_eq!(
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
+        ENTRY_COUNT,
+        "长对局不应改变已提交的活动记忆数"
     );
-    reopened.close().unwrap();
+    let provider_starts = reopened
+        .stress_provider
+        .as_ref()
+        .unwrap()
+        .starts
+        .load(Ordering::SeqCst);
+    assert_eq!(provider_starts, 400, "200 个产品回合应各执行两次合成生成");
+    let sqlite_path = reopened.root.join("storage.sqlite");
+    let record_path = reopened
+        .root
+        .join("workspaces/mistbell/transcript")
+        .join(format!("{}.jsonl", opened.session_id));
+    let sqlite_bytes = std::fs::metadata(&sqlite_path).unwrap().len();
+    let record_bytes = std::fs::metadata(&record_path).unwrap().len();
+    let wal_bytes = std::fs::metadata(reopened.root.join("storage.sqlite-wal"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    println!(
+        "{{\"activeEntries\":{ENTRY_COUNT},\"completedBatches\":{completed_batches},\"createMs\":{create_ms},\"lookupPreparationMs\":{lookup_preparation_ms},\"reopenValidationMs\":{reopen_validation_ms},\"longGameRounds\":200,\"longGameMs\":{long_game_ms},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"providerStarts\":{}}}",
+        provider_starts,
+    );
+    reopened.close().await;
 }
 
 async fn complete_product_stress_round(
