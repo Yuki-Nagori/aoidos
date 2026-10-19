@@ -846,6 +846,41 @@ describe("useBilling settings and period refresh", () => {
     scope.stop();
   });
 
+  it("keeps the newest run-period refresh when earlier reads resolve later", async () => {
+    const earlier = deferred<RunPeriod>();
+    const later = deferred<RunPeriod>();
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    vi.mocked(getRunPeriod).mockReturnValueOnce(earlier.promise).mockReturnValueOnce(later.promise);
+
+    const firstRefresh = state.loadPeriod();
+    const secondRefresh = state.loadPeriod();
+    later.resolve(runPeriod("run-1-new"));
+    await secondRefresh;
+    earlier.resolve(runPeriod("run-1-old"));
+    await firstRefresh;
+
+    expect(state.period.value?.runId).toBe("run-1-new");
+    scope.stop();
+  });
+
+  it("does not let the initial period read overwrite a newer refresh", async () => {
+    const initial = deferred<RunPeriod>();
+    vi.mocked(getRunPeriod).mockReturnValueOnce(initial.promise);
+    vi.mocked(getBudgetSettings).mockResolvedValueOnce(settings());
+    const { state, scope } = createState();
+    await vi.waitFor(() => expect(getRunPeriod).toHaveBeenCalledTimes(1));
+
+    vi.mocked(getRunPeriod).mockResolvedValueOnce(runPeriod("run-1-new"));
+    await state.loadPeriod();
+    expect(state.period.value?.runId).toBe("run-1-new");
+
+    initial.resolve(runPeriod("run-1-initial"));
+    await vi.waitFor(() => expect(state.settings.value).not.toBeNull());
+    expect(state.period.value?.runId).toBe("run-1-new");
+    scope.stop();
+  });
+
   it("ignores a failed settings save after disposal", async () => {
     const pending = deferred<BudgetSettings>();
     const { state, scope } = createState();

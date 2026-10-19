@@ -121,6 +121,10 @@ export function useGameWorkspace(ports: Options) {
         return t("game.submitAction");
     }
   });
+  const connectionError = computed(
+    () =>
+      phase.connectionError.value ?? records.connectionError.value ?? turn.connectionError.value,
+  );
   const error = computed(
     () =>
       input.error.value ??
@@ -130,9 +134,7 @@ export function useGameWorkspace(ports: Options) {
       phase.state.value.error ??
       records.state.value.error ??
       turn.view.value.recoveryError ??
-      phase.connectionError.value ??
-      records.connectionError.value ??
-      turn.connectionError.value,
+      connectionError.value,
   );
   const scenePath = computed(() =>
     current.value?.scene?.path.map(({ title }) => title).join(" · "),
@@ -394,6 +396,7 @@ export function useGameWorkspace(ports: Options) {
     game,
     preferences,
     phase,
+    connectionFailed: computed(() => connectionError.value !== undefined),
     records,
     current,
     presence,

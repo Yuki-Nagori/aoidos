@@ -17,6 +17,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 记录与上下文 | [记录引擎](record-engine.md)           | 块语法、流式持久化、投影预算、恢复与迁移；022 已实现并验收                                              |
 | 记忆设计     | [记忆系统](memory.md)                  | 三域与门控；029–033 引擎端流程已接入，生产参数与实测仍待验收                                            |
 | 记忆算法     | [记忆算法与标定](memory-algorithms.md) | 匹配 / 强化 / 衰减候选、正确性约束与对照实验；算法与数值待标定                                          |
+| 周目结局     | [结局与落幕](ending-flow.md)           | 周目规则快照、数值标签、规范事实与 AI 叙事边界；054 已定稿，056 待实现                                  |
 | 回合与判定   | [阶段机](turn-state-machine.md)        | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收                                        |
 | 界面结构     | [界面交互](ui-shell.md)                | 舞台覆盖层、面板四态、记录呈现与输入；025 已实现、平台验收待完成；051 拆分前端架构，052 移植 aoidos-art |
 | 国际化       | [界面国际化](i18n.md)                  | zh-Hans / en、语言偏好、首窗原生文案与精确格式化；034 已验收                                            |
@@ -36,17 +37,19 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 设计定稿表示协议和交互已评审，不表示功能已经上线。下表列出主责；任务范围、依赖及验收证据以链接中的 task 为准。
 
-| 设计文档                               | 设计任务                                        | 实施主责                                                                                                                                            |
-| -------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [LLM 接入与护栏](llm.md)               | [005](../task/005-llm-design.md)                | 018–021 接入 / 恢复，024 产品联调                                                                                                                   |
-| [计价与费用预算](billing.md)           | [027](../task/027-llm-cost-control-design.md)   | [035](../task/035-llm-cost-control-impl.md) 统一计费与展示，030 / 033 消费                                                                          |
-| [记录引擎](record-engine.md)           | [006](../task/006-record-design.md)             | [022](../task/022-record-engine-impl.md) 持久化、投影与迁移                                                                                         |
-| [记忆系统](memory.md)                  | [007](../task/007-memory-design.md)             | 设计已评审；029–033 承接实施，当前不接 006 投影热路径                                                                                               |
-| [记忆算法与标定](memory-algorithms.md) | [007](../task/007-memory-design.md)             | 与记忆系统共同定稿；033 承接标定和运行期验证                                                                                                        |
-| [回合与阶段机](turn-state-machine.md)  | [012](../task/012-turn-state-machine-design.md) | [023](../task/023-turn-state-machine-impl.md) 产品入口、判定与恢复                                                                                  |
-| [界面结构与交互](ui-shell.md)          | [008](../task/008-ui-shell-design.md)           | [004](../task/004-tailwind-v4.md) 样式底座；[025](../task/025-ui-shell-impl.md) 完整界面，[046](../task/046-scene-presence-ui-impl.md) 在场角色选择 |
-| [界面国际化](i18n.md)                  | [028](../task/028-i18n-design.md)               | [034](../task/034-i18n-impl.md) 底座 / 原生，025 / 031 消费                                                                                         |
-| [主题与剧本皮肤](theming.md)           | [009](../task/009-theming-design.md)            | [004](../task/004-tailwind-v4.md) 默认样式 / 映射，[026](../task/026-theming-impl.md) 运行时                                                        |
+| 设计文档                                           | 设计任务                                         | 实施主责                                                                                                                                            |
+| -------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [LLM 接入与护栏](llm.md)                           | [005](../task/005-llm-design.md)                 | 018–021 接入 / 恢复，024 产品联调                                                                                                                   |
+| [计价与费用预算](billing.md)                       | [027](../task/027-llm-cost-control-design.md)    | [035](../task/035-llm-cost-control-impl.md) 统一计费与展示，030 / 033 消费                                                                          |
+| [记录引擎](record-engine.md)                       | [006](../task/006-record-design.md)              | [022](../task/022-record-engine-impl.md) 持久化、投影与迁移                                                                                         |
+| [记忆系统](memory.md)                              | [007](../task/007-memory-design.md)              | 设计已评审；029–033 承接实施，当前不接 006 投影热路径                                                                                               |
+| [记忆算法与标定](memory-algorithms.md)             | [007](../task/007-memory-design.md)              | 与记忆系统共同定稿；033 承接标定和运行期验证                                                                                                        |
+| [记忆搜索](memory.md#记忆搜索053-已定稿055-待实现) | [053](../task/053-memory-query-search-design.md) | [055](../task/055-memory-search-impl.md) 检索、IPC 与共享输入组件                                                                                   |
+| [结局与周目落幕](ending-flow.md)                   | [054](../task/054-ending-flow-design.md)         | [056](../task/056-ending-flow-impl.md) 规则冻结、标签、AI 叙事与终态恢复                                                                            |
+| [回合与阶段机](turn-state-machine.md)              | [012](../task/012-turn-state-machine-design.md)  | [023](../task/023-turn-state-machine-impl.md) 产品入口、判定与恢复                                                                                  |
+| [界面结构与交互](ui-shell.md)                      | [008](../task/008-ui-shell-design.md)            | [004](../task/004-tailwind-v4.md) 样式底座；[025](../task/025-ui-shell-impl.md) 完整界面，[046](../task/046-scene-presence-ui-impl.md) 在场角色选择 |
+| [界面国际化](i18n.md)                              | [028](../task/028-i18n-design.md)                | [034](../task/034-i18n-impl.md) 底座 / 原生，025 / 031 消费                                                                                         |
+| [主题与剧本皮肤](theming.md)                       | [009](../task/009-theming-design.md)             | [004](../task/004-tailwind-v4.md) 默认样式 / 映射，[026](../task/026-theming-impl.md) 运行时                                                        |
 
 LLM 实施顺序为 [018](../task/018-llm-provider-guard-impl.md) Provider / 护栏 → [019](../task/019-llm-profile-credentials-impl.md) 配置 / 凭据 → [020](../task/020-llm-turn-ipc-impl.md) 回合协调；[021](../task/021-llm-web-recovery-impl.md) 承接前端恢复，[024](../task/024-llm-engine-integration.md) 在记录与阶段机完成后验证产品链路。
 
@@ -221,10 +224,10 @@ useEnginePhase → api/engine + listener-group
     → phase-consumer（独立事件基线与跨流修订）
 
 app/App.vue（跨功能组合）
-  ├─ app/components/SetupPanel（产品、主题、语言与跨功能设置）
+  ├─ app/components/SetupPanel（统一设置抽屉；仅在显式打开时挂载）
   │    ├─ features/billing/BillingPanel（费用与供应商用量）
-  │    └─ memory 设置由 app 插槽装配
-  ├─ features/memory/MemoryQueryPanel（与游戏区并列）
+  │    └─ features/memory 的设置与查询由 app 插槽装配
+  ├─ app/components/WelcomeScreen（未开局摘要与显式开局）
   └─ features/game/GameWorkspace
        ├─ useGameView / useGameInput / useGameControls
        ├─ useUiPreferences 由 app 创建并注入
@@ -249,7 +252,7 @@ aoidos-art（固定版本的静态设计输入）
   → 使用 Aoidos 已有 Rust / IPC 状态；尚未实现的能力不伪装为可用
 ```
 
-目录边界和实现顺序由 [051](../task/051-web-ui-architecture-refactor.md) / [052](../task/052-aoidos-art-vue-port.md) 跟踪。设计 HTML、预览工具和生成文案不进入产品运行时；正式 token、locale 与交互状态继续分别由主题、i18n 和产品架构持有。App 层可以组合 feature，但 shared 不依赖 feature，feature 不循环依赖。
+目录边界和实现顺序由 [051](../task/051-web-ui-architecture-refactor.md) / [052](../task/052-aoidos-art-vue-port.md) 跟踪。052 按设计 HTML 的主要 DOM 层级、排布与响应式断点用 Vue 重实现；设计 HTML、预览工具和生成文案不进入产品运行时，不能以自由改版代替视觉移植。正式 token、locale 与交互状态继续分别由主题、i18n 和产品架构持有。App 层可以组合 feature，但 shared 不依赖 feature，feature 不循环依赖。
 
 ## 文档职责
 

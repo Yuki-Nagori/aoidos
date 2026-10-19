@@ -2,7 +2,7 @@
 
 更新日期：2026-10-19。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。053 已定稿记忆检索命令契约，具体命令尚未实现；054 已定稿结局快照与操作接口方向，精确 DTO 随 056 实现设计确认。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -422,6 +422,7 @@ else showGenericError(err);
 - `memory_list_questions`：接收 `{ runId, cursor, limit }`；返回问题页、固定分页上界和 `historyRevision`。游标绑定 `runId` 与历史修订，不能跨周目复用；过期问题在查询中持久标记失效。实体候选附带当前完整目录中的展示名，回答仍只提交稳定 `entityId`。IPC 候选 / 答案枚举内部字段使用 camelCase DTO，不改变仓储持久化格式。
 - `memory_resolve_question`：接收 `{ runId, resolution }`，答案携带问题 revision 与 historyRevision；来源、目录或候选变化时拒绝，不直接创建权威实体。
 - `memory_list_entries`：接收 `{ runId, cursor, limit }`；游标绑定 runId、historyRevision、SQLite rowid 快照上界与上一页扫描位置，返回固定快照的有界条目页，最多 32 条。
+- `memory_search_entries`（053 已定稿，055 待实现）：接收 `{ runId, query, filters, cursor, limit }`；返回 `{ entries, nextCursor, historyRevision, searchRevision }`。Rust 执行归一化与当前版本检索；单次最多扫描 256 entry / 1024 name 行、读取 256 KiB 原始名称文本 / 1 MiB 原始投影 / 4 MiB 归一化工作字节，返回最多 32 个搜索摘要 DTO，单项序列化 ≤32 KiB、完整响应 ≤64 KiB。游标绑定 run、history / search revision、query / filters hash、entry / name 固定 rowid 上界及双层位置；响应或扫描预算耗尽须可续扫且不漏结果。无命中但仍未扫描完时也返回 cursor；旧快照或 query / filters 不一致以 `app.bad-request`（`detail.reason=staleSearchCursor`）拒绝。DTO 使用 camelCase 并拒绝未知字段，不返回来源 / 证据正文、路径或供应商原始响应。
 - `memory_get_entry`：接收 `{ runId, entryId, expectedVersionId }`；读取指定不可变版本并重新核验其策略、正文 hash 与当前有效来源；失效版本不会因历史查询绕过校验。
 - `memory_get_batch_status`：接收 `{ runId, batchId }`；只返回与周目匹配的持久状态、完成摘要和白名单诊断码，不返回 prompt 或供应商原始响应；调用只读状态，不重发请求、不后台轮询。
 - `memory_collect_materials`：接收 `{ runId, cursor }`，`cursor` 可为 `null`；仅在本地扫描当前有效分支并登记素材，返回 `{ runId, historyRevision, eligibleCount, nextCursor }`，不返回正文、不冻结批次、不发送模型请求。游标固定 run、历史修订和首次扫描记录上界；每页最多扫描 256 条 / 4 MiB，超预算前停在上一条完整记录并返回续页位置。

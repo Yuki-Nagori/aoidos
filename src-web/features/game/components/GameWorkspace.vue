@@ -11,8 +11,13 @@ const props = defineProps<{
   session: OpenedSession;
   productBusy: boolean;
   preferences: ReturnType<typeof useUiPreferences>;
+  errorMessage?: string;
 }>();
-const emit = defineEmits<{ error: [unknown]; historyRevision: [number] }>();
+const emit = defineEmits<{
+  error: [unknown];
+  historyRevision: [number];
+  openSettings: [trigger: HTMLElement];
+}>();
 const composer = ref<{ focus(): void }>();
 const recordsFeed = ref<HTMLElement>();
 const confirmDialog = ref<HTMLDialogElement>();
@@ -23,7 +28,7 @@ const {
   composerSubmitDisabled, composerSubmitLabel, scenePath, olderCursor, game, generation, preview,
   hasTextSelection, updateFollowState, onReadingPointerDown, jumpToLatest, onComposerKeydown,
   interruptDraft, submitComposer, confirmOperation, chooseSlashCommand, closePanel, loadOlder,
-  phaseName, reconnect,
+  phaseName, reconnect, connectionFailed,
 } = useGameWorkspace({
   session: toRef(props, "session"),
   composer,
@@ -43,8 +48,13 @@ defineExpose({ reconnect });
       :panel-open="panel.isOpen.value"
       :modal-open="Boolean(confirmation)"
       :title="session.title"
+      :script-id="session.scriptId"
+      :scene-available="Boolean(current?.scene)"
       :scene-label="t('game.scene')"
+      :phase="current?.needsRecovery || current?.resumeRequired ? 'needsRecovery' : current?.phase ?? 'idle'"
+      :phase-label="current?.needsRecovery ? t('game.needsRecovery') : current?.resumeRequired ? t('game.paused') : current ? phaseName(current.phase) : t('common.loading')"
       :trigger-label="t('game.openPanel')"
+      :settings-label="t('settings.title')"
       :pin-label="t('game.pinPanel')"
       :unpin-label="t('game.unpinPanel')"
       :close-label="t('game.closePanel')"
@@ -58,21 +68,17 @@ defineExpose({ reconnect });
       @pin="panel.pin"
       @unpin="panel.unpin"
       @close="closePanel"
+      @settings="emit('openSettings', $event)"
     >
-      <template #status>
-        <span class="ml-auto truncate text-xs text-muted">
-          {{ t("game.phase", { phase: current ? phaseName(current.phase) : t("common.loading") }) }}
-        </span>
+      <template #summary>
+        <slot name="summary" />
       </template>
       <template #scene>
-        <div class="max-w-lg text-center">
-          <div class="scene-star mb-5 text-5xl text-accent-violet" aria-hidden="true" />
-          <h2 class="text-2xl font-semibold">{{ session.title }}</h2>
-          <p v-if="scenePath" class="mt-2 text-sm text-muted">{{ scenePath }}</p>
-          <p class="mt-3 text-sm text-muted">{{ t("game.scenePrompt") }}</p>
+        <div v-if="current?.scene" class="scene-hud">
+          <p v-if="scenePath" class="scene-breadcrumb">{{ scenePath }}</p>
           <button
+            class="scene-hint-button"
             type="button"
-            class="mt-4"
             :disabled="sceneHint.loading.value || !current?.scene || current.needsRecovery"
             @click="sceneHint.request"
           >
@@ -81,20 +87,24 @@ defineExpose({ reconnect });
           <p
             v-for="hint in sceneHint.hints.value"
             :key="hint.hintId"
-            class="mt-3 text-sm text-accent-violet"
+            class="scene-hint-result"
             role="status"
           >
             {{ hint.text }}
           </p>
-          <p v-if="sceneHint.unavailable.value" class="mt-3 text-sm text-muted" role="status">
+          <p v-if="sceneHint.unavailable.value" class="scene-hint-result" role="status">
             {{ t("game.hintUnavailable") }}
           </p>
-          <p v-if="sceneHint.failed.value" class="mt-3 text-sm text-warning" role="alert">
+          <p v-if="sceneHint.failed.value" class="scene-hint-result scene-hint-error" role="alert">
             {{ t("game.hintFailed") }}
           </p>
-          <p v-if="current?.resumeRequired" class="mt-4 text-sm text-warning">
+          <p v-if="current?.resumeRequired" class="scene-hint-result scene-hint-error">
             {{ t("game.paused") }}
           </p>
+        </div>
+        <div v-else class="scene-empty-state">
+          <h2>{{ session.title }}</h2>
+          <p>{{ current?.needsRecovery ? t("game.paused") : t("game.scenePrompt") }}</p>
         </div>
       </template>
       <template #panel-header>
@@ -117,6 +127,22 @@ defineExpose({ reconnect });
           @keyup="panelProtected = hasTextSelection()"
           @pointerdown="onReadingPointerDown"
         >
+          <p
+            v-if="props.errorMessage"
+            class="mx-3 mt-3 rounded-lg border border-danger bg-panel p-3 text-sm text-danger"
+            role="alert"
+          >
+            {{ props.errorMessage }}
+            <button
+              v-if="connectionFailed"
+              type="button"
+              class="ml-2 underline"
+              :disabled="phase.connecting.value"
+              @click="reconnect"
+            >
+              {{ t("common.reconnect") }}
+            </button>
+          </p>
           <div
             v-if="!game.historyPending.value"
             ref="recordsFeed"
@@ -143,6 +169,62 @@ defineExpose({ reconnect });
           <button type="button" v-if="unreadRecords" class="jump-latest" @click="jumpToLatest">
             {{ t("game.newRecords") }}
           </button>
+          <details v-if="panel.state.value !== 'hover' && current" class="work">
+            <summary class="work-head mono">
+              <span
+                class="led"
+                :class="current.needsRecovery || current.resumeRequired
+                ? 'warn'
+                : current.phase === 'idle'
+                  ? ''
+                  : 'active'"
+                aria-hidden="true"
+              />
+              <span class="work-title">{{ t("game.workProcess") }} · {{
+                  phaseName(current.phase)
+                }}</span>
+              <svg class="i sm work-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </summary>
+            <ul class="mono">
+              <li>
+                <span>{{ t("game.workPhase") }}:</span>
+                <span class="work-value">{{ phaseName(current.phase) }}</span>
+              </li>
+              <li v-if="scenePath">
+                <span>{{ t("game.workScene") }}:</span>
+                <span class="work-value">{{ scenePath }}</span>
+              </li>
+              <li v-if="current.check">
+                <span>{{ t("game.workCheck") }}:</span>
+                <span class="work-value">
+                  {{
+                    current.check.status === "rolling"
+                    ? t("game.workCheckRolling", { expression: current.check.expression })
+                    : t("game.workCheckWaiting", { expression: current.check.expression })
+                  }}
+                </span>
+              </li>
+              <li v-if="current.lastOperation && current.lastOperation.outcome !== 'accepted'">
+                <span>{{ t("game.workOperation") }}:</span>
+                <span class="work-value">
+                  {{
+                    current.lastOperation.outcome === "completed"
+                    ? t("game.outcomes.completed")
+                    : current.lastOperation.outcome === "cancelled"
+                      ? t("game.outcomes.cancelled")
+                      : t("game.outcomes.failed")
+                  }}
+                </span>
+              </li>
+              <li v-if="current.lastOperation?.error">
+                <span>{{
+                  t("game.workErrorCode", { code: current.lastOperation.error.code })
+                }}</span>
+              </li>
+            </ul>
+          </details>
           <dialog
             ref="confirmDialog"
             class="confirmation-card"

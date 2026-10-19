@@ -6,9 +6,61 @@
     "reconnect": "重新连接",
     "retry": "重试",
     "cancel": "取消",
+    "close": "关闭",
     "unknownError": "发生了意外错误"
   },
+  "welcome": {
+    "eyebrow": "AI 剧情跑团",
+    "headline": "和 AI 一起，演出一段有始有终的故事。",
+    "lede": "你不是在和 AI 聊天，而是在和它共同编排一段有因果、有推进、有结局的故事。从一个设定出发，世界会记住你的每一个选择。",
+    "principles": "游戏特点",
+    "pillars": {
+      "agency": {
+        "title": "自由",
+        "code": "agency",
+        "description": "没有固定剧本，用自然语言描述行动"
+      },
+      "causality": {
+        "title": "因果",
+        "code": "causality",
+        "description": "每个选择都有后果，世界会记住"
+      },
+      "duet": {
+        "title": "共演",
+        "code": "duet",
+        "description": "AI 是和你一起演戏的搭档"
+      },
+      "ending": {
+        "title": "有终",
+        "code": "ending",
+        "description": "故事会落幕，而不是无限拖延"
+      }
+    },
+    "startTitle": "开始一局",
+    "selectedScenario": "当前选择 · {id}",
+    "changeInSettings": "在设置中修改",
+    "settingsHint": "语言、主题、API、骰子与费用上限都在设置里"
+  },
   "settings": {
+    "title": "设置",
+    "sections": {
+      "appearance": "外观与语言",
+      "api": "模型与 API",
+      "gameplay": "游戏",
+      "billing": "费用与上限",
+      "price": "价格登记",
+      "balance": "服务商余额",
+      "memory": "记忆",
+      "memory-list": "记忆查询",
+      "memory-pending": "待确认",
+      "scenario": "剧本与许可"
+    },
+    "keyChecking": "正在检查已保存的密钥…",
+    "keyUnknown": "暂时无法读取密钥状态。请重试后再开始游戏。",
+    "billingAfterStart": "开始游戏后可查看费用明细。",
+    "memoryAfterStart": "开始游戏后可查看记忆设置与记录。",
+    "openSettings": "打开设置",
+    "startNeedsKey": "请先在设置中填写 API 密钥。",
     "language": "界面语言",
     "systemLanguageCurrent": "跟随系统（{locale}）",
     "chinese": "简体中文",
@@ -39,9 +91,11 @@
     },
     "enableSkin": "启用剧本皮肤",
     "disableSkin": "关闭剧本皮肤",
+    "scriptSkin": "剧本皮肤",
     "skinWarnings": "剧本皮肤有 {count} 条兼容性提示。",
     "model": "模型",
     "provider": "供应商",
+    "keyStatus": "API 密钥状态",
     "setApiKey": "设置 API 密钥（系统窗口）",
     "keySet": "密钥已设置",
     "keyMissing": "密钥未设置",
@@ -49,7 +103,6 @@
     "credits": "剧本署名与许可"
   },
   "memorySettings": {
-    "title": "记忆策略",
     "explanation": "这些尚未标定的开发默认参数只用于新周目；已有周目继续使用创建时冻结的策略。参数组合不合法时会整体拒绝保存。",
     "appDefaults": "应用默认值",
     "scriptOverrides": "剧本覆盖 · {script}",
@@ -142,6 +195,35 @@
     "propose": "提议新名称",
     "name": "提议名称",
     "details": "读取当前记忆",
+    "hideDetails": "收起详情",
+    "entryStates": {
+      "active": "有效",
+      "archived": "已归档",
+      "unavailable": "不可用"
+    },
+    "subjectKinds": {
+      "character": "角色",
+      "playerPreference": "玩家偏好"
+    },
+    "dimensions": {
+      "story": "经历",
+      "relationship": "关系",
+      "playerPreference": "玩家偏好",
+      "foreshadowing": "伏笔"
+    },
+    "attitudes": {
+      "unexpressed": "未表达",
+      "believed": "相信",
+      "doubtful": "存疑",
+      "denied": "否认"
+    },
+    "changes": {
+      "new": "新记忆",
+      "supplement": "补充",
+      "correction": "修正",
+      "restore": "恢复"
+    },
+    "inferred": "推断",
     "sources": "原始来源",
     "sourceRecord": "记录 {sequence}",
     "noSources": "没有来源记录。",
@@ -202,6 +284,7 @@
     "commitBackfill": "执行本地恢复",
     "backfillUnavailable": "仅完整保存的用量可以恢复；此操作不会发送供应商请求。",
     "queryBalance": "查询 DeepSeek 账户余额",
+    "balanceUnsupported": "当前服务商没有接入账户余额查询。",
     "balanceStatus": "供应商余额状态：{status}",
     "balanceQueriedAt": "查询时间：{queriedAt}",
     "balanceAvailable": "可用",
@@ -241,7 +324,7 @@
     "intro": "选择剧本与模型后开始。重开周目不会自动生成。",
     "restart": "重开 / 首次打开",
     "newCycle": "新建周目",
-    "phase": "阶段：{phase}",
+    "needsRecovery": "需要恢复",
     "paused": "已暂停，继续需要显式恢复。",
     "historyPending": "记录尚未确认，请重新连接。",
     "recordKind": "{kind}：",
@@ -260,6 +343,14 @@
     "hintUnavailable": "当前没有可用提示。",
     "hintFailed": "暂时无法读取提示，请稍后重试。",
     "dialogue": "对话与记录",
+    "workProcess": "工作过程",
+    "workPhase": "阶段",
+    "workScene": "场景",
+    "workCheck": "判定计划",
+    "workCheckWaiting": "等待确认：{expression}",
+    "workCheckRolling": "正在判定：{expression}",
+    "workOperation": "最近操作",
+    "workErrorCode": "诊断码：{code}",
     "newRecords": "有新内容 · 跳转到最新",
     "pinPanel": "固定对话面板",
     "unpinPanel": "取消固定对话面板",

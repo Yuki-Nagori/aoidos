@@ -6,9 +6,61 @@
     "reconnect": "Reconnect",
     "retry": "Retry",
     "cancel": "Cancel",
+    "close": "Close",
     "unknownError": "Something went wrong"
   },
+  "welcome": {
+    "eyebrow": "AI tabletop storytelling",
+    "headline": "Perform a story with AI — one that truly begins and ends.",
+    "lede": "You are not chatting with an AI; you are staging a story together — with causes, momentum and an ending. Start from a premise, and the world remembers every choice.",
+    "principles": "Game principles",
+    "pillars": {
+      "agency": {
+        "title": "Freedom",
+        "code": "agency",
+        "description": "No fixed script — describe actions in plain words"
+      },
+      "causality": {
+        "title": "Causality",
+        "code": "causality",
+        "description": "Every choice has consequences"
+      },
+      "duet": {
+        "title": "Duet",
+        "code": "duet",
+        "description": "The AI is your scene partner"
+      },
+      "ending": {
+        "title": "Ending",
+        "code": "ending",
+        "description": "Stories end instead of dragging on"
+      }
+    },
+    "startTitle": "Start a run",
+    "selectedScenario": "Selected · {id}",
+    "changeInSettings": "Change in Settings",
+    "settingsHint": "Language, theme, API, dice and limits all live in Settings"
+  },
   "settings": {
+    "title": "Settings",
+    "sections": {
+      "appearance": "Appearance & language",
+      "api": "Model & API",
+      "gameplay": "Game",
+      "billing": "Cost & limits",
+      "price": "Price registration",
+      "balance": "Provider balance",
+      "memory": "Memory",
+      "memory-list": "Memory query",
+      "memory-pending": "Pending confirmations",
+      "scenario": "Scenario & license"
+    },
+    "keyChecking": "Checking saved key…",
+    "keyUnknown": "Key status is unavailable. Retry the check before starting.",
+    "billingAfterStart": "Cost details become available after a game starts.",
+    "memoryAfterStart": "Memory settings and history are available after a game starts.",
+    "openSettings": "Open settings",
+    "startNeedsKey": "Set an API key in settings to start.",
     "language": "Interface language",
     "systemLanguageCurrent": "System default ({locale})",
     "chinese": "简体中文",
@@ -39,9 +91,11 @@
     },
     "enableSkin": "Enable scenario skin",
     "disableSkin": "Disable scenario skin",
+    "scriptSkin": "Scenario skin",
     "skinWarnings": "The scenario skin has {count} compatibility warnings.",
     "model": "Model",
     "provider": "Provider",
+    "keyStatus": "API key status",
     "setApiKey": "Set API key (system dialog)",
     "keySet": "Key is set",
     "keyMissing": "Key is not set",
@@ -49,7 +103,6 @@
     "credits": "Scenario credits and license"
   },
   "memorySettings": {
-    "title": "Memory policy",
     "explanation": "These uncalibrated development defaults apply to new runs. Existing runs keep their frozen policy. Invalid combinations are rejected as a whole.",
     "appDefaults": "Application defaults",
     "scriptOverrides": "Scenario overrides · {script}",
@@ -142,6 +195,35 @@
     "propose": "Suggest a new name",
     "name": "Name to suggest",
     "details": "Read current memory",
+    "hideDetails": "Hide details",
+    "entryStates": {
+      "active": "Active",
+      "archived": "Archived",
+      "unavailable": "Unavailable"
+    },
+    "subjectKinds": {
+      "character": "Character",
+      "playerPreference": "Player preference"
+    },
+    "dimensions": {
+      "story": "Story",
+      "relationship": "Relationship",
+      "playerPreference": "Player preference",
+      "foreshadowing": "Foreshadowing"
+    },
+    "attitudes": {
+      "unexpressed": "Unexpressed",
+      "believed": "Believed",
+      "doubtful": "Doubtful",
+      "denied": "Denied"
+    },
+    "changes": {
+      "new": "New",
+      "supplement": "Supplement",
+      "correction": "Correction",
+      "restore": "Restored"
+    },
+    "inferred": "Inferred",
     "sources": "Original sources",
     "sourceRecord": "Record {sequence}",
     "noSources": "No source records.",
@@ -202,6 +284,7 @@
     "commitBackfill": "Apply local recovery",
     "backfillUnavailable": "Only complete saved usage can be recovered. No provider request will be sent.",
     "queryBalance": "Query DeepSeek balance",
+    "balanceUnsupported": "Balance queries are not connected for this provider.",
     "balanceStatus": "Provider balance status: {status}",
     "balanceAvailable": "available",
     "balanceUnavailable": "unavailable",
@@ -241,7 +324,7 @@
     "intro": "Choose a scenario and model to begin. Reopening a cycle does not generate text automatically.",
     "restart": "Reopen / open for the first time",
     "newCycle": "Start a new cycle",
-    "phase": "Phase: {phase}",
+    "needsRecovery": "Recovery needed",
     "paused": "Paused. Resume explicitly to continue.",
     "historyPending": "The record is not confirmed. Reconnect to continue.",
     "recordKind": "{kind}: ",
@@ -260,6 +343,14 @@
     "hintUnavailable": "No hint is available yet.",
     "hintFailed": "The hint could not be loaded. Try again later.",
     "dialogue": "Dialogue and records",
+    "workProcess": "Working process",
+    "workPhase": "Phase",
+    "workScene": "Scene",
+    "workCheck": "Check plan",
+    "workCheckWaiting": "Waiting for confirmation: {expression}",
+    "workCheckRolling": "Resolving: {expression}",
+    "workOperation": "Latest operation",
+    "workErrorCode": "Diagnostic code: {code}",
     "newRecords": "New content · Jump to latest",
     "pinPanel": "Pin dialogue panel",
     "unpinPanel": "Unpin dialogue panel",

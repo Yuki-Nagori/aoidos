@@ -26,8 +26,13 @@ import {
   sendMemoryBatch,
 } from "../../../api/memory";
 
-const props = defineProps<{ runId: string; historyRevision: number }>();
+const props = defineProps<{
+  runId: string;
+  historyRevision: number;
+  view?: "all" | "list" | "pending";
+}>();
 const { t } = useI18n();
+const panelView = computed(() => props.view ?? "all");
 const classificationLabels = computed(() => ({
   repeat: t("memoryQuery.classifications.repeat"),
   supplement: t("memoryQuery.classifications.supplement"),
@@ -44,6 +49,39 @@ const evidenceKindLabels = computed<Record<MemoryKnowledgeEvidence["kind"], stri
   observed: t("memoryQuery.evidenceKinds.observed"),
   told: t("memoryQuery.evidenceKinds.told"),
   rumor: t("memoryQuery.evidenceKinds.rumor"),
+}));
+const entryStateLabels = computed<Record<MemoryEntry["state"], string>>(() => ({
+  active: t("memoryQuery.entryStates.active"),
+  archived: t("memoryQuery.entryStates.archived"),
+  unavailable: t("memoryQuery.entryStates.unavailable"),
+}));
+const subjectKindLabels = computed<
+  Record<MemoryEntryDetails["version"]["subject"]["kind"], string>
+>(() => ({
+  character: t("memoryQuery.subjectKinds.character"),
+  playerPreference: t("memoryQuery.subjectKinds.playerPreference"),
+}));
+const dimensionLabels = computed<Record<MemoryEntryDetails["version"]["dimension"], string>>(
+  () => ({
+    story: t("memoryQuery.dimensions.story"),
+    relationship: t("memoryQuery.dimensions.relationship"),
+    playerPreference: t("memoryQuery.dimensions.playerPreference"),
+    foreshadowing: t("memoryQuery.dimensions.foreshadowing"),
+  }),
+);
+const attitudeLabels = computed<Record<MemoryEntryDetails["version"]["attitude"], string>>(
+  () => ({
+    unexpressed: t("memoryQuery.attitudes.unexpressed"),
+    believed: t("memoryQuery.attitudes.believed"),
+    doubtful: t("memoryQuery.attitudes.doubtful"),
+    denied: t("memoryQuery.attitudes.denied"),
+  }),
+);
+const changeLabels = computed<Record<MemoryEntryDetails["version"]["change"], string>>(() => ({
+  new: t("memoryQuery.changes.new"),
+  supplement: t("memoryQuery.changes.supplement"),
+  correction: t("memoryQuery.changes.correction"),
+  restore: t("memoryQuery.changes.restore"),
 }));
 const batchStateLabels = computed(() => ({
   queued: t("memoryQuery.batchStates.queued"),
@@ -364,6 +402,14 @@ async function openEntry(entry: MemoryEntry): Promise<void> {
   }
 }
 
+function toggleEntry(entry: MemoryEntry): void {
+  if (details.value?.entry.entryId === entry.entryId) {
+    details.value = null;
+    return;
+  }
+  void openEntry(entry);
+}
+
 function retry(): void {
   void Promise.all([loadQuestions(), loadEntries()]);
 }
@@ -404,9 +450,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <details class="glass-panel">
-    <summary>{{ t("memoryQuery.title") }}</summary>
-    <section class="grid gap-2 p-2">
+  <div class="grid gap-3">
+    <h2 v-if="panelView === 'all'" class="font-semibold">{{ t("memoryQuery.title") }}</h2>
+    <section v-if="panelView === 'all' || panelView === 'list'" class="grid gap-2">
       <div class="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -490,7 +536,7 @@ onBeforeUnmount(() => {
         {{ t("memoryQuery.reload") }}
       </button>
     </p>
-    <section class="grid gap-2 p-2">
+    <section v-if="panelView === 'all' || panelView === 'pending'" class="grid gap-2">
       <div class="flex items-center justify-between gap-2">
         <h2 class="font-semibold">{{ t("memoryQuery.questions") }}</h2>
         <button type="button" :disabled="questionBusy" @click="loadQuestions()">
@@ -567,7 +613,7 @@ onBeforeUnmount(() => {
       </button>
     </section>
 
-    <section class="grid gap-2 p-2">
+    <section v-if="panelView === 'all' || panelView === 'list'" class="grid gap-2">
       <div class="flex items-center justify-between gap-2">
         <h2 class="font-semibold">{{ t("memoryQuery.entries") }}</h2>
         <button type="button" :disabled="entryBusy" @click="loadEntries()">
@@ -577,39 +623,69 @@ onBeforeUnmount(() => {
       <p v-if="!entries.length && !entryBusy" class="text-sm text-muted">
         {{ t("memoryQuery.noneEntries") }}
       </p>
-      <article v-for="entry in entries" :key="entry.entryId" class="rounded border border-line p-3">
-        <button type="button" :disabled="detailBusy" @click="openEntry(entry)">
-          {{ t("memoryQuery.details") }} · {{ entry.entryId }}
+      <article
+        v-for="entry in entries"
+        :key="entry.entryId"
+        class="grid gap-2 rounded border border-line p-3"
+      >
+        <button
+          type="button"
+          :disabled="detailBusy"
+          :aria-expanded="details?.entry.entryId === entry.entryId"
+          :aria-controls="`memory-entry-${entry.entryId}`"
+          @click="toggleEntry(entry)"
+        >
+          <span class="font-mono">{{ entry.entryId }}</span>
+          <span class="tag">{{ entryStateLabels[entry.state] }}</span>
+          <span>{{
+            t(details?.entry.entryId === entry.entryId ? "memoryQuery.hideDetails" : "memoryQuery.details")
+          }}</span>
         </button>
+        <div
+          v-if="details?.entry.entryId === entry.entryId"
+          :id="`memory-entry-${entry.entryId}`"
+          class="grid gap-2"
+          aria-live="polite"
+        >
+          <h3 class="font-semibold">{{ details.version.summary }}</h3>
+          <p class="text-sm text-muted">
+            <span>{{ subjectKindLabels[details.version.subject.kind] }}</span>
+            <code v-if="details.version.subject.kind === 'character'">{{
+              details.version.subject.id
+            }}</code>
+            · {{ dimensionLabels[details.version.dimension] }}
+          </p>
+          <div class="flex flex-wrap gap-2 text-sm">
+            <span class="tag">{{ attitudeLabels[details.version.attitude] }}</span>
+            <span class="tag">{{ changeLabels[details.version.change] }}</span>
+            <span v-if="details.version.inferred" class="tag">
+              {{ t("memoryQuery.inferred") }}
+            </span>
+          </div>
+          <div class="grid gap-1 text-sm">
+            <h4 class="font-medium">{{ t("memoryQuery.sources") }}</h4>
+            <ul v-if="details.version.sources.length" class="grid gap-1">
+              <li
+                v-for="source in details.version.sources"
+                :key="`${source.runId}:${source.recordSeq}`"
+              >
+                {{ sourceLabel(source) }}
+              </li>
+            </ul>
+            <p v-else class="text-muted">{{ t("memoryQuery.noSources") }}</p>
+            <h4 class="font-medium">{{ t("memoryQuery.evidence") }}</h4>
+            <ul v-if="details.version.evidence.length" class="grid gap-1">
+              <li v-for="item in details.version.evidence" :key="item.evidenceId">
+                {{ evidenceLabel(item) }} · {{ sourceLabel(item.source) }}
+              </li>
+            </ul>
+            <p v-else class="text-muted">{{ t("memoryQuery.noEvidence") }}</p>
+          </div>
+        </div>
       </article>
       <button v-if="entryCursor" type="button" :disabled="entryBusy" @click="loadEntries(true)">
         {{ t("memoryQuery.next") }}
       </button>
-      <article v-if="details" class="grid gap-2 rounded border border-line p-3" aria-live="polite">
-        <h3 class="font-semibold">{{ details.version.summary }}</h3>
-        <p class="text-sm text-muted">
-          {{ details.version.subject.kind }} · {{ details.version.dimension }}
-        </p>
-        <div class="grid gap-1 text-sm">
-          <h4 class="font-medium">{{ t("memoryQuery.sources") }}</h4>
-          <ul v-if="details.version.sources.length" class="grid gap-1">
-            <li
-              v-for="source in details.version.sources"
-              :key="`${source.runId}:${source.recordSeq}`"
-            >
-              {{ sourceLabel(source) }}
-            </li>
-          </ul>
-          <p v-else class="text-muted">{{ t("memoryQuery.noSources") }}</p>
-          <h4 class="font-medium">{{ t("memoryQuery.evidence") }}</h4>
-          <ul v-if="details.version.evidence.length" class="grid gap-1">
-            <li v-for="item in details.version.evidence" :key="item.evidenceId">
-              {{ evidenceLabel(item) }} · {{ sourceLabel(item.source) }}
-            </li>
-          </ul>
-          <p v-else class="text-muted">{{ t("memoryQuery.noEvidence") }}</p>
-        </div>
-      </article>
     </section>
-  </details>
+  </div>
 </template>

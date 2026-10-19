@@ -90,6 +90,15 @@ function themeInlineBlock(): string {
 }
 
 describe("token 目录与 app.css 互校", () => {
+  it("锁定文档滚动，避免 WKWebView 整页橡皮筋回弹", () => {
+    const documentRule = css.match(/html,\s*body\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(documentRule).toMatch(/width:\s*100%/);
+    expect(documentRule).toMatch(/height:\s*100%/);
+    expect(documentRule).toMatch(/margin:\s*0/);
+    expect(documentRule).toMatch(/overflow:\s*hidden/);
+    expect(documentRule).toMatch(/overscroll-behavior:\s*none/);
+  });
+
   it("默认 CSS 为每个内置主题提供完整 token", () => {
     for (const [themeName, vars] of themes) {
       for (const { name } of CATALOG) {

@@ -8,14 +8,32 @@ const props = {
   panelOpen: true,
   modalOpen: false,
   title: "Mistbell",
+  scriptId: "mistbell",
+  sceneAvailable: true,
   sceneLabel: "Scene",
+  phase: "idle",
+  phaseLabel: "Waiting",
   triggerLabel: "Open dialogue",
+  settingsLabel: "Settings",
   pinLabel: "Pin dialogue",
   unpinLabel: "Unpin dialogue",
   closeLabel: "Close dialogue",
 };
 
 describe("GameStage", () => {
+  it("uses the Mistbell scene illustration only for an active Mistbell scene", () => {
+    const mistbell = mount(GameStage, { props });
+    expect(mistbell.find(".stage-art").exists()).toBe(true);
+    mistbell.unmount();
+
+    const otherScript = mount(GameStage, {
+      props: { ...props, scriptId: "another-script" },
+    });
+    expect(otherScript.find(".stage-art").exists()).toBe(false);
+    expect(otherScript.find(".stage-art-fallback").exists()).toBe(true);
+    otherScript.unmount();
+  });
+
   it("opens with the platform shortcut and returns focus after Escape", async () => {
     const wrapper = mount(GameStage, { props, attachTo: document.body });
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "m", ctrlKey: true, shiftKey: true }));

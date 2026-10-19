@@ -8,8 +8,10 @@
 ├── index.html                 # Vite 入口 HTML（挂载点 #app）
 ├── src-web/                   # 前端：Vue 3 + TypeScript
 │   ├── main.ts                # 应用入口：挂载根组件
-│   ├── app/                   # App.vue 根组合与 SetupPanel 等跨功能界面
+│   ├── app/                   # App.vue 根组合、WelcomeScreen 与设置抽屉
 │   ├── features/              # game、product、billing、memory、locale、theme 功能模块
+│   │   ├── game/              # 对局舞台、记录、输入与状态编排
+│   │   │   └── assets/        # 仅由对应剧本状态选择的游戏视觉资源
 │   │   └── <feature>/         # 各自的 components/、composables/、utils/ 与类型
 │   ├── shared/                # 跨功能共享的纯逻辑 / 展示原语，不依赖 feature
 │   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
@@ -69,7 +71,7 @@
 
 ## 归属规则
 
-上图记录当前实际目录。`app/App.vue` 只装配产品、语言、主题、计费、记忆和对局功能；应用级 `SetupPanel` 组合多个设置 feature，`GameWorkspace` 管理游戏内状态与呈现。feature 之间不互相导入实现；共享能力放 `shared/`，测试按生产目录镜像。
+上图记录当前实际目录。`app/App.vue` 只装配产品、语言、主题、计费、记忆和对局功能；`WelcomeScreen` 呈现未开局摘要与显式开局，应用级 `SetupPanel` 作为跨功能设置抽屉，通过插槽承载记忆设置 / 查询；`GameWorkspace` 管理游戏内状态与呈现。feature 之间不互相导入实现；共享能力放 `shared/`，测试按生产目录镜像。
 
 组件只做编排与渲染，跨功能共享的纯逻辑进 `shared/utils/` 并配单测，功能私有逻辑留在对应 feature；`commands.rs` 只做解参数、调逻辑、回包，业务长大后在 `src-rust/` 下拆独立 crate（加入 `members`，依赖方向与工程纪律见[职责边界](ts-rust-boundary.md)），命令层只做转发。全局状态、路由、UI 组件库在需求真实出现前不引入，也不建占位目录。
 
