@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { ref } from "vue";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { useBilling } from "../../../../../src-web/features/billing/composables/useBilling";
 import BillingPanel from "../../../../../src-web/features/billing/components/BillingPanel.vue";
 import { i18n } from "../../../../../src-web/i18n/index";
@@ -89,5 +89,47 @@ describe("BillingPanel", () => {
     await wrapper.setProps({ view: "balance" });
     expect(wrapper.text()).toContain(i18n.global.t("billing.queryBalance"));
     expect(wrapper.text()).not.toContain(i18n.global.t("billing.savePrice"));
+  });
+
+  it("presents the cached provider balance and keeps its status explicit", async () => {
+    const queryProviderBalance = vi.fn();
+    const billing = new Proxy(
+      {},
+      {
+        get: (_target, key) => {
+          if (key === "__v_isRef" || key === "then") return undefined;
+          if (key === "providerBalance")
+            return ref({
+              providerId: "deepseek",
+              queriedAt: "2026-10-19T00:00:00Z",
+              stale: true,
+              status: "available",
+              accounts: [{ currency: "CNY", total: "12.34", granted: "2", toppedUp: "10.34" }],
+            });
+          if (key === "monthly")
+            return ref({ month: "2026-10", timeZone: "Asia/Shanghai", items: [] });
+          if (key === "balanceBusy") return ref(false);
+          if (key === "queryProviderBalance") return queryProviderBalance;
+          return ref(false);
+        },
+      },
+    ) as ReturnType<typeof useBilling>;
+    const wrapper = mount(BillingPanel, {
+      props: {
+        billing,
+        locale: "zh-Hans",
+        active: true,
+        providerId: "deepseek",
+        providerLabel: "DeepSeek API",
+        view: "balance",
+      },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.get(".billing-balance-header").text()).toContain("DeepSeek API");
+    expect(wrapper.text()).toContain(i18n.global.t("billing.balanceStale"));
+    expect(wrapper.text()).toContain("¥12.34");
+    await wrapper.get(".billing-balance-section button").trigger("click");
+    expect(queryProviderBalance).toHaveBeenCalledOnce();
   });
 });

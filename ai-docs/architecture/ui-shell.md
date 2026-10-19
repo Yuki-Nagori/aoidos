@@ -24,6 +24,8 @@ Vue 页面按窗口级顶栏、居中 16:9 舞台和右侧浮动面板组合，�
 
 当前 `app/App.vue` 组合产品、主题、语言、费用、记忆偏好和页面状态；无会话时由 `app/components/WelcomeScreen.vue` 按 `aoidos-art/screens/welcome.html` 的双栏层级展示介绍、只读剧本 / 模型摘要与开局操作，开局必须由用户显式触发，且需要真实密钥状态为已设置。顶栏齿轮打开 `app/components/SetupPanel.vue` 右侧设置抽屉，密钥状态经 `llm_get_key_status` 查询；读取失败保持未知并阻止开局，不将失败误报为缺少密钥。设置区按设计稿分组，导航图标标识页签、导航只负责切换；当前内容标题提供关闭操作，并通过插槽承载记忆设置和查询。费用视图由 `features/billing/components/BillingPanel.vue` 持有，活动会话内按原币显示本局 CNY / USD 用量和各自上限，并提供请求明细、月报及供应商余额；金额汇总复用账本用量函数，不进行跨币换算。价格登记视图展示当前 provider、model、币种及价格状态，价格版本继续按既有不可变登记规则保存。尚未开始会话时显示不可用说明。剧本署名视图只展示 `engine_list_scripts` 提供的本地化名称、剧本 ID 和署名正文，不推断作者、许可证或资源元数据。`features/game/components/GameWorkspace.vue` 管理对局内状态和交互；记忆查询仅在用户打开设置抽屉后挂载。`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览位于 game feature 的 utils，定时器与偏好写入由 composables 管理。052 按设计 HTML 的主要 DOM / 布局逐项复现，再将静态示例替换为真实数据与已有操作；不得以自由改版替代视觉移植，也不展示设计稿演示数据或把缺失服务伪装为可用状态。
 
+计费页的服务商余额只查询当前已接通的供应商；目前仅 DeepSeek 返回真实余额快照。界面按快照展示服务状态、查询时间、缓存过期提示和各原币账户，不把账户余额与本地账单估算混为一谈，也不为未接通的供应商模拟结果。
+
 ## 面板四态
 
 面板状态属于 UI，独立于游戏 phase。纯函数接受输入事件和保护标志，返回目标状态 / 定时器效果；计时与 DOM 监听放 composable，不在组件中散布 timeout。

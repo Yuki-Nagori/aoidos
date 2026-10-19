@@ -82,45 +82,58 @@ const billingErrorMessage = computed(() => {
     </template>
     <section
       v-if="(view === 'all' || view === 'balance') && providerId === 'deepseek'"
-      class="grid gap-2 rounded border border-line p-3"
+      class="billing-balance-section grid gap-3"
     >
       <button
         type="button"
+        class="btn"
         :disabled="billing.balanceBusy.value"
         @click="billing.queryProviderBalance"
       >
         {{ t("billing.queryBalance") }}
       </button>
       <p class="text-sm text-muted">{{ t("billing.balanceCacheHint") }}</p>
-      <template v-if="billing.providerBalance.value">
-        <p role="status">
-          {{
-            t("billing.balanceStatus", {
-              status: providerBalanceStatus(billing.providerBalance.value.status),
-            })
-          }}
-        </p>
-        <p>
+      <article v-if="billing.providerBalance.value" class="billing-balance-card">
+        <header class="billing-balance-header">
+          <strong>{{ providerLabel ?? providerId }}</strong>
+          <span role="status" class="billing-price-status">
+            {{
+              t("billing.balanceStatus", {
+                status: providerBalanceStatus(billing.providerBalance.value.status),
+              })
+            }}
+          </span>
+        </header>
+        <p class="billing-balance-date">
           {{
             t("billing.balanceQueriedAt", {
               queriedAt: providerBalanceDate(billing.providerBalance.value.queriedAt),
             })
           }}
         </p>
-        <p v-if="billing.providerBalance.value.stale" role="status">
+        <p v-if="billing.providerBalance.value.stale" role="status" class="text-sm text-muted">
           {{ t("billing.balanceStale") }}
         </p>
-        <p v-for="account in billing.providerBalance.value.accounts" :key="account.currency">
-          {{
-            t("billing.balanceAccount", {
-              currency: account.currency,
-              total: providerBalanceAmount(account.total, account.currency),
-              granted: providerBalanceAmount(account.granted, account.currency),
-              toppedUp: providerBalanceAmount(account.toppedUp, account.currency),
-            })
-          }}
-        </p>
-      </template>
+        <div v-if="billing.providerBalance.value.accounts.length" class="billing-balance-accounts">
+          <section
+            v-for="account in billing.providerBalance.value.accounts"
+            :key="account.currency"
+            class="billing-balance-account"
+          >
+            <strong class="mono">{{ account.currency }}</strong>
+            <p>
+              {{
+                t("billing.balanceAccount", {
+                  currency: account.currency,
+                  total: providerBalanceAmount(account.total, account.currency),
+                  granted: providerBalanceAmount(account.granted, account.currency),
+                  toppedUp: providerBalanceAmount(account.toppedUp, account.currency),
+                })
+              }}
+            </p>
+          </section>
+        </div>
+      </article>
     </section>
     <p v-else-if="view === 'balance'" class="text-sm text-muted">
       {{ t("billing.balanceUnsupported") }}
