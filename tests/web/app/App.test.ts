@@ -146,7 +146,8 @@ describe("App", () => {
       "DeepSeek V4 Pro",
     ]);
     expect((model.element as HTMLSelectElement).value).toBe("deepseek-flash");
-    await wrapper.get('select[aria-label="Interface language"]').setValue("zh-Hans");
+    const language = wrapper.get('input[name="interface-language"][value="zh-Hans"]');
+    await language.setValue();
     await vi.waitFor(() => {
       expect(theme.findAll("option").map((option) => option.text())).toEqual([
         "深色",
@@ -155,6 +156,10 @@ describe("App", () => {
       ]);
       expect(script.findAll("option").map((option) => option.text())).toEqual(["雾钟地窖"]);
     });
+    const skinSwitch = wrapper.get('[role="switch"][aria-label="剧本皮肤"]');
+    expect(skinSwitch.attributes("aria-checked")).toBe("true");
+    await skinSwitch.trigger("click");
+    expect(skinSwitch.attributes("aria-checked")).toBe("false");
     await theme.trigger("keydown", { key: "Escape" });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     await vi.waitFor(() =>

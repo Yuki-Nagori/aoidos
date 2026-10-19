@@ -175,41 +175,89 @@ function themeName(id: string, fallback: string): string {
                 </option>
               </select>
             </label>
-            <button
-              v-if="product.scriptId.value === 'mistbell'"
-              type="button"
-              @click="theme.toggleSkin"
-            >
-              {{ theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin") }}
-            </button>
+            <div v-if="product.scriptId.value === 'mistbell'" class="settings-skin card">
+              <div class="settings-skin-copy">
+                <strong>{{
+                  selectedScript?.displayNames[locale.resolved.value] ?? selectedScript?.title
+                }}</strong>
+                <span class="text-sm text-muted">{{ t("settings.scriptSkin") }}</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                class="settings-switch"
+                :aria-checked="!theme.disabled.value"
+                :aria-label="t('settings.scriptSkin')"
+                @click="theme.toggleSkin"
+              >
+                <span aria-hidden="true" />
+              </button>
+              <span class="text-sm">{{
+                theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin")
+              }}</span>
+            </div>
             <p v-if="themeErrorMessage" role="status">{{ themeErrorMessage }}</p>
             <p v-if="skinErrorMessage" role="status">{{ skinErrorMessage }}</p>
             <p v-else-if="theme.warningCount.value">
               {{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}
             </p>
-            <label>
-              {{ t("settings.language") }}
-              <select
-                :value="locale.choice.value"
-                :aria-label="t('settings.language')"
-                :disabled="!locale.ready.value || locale.saving.value"
-                @change="locale.setChoice(
-                  ($event.target as HTMLSelectElement).value as 'system' | 'zh-Hans' | 'en',
-                )"
-              >
-                <option value="system">
-                  {{
+            <fieldset class="settings-choice-group">
+              <legend>{{ t("settings.language") }}</legend>
+              <div class="settings-segmented">
+                <label
+                  :class="{
+                    'is-selected': locale.choice.value === 'system',
+                    'is-disabled': !locale.ready.value || locale.saving.value,
+                  }"
+                >
+                  <input
+                    type="radio"
+                    name="interface-language"
+                    value="system"
+                    :checked="locale.choice.value === 'system'"
+                    :disabled="!locale.ready.value || locale.saving.value"
+                    @change="locale.setChoice('system')"
+                  />
+                  <span>{{
                     t("settings.systemLanguageCurrent", {
-                      locale: t(
-                        locale.resolved.value === "zh-Hans" ? "settings.chinese" : "settings.english",
-                      ),
+                      locale: t(locale.resolved.value === "zh-Hans" ? "settings.chinese" : "settings.english"),
                     })
-                  }}
-                </option>
-                <option value="zh-Hans">{{ t("settings.chinese") }}</option>
-                <option value="en">{{ t("settings.english") }}</option>
-              </select>
-            </label>
+                  }}</span>
+                </label>
+                <label
+                  :class="{
+                    'is-selected': locale.choice.value === 'zh-Hans',
+                    'is-disabled': !locale.ready.value || locale.saving.value,
+                  }"
+                >
+                  <input
+                    type="radio"
+                    name="interface-language"
+                    value="zh-Hans"
+                    :checked="locale.choice.value === 'zh-Hans'"
+                    :disabled="!locale.ready.value || locale.saving.value"
+                    @change="locale.setChoice('zh-Hans')"
+                  />
+                  <span>{{ t("settings.chinese") }}</span>
+                </label>
+                <label
+                  :class="{
+                    'is-selected': locale.choice.value === 'en',
+                    'is-disabled': !locale.ready.value || locale.saving.value,
+                  }"
+                >
+                  <input
+                    type="radio"
+                    name="interface-language"
+                    value="en"
+                    :checked="locale.choice.value === 'en'"
+                    :disabled="!locale.ready.value || locale.saving.value"
+                    @change="locale.setChoice('en')"
+                  />
+                  <span>{{ t("settings.english") }}</span>
+                </label>
+              </div>
+            </fieldset>
             <p v-if="localeNotice" role="status">{{ localeNotice }}</p>
           </section>
 

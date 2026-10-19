@@ -91,6 +91,7 @@
     },
     "enableSkin": "Enable scenario skin",
     "disableSkin": "Disable scenario skin",
+    "scriptSkin": "Scenario skin",
     "skinWarnings": "The scenario skin has {count} compatibility warnings.",
     "model": "Model",
     "provider": "Provider",
