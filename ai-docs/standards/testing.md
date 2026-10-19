@@ -14,6 +14,7 @@
 - 按被验证的语义选择夹具：内存 SQLite 适合规则 / 查询 / 状态迁移；原子写入、同步、锁、迁移备份与崩溃恢复使用真实文件和 SQLite WAL。不要为了速度在所有夹具中关闭同步。
 - 容量边界测试只构造证明边界所需的数据（通常为上限加一）；批量准备大量行时使用单个显式事务，避免每行单独 autocommit 把磁盘同步成本混入规则测试。若测试不验证事务提交 / 文件耐久性，使用内存 SQLite；若验证这些语义，保留真实文件和正式提交路径。
 - 压力测试只保留能证明独立边界的规模；同一分页 / 容量行为用最严的有效输入验证即可，不重复多个较低负载的全量耐久写入。若要缩短长链，只保留刚越过硬上限的规模，并明确仍断言分页或拒绝结果。
+- 分钟级或需要大量磁盘 I/O 的长对局 / 容量探索标记为 ignored，不进入 PR 受影响测试或本地提交前检查；由 `bun run memory:stress` 显式运行，并在 Ubuntu Nightly 单独执行一次。常规测试仍覆盖对应的快速边界行为，不因移动压力测试而删减。
 - 覆盖率用于发现未审查的逻辑，不表示测试有价值，也不要求所有分支组合都单测。优先覆盖风险清单与公开行为，再查看覆盖缺口；不得为维持数字复制实现或增加无意义断言。
 
 ### 界面视觉布局回归
@@ -32,7 +33,7 @@
 
 - 前端 `bun run test:coverage`：v8 provider，统计 `src-web/features/**` 的功能规则 / 状态 composable 与 `src-web/shared/**`；行 / 分支 / 函数 / 语句各至少 90%。`app/`、`GameWorkspace` 页面级跨 composable 编排、API 薄封装和 `bench/` 不计入门槛；关键用户路径仍由组件 / 入口行为测试验证，不能用 coverage 排除代替行为证据。
 - Rust `bun run coverage:rust`：`cargo llvm-cov --workspace --lib --json` 统计纳入文件的**聚合行覆盖率至少 90%**，配置在根目录 [`coverage-rust.config.mts`](../../coverage-rust.config.mts)，由 `scripts/coverage-rust.mts` 执行。小文件不单独设 100% 预算，Tauri 宏映射的无源行也不再单独登记；平台适配 / 装配排除见下方台账。
-- PR CI 由变更规划、Ubuntu 共享质量门禁和三平台构建 / 受影响测试组成；可复用步骤位于 `.github/actions/`。三平台均构建 Web 产物，并按同一计划运行受影响 Tauri 应用 / Rust crate / 消费者及对应 Vitest 镜像测试；Vue / TS 改动按镜像关系选择 Vitest，找不到对应测试时扩展到全部 Vitest。除 WebView 夹具直接或传递依赖的文件外，纯 Web 改动不触发 Rust 或原生测试。格式、lint 和 Clippy 在 Ubuntu 执行，原生验收仅在 WebView 夹具输入、原生测试输入或 Rust 消费闭包受影响时运行。测试、Biome、dprint、rustfmt 与 Clippy 共用变更计划，Cargo 反向依赖闭包从 metadata 得出；`vitest.config.ts` 变更扩展到全部 Vitest，但不扩大 Cargo 测试范围。其他共享配置、空 diff、未知路径或不可用元数据 / 基线回退全量。Nightly 在三平台构建并运行完整 Vitest、workspace Rust 和原生测试；Rust / Vitest coverage、knip、bench、rustdoc 与 Playwright 视觉布局检查由 Ubuntu nightly 的完整 `bun run verify` 执行，也可手动触发。`bun run test:rust` 仍是本地完整 workspace 测试入口。覆盖统计平台分工不替代平台行为测试。
+- PR CI 由变更规划、Ubuntu 共享质量门禁和三平台构建 / 受影响测试组成；可复用步骤位于 `.github/actions/`。三平台均构建 Web 产物，并按同一计划运行受影响 Tauri 应用 / Rust crate / 消费者及对应 Vitest 镜像测试；Vue / TS 改动按镜像关系选择 Vitest，找不到对应测试时扩展到全部 Vitest。除 WebView 夹具直接或传递依赖的文件外，纯 Web 改动不触发 Rust 或原生测试。格式、lint 和 Clippy 在 Ubuntu 执行，原生验收仅在 WebView 夹具输入、原生测试输入或 Rust 消费闭包受影响时运行。测试、Biome、dprint、rustfmt 与 Clippy 共用变更计划，Cargo 反向依赖闭包从 metadata 得出；`vitest.config.ts` 变更扩展到全部 Vitest，但不扩大 Cargo 测试范围。其他共享配置、空 diff、未知路径或不可用元数据 / 基线回退全量。Nightly 在三平台构建并运行完整 Vitest、workspace Rust 和原生测试；Rust / Vitest coverage、knip、bench、rustdoc 与 Playwright 视觉布局检查由 Ubuntu nightly 的完整 `bun run verify` 执行；长时记忆压力探索随后只在 Ubuntu 执行一次 `bun run memory:stress`，不进入 PR 流水线。Nightly 可手动触发。`bun run test:rust` 仍是本地完整 workspace 测试入口。覆盖统计平台分工不替代平台行为测试。
 
 ### Rust 覆盖豁免台账
 

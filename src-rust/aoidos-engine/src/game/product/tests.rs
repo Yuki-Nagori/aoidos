@@ -75,10 +75,11 @@ use crate::{
 };
 use aoidos_memory::{
     model::{
-        Candidate, Classification, Dimension, InputMode as MemoryInputMode, PolicyOverrides,
-        Proposal, ProposalContext, SubjectRef, new_id,
+        Attitude, Candidate, CausalPort, ChangeKind, Classification, Dimension, EntryState,
+        Expected, InputMode as MemoryInputMode, Plan, PolicyOverrides, Proposal, ProposalContext,
+        Subject, SubjectRef, Target, Version, new_id, set_hash,
     },
-    repository::BatchState,
+    repository::{BatchState, MAX_PROPOSAL_TARGET_SEARCH_BYTES},
 };
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -819,6 +820,333 @@ async fn memory_runtime_product_session_retrieves_target_after_1000_active_entri
     println!(
         "{{\"activeEntries\":{ENTRY_COUNT},\"completedBatches\":{completed_batches},\"createMs\":{create_ms},\"lookupPreparationMs\":{lookup_preparation_ms},\"reopenValidationMs\":{reopen_validation_ms},\"longGameRounds\":200,\"longGameMs\":{long_game_ms},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes},\"providerStarts\":{}}}",
         provider_starts,
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
+#[ignore = "显式运行的同一产品会话 10,000 条活动记忆重开与预算拒绝探索"]
+async fn memory_runtime_product_session_reopens_at_10000_active_entries() {
+    const ENTRY_COUNT: usize = 10_000;
+    const ROUNDS_AFTER_REOPEN: usize = 6;
+
+    let fixture = Fixture::with_stress_provider();
+    let config = fixture.storage.memory_script_config("mistbell").unwrap();
+    fixture
+        .storage
+        .save_memory_script_config(
+            "mistbell",
+            config.config_version,
+            config.app_config_version,
+            PolicyOverrides {
+                active_capacity: Some(ENTRY_COUNT as u64),
+                ..PolicyOverrides::default()
+            },
+        )
+        .unwrap();
+    let opened = fixture.open(false).await.unwrap();
+    let catalog = fixture
+        .storage
+        .memory_catalog_for_run(&opened.memory_run_id)
+        .unwrap()
+        .1;
+    let source_seq = {
+        let session = fixture.storage.records.get(&opened.session_id).unwrap();
+        session
+            .lock()
+            .unwrap()
+            .append(crate::record::format::Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "用于满负载记忆容量探索的合成来源".into(),
+                mode: Some(crate::record::format::InputMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap()
+    };
+
+    // 使用生产版本校验与 SQLite 操作写入完整有效条目，避免把 NULL 版本行误当成容量证据。
+    let seed_started = std::time::Instant::now();
+    fixture
+        .storage
+        .with_memory_context(
+            &opened.session_id,
+            &catalog,
+            |repository, connection, port, _, _| {
+                let run = repository.run(connection, &opened.memory_run_id)?;
+                let source = port.reference(&opened.memory_run_id, source_seq)?;
+                let source_set_hash = set_hash(std::slice::from_ref(&source))?;
+                let evidence_set_hash = set_hash::<aoidos_memory::model::KnowledgeEvidence>(&[])?;
+                let versions = (0..ENTRY_COUNT)
+                    .map(|index| Version {
+                        version: 1,
+                        entry_id: new_id(),
+                        version_id: new_id(),
+                        parent_version_id: None,
+                        restored_from_version_id: None,
+                        subject: Subject::PlayerPreference,
+                        dimension: Dimension::PlayerPreference,
+                        summary: format!("合成长期容量记忆 {index:05}"),
+                        attitude: Attitude::Believed,
+                        inferred: false,
+                        change: ChangeKind::New,
+                        sources: vec![source.clone()],
+                        evidence: vec![],
+                        source_set_hash,
+                        evidence_set_hash,
+                        policy_hash: run.policy_hash,
+                    })
+                    .collect::<Vec<_>>();
+
+                for versions in versions.chunks(16) {
+                    let boundary = port.boundary()?;
+                    let targets = versions
+                        .iter()
+                        .map(|version| Target {
+                            entry_id: version.entry_id.clone(),
+                            expected: Expected {
+                                version_id: None,
+                                state_revision: 0,
+                            },
+                            next: Some(version.clone()),
+                            state: EntryState::Active,
+                            effects: vec![],
+                        })
+                        .collect();
+                    let plan = Plan {
+                        expected_logical_clock: repository.clock(
+                            connection,
+                            port,
+                            &opened.memory_run_id,
+                        )?,
+                        operation_id: new_id(),
+                        run_id: opened.memory_run_id.clone(),
+                        history_revision: boundary.history_revision,
+                        entity_revision: boundary.entity_revision,
+                        evidence_revision: boundary.evidence_revision,
+                        policy_hash: run.policy_hash,
+                        batch_id: None,
+                        candidate_ids: vec![],
+                        targets,
+                        processed_materials: vec![],
+                        reason: "10,000 条产品容量测试夹具".into(),
+                    };
+                    repository.prepare(connection, port, &plan)?;
+                    repository.write_versions(connection, &plan.operation_id)?;
+                    repository.apply(connection, port, &plan.operation_id)?;
+                }
+                let extra_version = Version {
+                    version: 1,
+                    entry_id: new_id(),
+                    version_id: new_id(),
+                    parent_version_id: None,
+                    restored_from_version_id: None,
+                    subject: Subject::PlayerPreference,
+                    dimension: Dimension::PlayerPreference,
+                    summary: "超出活动容量的合成记忆".into(),
+                    attitude: Attitude::Believed,
+                    inferred: false,
+                    change: ChangeKind::New,
+                    sources: vec![source.clone()],
+                    evidence: vec![],
+                    source_set_hash,
+                    evidence_set_hash,
+                    policy_hash: run.policy_hash,
+                };
+                let boundary = port.boundary()?;
+                let overflow_plan = Plan {
+                    expected_logical_clock: repository.clock(
+                        connection,
+                        port,
+                        &opened.memory_run_id,
+                    )?,
+                    operation_id: new_id(),
+                    run_id: opened.memory_run_id.clone(),
+                    history_revision: boundary.history_revision,
+                    entity_revision: boundary.entity_revision,
+                    evidence_revision: boundary.evidence_revision,
+                    policy_hash: run.policy_hash,
+                    batch_id: None,
+                    candidate_ids: vec![],
+                    targets: vec![Target {
+                        entry_id: extra_version.entry_id.clone(),
+                        expected: Expected {
+                            version_id: None,
+                            state_revision: 0,
+                        },
+                        next: Some(extra_version),
+                        state: EntryState::Active,
+                        effects: vec![],
+                    }],
+                    processed_materials: vec![],
+                    reason: "验证活动记忆容量上限".into(),
+                };
+                assert!(matches!(
+                    repository.prepare(connection, port, &overflow_plan),
+                    Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::CapacityBlocked
+                    ))
+                ));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        count_active_memory_entries(&fixture.storage, &opened.memory_run_id),
+        ENTRY_COUNT
+    );
+    let seed_ms = seed_started.elapsed().as_millis();
+
+    fixture.storage.records.close(&opened.session_id).unwrap();
+    fixture.close().await;
+    let reopen_started = std::time::Instant::now();
+    let reopened = Fixture::build_at(fixture.root.clone(), fixture.stress_provider.clone());
+    let reopened_session = reopened.open(false).await.unwrap();
+    assert_eq!(reopened_session.session_id, opened.session_id);
+    assert_eq!(reopened_session.memory_run_id, opened.memory_run_id);
+    assert_eq!(
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
+        ENTRY_COUNT
+    );
+    let reopen_validation_ms = reopen_started.elapsed().as_millis();
+
+    let turns_started = std::time::Instant::now();
+    for index in 0..ROUNDS_AFTER_REOPEN {
+        complete_product_stress_round(
+            &reopened,
+            &opened.session_id,
+            &format!("检查满负载后的第 {index} 条线索"),
+            index,
+        )
+        .await;
+    }
+    let mut turns_ms = turns_started.elapsed().as_millis();
+
+    {
+        let session = reopened.storage.records.get(&opened.session_id).unwrap();
+        session
+            .lock()
+            .unwrap()
+            .append(crate::record::format::Body::PlayerSpeech {
+                player_id: "player".into(),
+                text: "合成长期容量记忆 00000 检索确认".into(),
+                mode: Some(crate::record::format::InputMode::OutOfCharacter),
+                content_range: None,
+            })
+            .unwrap();
+    }
+    let collected = reopened
+        .storage
+        .collect_memory_materials(&opened.memory_run_id, None)
+        .unwrap();
+    assert!(collected.eligible_count > 0, "查询输入应登记为可处理素材");
+    let lookup_started = std::time::Instant::now();
+    let target_search_catalog = reopened
+        .storage
+        .memory_catalog_for_run(&opened.memory_run_id)
+        .unwrap()
+        .1;
+    let target_search_refused_for_body_budget = reopened
+        .storage
+        .with_memory_context(
+            &opened.session_id,
+            &target_search_catalog,
+            |repository, connection, port, _, _| {
+                let history_revision = port.boundary()?.history_revision;
+                let (scanned_entries, distinct_subjects, body_bytes): (i64, i64, i64) = connection
+                    .query_row(
+                        "SELECT COUNT(*), COUNT(DISTINCT v.subject_json), SUM(v.body_length) \
+                         FROM memory_entries e JOIN memory_versions v \
+                           ON v.entry_id=e.entry_id AND v.version_id=e.current_version_id \
+                         WHERE e.run_id=?1 AND e.status IN ('active','archived')",
+                        [&opened.memory_run_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .map_err(|error| {
+                        aoidos_memory::error::Error::from(aoidos_store::db::sqlite_error(error))
+                    })?;
+                assert_eq!(usize::try_from(scanned_entries).unwrap(), ENTRY_COUNT);
+                assert_eq!(distinct_subjects, 1);
+                assert!(
+                    usize::try_from(body_bytes).unwrap() > MAX_PROPOSAL_TARGET_SEARCH_BYTES,
+                    "同一主体的版本正文总量应超过目标检索预算"
+                );
+                Ok(matches!(
+                    repository.entries_for_subjects(
+                        connection,
+                        port,
+                        &opened.memory_run_id,
+                        history_revision,
+                        &[Subject::PlayerPreference],
+                        aoidos_memory::model::MAX_PROPOSAL_TARGET_SCAN + 1,
+                    ),
+                    Err(aoidos_memory::error::Error::Rejected(
+                        aoidos_memory::error::Reason::CapacityBlocked
+                    ))
+                ))
+            },
+        )
+        .unwrap();
+    assert!(
+        target_search_refused_for_body_budget,
+        "目标扫描应由版本正文总字节预算拒绝"
+    );
+    let lookup_error = reopened
+        .storage
+        .prepare_collectible_memory_batch(&opened.memory_run_id)
+        .expect_err("超过目标正文扫描预算时应在准备阶段失败关闭");
+    assert_eq!(lookup_error.code, "app.bad-request");
+    let lookup_ms = lookup_started.elapsed().as_millis();
+    assert!(
+        reopened
+            .storage
+            .active_memory_batch_status(&opened.memory_run_id)
+            .unwrap()
+            .is_none(),
+        "上下文超限不得冻结批次或占用素材"
+    );
+
+    let turns_after_refusal_started = std::time::Instant::now();
+    for index in ROUNDS_AFTER_REOPEN..(ROUNDS_AFTER_REOPEN * 2) {
+        complete_product_stress_round(
+            &reopened,
+            &opened.session_id,
+            &format!("检查预算拒绝后的第 {index} 条线索"),
+            index,
+        )
+        .await;
+    }
+    turns_ms += turns_after_refusal_started.elapsed().as_millis();
+    let provider_starts = reopened
+        .stress_provider
+        .as_ref()
+        .unwrap()
+        .starts
+        .load(Ordering::SeqCst);
+    assert_eq!(provider_starts, ROUNDS_AFTER_REOPEN * 4);
+    assert_eq!(
+        count_active_memory_entries(&reopened.storage, &opened.memory_run_id),
+        ENTRY_COUNT,
+        "回合与失败关闭的记忆请求都不应改变已提交容量"
+    );
+    let sqlite_bytes = std::fs::metadata(reopened.root.join("storage.sqlite"))
+        .unwrap()
+        .len();
+    let record_bytes = std::fs::metadata(
+        reopened
+            .root
+            .join("workspaces/mistbell/transcript")
+            .join(format!("{}.jsonl", opened.session_id)),
+    )
+    .unwrap()
+    .len();
+    let wal_bytes = match std::fs::metadata(reopened.root.join("storage.sqlite-wal")) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => panic!("读取 SQLite WAL 大小失败：{error}"),
+    };
+    println!(
+        "{{\"activeEntries\":{ENTRY_COUNT},\"seedMs\":{seed_ms},\"reopenValidationMs\":{reopen_validation_ms},\"turnsAfterReopen\":{},\"turnsMs\":{turns_ms},\"targetBudgetRefused\":true,\"lookupMs\":{lookup_ms},\"providerStarts\":{provider_starts},\"recordBytes\":{record_bytes},\"sqliteBytes\":{sqlite_bytes},\"walBytes\":{wal_bytes}}}",
+        ROUNDS_AFTER_REOPEN * 2,
     );
     reopened.close().await;
 }
