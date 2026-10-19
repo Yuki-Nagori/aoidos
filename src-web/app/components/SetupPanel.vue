@@ -6,15 +6,17 @@ import type { useProduct } from "../../features/product/composables/useProduct";
 import type { useTheme } from "../../features/theme/composables/useTheme";
 import type { useLocale } from "../../features/locale/composables/useLocale";
 import type { useBilling } from "../../features/billing/composables/useBilling";
+import type { useUiPreferences } from "../../features/game/composables/useUiPreferences";
 
 const { t } = useI18n();
-const { open, initialSection, product, theme, locale, billing, errorMessage } = defineProps<{
+const { open, initialSection, product, theme, locale, billing, preferences, errorMessage } = defineProps<{
   open: boolean;
   initialSection: string;
   product: ReturnType<typeof useProduct>;
   theme: ReturnType<typeof useTheme>;
   locale: ReturnType<typeof useLocale>;
   billing: ReturnType<typeof useBilling>;
+  preferences: ReturnType<typeof useUiPreferences>;
   errorMessage?: string;
 }>();
 const emit = defineEmits<{ reconnect: []; close: [] }>();
@@ -352,6 +354,43 @@ function themeName(id: string, fallback: string): string {
                 </option>
               </select>
             </label>
+            <fieldset class="settings-choice-group">
+              <legend>{{ t("game.diceMode") }}</legend>
+              <div class="settings-segmented">
+                <label
+                  :class="{
+                    'is-selected': preferences.diceMode.value === 'manual',
+                    'is-disabled': !preferences.ready.value || preferences.saving.value,
+                  }"
+                >
+                  <input
+                    type="radio"
+                    name="dice-mode"
+                    value="manual"
+                    :checked="preferences.diceMode.value === 'manual'"
+                    :disabled="!preferences.ready.value || preferences.saving.value"
+                    @change="preferences.setDiceMode('manual')"
+                  />
+                  <span>{{ t("game.manual") }}</span>
+                </label>
+                <label
+                  :class="{
+                    'is-selected': preferences.diceMode.value === 'auto',
+                    'is-disabled': !preferences.ready.value || preferences.saving.value,
+                  }"
+                >
+                  <input
+                    type="radio"
+                    name="dice-mode"
+                    value="auto"
+                    :checked="preferences.diceMode.value === 'auto'"
+                    :disabled="!preferences.ready.value || preferences.saving.value"
+                    @change="preferences.setDiceMode('auto')"
+                  />
+                  <span>{{ t("game.automatic") }}</span>
+                </label>
+              </div>
+            </fieldset>
             <div class="settings-actions">
               <button
                 type="button"

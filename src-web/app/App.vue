@@ -171,6 +171,7 @@ void preferences.load();
       :theme="theme"
       :locale="locale"
       :billing="billing"
+      :preferences="preferences"
       :error-message="errorMessage"
       @reconnect="workspace?.reconnect()"
       @close="closeSettings"

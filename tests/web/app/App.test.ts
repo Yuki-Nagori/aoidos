@@ -30,6 +30,8 @@ describe("App", () => {
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
       if (command === "store_get_ui_preferences")
         return { version: 1, panelPinned: false, diceMode: "manual" };
+      if (command === "store_set_ui_preferences")
+        return { version: 1, panelPinned: false, diceMode: "auto" };
       if (command === "theme_list")
         return [
           { id: "dark", name: "深色", colorScheme: "dark" },
@@ -162,6 +164,14 @@ describe("App", () => {
     expect(skinSwitch.attributes("aria-checked")).toBe("true");
     await skinSwitch.trigger("click");
     expect(skinSwitch.attributes("aria-checked")).toBe("false");
+    await wrapper.get('.settings-nav button[aria-controls="gameplay"]').trigger("click");
+    await wrapper.get('input[name="dice-mode"][value="auto"]').setValue();
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("store_set_ui_preferences", {
+        panelPinned: false,
+        diceMode: "auto",
+      });
+    });
     await theme.trigger("keydown", { key: "Escape" });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     await vi.waitFor(() =>
@@ -187,6 +197,7 @@ describe("App", () => {
       "memory_get_script_config",
       "memory_get_script_config",
       "store_get_ui_preferences",
+      "store_set_ui_preferences",
       "theme_get_preference",
       "theme_list",
       "theme_skin_load",
