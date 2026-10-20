@@ -162,7 +162,7 @@ const billingErrorMessage = computed(() => {
         <article
           v-for="item in billing.period.value?.items"
           :key="`${item.providerId}:${item.currency}:${item.modelId}`"
-          class="rounded border border-line p-3"
+          class="rounded border border-hairline p-3"
         >
           <h3>
             {{
@@ -221,12 +221,12 @@ const billingErrorMessage = computed(() => {
         >
           {{ t("billing.refreshUsage") }}
         </button>
-        <hr class="my-2 border-line" />
+        <hr class="my-2 border-hairline" />
         <h2 class="font-semibold">{{ t("billing.requests") }}</h2>
         <article
           v-for="item in billing.requests.value?.items"
           :key="item.requestId"
-          class="rounded border border-line p-3"
+          class="rounded border border-hairline p-3"
         >
           <h3>
             {{
@@ -287,7 +287,7 @@ const billingErrorMessage = computed(() => {
           <!-- biome-ignore lint/a11y/useSemanticElements: This groups preview status and controls, not form fields. -->
           <div
             v-if="billing.backfillPreview.value?.requestId === item.requestId"
-            class="grid gap-2 rounded border border-line p-3"
+            class="grid gap-2 rounded border border-hairline p-3"
             role="group"
           >
             <p>
@@ -396,7 +396,7 @@ const billingErrorMessage = computed(() => {
             {{ t("billing.loadMore") }}
           </button>
         </div>
-        <hr class="my-2 border-line" />
+        <hr class="my-2 border-hairline" />
         <h2 class="font-semibold">
           {{ t("billing.monthly", { month: billing.monthly.value?.month ?? "—" }) }}
         </h2>
@@ -407,7 +407,7 @@ const billingErrorMessage = computed(() => {
         <article
           v-for="item in billing.monthly.value?.items"
           :key="`month:${item.providerId}:${item.currency}:${item.modelId}`"
-          class="rounded border border-line p-3"
+          class="rounded border border-hairline p-3"
         >
           <h3>
             {{

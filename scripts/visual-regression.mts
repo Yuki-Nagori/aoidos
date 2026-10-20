@@ -78,7 +78,8 @@ const script = {
   scriptId: "mistbell",
   title: "雾钟地窖",
   displayNames: { "zh-Hans": "雾钟地窖", en: "Mistbell Cellar" },
-  attributions: "visual test fixture",
+  attributions:
+    "# Mistbell License\n\nReleased under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).\n\n# SRD Attribution\n\n## Scope\n\n- Preserve attribution.\n- Keep source references visible.",
 };
 const sourceCss = await readFile(resolve(root, "resources/scripts/mistbell/theme.css"), "utf8");
 const skinTokens = Object.fromEntries(
@@ -610,6 +611,18 @@ try {
     await page.locator(".game-stage").waitFor();
     await page.locator('.topbar button[aria-label="Settings"]').click();
     await page.getByRole("dialog").waitFor();
+    const modelChip = page.locator(".game-model-chip");
+    await modelChip.waitFor({ state: "attached" });
+    if (await modelChip.isVisible()) {
+      assert.equal(
+        await modelChip
+          .locator(".sep")
+          .first()
+          .evaluate((element) => getComputedStyle(element).width),
+        "1px",
+        "Provider and model names need a visible design separator",
+      );
+    }
 
     const layout = await measureSettings(page);
     const narrow = viewport.width <= baseline.layout.settings.narrowMaxWidth;
@@ -659,9 +672,37 @@ try {
       const button = page.locator(".settings-nav button").nth(index);
       await button.click();
       assert.equal(await button.getAttribute("aria-current"), "page");
-      if (section.id === "billing")
+      if (section.id === "billing") {
         await page.locator("#billing .billing-summary-card").first().waitFor();
-      if (section.id === "price") await page.locator("#billing .billing-price-form").waitFor();
+        const divider = page.locator("#billing hr").first();
+        const borderColor = await divider.evaluate(
+          (element) => getComputedStyle(element).borderTopColor,
+        );
+        const hairline = await page
+          .locator("html")
+          .evaluate((element) => getComputedStyle(element).getPropertyValue("--hairline").trim());
+        assert.equal(borderColor, hairline, "Billing dividers must use the theme hairline token");
+      }
+      if (section.id === "price") {
+        const form = page.locator("#billing .billing-price-form");
+        await form.waitFor();
+        const overflows = await form.evaluate((element) => {
+          const right = element.getBoundingClientRect().right;
+          return Array.from(element.querySelectorAll("input")).some(
+            (input) => input.getBoundingClientRect().right > right + 1,
+          );
+        });
+        assert.equal(overflows, false, "Price inputs must stay inside the form grid");
+      }
+      if (section.id === "scenario") {
+        const credits = page.locator("#scenario .scenario-attribution-document");
+        assert.equal(await credits.count(), 2, "Each bundled notice should have its own card");
+        assert.equal(await page.locator("#scenario .scenario-attributions pre").count(), 0);
+        await credits.first().locator("summary").click();
+        await page
+          .locator('#scenario a[href="https://creativecommons.org/licenses/by/4.0/"]')
+          .waitFor();
+      }
       if (section.id === "balance") {
         await page.getByRole("button", { name: /query deepseek balance/i }).click();
         await page.locator("#billing .billing-balance-card").waitFor();

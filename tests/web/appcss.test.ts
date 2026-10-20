@@ -226,4 +226,29 @@ describe("token 目录与 app.css 互校", () => {
     expect(shortcutDialog).toContain("width: min(51.25rem, 100%)");
     expect(shortcutDialog).toContain("calc(100dvh - 4.5rem)");
   });
+
+  it("为顶栏身份分隔符和设置表单输入保留有效布局", () => {
+    const chip = css.match(/\.chip\s*\{([^}]+)\}/)?.[1];
+    expect(chip).toContain("display: inline-flex");
+    expect(chip).toContain("gap: 0.375rem");
+
+    const separator = css.match(/\.chip \.sep\s*\{([^}]+)\}/)?.[1];
+    expect(separator).toContain("width: 1px");
+    expect(separator).toContain("height: 0.75rem");
+
+    const field = css.match(
+      /\.settings-section\s+:where\(input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="search"\]\)\)\s*\{([^}]+)\}/,
+    )?.[1];
+    expect(field).toContain("width: 100%");
+    expect(field).toContain("min-width: 0");
+
+    for (const file of [
+      "../../src-web/features/billing/components/BillingPanel.vue",
+      "../../src-web/features/memory/components/MemoryQueryPanel.vue",
+    ]) {
+      const component = readFileSync(resolve(__dirname, file), "utf8");
+      expect(component).not.toContain("border-line");
+      expect(component).toContain("border-hairline");
+    }
+  });
 });

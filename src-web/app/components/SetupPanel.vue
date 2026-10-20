@@ -11,6 +11,7 @@ import type { useTheme } from "../../features/theme/composables/useTheme";
 import type { useLocale } from "../../features/locale/composables/useLocale";
 import type { useBilling } from "../../features/billing/composables/useBilling";
 import type { useUiPreferences } from "../../features/game/composables/useUiPreferences";
+import { parseAttributionDocuments } from "../utils/attributions";
 
 const { t } = useI18n();
 const { open, initialSection, product, theme, locale, billing, preferences, errorMessage } = defineProps<{
@@ -107,15 +108,7 @@ const selectedScript = computed(() =>
 );
 const attributionDocuments = computed(() => {
   const source = selectedScript.value?.attributions.trim();
-  if (!source) return [];
-  return source.split(/\n{2,}(?=#\s)/).map((document, index) => {
-    const heading = /^#\s+([^\n]+)(?:\n|$)/.exec(document);
-    return {
-      id: index,
-      heading: heading?.[1],
-      body: heading ? document.slice(heading[0].length).trim() : document,
-    };
-  });
+  return source ? parseAttributionDocuments(source) : [];
 });
 const selectedProviderLabel = computed(
   () =>
@@ -519,14 +512,60 @@ function themeName(id: string, fallback: string): string {
               :aria-label="t('settings.credits')"
             >
               <h4>{{ t("settings.credits") }}</h4>
-              <article
+              <details
                 v-for="document in attributionDocuments"
                 :key="document.id"
                 class="scenario-attribution-document"
               >
-                <h5 v-if="document.heading">{{ document.heading }}</h5>
-                <pre>{{ document.body }}</pre>
-              </article>
+                <summary>
+                  <h5>{{ document.heading ?? t("settings.credits") }}</h5>
+                </summary>
+                <div class="scenario-attribution-body">
+                  <template v-for="(block, index) in document.blocks" :key="index">
+                    <h6 v-if="block.kind === 'heading'" class="scenario-attribution-heading">
+                      <template v-for="(part, partIndex) in block.parts" :key="partIndex">
+                        <a
+                          v-if="part.kind === 'link'"
+                          :href="part.href"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >{{ part.value }}</a>
+                        <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                        <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                        <template v-else>{{ part.value }}</template>
+                      </template>
+                    </h6>
+                    <p v-else-if="block.kind === 'paragraph'">
+                      <template v-for="(part, partIndex) in block.parts" :key="partIndex">
+                        <a
+                          v-if="part.kind === 'link'"
+                          :href="part.href"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >{{ part.value }}</a>
+                        <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                        <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                        <template v-else>{{ part.value }}</template>
+                      </template>
+                    </p>
+                    <ul v-else>
+                      <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
+                        <template v-for="(part, partIndex) in item" :key="partIndex">
+                          <a
+                            v-if="part.kind === 'link'"
+                            :href="part.href"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >{{ part.value }}</a>
+                          <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                          <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                          <template v-else>{{ part.value }}</template>
+                        </template>
+                      </li>
+                    </ul>
+                  </template>
+                </div>
+              </details>
             </section>
           </section>
 
