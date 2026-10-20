@@ -112,6 +112,8 @@ src-tauri
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。033 已接入记忆产品处理链路，真实样本与生产参数验收仍在进行；计费运行时由 engine 持有账本并实现 LLM 的预算端口。端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
 
+058 规划新增 `aoidos-app`，把 profile / 凭据冻结及游戏产品装配从 Tauri 壳提取为共享应用服务；Tauri GUI 与 `aoidos-cli` 将作为并列 adapter 在进程内依赖它。目标图为 `aoidos` / `aoidos-cli` → `aoidos-app` → `aoidos-engine`，`aoidos-app` 另依赖其所需的 `aoidos-llm` 与 `aoidos-store`。engine 和领域 crate 不依赖 app，两个入口也不互相依赖；`aoidos-cli` 与 app 仍是规划项，实施前依赖边需登记到 `lint:layers`。细节见[分层规范](../standards/layering.md)和[TS / Rust 边界](ts-rust-boundary.md)。
+
 前端 IPC 调用放在 `src-web/api/`；功能私有逻辑留在 `features/<feature>/`，跨功能共用逻辑放在 `shared/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
 
 ### JSON 共用能力
