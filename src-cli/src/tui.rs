@@ -320,7 +320,7 @@ async fn open_session(
             .into();
             state.phase = app.services.runtime.get_phase(&session.session_id).ok();
             load_history(app, state, &session.session_id);
-            refresh_billing(app, state, &session.session_id);
+            refresh_billing(app, state, &session.memory_run_id);
             state.session = Some(session);
             state.focus = Focus::Input;
             if state.draft.is_empty()
@@ -583,13 +583,14 @@ fn handle_runtime_event(app: &CliApp, state: &mut ViewState, event: RuntimeEvent
             }
         }
         RuntimeEvent::Record(event) => {
-            if state
+            let run_id = state
                 .session
                 .as_ref()
-                .is_some_and(|session| session.session_id == event.session_id)
-            {
+                .filter(|session| session.session_id == event.session_id)
+                .map(|session| session.memory_run_id.clone());
+            if let Some(run_id) = run_id {
                 load_history(app, state, &event.session_id);
-                refresh_billing(app, state, &event.session_id);
+                refresh_billing(app, state, &run_id);
             }
         }
         RuntimeEvent::Migration(event) => {
@@ -749,17 +750,17 @@ fn load_history(app: &CliApp, state: &mut ViewState, session_id: &str) {
 }
 
 fn refresh_billing_for_active_session(app: &CliApp, state: &mut ViewState) {
-    if let Some(session_id) = state
+    if let Some(run_id) = state
         .session
         .as_ref()
-        .map(|session| session.session_id.clone())
+        .map(|session| session.memory_run_id.clone())
     {
-        refresh_billing(app, state, &session_id);
+        refresh_billing(app, state, &run_id);
     }
 }
 
-fn refresh_billing(app: &CliApp, state: &mut ViewState, session_id: &str) {
-    match app.services.billing.run_summary(session_id) {
+fn refresh_billing(app: &CliApp, state: &mut ViewState, run_id: &str) {
+    match app.services.billing.run_summary(run_id) {
         Ok(summary) => {
             state.billing_scroll = state
                 .billing_scroll
