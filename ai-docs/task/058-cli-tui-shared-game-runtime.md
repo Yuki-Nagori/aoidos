@@ -66,13 +66,13 @@
 - [x] CLI/TUI 与 GUI 共用 profile、OS 凭据库、剧本、存档、回合服务、Provider 和 billing ledger；密钥不进入 CLI 参数、输出、日志或记录。
 - [x] TUI 能在 fake-provider 测试中新建 / 恢复 Mistbell 周目、编辑首行动建议、显式提交、显示流式正文 / 终态 / 记录 / 计费状态，并取消与显式恢复。
 - [x] 新周目不会自动发送建议或收费；关闭后重开不会重复提交建议；草稿不得伪装成已接纳玩家事实。
-- [ ] Mistbell 首行动建议有中英文来源；缺失 / 非法本地化 metadata 明确回退或拒绝，不猜测生成玩家输入。
+- [x] Mistbell 首行动建议有中英文来源；缺失 / 非法本地化 metadata 明确回退或拒绝，不猜测生成玩家输入。
 - [x] 每次预留按冻结输入序列化字节上界和请求封套余量计算，且原文 / 序列化请求均受 256 KiB 发送前硬限和模型窗口约束；不得将字符估算冒充供应商 usage。模型窗口、最大输出、不同币种限额及超限前不发送均有测试。
 - [x] 额度不足时请求在网络发送前被拒绝，UI / TUI 给出可读原因；可用预算足够时真实请求不会仅因模型未使用的上下文容量而提前失败。
 - [ ] 仅在 035 三平台实机验收完成且用户对本次请求单独明确授权后，才用选定的 DeepSeek profile / OS key 完成一次真实请求并显示终态及本地原币估算；记录 profile、模型、币种、冻结价格、上限、实际用量与限制。未执行真实请求的平台不宣称通过。
-- [ ] 本地 fake-provider 测试不访问网络；CI 不使用真实密钥、不产生真实费用。
-- [ ] GUI 错误码映射与 system record 展示不再显示原始 `budget.exceeded` 或“当前版本无法显示”的通用占位；内容来自稳定码本或已脱敏 system message。
-- [ ] 代码、中文注释、类型、文档及 task 同步；独立评审完成并处理发现，`bun run verify` 通过。
+- [x] 本地 fake-provider 测试不访问网络；CI 不使用真实密钥、不产生真实费用。
+- [x] GUI 错误码映射与 system record 展示不再显示原始 `budget.exceeded` 或“当前版本无法显示”的通用占位；内容来自稳定码本或经过控制字符清理、长度限制的 system message。
+- [x] 代码、中文注释、类型、文档及 task 同步；独立评审完成并处理发现，`bun run verify` 通过。
 
 ## 验证计划与结果
 
@@ -81,6 +81,8 @@
 | 2026-10-20 | `bun scripts/cargo.mts test -p aoidos-app -p aoidos-cli` | 应用服务摘要及 CLI/TUI 目标测试通过    | 21 项通过；覆盖应用 profile / billing 服务、TUI 无请求开局与恢复、行动提交 / 流式显示 / 终态、取消与显式恢复、认证失败、真实账本预算拒绝不派发、费用预留 / 实际用量结算及面板刷新              |
 | 2026-10-20 | `gh run view 39415423031 --log-failed`                   | 定位 main CI 的 macOS 测试失败         | `aoidos-app` 的 profile 配额测试在并行执行时遇到 `store.not-found`；测试临时目录改为进程号 + 原子序号命名并用 `create_dir` 独占创建，防止测试共享目录及互相清理。应用与 CLI 定向测试 21 项通过 |
 | 2026-10-20 | `bun run verify`                                         | 全仓检查、测试、覆盖率、构建和文档通过 | 全部通过；454 项 Vitest、Rust workspace 测试通过，Rust 覆盖率 96.83%，视觉回归、基准、Web 构建和 Rust 文档生成通过。                                                                           |
+| 2026-10-20 | 全量 Vitest、类型、i18n 与受影响格式检查                 | 前端行为与本次改动相关检查通过         | 457 项 Vitest 通过；错误映射测试覆盖 budget 本地化、system message 控制字符清理及 Unicode 安全截断；Vue / TypeScript 类型、i18n 和受影响格式检查通过。                                         |
+| 2026-10-20 | `bun run verify`                                         | 全仓检查、测试、覆盖率、构建和文档通过 | 通过；457 项 Vitest、Rust workspace 测试通过（3 项显式长测忽略），Rust 覆盖率 96.83%；视觉回归、Biome / dprint / rustfmt、Clippy、分层、i18n、knip、基准、Web 构建与 Rust 文档生成通过。       |
 
 ## 风险与回退
 
@@ -98,7 +100,9 @@
 - 2026-10-20：CLI/TUI 计费摘要通过 `aoidos-app::BillingService` 从共享 SQLite 读取；周目打开、回合执行期间每秒、回合终态、记录更新和事件溢出恢复时刷新，显示按供应商、原币与模型分组的已结算 / 预留金额、已知 Token、请求数、用量缺失和预算提醒；金额显示到 0.01，不做跨币换算。模型明细可在费用面板内滚动，窄终端按显示宽度截断。
 - 2026-10-20：CLI fake Provider 集成测试发现费用摘要误用会话 `session_id` 查询账本；计费账本以 memory `run_id` 为作用域，已统一改用 `OpenedSession.memory_run_id`，并以真实账本适配器覆盖预算拒绝、预留、结算和 TUI 刷新。
 - 2026-10-20：main CI 的 profile 配额测试因并行测试临时目录可能碰撞而偶发 `store.not-found`；改用进程号和原子序号生成名称，并以独占目录创建消除共享与误删。
+- 2026-10-20：GUI 将 `budget.exceeded` 映射到现有额度本地化文案；RecordFeed 展示持久化 system message，移除控制字符并限制长度，空说明与无正文记录使用准确的保留提示，不将 system code 输出给玩家。
+- 2026-10-20：独立 review 找到 UTF-16 截断可能拆开 emoji；改为按 Unicode code point 截断并增加边界断言。代码复核确认控制字符会清理且记录正文保持 Vue 文本插值。
 
 ## 完成摘要
 
-未完成。
+实现、文档、独立评审和仓库验收已完成；仅剩真实 DeepSeek API 手工验收，须满足 035 三平台实机门控，并在具体请求前取得单独授权及用户设定的金额上限。
