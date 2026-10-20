@@ -3,12 +3,15 @@ import { computed, nextTick, ref, watch } from "vue";
 import BillingPanel from "../../features/billing/components/BillingPanel.vue";
 import SettingsSectionHeading from "./SettingsSectionHeading.vue";
 import SettingsSectionIcon from "./SettingsSectionIcon.vue";
+import SelectMenu from "../../shared/components/SelectMenu.vue";
+import KeyboardShortcuts from "./KeyboardShortcuts.vue";
 import { useI18n } from "vue-i18n";
 import type { useProduct } from "../../features/product/composables/useProduct";
 import type { useTheme } from "../../features/theme/composables/useTheme";
 import type { useLocale } from "../../features/locale/composables/useLocale";
 import type { useBilling } from "../../features/billing/composables/useBilling";
 import type { useUiPreferences } from "../../features/game/composables/useUiPreferences";
+import { parseAttributionDocuments } from "../utils/attributions";
 
 const { t } = useI18n();
 const { open, initialSection, product, theme, locale, billing, preferences, errorMessage } = defineProps<{
@@ -35,6 +38,7 @@ const sections = computed(() => [
   { id: "memory-list", label: t("settings.sections.memory-list") },
   { id: "memory-pending", label: t("settings.sections.memory-pending") },
   { id: "scenario", label: t("settings.sections.scenario") },
+  { id: "shortcuts", label: t("settings.sections.shortcuts") },
 ] as const);
 const activeSectionTitle = computed(
   () => sections.value.find((section) => section.id === activeSection.value)?.label ?? t("settings.title"),
@@ -71,14 +75,14 @@ function focusableElements(): HTMLElement[] {
   if (!panel.value) return [];
   return Array.from(
     panel.value.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+      'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
     ),
   ).filter(isVisible);
 }
 function onKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
   if (event.key === "Escape") {
-    if (event.isComposing || event.keyCode === 229) return;
+    if (isComposingEvent(event)) return;
     event.preventDefault();
     emit("close");
     return;
@@ -96,9 +100,16 @@ function onKeydown(event: KeyboardEvent): void {
     first.focus();
   }
 }
+function isComposingEvent(event: KeyboardEvent): boolean {
+  return event.isComposing || event.key === "Process";
+}
 const selectedScript = computed(() =>
   product.scripts.value.find((script) => script.scriptId === product.scriptId.value),
 );
+const attributionDocuments = computed(() => {
+  const source = selectedScript.value?.attributions.trim();
+  return source ? parseAttributionDocuments(source) : [];
+});
 const selectedProviderLabel = computed(
   () =>
     product.providerOptions.find((option) => option.id === product.providerId.value)?.label ??
@@ -191,45 +202,85 @@ function themeName(id: string, fallback: string): string {
               :title="t('settings.sections.appearance')"
               @close="emit('close')"
             />
-            <label>
-              {{ t("settings.theme") }}
-              <select
-                :value="theme.theme.value"
-                :aria-label="t('settings.theme')"
-                :disabled="theme.saving.value"
-                @change="theme.setTheme(($event.target as HTMLSelectElement).value)"
-              >
-                <option v-for="option in theme.themes.value" :key="option.id" :value="option.id">
-                  {{ themeName(option.id, option.name) }}
-                </option>
-              </select>
-            </label>
-            <div v-if="product.scriptId.value === 'mistbell'" class="settings-skin card">
-              <div class="settings-skin-copy">
-                <strong>{{
-                  selectedScript?.displayNames[locale.resolved.value] ?? selectedScript?.title
-                }}</strong>
-                <span class="text-sm text-muted">{{ t("settings.scriptSkin") }}</span>
+            <fieldset class="settings-theme-field">
+              <legend class="settings-field-label">{{ t("settings.theme") }}</legend>
+              <div class="settings-theme-grid">
+                <button
+                  v-for="option in theme.themes.value"
+                  :key="option.id"
+                  type="button"
+                  class="settings-theme-card"
+                  :class="{ 'is-selected': theme.theme.value === option.id }"
+                  :aria-label="themeName(option.id, option.name)"
+                  :aria-pressed="theme.theme.value === option.id"
+                  :disabled="theme.saving.value"
+                  @click="theme.setTheme(option.id)"
+                >
+                  <span class="settings-theme-preview" :data-theme="option.id" aria-hidden="true">
+                    <span />
+                    <span />
+                  </span>
+                  <span class="settings-theme-name">
+                    {{ themeName(option.id, option.name) }}
+                    <svg
+                      v-if="theme.theme.value === option.id"
+                      class="settings-theme-check"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path d="m5 12.5 4.5 4.5L19 7.5" />
+                    </svg>
+                  </span>
+                </button>
               </div>
-              <button
-                type="button"
-                role="switch"
-                class="settings-switch"
-                :aria-checked="!theme.disabled.value"
-                :aria-label="t('settings.scriptSkin')"
-                @click="theme.toggleSkin"
-              >
-                <span aria-hidden="true" />
-              </button>
-              <span class="text-sm">{{
-                theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin")
-              }}</span>
-            </div>
+            </fieldset>
+            <section
+              v-if="product.scriptId.value === 'mistbell'"
+              class="settings-skin-section"
+              :aria-label="t('settings.scriptSkin')"
+            >
+              <div class="settings-skin-heading">
+                <strong>{{ t("settings.scriptSkin") }}</strong>
+                <button
+                  type="button"
+                  role="switch"
+                  class="settings-switch"
+                  :aria-checked="!theme.disabled.value"
+                  :aria-label="t('settings.scriptSkin')"
+                  @click="theme.toggleSkin"
+                >
+                  <span aria-hidden="true" />
+                </button>
+              </div>
+              <div class="settings-skin card">
+                <span class="script-ic" aria-hidden="true">
+                  <svg class="i" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" />
+                    <path d="M10 20a2 2 0 0 0 4 0" />
+                  </svg>
+                </span>
+                <div class="settings-skin-copy">
+                  <strong>{{
+                    selectedScript?.displayNames[locale.resolved.value] ?? selectedScript?.title
+                  }}</strong>
+                  <span v-if="theme.skinTokenCount.value !== null" class="text-sm text-muted">
+                    {{ t("settings.skinTokenSummary", { count: theme.skinTokenCount.value }) }}
+                  </span>
+                </div>
+                <button type="button" class="btn" @click="theme.toggleSkin">
+                  {{ theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin") }}
+                </button>
+              </div>
+              <div v-if="theme.warningCount.value" class="settings-skin-warning">
+                <svg class="i" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 4 21 19H3z" />
+                  <path d="M12 10v4M12 16.6v.1" />
+                </svg>
+                <span>{{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}</span>
+              </div>
+            </section>
             <p v-if="themeErrorMessage" role="status">{{ themeErrorMessage }}</p>
             <p v-if="skinErrorMessage" role="status">{{ skinErrorMessage }}</p>
-            <p v-else-if="theme.warningCount.value">
-              {{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}
-            </p>
             <fieldset class="settings-choice-group">
               <legend>{{ t("settings.language") }}</legend>
               <div class="settings-segmented">
@@ -293,34 +344,29 @@ function themeName(id: string, fallback: string): string {
           <section v-show="activeSection === 'api'" id="api" class="settings-section">
             <SettingsSectionHeading :title="t('settings.sections.api')" @close="emit('close')" />
             <div class="settings-form-grid">
-              <label>
+              <div class="settings-field">
                 {{ t("settings.provider") }}
-                <select
-                  v-model="product.providerId.value"
-                  :aria-label="t('settings.provider')"
+                <SelectMenu
+                  :model-value="product.providerId.value"
+                  :options="product.providerOptions.map((provider) => ({
+                    value: provider.id,
+                    label: provider.label,
+                  }))"
+                  :label="t('settings.provider')"
                   :disabled="product.busy.value"
-                >
-                  <option
-                    v-for="provider in product.providerOptions"
-                    :key="provider.id"
-                    :value="provider.id"
-                  >
-                    {{ provider.label }}
-                  </option>
-                </select>
-              </label>
-              <label>
+                  @update:model-value="product.providerId.value = $event"
+                />
+              </div>
+              <div class="settings-field">
                 {{ t("settings.model") }}
-                <select
-                  v-model="product.model.value"
-                  :aria-label="t('settings.model')"
+                <SelectMenu
+                  :model-value="product.model.value"
+                  :options="product.models.value.map((model) => ({ value: model.id, label: model.label }))"
+                  :label="t('settings.model')"
                   :disabled="product.busy.value"
-                >
-                  <option v-for="model in product.models.value" :key="model.id" :value="model.id">
-                    {{ model.label }}
-                  </option>
-                </select>
-              </label>
+                  @update:model-value="product.model.value = $event"
+                />
+              </div>
             </div>
             <div
               class="settings-key-card card"
@@ -372,18 +418,19 @@ function themeName(id: string, fallback: string): string {
               :title="t('settings.sections.gameplay')"
               @close="emit('close')"
             />
-            <label>
+            <div class="settings-field">
               {{ t("settings.script") }}
-              <select v-model="product.scriptId.value" :disabled="product.busy.value">
-                <option
-                  v-for="script in product.scripts.value"
-                  :key="script.scriptId"
-                  :value="script.scriptId"
-                >
-                  {{ script.displayNames[locale.resolved.value] ?? script.title }}
-                </option>
-              </select>
-            </label>
+              <SelectMenu
+                :model-value="product.scriptId.value"
+                :options="product.scripts.value.map((script) => ({
+                  value: script.scriptId,
+                  label: script.displayNames[locale.resolved.value] ?? script.title,
+                }))"
+                :label="t('settings.script')"
+                :disabled="product.busy.value"
+                @update:model-value="product.scriptId.value = $event"
+              />
+            </div>
             <fieldset class="settings-choice-group">
               <legend>{{ t("game.diceMode") }}</legend>
               <div class="settings-segmented">
@@ -504,9 +551,96 @@ function themeName(id: string, fallback: string): string {
               class="scenario-attributions"
               :aria-label="t('settings.credits')"
             >
-              <h4>{{ t("settings.credits") }}</h4>
-              <pre>{{ selectedScript.attributions }}</pre>
+              <section
+                v-for="document in attributionDocuments"
+                :key="document.id"
+                class="scenario-attribution-section"
+              >
+                <div class="scenario-attribution-heading">
+                  {{ document.heading ?? t("settings.credits") }}
+                </div>
+                <details class="scenario-attribution-document">
+                  <summary>{{ t("settings.viewFullAttribution") }}</summary>
+                  <div class="scenario-attribution-body">
+                    <template v-for="(block, index) in document.blocks" :key="index">
+                      <h6 v-if="block.kind === 'heading'">
+                        <template v-for="(part, partIndex) in block.parts" :key="partIndex">
+                          <a
+                            v-if="part.kind === 'link'"
+                            :href="part.href"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >{{ part.value }}</a>
+                          <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                          <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                          <template v-else>{{ part.value }}</template>
+                        </template>
+                      </h6>
+                      <p v-else-if="block.kind === 'paragraph'">
+                        <template v-for="(part, partIndex) in block.parts" :key="partIndex">
+                          <a
+                            v-if="part.kind === 'link'"
+                            :href="part.href"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >{{ part.value }}</a>
+                          <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                          <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                          <template v-else>{{ part.value }}</template>
+                        </template>
+                      </p>
+                      <ul v-else>
+                        <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
+                          <template v-for="(part, partIndex) in item" :key="partIndex">
+                            <a
+                              v-if="part.kind === 'link'"
+                              :href="part.href"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >{{ part.value }}</a>
+                            <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                            <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                            <template v-else>{{ part.value }}</template>
+                          </template>
+                        </li>
+                      </ul>
+                    </template>
+                  </div>
+                </details>
+              </section>
             </section>
+            <section
+              v-if="selectedScript?.scriptId === 'mistbell'"
+              class="scenario-resource-section"
+            >
+              <h4>{{ t("settings.resources") }}</h4>
+              <table class="scenario-resource-table">
+                <tbody>
+                  <tr>
+                    <td>{{ t("settings.stageArt") }}</td>
+                    <td class="text-muted">{{ t("settings.resourcePlaceholder") }}</td>
+                  </tr>
+                  <tr>
+                    <td>{{ t("settings.scriptSkin") }}</td>
+                    <td class="mono">
+                      {{ t("settings.skinFile") }}<template
+                        v-if="theme.skinTokenCount.value !== null"
+                      >
+                        · {{ theme.skinTokenCount.value }} {{ t("settings.tokens") }}
+                      </template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+          </section>
+
+          <section v-show="activeSection === 'shortcuts'" id="shortcuts" class="settings-section">
+            <SettingsSectionHeading
+              :title="t('settings.sections.shortcuts')"
+              @close="emit('close')"
+            />
+            <KeyboardShortcuts />
           </section>
         </div>
       </div>

@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ComposerPreview } from "../utils/ui-shell";
 import type { ScenePresenceSnapshot } from "../../../api/engine";
+import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const props = defineProps<{
   modelValue: string;
@@ -44,24 +45,27 @@ defineExpose({ focus });
     v-if="props.presenceHasScene"
     class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted"
   >
-    <label class="flex items-center gap-2">
+    <div class="flex items-center gap-2">
       {{ t("game.replyTo") }}
-      <select
+      <SelectMenu
         v-if="props.presenceReady"
-        :value="props.selectedCharacterId ?? ''"
+        :model-value="props.selectedCharacterId ?? ''"
+        :options="[
+          { value: '', label: t('game.replyToNarration'), marker: 'book' as const },
+          ...(props.presenceCharacters ?? []).map((character) => ({
+            value: character.id,
+            label: character.canonicalName,
+            marker: 'avatar' as const,
+          })),
+        ]"
+        :label="t('game.replyTo')"
+        :menu-title="t('game.replyTo')"
+        :footer-note="t('game.presenceNote')"
+        variant="recipient"
         :disabled="props.submitDisabled"
-        class="rounded-md border border-hairline bg-panel px-2 py-1 text-ink"
-        @change="emit('selectRecipient', ($event.target as HTMLSelectElement).value)"
-      >
-        <option value="">{{ t("game.replyToNarration") }}</option>
-        <option
-          v-for="character in props.presenceCharacters ?? []"
-          :key="character.id"
-          :value="character.id"
-        >
-          {{ character.canonicalName }}
-        </option>
-      </select>
+        placement="top"
+        @update:model-value="emit('selectRecipient', $event)"
+      />
       <span v-else-if="props.presenceLoading" role="status">{{ t("game.presenceLoading") }}</span>
       <span v-else-if="props.presenceUnavailable" role="status">
         {{ t("game.presenceUnavailable") }}
@@ -69,7 +73,7 @@ defineExpose({ focus });
           {{ t("common.retry") }}
         </button>
       </span>
-    </label>
+    </div>
   </div>
   <form class="flex items-end gap-2" @submit.prevent="emit('submit')">
     <textarea

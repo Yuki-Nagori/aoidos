@@ -54,7 +54,7 @@ describe("MemorySettingsPanel", () => {
     vi.mocked(saveMemoryScriptConfig).mockResolvedValue({ configVersion: 3 });
   });
 
-  it("shows application and scenario settings without a redundant outer disclosure", async () => {
+  it("keeps both policy groups visible and uses the segmented algorithm selector", async () => {
     const wrapper = mount(MemorySettingsPanel, {
       props: { scriptId: "mistbell" },
       global: { plugins: [i18n] },
@@ -62,11 +62,15 @@ describe("MemorySettingsPanel", () => {
     await flushPromises();
 
     expect(wrapper.element.tagName).toBe("DIV");
-    expect(wrapper.findAll("details")).toHaveLength(2);
-    expect(wrapper.findAll("summary").map((summary) => summary.text())).toEqual([
-      "Application defaults",
-      "Scenario overrides · mistbell",
-    ]);
+    expect(wrapper.findAll("details")).toHaveLength(0);
+    expect(wrapper.findAll(".memory-settings-group")).toHaveLength(2);
+    expect(wrapper.findAll('input[name="memory-app-algorithm"]')).toHaveLength(3);
+    expect(wrapper.findAll('input[type="number"]').length).toBeGreaterThan(10);
+    const algorithmOverrideLabel = wrapper.findAll("legend")[1]!.get("label");
+    const algorithmOverride = algorithmOverrideLabel.get('input[type="checkbox"]');
+    expect((algorithmOverride.element as HTMLInputElement).labels).toHaveLength(1);
+    await algorithmOverrideLabel.trigger("click");
+    expect((algorithmOverride.element as HTMLInputElement).checked).toBe(true);
     wrapper.unmount();
   });
 
@@ -144,7 +148,9 @@ describe("MemorySettingsPanel", () => {
       .findAll("button")
       .find((button) => button.text() === "Restore application inheritance")!
       .trigger("click");
-    expect(forms[1]!.get("select").element).toHaveProperty("value", "exponential");
+    expect((forms[1]!.get('input[type="radio"]:checked').element as HTMLInputElement).value).toBe(
+      "exponential",
+    );
     const inheritedBaseStrength = forms[1]!.find('input[type="number"]');
     expect((inheritedBaseStrength.element as HTMLInputElement).value).toBe("500000");
     expect((inheritedBaseStrength.element as HTMLInputElement).disabled).toBe(true);

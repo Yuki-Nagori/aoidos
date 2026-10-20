@@ -1,6 +1,6 @@
 # UI 风格规范
 
-更新日期：2026-10-19。定义 Aoidos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Aoidos 品牌调整）。状态：**基线已接线**——task 004 已把 app.css 按本规范落地（token 真源 + Tailwind v4 映射 + 多主题 + 星云背景）；025 的界面基础实现已接通，真实 WebView、辅助技术、DPI 与三平台验收仍待完成，偏差回写。整体界面视觉目标以用户维护的 `aoidos-art` 设计仓库为准，移植任务见 [052](../task/052-aoidos-art-vue-port.md)。
+更新日期：2026-10-20。定义 Aoidos 的目标设计语言，提炼自[Herta 调查](../research/001-herta.md)（风格基线数值取自其 `reference-ux.css`，可按 Aoidos 品牌调整）。状态：**基线已接线**——task 004 已把 app.css 按本规范落地（token 真源 + Tailwind v4 映射 + 多主题 + 星云背景）；025 的界面基础实现已接通，真实 WebView、辅助技术、DPI 与三平台验收仍待完成，偏差回写。整体界面视觉目标以用户维护的 `aoidos-art` 设计仓库为准，移植任务见 [052](../task/052-aoidos-art-vue-port.md)。
 
 ## 设计稿移植
 
@@ -19,6 +19,7 @@
 - 状态色的语义和色相固定；表格展示 light / dark 两套基线，其他主题可采用自己的亮度。皮肤不可覆盖状态色，不能另用 LED 蓝与活动紫制造两套口径。
 - 背景是签名的组成部分：多层 radial 星云渐变 + 底部 linear，画在 `body` 上预模糊一次（性能决策，不用逐帧 `backdrop-filter`）。
 - 表面是玻璃阶梯：半透明白（浅色）/ 深板岩（深色）+ hairline 边框（ink 按透明度）+ `inset 0 1px 0` 顶高光 + 柔和大阴影。
+- 设置抽屉和模态对话框按 `aoidos-art` 的 `--x-solid` 底层规则，在主题面板色下铺近不透明主题底色，避免舞台内容透过表单或对话框干扰阅读；普通卡片和对局面板继续使用半透明 `--panel`。
 
 ### 色板（按立绘微调）
 

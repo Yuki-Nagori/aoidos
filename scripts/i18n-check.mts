@@ -88,7 +88,7 @@ function staticTranslationKeys(source: string, path: string): string[] {
     if (
       ts.isPropertyAssignment(node) &&
       (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) &&
-      node.name.text === "key" &&
+      (node.name.text === "key" || node.name.text.endsWith("Key")) &&
       ts.isStringLiteralLike(node.initializer) &&
       en.has(node.initializer.text)
     ) {

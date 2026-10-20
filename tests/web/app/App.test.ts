@@ -15,7 +15,7 @@ describe("App", () => {
     delete document.documentElement.dataset.localeFallback;
   });
   it("展示正式入口，初始化不打开会话或发起生成", async () => {
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "llm_list_profiles") return { items: [] };
       if (command === "llm_get_key_status") return { set: true, hint: "1234" };
       if (command === "engine_list_scripts")
@@ -24,10 +24,13 @@ describe("App", () => {
             scriptId: "mistbell",
             title: "雾钟地窖",
             displayNames: { en: "Mistbell Cellar", "zh-Hans": "雾钟地窖" },
-            attributions: "CC BY 4.0",
+            attributions:
+              "# Script License\n\nCC BY 4.0\n\n# SRD Attribution\n\nWizards of the Coast",
           },
         ];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
+      if (command === "theme_set_preference")
+        return { version: 1, theme: (args as { theme?: string } | undefined)?.theme ?? "dark" };
       if (command === "store_get_ui_preferences")
         return { version: 1, panelPinned: false, diceMode: "manual" };
       if (command === "store_set_ui_preferences")
@@ -41,9 +44,14 @@ describe("App", () => {
       if (command === "theme_skin_load")
         return {
           scriptId: "mistbell",
-          status: "missing",
-          tokens: {},
-          warnings: [],
+          status: "valid",
+          tokens: {
+            "--accent": "#5cc8b4",
+            "--on-accent": "#102126",
+            "--accent-violet": "#a88bff",
+            "--accent-warm": "#f0924a",
+          },
+          warnings: [{ code: "protected-token", token: "--panel" }],
           warningsTruncated: false,
         };
       if (command === "locale_get_preference")
@@ -131,11 +139,11 @@ describe("App", () => {
     await wrapper.get('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
-    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(10);
+    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(11);
     const dialog = wrapper.get('[role="dialog"]');
     const focusable = Array.from(
       dialog.element.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex]:not([tabindex="-1"])',
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex]:not([tabindex="-1"])',
       ),
     ).filter((element) => {
       let parent: HTMLElement | null = element;
@@ -150,40 +158,40 @@ describe("App", () => {
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
     expect(document.activeElement).toBe(focusable.at(-1));
-    await wrapper.get('select[aria-label="Theme"]').trigger("keydown", {
+    await wrapper.get('.settings-theme-card[aria-label="Dark"]').trigger("keydown", {
       key: "Escape",
       isComposing: true,
     });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
     expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
-    expect(wrapper.get(".settings-form-grid").findAll("select")).toHaveLength(2);
-    const theme = wrapper.get('select[aria-label="Theme"]');
-    expect(theme.findAll("option").map((option) => option.text())).toEqual([
-      "Dark",
-      "Light",
-      "Light Purple",
-    ]);
-    const script = wrapper
-      .findAll("label")
-      .find((label) => label.text().includes("Scenario"))!
-      .get("select");
-    expect(script.findAll("option").map((option) => option.text())).toEqual(["Mistbell Cellar"]);
-    const model = wrapper.get('select[aria-label="Model"]');
-    expect(model.findAll("option").map((option) => option.text())).toEqual([
-      "DeepSeek V4.1 Flash",
-      "DeepSeek V4 Pro",
-    ]);
-    expect((model.element as HTMLSelectElement).value).toBe("deepseek-flash");
+    expect(wrapper.get(".settings-theme-field").findAll(".settings-theme-card")).toHaveLength(3);
+    const theme = wrapper.get('.settings-theme-card[aria-label="Dark"]');
+    expect(theme.attributes("aria-pressed")).toBe("true");
+    await wrapper.get('.settings-theme-card[aria-label="Light Purple"]').trigger("click");
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("theme_set_preference", { theme: "light-purple" }),
+    );
+    const script = wrapper.get('[role="combobox"][aria-label="Scenario"]');
+    expect(script.text()).toContain("Mistbell Cellar");
+    const model = wrapper.get('[role="combobox"][aria-label="Model"]');
+    expect(model.text()).toContain("DeepSeek V4.1 Flash");
     const language = wrapper.get('input[name="interface-language"][value="zh-Hans"]');
     await language.setValue();
     await vi.waitFor(() => {
-      expect(theme.findAll("option").map((option) => option.text())).toEqual([
-        "深色",
-        "浅色",
-        "浅紫",
-      ]);
-      expect(script.findAll("option").map((option) => option.text())).toEqual(["雾钟地窖"]);
+      expect(
+        wrapper.get('.settings-theme-card[aria-label="浅紫"]').attributes("aria-pressed"),
+      ).toBe("true");
+      expect(script.text()).toContain("雾钟地窖");
     });
+    expect(wrapper.get(".settings-skin-section .settings-skin-heading").text()).toContain(
+      "剧本皮肤",
+    );
+    expect(wrapper.get(".settings-skin .script-ic svg").classes()).toContain("i");
+    await vi.waitFor(() =>
+      expect(wrapper.get(".settings-skin-copy").text()).toContain("覆盖 4 个强调色 token"),
+    );
+    expect(wrapper.get(".settings-skin-warning").text()).toContain("剧本皮肤有 1 条兼容性提示。");
+    expect(wrapper.get(".settings-skin-warning svg").classes()).toContain("i");
     const skinSwitch = wrapper.get('[role="switch"][aria-label="剧本皮肤"]');
     expect(skinSwitch.attributes("aria-checked")).toBe("true");
     await skinSwitch.trigger("click");
@@ -191,6 +199,13 @@ describe("App", () => {
     await wrapper.get('.settings-nav button[aria-controls="scenario"]').trigger("click");
     expect(wrapper.get(".scenario-script-copy").text()).toContain("雾钟地窖");
     expect(wrapper.get(".scenario-attributions").text()).toContain("CC BY 4.0");
+    expect(
+      wrapper
+        .findAll(".scenario-attribution-section > .scenario-attribution-heading")
+        .map((heading) => heading.text()),
+    ).toEqual(["Script License", "SRD Attribution"]);
+    expect(wrapper.findAll(".scenario-resource-table tr")).toHaveLength(2);
+    expect(wrapper.get(".scenario-resource-table").text()).toContain("舞台图");
     await wrapper.get('.settings-nav button[aria-controls="gameplay"]').trigger("click");
     await wrapper.get('input[name="dice-mode"][value="auto"]').setValue();
     await vi.waitFor(() => {
@@ -199,7 +214,7 @@ describe("App", () => {
         diceMode: "auto",
       });
     });
-    await theme.trigger("keydown", { key: "Escape" });
+    await wrapper.get('[role="dialog"]').trigger("keydown", { key: "Escape" });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     await vi.waitFor(() =>
       expect(wrapper.get('button[aria-label="设置"]').element).toBe(document.activeElement),
@@ -230,6 +245,7 @@ describe("App", () => {
       "store_set_ui_preferences",
       "theme_get_preference",
       "theme_list",
+      "theme_set_preference",
       "theme_skin_load",
     ]);
     wrapper.unmount();

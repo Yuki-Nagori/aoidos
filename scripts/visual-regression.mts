@@ -78,7 +78,8 @@ const script = {
   scriptId: "mistbell",
   title: "雾钟地窖",
   displayNames: { "zh-Hans": "雾钟地窖", en: "Mistbell Cellar" },
-  attributions: "visual test fixture",
+  attributions:
+    "# Mistbell License\n\nReleased under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).\n\n# SRD Attribution\n\n## Scope\n\n- Preserve attribution.\n- Keep source references visible.",
 };
 const sourceCss = await readFile(resolve(root, "resources/scripts/mistbell/theme.css"), "utf8");
 const skinTokens = Object.fromEntries(
@@ -601,7 +602,7 @@ try {
     const { page, pageErrors } = await openWelcome(browser, viewport, {
       theme: "dark",
       locale: "en",
-      skin: false,
+      skin: true,
       skinTokens,
       themes,
       activeSession: true,
@@ -610,6 +611,18 @@ try {
     await page.locator(".game-stage").waitFor();
     await page.locator('.topbar button[aria-label="Settings"]').click();
     await page.getByRole("dialog").waitFor();
+    const modelChip = page.locator(".game-model-chip");
+    await modelChip.waitFor({ state: "attached" });
+    if (await modelChip.isVisible()) {
+      assert.equal(
+        await modelChip
+          .locator(".sep")
+          .first()
+          .evaluate((element) => getComputedStyle(element).width),
+        "1px",
+        "Provider and model names need a visible design separator",
+      );
+    }
 
     const layout = await measureSettings(page);
     const narrow = viewport.width <= baseline.layout.settings.narrowMaxWidth;
@@ -653,26 +666,179 @@ try {
       { id: "memory-list", target: "memory-query" },
       { id: "memory-pending", target: "memory-query" },
       { id: "scenario", target: "scenario" },
+      { id: "shortcuts", target: "shortcuts" },
     ];
     for (const [index, section] of sections.entries()) {
       const button = page.locator(".settings-nav button").nth(index);
       await button.click();
       assert.equal(await button.getAttribute("aria-current"), "page");
-      if (section.id === "billing")
+      if (section.id === "billing") {
         await page.locator("#billing .billing-summary-card").first().waitFor();
-      if (section.id === "price") await page.locator("#billing .billing-price-form").waitFor();
+        const divider = page.locator("#billing hr").first();
+        const borderColor = await divider.evaluate(
+          (element) => getComputedStyle(element).borderTopColor,
+        );
+        const hairline = await page
+          .locator("html")
+          .evaluate((element) => getComputedStyle(element).getPropertyValue("--hairline").trim());
+        assert.equal(borderColor, hairline, "Billing dividers must use the theme hairline token");
+      }
+      if (section.id === "price") {
+        const form = page.locator("#billing .billing-price-form");
+        await form.waitFor();
+        assert.equal(
+          await form.locator(".billing-price-base-grid .billing-price-field").count(),
+          2,
+        );
+        assert.equal(
+          await form
+            .locator(".billing-price-rates-grid")
+            .first()
+            .locator(".billing-price-field")
+            .count(),
+          3,
+        );
+        const rateColumns = await form
+          .locator(".billing-price-rates-grid")
+          .first()
+          .evaluate((element) => {
+            const columns = Array.from(element.children).map((child) =>
+              Math.round(child.getBoundingClientRect().left),
+            );
+            return new Set(columns).size;
+          });
+        assert.equal(
+          rateColumns,
+          viewport.width <= 720 ? 2 : 3,
+          `Price rates must follow the design's ${viewport.width <= 720 ? "two" : "three"}-column layout at ${viewport.width}px`,
+        );
+        const overflows = await form.evaluate((element) => {
+          const right = element.getBoundingClientRect().right;
+          return Array.from(element.querySelectorAll("input")).some(
+            (input) => input.getBoundingClientRect().right > right + 1,
+          );
+        });
+        assert.equal(overflows, false, "Price inputs must stay inside the form grid");
+      }
+      if (section.id === "scenario") {
+        const credits = page.locator("#scenario .scenario-attribution-document");
+        assert.equal(await credits.count(), 2, "Each bundled notice should have its own card");
+        assert.equal(await page.locator("#scenario .scenario-attributions pre").count(), 0);
+        assert.equal(await page.locator("#scenario .scenario-resource-table tr").count(), 2);
+        const resourceText =
+          (await page.locator("#scenario .scenario-resource-table").textContent()) ?? "";
+        assert.match(resourceText, /theme\.css/);
+        assert.match(resourceText, /4 tokens/);
+        await credits.first().locator("summary").click();
+        await page
+          .locator('#scenario a[href="https://creativecommons.org/licenses/by/4.0/"]')
+          .waitFor();
+      }
       if (section.id === "balance") {
         await page.getByRole("button", { name: /query deepseek balance/i }).click();
         await page.locator("#billing .billing-balance-card").waitFor();
       }
       if (section.id === "memory") {
-        await page.locator("#memory summary").nth(0).click();
-        await page.locator("#memory summary").nth(1).click();
         await page.locator("#memory input[type=number]").first().waitFor();
+        assert.equal(await page.locator("#memory details").count(), 0);
+        assert.equal(await page.locator("#memory .memory-settings-group").count(), 2);
+        assert.equal(await page.locator('#memory input[name="memory-app-algorithm"]').count(), 3);
+        const memoryColumns = await page
+          .locator("#memory .memory-parameter-grid")
+          .first()
+          .evaluate((element) => {
+            const columns = Array.from(element.children).map((child) =>
+              Math.round(child.getBoundingClientRect().left),
+            );
+            return new Set(columns).size;
+          });
+        assert.equal(
+          memoryColumns,
+          2,
+          "Memory parameters remain two columns at every design viewport",
+        );
       }
       if (section.id === "memory-list")
         await page.locator('#memory-query button[aria-controls^="memory-entry-"]').waitFor();
       if (section.id === "memory-pending") await page.locator("#memory-query article").waitFor();
+      if (section.id === "appearance") {
+        assert.equal(
+          await page.locator("select").count(),
+          0,
+          "App selectors must use the custom menu",
+        );
+        const themeCards = page.locator(".settings-theme-card");
+        assert.equal(
+          await themeCards.count(),
+          themes.length,
+          "Theme cards follow the Rust catalog",
+        );
+        assert.equal(await page.locator('.settings-theme-card[aria-pressed="true"]').count(), 1);
+        const previews = await page.locator(".settings-theme-preview").evaluateAll((elements) =>
+          elements.map((element) => ({
+            accent: getComputedStyle(element).getPropertyValue("--accent").trim(),
+            height: getComputedStyle(element).height,
+            cardInk: getComputedStyle(element.parentElement!).color,
+            labelInk: getComputedStyle(
+              element.parentElement!.querySelector(".settings-theme-name")!,
+            ).color,
+            barWidthRatio:
+              element.children[1]!.getBoundingClientRect().width /
+              element.children[0]!.getBoundingClientRect().width,
+            barColorsDistinct:
+              getComputedStyle(element.children[0]!).backgroundColor !==
+              getComputedStyle(element.children[1]!).backgroundColor,
+          })),
+        );
+        assert.equal(
+          new Set(previews.map(({ accent }) => accent)).size,
+          themes.length,
+          "Every theme card previews its own accent",
+        );
+        assert.ok(
+          previews.every(({ height }) => height === "44px"),
+          "Theme previews are 44px high",
+        );
+        assert.ok(
+          previews.every(
+            ({ barWidthRatio, barColorsDistinct }) =>
+              Math.abs(barWidthRatio - 0.6) < 0.03 && barColorsDistinct,
+          ),
+          "Theme preview bars use 40%/24% widths and distinct accent tokens",
+        );
+        assert.equal(
+          new Set(previews.map(({ cardInk, labelInk }) => `${cardInk}/${labelInk}`)).size,
+          1,
+          "Card frames and labels retain the selected application theme",
+        );
+        const themeColumns = await themeCards.evaluateAll(
+          (cards) =>
+            new Set(cards.map((card) => Math.round(card.getBoundingClientRect().left))).size,
+        );
+        assert.equal(
+          themeColumns,
+          viewport.width <= 720 ? 2 : 3,
+          `Theme cards use the design grid at ${viewport.width}px`,
+        );
+        await page.locator('.settings-theme-card[aria-label="Light Purple"]').click();
+        await page.waitForFunction(() => document.documentElement.dataset.theme === "light-purple");
+        await page.locator('.settings-theme-card[aria-label="Dark"]').click();
+        await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+      }
+      if (section.id === "shortcuts") {
+        await page.locator("#shortcuts .shortcut-row").first().waitFor();
+        assert.equal(await page.locator("#shortcuts .shortcut-search").count(), 0);
+        assert.ok(await page.locator("#shortcuts .shortcut-lock").count());
+        await page.getByRole("button", { name: /view reference|查看速查表/i }).click();
+        const shortcutDialog = page.getByRole("dialog", { name: /keyboard shortcuts|快捷键/i });
+        await shortcutDialog.waitFor();
+        assert.ok(await shortcutDialog.locator('input[type="search"]').count());
+        assert.ok(await shortcutDialog.locator(".shortcut-row .tag").count());
+        await shortcutDialog.locator('input[type="search"]').fill("Send");
+        assert.equal(await shortcutDialog.locator(".shortcut-row").count(), 1);
+        await shortcutDialog.press("Escape");
+        await shortcutDialog.waitFor({ state: "detached" });
+      }
       const sectionLayout = await measureSettings(page);
       assert.equal(
         sectionLayout.visibleSections,
@@ -705,7 +871,7 @@ try {
   }
 
   console.log(
-    `欢迎页与设置视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个欢迎页窗口、3 个真实会话设置窗口、10 个分区（含账单 / 记忆数据）和 2 种失败状态。`,
+    `欢迎页与设置视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个欢迎页窗口、3 个真实会话设置窗口、11 个分区（含账单 / 记忆数据 / 快捷键）和 2 种失败状态。`,
   );
 } finally {
   await browser?.close();

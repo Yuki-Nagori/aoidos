@@ -3,6 +3,7 @@ import { ref, toRef } from "vue";
 import ActionComposer from "./ActionComposer.vue";
 import GameStage from "./GameStage.vue";
 import RecordFeed from "./RecordFeed.vue";
+import SelectMenu from "../../../shared/components/SelectMenu.vue";
 import type { OpenedSession } from "../../../api/engine";
 import type { useUiPreferences } from "../composables/useUiPreferences";
 import { useGameWorkspace } from "../composables/useGameWorkspace";
@@ -258,19 +259,19 @@ defineExpose({ reconnect });
           </dialog>
           <div v-if="panel.state.value !== 'hover'" class="border-t border-hairline p-3">
             <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-              <label class="flex items-center gap-2">
+              <div class="flex items-center gap-2">
                 {{ t("game.diceMode") }}
-                <select
-                  :value="preferences.diceMode.value"
+                <SelectMenu
+                  :model-value="preferences.diceMode.value"
+                  :options="[
+                    { value: 'manual', label: t('game.manual') },
+                    { value: 'auto', label: t('game.automatic') },
+                  ]"
+                  :label="t('game.diceMode')"
                   :disabled="preferences.saving.value"
-                  @change="preferences.setDiceMode(
-                    ($event.target as HTMLSelectElement).value as 'manual' | 'auto',
-                  )"
-                >
-                  <option value="manual">{{ t("game.manual") }}</option>
-                  <option value="auto">{{ t("game.automatic") }}</option>
-                </select>
-              </label>
+                  @update:model-value="preferences.setDiceMode($event as 'manual' | 'auto')"
+                />
+              </div>
               <span v-if="preferences.saveError.value" role="status">{{
                 t("game.preferenceSaveFailed")
               }}</span>

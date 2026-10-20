@@ -549,7 +549,7 @@ onBeforeUnmount(() => {
       <article
         v-for="question in questions"
         :key="question.questionId"
-        class="grid gap-2 rounded border border-line p-3"
+        class="grid gap-2 rounded border border-hairline p-3"
       >
         <p>{{ questionName(question) }}</p>
         <p v-if="question.status !== 'pending'" class="text-sm text-muted">
@@ -626,7 +626,7 @@ onBeforeUnmount(() => {
       <article
         v-for="entry in entries"
         :key="entry.entryId"
-        class="grid gap-2 rounded border border-line p-3"
+        class="grid gap-2 rounded border border-hairline p-3"
       >
         <button
           type="button"

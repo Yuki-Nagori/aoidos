@@ -48,7 +48,8 @@ const themeCss = readFileSync(
 
 /** 花括号配平截取选择器规则块正文；找不到时报错而不是静默返回空。 */
 function blockOf(selector: string): string {
-  const start = themeCss.indexOf(selector);
+  const marker = selector.startsWith("[data-theme=") ? `\n${selector} {` : selector;
+  const start = themeCss.indexOf(marker);
   if (start < 0) throw new Error(`选择器缺失：${selector}`);
   const open = themeCss.indexOf("{", start);
   let depth = 0;
@@ -81,7 +82,7 @@ const themeNames = readdirSync(themeDirectory)
 const themes = new Map(
   themeNames.map((name) => [name, varsOf(blockOf(`:root[data-theme="${name}"]`))]),
 );
-const defaultTheme = themeCss.match(/:root,\s*:root\[data-theme="([a-z0-9-]+)"\]\s*\{/)?.[1];
+const defaultTheme = themeCss.match(/:root,\s*:root\[data-theme="([a-z0-9-]+)"\]/)?.[1];
 
 function themeInlineBlock(): string {
   const start = css.indexOf("@theme inline {");
@@ -104,6 +105,15 @@ describe("token 目录与 app.css 互校", () => {
       for (const { name } of CATALOG) {
         expect(vars.has(name), `${themeName} 缺少 ${name}`).toBe(true);
       }
+    }
+  });
+
+  it("将主题 token 同时提供给文档根节点和主题预览卡片", () => {
+    for (const name of themeNames) {
+      expect(themeCss).toContain(`\n[data-theme="${name}"] {`);
+      expect(varsOf(blockOf(`:root[data-theme="${name}"]`))).toEqual(
+        varsOf(blockOf(`[data-theme="${name}"]`)),
+      );
     }
   });
 
@@ -133,7 +143,7 @@ describe("token 目录与 app.css 互校", () => {
   it("生成选择器覆盖所有内置主题，并保持深色为默认主题", () => {
     expect(defaultTheme).toBe("dark");
     expect(themeNames).toContain(defaultTheme);
-    const selectors = [...themeCss.matchAll(/:root\[data-theme="([a-z0-9-]+)"\]\s*\{/g)].map(
+    const selectors = [...themeCss.matchAll(/:root\[data-theme="([a-z0-9-]+)"\]/g)].map(
       (match) => match[1],
     );
     expect([...selectors].sort()).toEqual([...themeNames].sort());
@@ -154,5 +164,139 @@ describe("token 目录与 app.css 互校", () => {
       /prefers-reduced-motion:\s*reduce[\s\S]*?\.record-feed\s*\{[\s\S]*?scroll-behavior:\s*auto/,
     );
     expect(css).not.toMatch(/\.record-feed\s*\{[^}]*scroll-behavior:\s*smooth/);
+  });
+
+  it("为设置抽屉和模态框使用不透出舞台的主题底层", () => {
+    expect(css).toContain("--overlay-solid: var(--panel)");
+    expect(css).toContain(':root[data-theme="dark"]');
+    expect(css).toContain(':root[data-theme="light"]');
+    expect(css).toContain(':root[data-theme="light-purple"]');
+    for (const selector of [".settings-dialog", ".shortcut-dialog", ".confirmation-card"]) {
+      const block = css.match(
+        new RegExp(`${selector.replaceAll(".", "\\.")}\\s*\\{([^}]+)\\}`),
+      )?.[1];
+      expect(block, `${selector} 缺少模态面板底层`).toContain(
+        "background: linear-gradient(var(--panel), var(--panel)), var(--overlay-solid)",
+      );
+    }
+  });
+
+  it("选择器铺满字段宽度，并沿用设计稿的主题遮罩与浅色记录面板", () => {
+    const trigger = css.match(/\.select-menu \.select-menu-trigger\s*\{([^}]+)\}/)?.[1];
+    expect(trigger).toMatch(/width:\s*100%/);
+
+    for (const [theme, color] of [
+      ["dark", "rgba(4, 8, 12, 0.55)"],
+      ["light", "rgba(30, 40, 50, 0.25)"],
+      ["light-purple", "rgba(40, 36, 60, 0.28)"],
+    ]) {
+      expect(css).toContain(`:root[data-theme="${theme}"]`);
+      expect(css).toContain(`--overlay-scrim: ${color}`);
+    }
+
+    const settingsBackdrop = css.match(/\.settings-backdrop\s*\{([^}]+)\}/)?.[1];
+    expect(settingsBackdrop).toContain("var(--overlay-scrim) 70%, transparent");
+    expect(settingsBackdrop).not.toContain("opacity:");
+    expect(settingsBackdrop).not.toContain("backdrop-filter");
+    expect(css).toMatch(
+      /:root\[data-theme="light"\] \.dialogue-panel\s*\{[^}]*background:\s*linear-gradient\(var\(--panel\), var\(--panel\)\), var\(--overlay-solid\)/,
+    );
+  });
+
+  it("主题卡片几何与 aoidos-art 预览规格一致", () => {
+    const grid = css.match(/\.settings-theme-grid\s*\{([^}]+)\}/)?.[1];
+    expect(grid).toContain("grid-template-columns: repeat(3, minmax(0, 1fr))");
+    expect(grid).toContain("gap: 0.625rem");
+    const preview = css.match(/\.settings-theme-preview\s*\{([^}]+)\}/)?.[1];
+    expect(preview).toContain("height: 2.75rem");
+    expect(preview).toContain("background: var(--app-bg)");
+    expect(css).toMatch(/\.settings-theme-grid\s*\{[^}]*repeat\(2, minmax\(0, 1fr\)\)/);
+  });
+
+  it("剧本皮肤按设计分开标题开关与剧本信息卡", () => {
+    const component = readFileSync(
+      resolve(__dirname, "../../src-web/app/components/SetupPanel.vue"),
+      "utf8",
+    );
+    expect(component).toContain('class="settings-skin-section"');
+    expect(component).toContain('class="settings-skin-heading"');
+    expect(component).toContain('class="settings-skin card"');
+    expect(component).toContain('class="settings-skin-copy"');
+    expect(component).toContain('class="settings-skin-warning"');
+    expect(css).toMatch(/\.settings-skin-section\s*\{[^}]*gap:\s*0\.625rem/);
+    expect(css).toMatch(/\.settings-skin \.script-ic\s*\{[^}]*width:\s*2rem/);
+    expect(css).toMatch(
+      /\.settings-skin-warning\s*\{[^}]*border: 1px solid color-mix\([^;]+\);[^}]*background: color-mix\([^;]+\);[^}]*padding: 0\.625rem 0\.75rem/,
+    );
+  });
+
+  it("为快捷键、分段选项、开关和记忆参数保留设计稿的尺寸与视觉状态", () => {
+    const kbd = css.match(/:where\(\.kbd\)\s*\{([^}]+)\}/)?.[1];
+    expect(kbd).toContain("height: 1.125rem");
+    expect(kbd).toContain("border-radius: 0.3125rem");
+
+    const segmented = css.match(/\.settings-segmented\s*\{([^}]+)\}/)?.[1];
+    expect(segmented).toContain("gap: 0.1875rem");
+    expect(segmented).toContain("padding: 0.1875rem");
+    expect(segmented).toContain("background: var(--field-surface)");
+    const selected = css.match(/\.settings-segmented label\.is-selected\s*\{([^}]+)\}/)?.[1];
+    expect(selected).toContain("color: var(--accent)");
+    expect(selected).toContain("40%, transparent");
+
+    const toggle = css.match(/\.settings-switch\s*\{([^}]+)\}/)?.[1];
+    expect(toggle).toContain("width: 1.875rem");
+    expect(toggle).toContain("height: 1.125rem");
+    const knob = css.match(/\.settings-switch span\s*\{([^}]+)\}/)?.[1];
+    expect(knob).toContain("width: 0.75rem");
+    expect(knob).toContain("height: 0.75rem");
+
+    const numberInput = css.match(/\.settings-section \.memory-number-input\s*\{([^}]+)\}/)?.[1];
+    expect(numberInput).toContain("min-height: 2.125rem");
+    expect(numberInput).toContain("var(--field-surface)");
+    expect(numberInput).toContain("font-variant-numeric: tabular-nums");
+
+    expect(css).toMatch(
+      /\.settings-section\s+:where\(input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="search"\]\)\)/,
+    );
+
+    const shortcutDialog = css.match(/\.shortcut-dialog\s*\{([^}]+)\}/)?.[1];
+    expect(shortcutDialog).toContain("width: min(51.25rem, 100%)");
+    expect(shortcutDialog).toContain("calc(100dvh - 4.5rem)");
+  });
+
+  it("为顶栏身份分隔符和设置表单输入保留有效布局", () => {
+    const chip = css.match(/\.chip\s*\{([^}]+)\}/)?.[1];
+    expect(chip).toContain("display: inline-flex");
+    expect(chip).toContain("gap: 0.375rem");
+
+    const separator = css.match(/\.chip \.sep\s*\{([^}]+)\}/)?.[1];
+    expect(separator).toContain("width: 1px");
+    expect(separator).toContain("height: 0.75rem");
+
+    const field = css.match(
+      /\.settings-section\s+:where\(input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="search"\]\)\)\s*\{([^}]+)\}/,
+    )?.[1];
+    expect(field).toContain("width: 100%");
+    expect(field).toContain("min-width: 0");
+
+    const segmentedOption = css.match(/\.settings-segmented label\s*\{([^}]+)\}/)?.[1];
+    expect(segmentedOption).toContain("min-height: 1.5rem");
+
+    const memoryGrid = css.match(/\.memory-parameter-grid\s*\{([^}]+)\}/)?.[1];
+    expect(memoryGrid).toContain("repeat(2, minmax(0, 1fr))");
+    const priceBase = css.match(/\.billing-price-base-grid\s*\{([^}]+)\}/)?.[1];
+    expect(priceBase).toContain("repeat(2, minmax(0, 1fr))");
+    expect(css).toMatch(
+      /\.billing-price-rates-grid\s*\{\s*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    );
+
+    for (const file of [
+      "../../src-web/features/billing/components/BillingPanel.vue",
+      "../../src-web/features/memory/components/MemoryQueryPanel.vue",
+    ]) {
+      const component = readFileSync(resolve(__dirname, file), "utf8");
+      expect(component).not.toContain("border-line");
+      expect(component).toContain("border-hairline");
+    }
   });
 });

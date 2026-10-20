@@ -32,6 +32,7 @@ export function useTheme(scriptId: Ref<string>) {
     invalidPreference: "invalidPreference",
     themeUnavailable: "themeUnavailable",
   } as const;
+  const skinTokenCount = ref<number | null>(null);
   const bootstrapFallback =
     bootstrap?.version === 1 && bootstrap.fallbackReason
       ? fallbackMessages[bootstrap.fallbackReason]
@@ -149,6 +150,7 @@ export function useTheme(scriptId: Ref<string>) {
   async function loadSkinFor(script: string, epoch: number): Promise<void> {
     if (script !== "mistbell") {
       skinError.value = "";
+      skinTokenCount.value = null;
       return;
     }
     try {
@@ -157,11 +159,13 @@ export function useTheme(scriptId: Ref<string>) {
       skinError.value = "";
       cache = result;
       warningCount.value = result.warnings.length + Number(result.warningsTruncated);
+      skinTokenCount.value = result.status === "valid" ? Object.keys(result.tokens).length : null;
       applySkin(result);
     } catch {
       if (disposed || epoch !== generation) return;
       clearSheet();
       skinError.value = "readFailed";
+      skinTokenCount.value = null;
     }
   }
 
@@ -191,6 +195,7 @@ export function useTheme(scriptId: Ref<string>) {
       clearSheet();
       skinError.value = "";
       warningCount.value = 0;
+      skinTokenCount.value = null;
       requestSkinLoad(script, generation);
     },
     { immediate: true },
@@ -251,6 +256,7 @@ export function useTheme(scriptId: Ref<string>) {
     themeError,
     skinError,
     warningCount,
+    skinTokenCount,
     setTheme,
     toggleSkin,
   };

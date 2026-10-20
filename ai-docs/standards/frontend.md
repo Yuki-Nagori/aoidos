@@ -1,6 +1,6 @@
 # 前端约定
 
-更新日期：2026-10-19。除标注官方依据外均为项目约定。
+更新日期：2026-10-20。除标注官方依据外均为项目约定。
 
 ## 逻辑归属
 
@@ -19,6 +19,8 @@ Composable 遵循 [Vue 官方约定](https://vuejs.org/guide/reusability/composa
 ## SFC 与类型
 
 组件一律 `<script setup lang="ts">`；纯类型依赖用 `import type { Foo }`（Biome `useImportType` 强制分离类型导入）；函数写显式返回类型，ref 给显式初值。模板内避免 `<img src="/...">` 这类运行时资产解析；简单图标用内联 SVG，复杂插画通过 Vite 静态 import 导入并在 happy-dom 中验证。
+
+产品选择器统一使用 `src-web/shared/components/SelectMenu.vue` 的应用内 listbox，避免暴露系统原生 `<select>` 菜单造成跨平台外观偏差。控件须保留 combobox / listbox 语义、方向键导航、禁用项跳过、Escape 取消和外部点击关闭；特定场景通过 props 提供设计稿所需的图标、键帽提示与说明，不另写操作系统分支。
 
 ## 测试
 

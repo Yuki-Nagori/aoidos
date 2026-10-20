@@ -7,6 +7,7 @@ import type { useBilling } from "../composables/useBilling";
 import { summarizeRunUsage } from "../utils/run-usage";
 import { billingErrorDescriptor } from "../utils/billing-error";
 import { formatPeakSchedule } from "../utils/price-schedule";
+import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const { t } = useI18n();
 const props = defineProps<{
@@ -161,7 +162,7 @@ const billingErrorMessage = computed(() => {
         <article
           v-for="item in billing.period.value?.items"
           :key="`${item.providerId}:${item.currency}:${item.modelId}`"
-          class="rounded border border-line p-3"
+          class="rounded border border-hairline p-3"
         >
           <h3>
             {{
@@ -220,12 +221,12 @@ const billingErrorMessage = computed(() => {
         >
           {{ t("billing.refreshUsage") }}
         </button>
-        <hr class="my-2 border-line" />
+        <hr class="my-2 border-hairline" />
         <h2 class="font-semibold">{{ t("billing.requests") }}</h2>
         <article
           v-for="item in billing.requests.value?.items"
           :key="item.requestId"
-          class="rounded border border-line p-3"
+          class="rounded border border-hairline p-3"
         >
           <h3>
             {{
@@ -286,7 +287,7 @@ const billingErrorMessage = computed(() => {
           <!-- biome-ignore lint/a11y/useSemanticElements: This groups preview status and controls, not form fields. -->
           <div
             v-if="billing.backfillPreview.value?.requestId === item.requestId"
-            class="grid gap-2 rounded border border-line p-3"
+            class="grid gap-2 rounded border border-hairline p-3"
             role="group"
           >
             <p>
@@ -395,7 +396,7 @@ const billingErrorMessage = computed(() => {
             {{ t("billing.loadMore") }}
           </button>
         </div>
-        <hr class="my-2 border-line" />
+        <hr class="my-2 border-hairline" />
         <h2 class="font-semibold">
           {{ t("billing.monthly", { month: billing.monthly.value?.month ?? "—" }) }}
         </h2>
@@ -406,7 +407,7 @@ const billingErrorMessage = computed(() => {
         <article
           v-for="item in billing.monthly.value?.items"
           :key="`month:${item.providerId}:${item.currency}:${item.modelId}`"
-          class="rounded border border-line p-3"
+          class="rounded border border-hairline p-3"
         >
           <h3>
             {{
@@ -468,49 +469,61 @@ const billingErrorMessage = computed(() => {
               })
             }}
           </p>
+          <p class="billing-price-note">{{ t("billing.priceImmutableNote") }}</p>
         </div>
         <span role="status" class="billing-price-status">
           {{ billing.priceReady.value ? t("billing.priceReady") : t("billing.priceMissing") }}
         </span>
       </div>
       <form class="billing-price-form grid gap-3" @submit.prevent="billing.savePrice">
-        <label>
-          {{ t("billing.currency") }}
-          <select v-model="billing.priceCurrency.value">
-            <option value="CNY">{{ t("billing.currencyCny") }}</option>
-            <option value="USD">{{ t("billing.currencyUsd") }}</option>
-          </select>
-        </label>
-        <label>
-          {{ t("billing.unitTokens") }}
-          <input v-model="billing.unitTokens.value" inputmode="numeric" autocomplete="off" />
-        </label>
-        <label>
-          {{ t("billing.inputUncached") }}
-          <input v-model="billing.inputUncached.value" inputmode="decimal" autocomplete="off" />
-        </label>
-        <label>
-          {{ t("billing.inputCached") }}
-          <input v-model="billing.inputCached.value" inputmode="decimal" autocomplete="off" />
-        </label>
-        <label>
-          {{ t("billing.inputCachedWrite") }}
-          <input
-            v-model="billing.inputCachedWrite.value"
-            inputmode="decimal"
-            autocomplete="off"
-          />
-        </label>
-        <label>
-          {{ t("billing.output") }}
-          <input v-model="billing.output.value" inputmode="decimal" autocomplete="off" />
-        </label>
+        <div class="billing-price-base-grid">
+          <div class="billing-price-field">
+            <span>{{ t("billing.currency") }}</span>
+            <SelectMenu
+              :model-value="billing.priceCurrency.value"
+              :options="[
+                { value: 'CNY', label: t('billing.currencyCny') },
+                { value: 'USD', label: t('billing.currencyUsd') },
+              ]"
+              :label="t('billing.currency')"
+              @update:model-value="billing.priceCurrency.value = $event"
+            />
+          </div>
+          <label class="billing-price-field">
+            <span>{{ t("billing.unitTokens") }}</span>
+            <input v-model="billing.unitTokens.value" inputmode="numeric" autocomplete="off" />
+          </label>
+        </div>
+        <div class="billing-price-rates-grid">
+          <label class="billing-price-field">
+            <span>{{ t("billing.inputUncached") }}</span>
+            <input v-model="billing.inputUncached.value" inputmode="decimal" autocomplete="off" />
+          </label>
+          <label class="billing-price-field">
+            <span>{{ t("billing.inputCached") }}</span>
+            <input v-model="billing.inputCached.value" inputmode="decimal" autocomplete="off" />
+          </label>
+          <label class="billing-price-field">
+            <span>{{ t("billing.inputCachedWrite") }}</span>
+            <input
+              v-model="billing.inputCachedWrite.value"
+              inputmode="decimal"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+        <div class="billing-price-rates-grid">
+          <label class="billing-price-field">
+            <span>{{ t("billing.output") }}</span>
+            <input v-model="billing.output.value" inputmode="decimal" autocomplete="off" />
+          </label>
+        </div>
         <fieldset
           v-if="billing.requiresScheduledPrice.value"
-          class="billing-scheduled-prices grid gap-3"
+          class="billing-scheduled-prices"
         >
           <legend>{{ t("billing.goPeakPrices") }}</legend>
-          <p>
+          <p class="note">
             {{
               t("billing.goPeakSchedule", {
                 timeZone: billing.monthly.value?.timeZone ?? "UTC",
@@ -529,37 +542,39 @@ const billingErrorMessage = computed(() => {
               })
             }}
           </p>
-          <label>
-            {{ t("billing.inputUncached") }}
-            <input
-              v-model="billing.peakInputUncached.value"
-              inputmode="decimal"
-              autocomplete="off"
-            />
-          </label>
-          <label>
-            {{ t("billing.inputCached") }}
-            <input
-              v-model="billing.peakInputCached.value"
-              inputmode="decimal"
-              autocomplete="off"
-            />
-          </label>
-          <label>
-            {{ t("billing.inputCachedWrite") }}
-            <input
-              v-model="billing.peakInputCachedWrite.value"
-              inputmode="decimal"
-              autocomplete="off"
-            />
-          </label>
-          <label>
-            {{ t("billing.output") }}
-            <input v-model="billing.peakOutput.value" inputmode="decimal" autocomplete="off" />
-          </label>
+          <div class="billing-price-rates-grid">
+            <label class="billing-price-field">
+              <span>{{ t("billing.inputUncached") }}</span>
+              <input
+                v-model="billing.peakInputUncached.value"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+            </label>
+            <label class="billing-price-field">
+              <span>{{ t("billing.inputCached") }}</span>
+              <input
+                v-model="billing.peakInputCached.value"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+            </label>
+            <label class="billing-price-field">
+              <span>{{ t("billing.inputCachedWrite") }}</span>
+              <input
+                v-model="billing.peakInputCachedWrite.value"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+            </label>
+            <label class="billing-price-field">
+              <span>{{ t("billing.output") }}</span>
+              <input v-model="billing.peakOutput.value" inputmode="decimal" autocomplete="off" />
+            </label>
+          </div>
         </fieldset>
-        <label>
-          {{ t("billing.sourceUrl") }}
+        <label class="billing-price-field">
+          <span>{{ t("billing.sourceUrl") }}</span>
           <input v-model="billing.sourceUrl.value" type="url" autocomplete="off" />
         </label>
         <button
