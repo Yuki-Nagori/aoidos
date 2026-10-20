@@ -28,6 +28,7 @@
 - 按 layering.md 目标图新增无 Tauri 的 `aoidos-app`，迁移共享产品装配、profile / 凭据冻结和对局操作；选择依赖图无环、职责最小的 crate 边界，不把业务逻辑放进 CLI 或 Tauri 命令。
 - 添加 `aoidos-cli`：复用同一存储、profile、OS 凭据库、Provider、Engine、回合恢复和计费端口，提供可脚本化命令及可交互 TUI。
 - TUI 可列出剧本与 profile、开始 / 恢复周目、编辑并显式提交首个建议行动、读取流式正文和已提交记录、显示阶段 / 失败码 / 原币账本，并提供已有的取消 / 显式恢复操作。
+- TUI 的可点击控件与键盘焦点映射到同一组动作，至少支持鼠标选择、Tab / 方向键移动、Enter 执行、Esc 返回；终端不支持鼠标时仍可完整键盘操作。交互拆为输入动作、运行时效果和状态更新，渲染组件不直接操作存储、凭据或 Provider。设计取舍见 [Grok Build TUI 调查](../research/003-grok-build-tui.md)。
 - 为 Mistbell 提供明确、可本地化的首行动建议；建议是可编辑的玩家输入，不是 system prompt，不自动发送，不改变记录身份。
 - 修复预算预留输入上界与实际请求的口径不一致问题；输入预留必须来自可证明的供应商 token 上界 / 保守系数，不能把字符估算硬限直接视为 token 上限。无法可靠估算时依 035 回退到模型输入硬限；若改用更小上界，必须由发送前强制请求限制保证。输出按冻结请求的实际 `max_tokens` 预留；安全余量、估算误差与校准暂停语义须与 035 / 006 保持一致并有边界测试。
 - 保留真实 API 的手动验收入口；必须展示将使用的 profile、模型、币种、局限额，并要求用户显式确认。密钥只经 OS 凭据库读取 / 写入，不进入参数、终端回显、日志或历史记录。
@@ -39,12 +40,13 @@
 
 - 已有的 `aoidos-engine::game::product::Product`、`ProfileFactory`、`runtime::Service`、`LedgerBudgetPort`、Provider 与 OS credential adapter 是复用基础；当前 `SavedProfiles` / profile 冻结装配在 `src-tauri`，按 layering.md 提取到 `aoidos-app`，入口只注入数据路径和平台交互，不允许反向依赖。
 - TUI 框架与终端事件依赖需核对跨平台能力、维护状态及仓库 toolchain 兼容后再选；不得为了 UI 引入与业务运行无关的大型依赖。
+- Grok Build 的公开 TUI 结构可作为交互与分层参考；首版只评估 Ratatui / Crossterm，不移植其 agent、插件或命令体系。
 - 真实 DeepSeek API 测试只在用户本机显式执行，使用已有账户密钥；不得从应用进程私自读取或打印密钥。真实费用额度由用户在验收前明确设定。
 
 ## 实施步骤
 
-1. 按 layering.md 登记 `aoidos-app`、`aoidos-cli` 目标依赖边，复核模块所有权；更新架构依赖图与 `lint:layers`，验证无循环依赖。
-2. 抽取 profile / credential / storage 装配和必要应用服务；Tauri 命令改为调用共享层，现有 IPC 与存档行为保持兼容。
+1. 按 layering.md 登记 `aoidos-app`、`aoidos-cli` 依赖边，复核模块所有权；`aoidos-app` 已加入 workspace 并纳入 `lint:layers`，无 Tauri 的依赖图检查通过。
+2. 已抽取 profile / credential 服务与共用 `Product` / runtime 装配；Tauri 命令复用共享 profile 服务，IPC 和既有数据根保持兼容。后续将由 CLI 直接提供该服务及路径，并验证跨入口锁与恢复行为。
 3. 添加 CLI 子命令与 TUI，复用 Product / Service 的业务操作、持久化、事件和恢复；不复制 prompt 投影、账本或错误分类。
 4. 将场景首行动建议作为有版本 / 本地化来源的展示数据提供；TUI 预填可编辑草稿，只有显式提交才创建玩家记录及付费请求。
 5. 推导 billing reserve 可证明的输入上界 / 保守系数；无法证明时回退模型输入硬限，或实现发送前强制请求限制。补充真实 token 数高于字符估算的用例、短请求、边界请求、额度不足及拒绝前不发送测试；完善预算拒绝的用户可读诊断。
@@ -87,6 +89,7 @@
 - 2026-10-20：用户提出先通过 CLI/TUI 真实验证 key 与游戏链路，并考虑 GUI 按钮是否也调用 CLI。决定 GUI 不启动 CLI 子进程；提取共用 Rust 应用层，Tauri GUI 和 `aoidos-cli` 各自作为薄入口。
 - 2026-10-20：检查发现正式产品 billing reserve 使用模型完整 `context_limit`，但 prompt projection hard limit 为 32,768；本任务修复两者不一致，CLI 不绕过 ledger。
 - 2026-10-20：截图暴露 budget 错误码原样显示、未知 system record 只显示兼容占位；加入稳定本地化与脱敏 message 渲染验收。
+- 2026-10-20：新增 `aoidos-app` 并接入 Tauri 装配；共享层现在提供 profile CRUD、凭据状态 / 写入 / 删除 / 提交冻结，并组合回合协调器、诊断状态、代理快照、engine `Product` 与 runtime。Tauri 仍解析数据根并注入窗口事件，CLI 尚待实施。
 
 ## 完成摘要
 

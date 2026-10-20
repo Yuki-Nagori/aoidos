@@ -1,6 +1,6 @@
 # 目录与模块规划
 
-更新日期：2026-10-19。
+更新日期：2026-10-20。
 
 [架构总览](README.md)
 
@@ -42,6 +42,7 @@
 │   ├── aoidos-script/         # 剧本原文解析 / 格式校验，不执行内容规则
 │   ├── aoidos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
+│   ├── aoidos-app/            # 058：profile / 凭据服务与 GUI / CLI 共用游戏装配
 │   ├── aoidos-theme/          # 主题目录 / 偏好 / 剧本皮肤校验，含 assets/themes/ 与 build.rs
 │   ├── aoidos-billing/        # 模型计价、周期、账本与预算领域规则
 │   ├── aoidos-memory/         # 记忆模型、仓储、批次、轮回节点与恢复协议

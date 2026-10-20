@@ -272,31 +272,21 @@ pub fn run() {
         app.manage(events.clone());
         let storage_events = store_commands::StorageEvents::new(events.clone());
         let storage = store_commands::StorageService::new(&dir, storage_events);
-        let turns = turn_commands::TurnService::new(
-            events.clone(),
-            aoidos_llm::proxy::SystemProxySnapshot::capture(),
-        )?;
-        let factory = aoidos_engine::game::product::ProfileFactory::new(
-            std::sync::Arc::new(game_commands::SavedProfiles),
-            storage.storage.clone(),
-            turns.proxy_snapshot.clone(),
-            turns.diagnostics.clone(),
-        );
-        app.manage(aoidos_engine::game::product::Product::new(
+        let game = aoidos_app::GameServices::new(
             &dir,
             storage.storage.clone(),
-            turns.coordinator.clone(),
-            events,
-            factory.clone(),
-        ));
+            events.clone(),
+            events.clone(),
+            llm_commands::profile_service()
+                .ok_or_else(|| std::io::Error::other("LLM profile service is not initialized"))?,
+            aoidos_llm::proxy::SystemProxySnapshot::capture(),
+        )?;
+        app.manage(game.product);
         app.manage(storage);
         app.manage(billing_commands::BalanceService::default());
-        app.manage(aoidos_engine::game::runtime::Service::new(
-            turns.coordinator.clone(),
-            factory.clone(),
-        ));
-        app.manage(factory);
-        app.manage(turns);
+        app.manage(game.runtime);
+        app.manage(game.factory);
+        app.manage(game.turns);
         let theme = storage_theme_bootstrap(
             app.state::<store_commands::StorageService>()
                 .storage

@@ -6,16 +6,16 @@
 
 依赖箭头表示“左侧依赖右侧”。workspace crate 之间只能使用下表登记的边；对第三方 crate 的依赖不在此表中。Cargo metadata 检查 normal、build 和 dev 依赖，避免测试依赖偷偷形成生产层反向边。标为“058 目标”的 crate / 边是规划，不代表已进入 workspace；实施时先更新清单和 `lint:layers`，再改 manifest。
 
-| 层                           | 成员                                                             | 允许依赖                                                                                                  | 职责                                                                                           |
-| ---------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| L1：基础与独立领域           | `aoidos-store`、`aoidos-json`、`aoidos-script`、`aoidos-billing` | 无                                                                                                        | 存储原语、JSON 共用能力、剧本语法及计价规则；不依赖应用编排                                    |
-| L2：领域适配                 | `aoidos-theme`、`aoidos-locale`                                  | `aoidos-store`                                                                                            | 主题 / 语言偏好及其存储适配                                                                    |
-| L2：领域服务                 | `aoidos-memory`                                                  | `aoidos-json`、`aoidos-store`                                                                             | 记忆派生数据、schema 与恢复                                                                    |
-| L2：模型服务                 | `aoidos-llm`                                                     | `aoidos-json`、`aoidos-store`                                                                             | Provider、请求策略、配置与凭据                                                                 |
-| L3：应用引擎                 | `aoidos-engine`                                                  | L1 与 L2 的全部 crate                                                                                     | 回合、记录和游戏规则的编排；不得依赖 Tauri、Vue 或桌面壳                                       |
-| L4：共享应用服务（058 目标） | `aoidos-app`（规划）                                             | `aoidos-engine`、`aoidos-llm`、`aoidos-store`                                                             | profile / 凭据冻结、路径注入、共享产品与运行时装配；不依赖入口 adapter                         |
-| L5：桌面与 CLI 入口          | `aoidos`（`src-tauri`）、`aoidos-cli`（058 目标）                | 目标上均依赖 `aoidos-app`；`aoidos` 迁移期间可保留现有领域直连                                            | Tauri IPC / 平台事件或 CLI 参数 / 终端输入及展示；入口相互独立                                 |
-| 验证消费者                   | `aoidos-native-tests`                                            | `aoidos`、`aoidos-engine`、`aoidos-llm`、`aoidos-locale`、`aoidos-store`；058 目标按需要增加 `aoidos-app` | 跨 crate 和桌面会话验证；CLI 行为在其自身或专用集成测试验证；生产 crate 不得反向依赖测试 crate |
+| 层                  | 成员                                                             | 允许依赖                                                                 | 职责                                                                                           |
+| ------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| L1：基础与独立领域  | `aoidos-store`、`aoidos-json`、`aoidos-script`、`aoidos-billing` | 无                                                                       | 存储原语、JSON 共用能力、剧本语法及计价规则；不依赖应用编排                                    |
+| L2：领域适配        | `aoidos-theme`、`aoidos-locale`                                  | `aoidos-store`                                                           | 主题 / 语言偏好及其存储适配                                                                    |
+| L2：领域服务        | `aoidos-memory`                                                  | `aoidos-json`、`aoidos-store`                                            | 记忆派生数据、schema 与恢复                                                                    |
+| L2：模型服务        | `aoidos-llm`                                                     | `aoidos-json`、`aoidos-store`                                            | Provider、请求策略、配置与凭据                                                                 |
+| L3：应用引擎        | `aoidos-engine`                                                  | L1 与 L2 的全部 crate                                                    | 回合、记录和游戏规则的编排；不得依赖 Tauri、Vue 或桌面壳                                       |
+| L4：共享应用服务    | `aoidos-app`（058 实施中）                                       | `aoidos-engine`、`aoidos-llm`、`aoidos-store`                            | profile / 凭据冻结、路径注入、共享产品与运行时装配；不依赖入口 adapter                         |
+| L5：桌面与 CLI 入口 | `aoidos`（`src-tauri`）、`aoidos-cli`（058 目标）                | 目标上均依赖 `aoidos-app`；`aoidos` 迁移期间可保留现有领域直连           | Tauri IPC / 平台事件或 CLI 参数 / 终端输入及展示；入口相互独立                                 |
+| 验证消费者          | `aoidos-native-tests`                                            | `aoidos`、`aoidos-engine`、`aoidos-llm`、`aoidos-locale`、`aoidos-store` | 跨 crate 和桌面会话验证；CLI 行为在其自身或专用集成测试验证；生产 crate 不得反向依赖测试 crate |
 
 规则：
 
@@ -26,7 +26,7 @@
 
 ## 共享游戏应用层与 CLI / TUI（058 目标架构）
 
-游戏运行入口采用“并列入口 adapter → 共享应用服务 → 领域引擎”的单向依赖。共享服务负责把已存在的配置、凭据、存储、`Product` 和回合运行时组合成可调用的应用接口；它不实现第二套回合、账本或恢复状态机。Tauri GUI 与 CLI/TUI 都在自己的进程内调用这套 Rust 接口，GUI 不启动 CLI 子进程，也不通过 CLI 转发 IPC。
+游戏运行入口采用“并列入口 adapter → 共享应用服务 → 领域引擎”的单向依赖。`aoidos-app` 已加入 workspace，当前负责组合 GUI 与未来 CLI 共用的 profile / 凭据服务、回合协调器、诊断状态、代理快照、`Product` 与 engine runtime；Tauri 仍解析并提供数据根及窗口事件，CLI 接入后复用同一 profile 服务和数据根。共享服务只组合现有能力，不实现第二套回合、账本或恢复状态机。Tauri GUI 与 CLI/TUI 都在自己的进程内调用这套 Rust 接口，GUI 不启动 CLI 子进程，也不通过 CLI 转发 IPC。
 
 ```text
 aoidos (Tauri) ─────┐
@@ -34,10 +34,10 @@ aoidos (Tauri) ─────┐
 aoidos-cli ─────────┘       ├────────→ aoidos-llm
                             └────────→ aoidos-store
 
-aoidos-native-tests → { aoidos, aoidos-app, 被测领域 crate }
+aoidos-native-tests → { aoidos, 被测领域 crate }
 ```
 
-箭头表示左侧依赖右侧；测试 crate 位于末端并依赖被测入口 / 生产 crate。
+箭头表示左侧依赖右侧；测试 crate 位于末端并依赖被测入口 / 生产 crate。只有测试直接引用共享应用层 API 时，才将 `aoidos-app` 加为测试 crate 的显式依赖并同步更新检查清单。
 
 应用层构造接收宿主解析的 `AppPaths` / 数据根，保持 Tauri 现有数据位置兼容；CLI 默认使用同一产品数据根。应用层统一执行 profile 文件锁、密钥库访问、配置冻结与运行时装配，不复制各入口已有的 `SavedProfiles` 或 `freeze_submission` 逻辑。操作系统凭据后端继续由 `aoidos-llm` 提供；Tauri 的原生对话框与 CLI 的终端输入分别留在入口，不让应用层等待 UI 输入。
 

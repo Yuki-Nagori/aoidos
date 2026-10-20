@@ -334,11 +334,13 @@ pub(crate) async fn budget_get_provider_balance(
     BillingArgs(args): BillingArgs<ProviderBalanceArgs>,
 ) -> Result<aoidos_llm::providers::BalanceSnapshot, CmdError> {
     storage.ready()?;
+    let profiles = crate::llm_commands::profile_service()
+        .ok_or_else(|| CmdError::new("app.not-ready", "LLM 配置尚未初始化", None))?;
     query_saved_balance(
         &balances,
         &turns.proxy_snapshot,
         &args.profile_id,
-        &crate::game_commands::SavedProfiles,
+        profiles.as_ref(),
     )
     .await
 }

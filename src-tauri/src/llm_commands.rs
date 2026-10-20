@@ -1,22 +1,30 @@
 use crate::ipc::CmdError;
-use aoidos_llm::config::{
-    LlmProfile, MAX_PROFILES, ProfileError, ProfileStore, validate_identifier,
-};
-use aoidos_llm::credentials::{CredentialStore, CredentialVault, KeyStatus};
+use aoidos_llm::config::{LlmProfile, ProfileError, validate_identifier};
+use aoidos_llm::credentials::KeyStatus;
+#[cfg(test)]
+use aoidos_llm::credentials::{CredentialStore, CredentialVault};
 use aoidos_llm::platform::{NativePrompt, NativePromptText};
+#[cfg(test)]
 use aoidos_store::error::StoreError;
 use secrecy::SecretString;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// llm 数据目录（app-data/llm/）：profile 与凭据降级文件的根。
-static LLM_DIR: OnceLock<PathBuf> = OnceLock::new();
+struct ProfileService {
+    #[cfg(test)]
+    directory: PathBuf,
+    profiles: Arc<aoidos_app::profiles::Profiles>,
+}
 
-/// 逻辑读改写的进程内串行锁（storage.md「并发与锁」）：原子写只保证单次
-/// 覆写的物理完整，读-改-写周期由这两把锁串行；命令层持有，业务 crate 不感知。
-/// 原生输入等待用户时不持锁，避免长时间阻塞另一把锁的使用方。
-static PROFILE_LOCK: Mutex<()> = Mutex::new(());
+/// 目录和服务以一个 OnceLock 发布，测试与生产命令始终使用同一数据根。
+static APP_PROFILES: OnceLock<ProfileService> = OnceLock::new();
+
+/// 注入式凭据单测使用的串行锁；生产 profile / 密钥一致性由 aoidos-app 管理。
+#[cfg(test)]
 static KEY_LOCK: Mutex<()> = Mutex::new(());
 static PROMPT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -38,22 +46,27 @@ fn prompt_busy(_: bool) -> CmdError {
     CmdError::new("app.busy", "原生密钥输入已打开", None)
 }
 
-fn profile_lock() -> MutexGuard<'static, ()> {
-    // 锁中毒说明上次持锁期间 panic；文件操作是原子的，状态仍有效，忽略中毒。
-    PROFILE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
+#[cfg(test)]
 fn key_lock() -> MutexGuard<'static, ()> {
     KEY_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// 由桌面装配或独立集成进程注入 llm 数据目录；重复注入忽略。
 pub fn init_llm_dir(dir: PathBuf) {
-    let _ = LLM_DIR.set(dir);
+    let profiles = Arc::new(aoidos_app::profiles::Profiles::new(&dir));
+    let _ = APP_PROFILES.set(ProfileService {
+        #[cfg(test)]
+        directory: dir,
+        profiles,
+    });
 }
 
+#[cfg(test)]
 fn llm_dir() -> Result<&'static PathBuf, CmdError> {
-    LLM_DIR.get().ok_or_else(not_ready)
+    APP_PROFILES
+        .get()
+        .map(|service| &service.directory)
+        .ok_or_else(not_ready)
 }
 
 fn not_ready() -> CmdError {
@@ -67,10 +80,18 @@ pub struct Deleted {
     pub deleted: bool,
 }
 
-fn profile_store() -> Result<ProfileStore, CmdError> {
-    Ok(ProfileStore::new(llm_dir()?))
+fn app_profiles() -> Result<&'static aoidos_app::profiles::Profiles, CmdError> {
+    APP_PROFILES
+        .get()
+        .map(|service| service.profiles.as_ref())
+        .ok_or_else(not_ready)
 }
 
+pub(crate) fn profile_service() -> Option<Arc<aoidos_app::profiles::Profiles>> {
+    APP_PROFILES.get().map(|service| service.profiles.clone())
+}
+
+#[cfg(test)]
 fn credential_vault() -> Result<CredentialVault, CmdError> {
     // vault 构造不落盘；目录缺失时首次写入会建。
     Ok(CredentialVault::new(llm_dir()?))
@@ -82,12 +103,8 @@ fn credential_vault() -> Result<CredentialVault, CmdError> {
 /// 目录不可读或文件损坏（store.corrupt）时返回。
 #[tauri::command]
 pub fn llm_list_profiles() -> Result<LlmProfileList, CmdError> {
-    list_profiles_in(&profile_store()?)
-}
-
-fn list_profiles_in(store: &ProfileStore) -> Result<LlmProfileList, CmdError> {
     Ok(LlmProfileList {
-        items: store.load().map_err(CmdError::from)?,
+        items: app_profiles()?.list().map_err(CmdError::from)?,
     })
 }
 
@@ -98,30 +115,7 @@ fn list_profiles_in(store: &ProfileStore) -> Result<LlmProfileList, CmdError> {
 /// 校验失败、目录不可写时返回。
 #[tauri::command]
 pub fn llm_save_profile(profile: LlmProfile) -> Result<LlmProfile, CmdError> {
-    let _guard = profile_lock();
-    save_profile_in(&profile_store()?, profile)
-}
-
-fn save_profile_in(store: &ProfileStore, profile: LlmProfile) -> Result<LlmProfile, CmdError> {
-    profile.validate().map_err(bad_profile)?;
-    let mut profiles = store.load().map_err(CmdError::from)?;
-    if let Some(idx) = profiles
-        .iter()
-        .position(|p| p.profile_id == profile.profile_id)
-    {
-        profiles[idx] = profile.clone()
-    } else {
-        if profiles.len() >= MAX_PROFILES {
-            return Err(CmdError::new(
-                "app.bad-request",
-                format!("profile 数量已达上限 {MAX_PROFILES}"),
-                None,
-            ));
-        }
-        profiles.push(profile.clone());
-    }
-    store.save(&profiles).map_err(CmdError::from)?;
-    Ok(profile)
+    app_profiles()?.save(profile).map_err(CmdError::from)
 }
 
 /// profile 结构校验失败 → app.bad-request（message 面向用户，code 供分支）。
@@ -143,47 +137,18 @@ pub(crate) fn freeze_submission(
     CmdError,
 > {
     validate_identifier("profileId", profile_id).map_err(bad_profile)?;
-    let profile = {
-        let _guard = profile_lock();
-        profile_store()?
-            .load()
-            .map_err(CmdError::from)?
-            .into_iter()
-            .find(|profile| profile.profile_id == profile_id)
-            .ok_or_else(profile_missing)?
-    };
-    let _guard = key_lock();
-    let credentials = credential_vault()?;
-    let frozen = aoidos_llm::config::freeze(&profile, &credentials).map_err(CmdError::from)?;
-    let auth_ref = match &profile.proxy {
-        aoidos_llm::config::ProxyConfig::Manual { auth_ref, .. } => auth_ref.as_deref(),
-        _ => None,
-    };
-    let auth =
-        aoidos_llm::proxy::resolve_proxy_auth(&credentials, auth_ref).map_err(CmdError::from)?;
-    Ok((frozen, auth))
+    let resolved = app_profiles()?.freeze(profile_id).map_err(CmdError::from)?;
+    Ok((resolved.frozen, resolved.proxy_auth))
 }
-fn profile_missing() -> CmdError {
-    CmdError::new("app.not-found", "配置不存在", None)
-}
-
 /// 删除 profile；不存在时也返回成功（幂等）。
 ///
 /// # Errors
 /// 持久化失败时返回。
 #[tauri::command]
 pub fn llm_delete_profile(profile_id: String) -> Result<Deleted, CmdError> {
-    let _guard = profile_lock();
-    delete_profile_in(&profile_store()?, &profile_id)
-}
-
-fn delete_profile_in(store: &ProfileStore, profile_id: &str) -> Result<Deleted, CmdError> {
-    let mut profiles = store.load().map_err(CmdError::from)?;
-    let before = profiles.len();
-    profiles.retain(|p| p.profile_id != profile_id);
-    if profiles.len() != before {
-        store.save(&profiles).map_err(CmdError::from)?;
-    }
+    app_profiles()?
+        .delete(&profile_id)
+        .map_err(CmdError::from)?;
     Ok(Deleted { deleted: true })
 }
 
@@ -193,11 +158,12 @@ fn delete_profile_in(store: &ProfileStore, profile_id: &str) -> Result<Deleted, 
 /// 凭据后端不可读时返回 store.*。
 #[tauri::command]
 pub fn llm_get_key_status(provider_id: String) -> Result<KeyStatus, CmdError> {
-    validate_identifier("providerId", &provider_id).map_err(bad_profile)?;
-    let _guard = key_lock();
-    key_status_with(&provider_id, &credential_vault()?)
+    app_profiles()?
+        .key_status(&provider_id)
+        .map_err(CmdError::from)
 }
 
+#[cfg(test)]
 fn key_status_with(provider_id: &str, store: &dyn CredentialStore) -> Result<KeyStatus, CmdError> {
     validate_identifier("providerId", provider_id).map_err(bad_profile)?;
     store.status(provider_id).map_err(CmdError::from)
@@ -235,15 +201,35 @@ pub async fn set_key_with_text_and_dispatch(
     dispatch: &NativeDispatch,
 ) -> Result<KeyStatus, CmdError> {
     validate_identifier("providerId", &provider_id).map_err(bad_profile)?;
-    set_key_in_with_text(
-        &provider_id,
-        &action,
-        &credential_vault()?,
-        prompt,
-        prompt_text,
-        dispatch,
-    )
-    .await
+    let profiles = app_profiles()?;
+    match action.as_str() {
+        "clear" => profiles
+            .clear_key_and_status(&provider_id)
+            .map_err(CmdError::from),
+        "set" => {
+            let permit = PromptPermit::acquire(&PROMPT_ACTIVE)?;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let label = format!("provider {provider_id}");
+            dispatch(Box::new(move || {
+                let result = prompt(&label, &prompt_text);
+                drop(permit);
+                let _ = tx.send(result);
+            }))
+            .map_err(native_dispatch_error)?;
+            match rx.await.map_err(native_receive_error)? {
+                Ok(Some(secret)) => {
+                    let status = KeyStatus::from_secret(&secret);
+                    profiles
+                        .set_key(&provider_id, SecretString::from(secret))
+                        .map_err(CmdError::from)?;
+                    Ok(status)
+                }
+                Ok(None) => profiles.key_status(&provider_id).map_err(CmdError::from),
+                Err(error) => Err(CmdError::from(error)),
+            }
+        }
+        _ => Err(CmdError::new("app.bad-request", "未知凭据操作", None)),
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +251,7 @@ async fn set_key_in(
     .await
 }
 
+#[cfg(test)]
 async fn set_key_in_with_text(
     provider_id: &str,
     action: &str,
@@ -292,12 +279,14 @@ async fn set_key_in_with_text(
     save_prompt_result(provider_id, store, result)
 }
 
+#[cfg(test)]
 fn clear_key_in(provider_id: &str, store: &dyn CredentialStore) -> Result<KeyStatus, CmdError> {
     let _guard = key_lock();
     store.clear_key(provider_id).map_err(CmdError::from)?;
     key_status_with(provider_id, store)
 }
 
+#[cfg(test)]
 fn save_prompt_result(
     provider_id: &str,
     store: &dyn CredentialStore,
@@ -577,63 +566,6 @@ mod tests {
     }
 
     #[test]
-    fn profile_round_trip_overwrite_and_idempotent_delete() {
-        let dir = tdir("profile-crud");
-        let store = ProfileStore::new(&dir);
-        let profile = deepseek_profile("narration");
-        let saved = save_profile_in(&store, profile.clone()).unwrap();
-        assert_eq!(saved, profile);
-        assert_eq!(
-            list_profiles_in(&store).unwrap().items,
-            vec![profile.clone()]
-        );
-        // 同 id 覆盖不追加。
-        let mut updated = profile.clone();
-        updated.model = "deepseek-flash".into();
-        save_profile_in(&store, updated).unwrap();
-        let items = list_profiles_in(&store).unwrap().items;
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].model, "deepseek-flash");
-        // 幂等删除。
-        assert!(delete_profile_in(&store, "narration").unwrap().deleted);
-        assert!(delete_profile_in(&store, "narration").unwrap().deleted);
-        assert!(list_profiles_in(&store).unwrap().items.is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn profile_count_is_capped_at_fifty() {
-        let dir = tdir("profile-cap");
-        let store = ProfileStore::new(&dir);
-        let profiles: Vec<LlmProfile> = (0..MAX_PROFILES)
-            .map(|i| deepseek_profile(&format!("p{i}")))
-            .collect();
-        store.save(&profiles).unwrap();
-        let err = save_profile_in(&store, deepseek_profile("overflow")).unwrap_err();
-        assert_eq!(err.code(), "app.bad-request");
-        // 同 id 覆盖不受上限影响。
-        save_profile_in(&store, deepseek_profile("p0")).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn invalid_profile_maps_to_bad_request() {
-        let dir = tdir("profile-invalid");
-        let store = ProfileStore::new(&dir);
-        let mut profile = deepseek_profile("x");
-        profile.model = "  ".into();
-        let err = save_profile_in(&store, profile.clone()).unwrap_err();
-        assert_eq!(err.code(), "app.bad-request");
-        profile.model = "m".into();
-        profile.proxy = aoidos_llm::config::ProxyConfig::Manual {
-            url: "file://x".into(),
-            auth_ref: None,
-        };
-        assert!(save_profile_in(&store, profile).is_err());
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
     fn commands_round_trip_through_shared_dir() {
         // 命令级冒烟：OnceLock 目录全进程共享（先到先得），断言只用唯一 id 相对化。
         let dir = tdir("commands");
@@ -723,8 +655,7 @@ mod tests {
             )
             .unwrap();
         }
-        use aoidos_engine::game::product::ProfileSource;
-        let resolved = crate::game_commands::SavedProfiles.freeze(&id).unwrap();
+        let resolved = app_profiles().unwrap().freeze(&id).unwrap();
         assert_eq!(
             resolved.frozen.credential.unwrap().expose_secret(),
             "local-fixture"

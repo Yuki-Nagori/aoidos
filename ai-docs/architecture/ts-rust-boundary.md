@@ -16,11 +16,11 @@
 ```text
 src-tauri/            # 仅 Tauri 装配：Builder、命令层、capabilities，不沉淀业务
 src-rust/<crate>/     # 业务 crate，按域拆分（如 aoidos-llm / aoidos-engine / aoidos-store）
-src-rust/aoidos-app/  # 058 目标：无平台依赖的共享游戏应用服务
+src-rust/aoidos-app/  # 无平台依赖的共享游戏应用服务（058 实施中）
 src-rust/aoidos-cli/  # 058 目标：命令行 / TUI 入口 adapter
 ```
 
-- 业务 crate 放 `src-rust/` 下，出现真实需求时创建，不预建空 crate；创建即加入根 `Cargo.toml` 的 `members`。`aoidos-app` 和 `aoidos-cli` 目前是 058 规划项，目录未创建。
+- 业务 crate 放 `src-rust/` 下，出现真实需求时创建，不预建空 crate；创建即加入根 `Cargo.toml` 的 `members`。`aoidos-app` 已加入 workspace，当前承载 profile / 凭据服务及共用游戏运行装配；Tauri 仍负责解析数据根和平台事件。`aoidos-cli` 仍是 058 规划项。
 - 现有依赖方向为 `src-tauri` → 业务 crate；058 目标调整游戏运行链路为 Tauri 与 CLI/TUI 两个入口各自依赖 `aoidos-app`，后者组合 engine、profile / credential 与存储能力。业务 crate 之间保持单向依赖、禁止成环；**业务 crate 不得依赖 tauri**（保证可独立 `cargo test`，也方便复用）。
 - `src-tauri` 的单测只覆盖命令层解参与转发；域逻辑的单测跟随业务 crate。
 
@@ -58,9 +58,9 @@ src-tauri（装配、命令、窗口事件适配）
 - **调度确认端口**：`OutputPort` 属 llm，engine 通过确认通道接入；LLM 仅在接纳后确认首交付，不能引用 engine 的快照。准备 / 写入错误由 engine 映射为事件和快照，LLM 不承担记录持久化。
 - **预算端口**：`BudgetPort` 属 llm，020 提供每个 turn 和物理 request 的唯一身份；035 由 engine 注入账本实现，冻结价格与周期上下文。LLM 不反向依赖计费模块，engine 不把账本写成第二套调度器。
 
-### 共享游戏应用层与 CLI / TUI（058 目标）
+### 共享游戏应用层与 CLI / TUI（058 实施中）
 
-下图是目标依赖图，不表示 crate 已经实现。箭头始终表示左侧依赖右侧；CLI 和桌面入口并列，彼此无边：
+下图表示游戏运行链路的依赖方向；箭头始终表示左侧依赖右侧。`aoidos-cli` 尚未进入 workspace，CLI 与桌面入口并列且彼此无边：
 
 ```text
 aoidos (Tauri) ─────┐
@@ -71,9 +71,9 @@ aoidos-cli ─────────┘       ├────────→ a
 aoidos-native-tests → 需要验证的生产 crate / 入口
 ```
 
-`aoidos-app` 组合 profile 与凭据冻结、`Product`、runtime、存储路径及对局操作；它不拥有第二份 engine、账本或恢复状态机。现有 `SavedProfiles` / `freeze_submission` 从 `src-tauri` 移到共享应用服务。路径由宿主解析后注入：Tauri 保持现有 app-data 根，CLI 采用相同数据根，避免产生两套 profile、存档或 key 命名空间。OS 凭据读写复用 `aoidos-llm`；Tauri 原生密钥对话框、CLI 终端输入、窗口事件与终端绘制分别留在 adapter，应用层不等待或导入 UI 类型。
+`aoidos-app` 当前负责 profile 列表 / 保存 / 删除、提交时 profile 与凭据冻结、密钥服务、`TurnRuntime` 以及 engine `Product` / runtime 装配；Tauri 注入解析后的数据根和窗口事件端口，CLI 接入后注入同一数据根并提供终端交互。OS 凭据读写复用 `aoidos-llm`；Tauri 原生密钥对话框、CLI 终端输入、窗口事件与终端绘制分别留在 adapter，应用层不等待或导入 UI 类型。
 
-Tauri GUI 按钮经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 可以依赖 engine、llm、store 等明确登记的底层 crate；engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
+Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 可以依赖 engine、llm、store 等明确登记的底层 crate；engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
 
 `aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
 
