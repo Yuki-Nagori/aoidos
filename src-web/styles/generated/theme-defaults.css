@@ -1,5 +1,6 @@
 :root,
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+[data-theme="dark"] {
   color-scheme: dark;
   --ink: #e6ebf1;
   --muted: #7e8894;
@@ -26,7 +27,8 @@
     linear-gradient(135deg, #0c1a1d 0%, #0a1520 46%, #081018 100%);
 }
 
-:root[data-theme="light-purple"] {
+:root[data-theme="light-purple"],
+[data-theme="light-purple"] {
   color-scheme: light;
   --ink: #333333;
   --muted: #6c6c6c;
@@ -53,7 +55,8 @@
     linear-gradient(135deg, #eef6f4 0%, #f2f4f7 100%);
 }
 
-:root[data-theme="light"] {
+:root[data-theme="light"],
+[data-theme="light"] {
   color-scheme: light;
   --ink: #111417;
   --muted: #6f7782;

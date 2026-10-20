@@ -202,18 +202,37 @@ function themeName(id: string, fallback: string): string {
               :title="t('settings.sections.appearance')"
               @close="emit('close')"
             />
-            <div class="settings-field">
-              {{ t("settings.theme") }}
-              <SelectMenu
-                :model-value="theme.theme.value"
-                :options="theme.themes.value.map((option) => ({
-                  value: option.id,
-                  label: themeName(option.id, option.name),
-                }))"
-                :label="t('settings.theme')"
-                :disabled="theme.saving.value"
-                @update:model-value="theme.setTheme"
-              />
+            <div class="settings-theme-field">
+              <span class="settings-field-label">{{ t("settings.theme") }}</span>
+              <div class="settings-theme-grid" role="group" :aria-label="t('settings.theme')">
+                <button
+                  v-for="option in theme.themes.value"
+                  :key="option.id"
+                  type="button"
+                  class="settings-theme-card"
+                  :class="{ 'is-selected': theme.theme.value === option.id }"
+                  :aria-label="themeName(option.id, option.name)"
+                  :aria-pressed="theme.theme.value === option.id"
+                  :disabled="theme.saving.value"
+                  @click="theme.setTheme(option.id)"
+                >
+                  <span class="settings-theme-preview" :data-theme="option.id" aria-hidden="true">
+                    <span />
+                    <span />
+                  </span>
+                  <span class="settings-theme-name">
+                    {{ themeName(option.id, option.name) }}
+                    <svg
+                      v-if="theme.theme.value === option.id"
+                      class="settings-theme-check"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path d="m5 12.5 4.5 4.5L19 7.5" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
             </div>
             <div v-if="product.scriptId.value === 'mistbell'" class="settings-skin card">
               <div class="settings-skin-copy">

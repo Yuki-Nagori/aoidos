@@ -15,7 +15,7 @@ describe("App", () => {
     delete document.documentElement.dataset.localeFallback;
   });
   it("展示正式入口，初始化不打开会话或发起生成", async () => {
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "llm_list_profiles") return { items: [] };
       if (command === "llm_get_key_status") return { set: true, hint: "1234" };
       if (command === "engine_list_scripts")
@@ -29,6 +29,8 @@ describe("App", () => {
           },
         ];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
+      if (command === "theme_set_preference")
+        return { version: 1, theme: (args as { theme?: string } | undefined)?.theme ?? "dark" };
       if (command === "store_get_ui_preferences")
         return { version: 1, panelPinned: false, diceMode: "manual" };
       if (command === "store_set_ui_preferences")
@@ -151,21 +153,21 @@ describe("App", () => {
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
     expect(document.activeElement).toBe(focusable.at(-1));
-    await wrapper.get('[role="combobox"][aria-label="Theme"]').trigger("keydown", {
+    await wrapper.get('.settings-theme-card[aria-label="Dark"]').trigger("keydown", {
       key: "Escape",
       isComposing: true,
     });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
     expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
-    expect(wrapper.get(".settings-form-grid").findAll('[role="combobox"]')).toHaveLength(2);
-    const theme = wrapper.get('[role="combobox"][aria-label="Theme"]');
-    await theme.trigger("click");
-    expect(wrapper.findAll('[role="option"]').map((option) => option.text())).toEqual([
-      "Dark",
-      "Light",
-      "Light Purple",
-    ]);
-    await theme.trigger("keydown", { key: "Escape" });
+    expect(
+      wrapper.get('[role="group"][aria-label="Theme"]').findAll(".settings-theme-card"),
+    ).toHaveLength(3);
+    const theme = wrapper.get('.settings-theme-card[aria-label="Dark"]');
+    expect(theme.attributes("aria-pressed")).toBe("true");
+    await wrapper.get('.settings-theme-card[aria-label="Light Purple"]').trigger("click");
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("theme_set_preference", { theme: "light-purple" }),
+    );
     const script = wrapper.get('[role="combobox"][aria-label="Scenario"]');
     expect(script.text()).toContain("Mistbell Cellar");
     const model = wrapper.get('[role="combobox"][aria-label="Model"]');
@@ -173,7 +175,9 @@ describe("App", () => {
     const language = wrapper.get('input[name="interface-language"][value="zh-Hans"]');
     await language.setValue();
     await vi.waitFor(() => {
-      expect(theme.text()).toContain("深色");
+      expect(
+        wrapper.get('.settings-theme-card[aria-label="浅紫"]').attributes("aria-pressed"),
+      ).toBe("true");
       expect(script.text()).toContain("雾钟地窖");
     });
     const skinSwitch = wrapper.get('[role="switch"][aria-label="剧本皮肤"]');
@@ -198,7 +202,7 @@ describe("App", () => {
         diceMode: "auto",
       });
     });
-    await theme.trigger("keydown", { key: "Escape" });
+    await wrapper.get('[role="dialog"]').trigger("keydown", { key: "Escape" });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     await vi.waitFor(() =>
       expect(wrapper.get('button[aria-label="设置"]').element).toBe(document.activeElement),
@@ -229,6 +233,7 @@ describe("App", () => {
       "store_set_ui_preferences",
       "theme_get_preference",
       "theme_list",
+      "theme_set_preference",
       "theme_skin_load",
     ]);
     wrapper.unmount();

@@ -48,7 +48,8 @@ const themeCss = readFileSync(
 
 /** 花括号配平截取选择器规则块正文；找不到时报错而不是静默返回空。 */
 function blockOf(selector: string): string {
-  const start = themeCss.indexOf(selector);
+  const marker = selector.startsWith("[data-theme=") ? `\n${selector} {` : selector;
+  const start = themeCss.indexOf(marker);
   if (start < 0) throw new Error(`选择器缺失：${selector}`);
   const open = themeCss.indexOf("{", start);
   let depth = 0;
@@ -81,7 +82,7 @@ const themeNames = readdirSync(themeDirectory)
 const themes = new Map(
   themeNames.map((name) => [name, varsOf(blockOf(`:root[data-theme="${name}"]`))]),
 );
-const defaultTheme = themeCss.match(/:root,\s*:root\[data-theme="([a-z0-9-]+)"\]\s*\{/)?.[1];
+const defaultTheme = themeCss.match(/:root,\s*:root\[data-theme="([a-z0-9-]+)"\]/)?.[1];
 
 function themeInlineBlock(): string {
   const start = css.indexOf("@theme inline {");
@@ -104,6 +105,15 @@ describe("token 目录与 app.css 互校", () => {
       for (const { name } of CATALOG) {
         expect(vars.has(name), `${themeName} 缺少 ${name}`).toBe(true);
       }
+    }
+  });
+
+  it("将主题 token 同时提供给文档根节点和主题预览卡片", () => {
+    for (const name of themeNames) {
+      expect(themeCss).toContain(`\n[data-theme="${name}"] {`);
+      expect(varsOf(blockOf(`:root[data-theme="${name}"]`))).toEqual(
+        varsOf(blockOf(`[data-theme="${name}"]`)),
+      );
     }
   });
 
@@ -133,7 +143,7 @@ describe("token 目录与 app.css 互校", () => {
   it("生成选择器覆盖所有内置主题，并保持深色为默认主题", () => {
     expect(defaultTheme).toBe("dark");
     expect(themeNames).toContain(defaultTheme);
-    const selectors = [...themeCss.matchAll(/:root\[data-theme="([a-z0-9-]+)"\]\s*\{/g)].map(
+    const selectors = [...themeCss.matchAll(/:root\[data-theme="([a-z0-9-]+)"\]/g)].map(
       (match) => match[1],
     );
     expect([...selectors].sort()).toEqual([...themeNames].sort());
@@ -191,6 +201,16 @@ describe("token 目录与 app.css 互校", () => {
     expect(css).toMatch(
       /:root\[data-theme="light"\] \.dialogue-panel\s*\{[^}]*background:\s*linear-gradient\(var\(--panel\), var\(--panel\)\), var\(--overlay-solid\)/,
     );
+  });
+
+  it("主题卡片几何与 aoidos-art 预览规格一致", () => {
+    const grid = css.match(/\.settings-theme-grid\s*\{([^}]+)\}/)?.[1];
+    expect(grid).toContain("grid-template-columns: repeat(3, minmax(0, 1fr))");
+    expect(grid).toContain("gap: 0.625rem");
+    const preview = css.match(/\.settings-theme-preview\s*\{([^}]+)\}/)?.[1];
+    expect(preview).toContain("height: 2.75rem");
+    expect(preview).toContain("background: var(--app-bg)");
+    expect(css).toMatch(/\.settings-theme-grid\s*\{[^}]*repeat\(2, minmax\(0, 1fr\)\)/);
   });
 
   it("为快捷键、分段选项、开关和记忆参数保留设计稿的尺寸与视觉状态", () => {

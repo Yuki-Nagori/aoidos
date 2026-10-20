@@ -767,10 +767,63 @@ try {
           0,
           "App selectors must use the custom menu",
         );
-        const themeMenu = page.getByRole("combobox", { name: /theme/i });
-        await themeMenu.click();
-        await page.getByRole("listbox", { name: /theme/i }).waitFor();
-        await themeMenu.press("Escape");
+        const themeCards = page.locator(".settings-theme-card");
+        assert.equal(
+          await themeCards.count(),
+          themes.length,
+          "Theme cards follow the Rust catalog",
+        );
+        assert.equal(await page.locator('.settings-theme-card[aria-pressed="true"]').count(), 1);
+        const previews = await page.locator(".settings-theme-preview").evaluateAll((elements) =>
+          elements.map((element) => ({
+            accent: getComputedStyle(element).getPropertyValue("--accent").trim(),
+            height: getComputedStyle(element).height,
+            cardInk: getComputedStyle(element.parentElement!).color,
+            labelInk: getComputedStyle(
+              element.parentElement!.querySelector(".settings-theme-name")!,
+            ).color,
+            barWidthRatio:
+              element.children[1]!.getBoundingClientRect().width /
+              element.children[0]!.getBoundingClientRect().width,
+            barColorsDistinct:
+              getComputedStyle(element.children[0]!).backgroundColor !==
+              getComputedStyle(element.children[1]!).backgroundColor,
+          })),
+        );
+        assert.equal(
+          new Set(previews.map(({ accent }) => accent)).size,
+          themes.length,
+          "Every theme card previews its own accent",
+        );
+        assert.ok(
+          previews.every(({ height }) => height === "44px"),
+          "Theme previews are 44px high",
+        );
+        assert.ok(
+          previews.every(
+            ({ barWidthRatio, barColorsDistinct }) =>
+              Math.abs(barWidthRatio - 0.6) < 0.03 && barColorsDistinct,
+          ),
+          "Theme preview bars use 40%/24% widths and distinct accent tokens",
+        );
+        assert.equal(
+          new Set(previews.map(({ cardInk, labelInk }) => `${cardInk}/${labelInk}`)).size,
+          1,
+          "Card frames and labels retain the selected application theme",
+        );
+        const themeColumns = await themeCards.evaluateAll(
+          (cards) =>
+            new Set(cards.map((card) => Math.round(card.getBoundingClientRect().left))).size,
+        );
+        assert.equal(
+          themeColumns,
+          viewport.width <= 720 ? 2 : 3,
+          `Theme cards use the design grid at ${viewport.width}px`,
+        );
+        await page.locator('.settings-theme-card[aria-label="Light Purple"]').click();
+        await page.waitForFunction(() => document.documentElement.dataset.theme === "light-purple");
+        await page.locator('.settings-theme-card[aria-label="Dark"]').click();
+        await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
       }
       if (section.id === "shortcuts") {
         await page.locator("#shortcuts .shortcut-row").first().waitFor();

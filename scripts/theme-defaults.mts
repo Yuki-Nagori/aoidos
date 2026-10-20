@@ -76,7 +76,9 @@ for (const file of files) {
     [...expectedTokens].some((token) => !values.has(token))
   )
     throw new Error(`theme ${id} must define every semantic token exactly once`);
-  const selector = id === "dark" ? ':root,\n:root[data-theme="dark"]' : `:root[data-theme="${id}"]`;
+  const selectors = [`:root[data-theme="${id}"]`, `[data-theme="${id}"]`];
+  if (id === "dark") selectors.unshift(":root");
+  const selector = selectors.join(",\n");
   output.push(
     `${selector} {\n  color-scheme: ${scheme};\n${[...values]
       .map(([name, value]) => {
