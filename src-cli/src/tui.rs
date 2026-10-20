@@ -20,10 +20,10 @@ use futures::StreamExt;
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use std::{collections::VecDeque, io, time::Duration};
 use unicode_width::UnicodeWidthChar;
@@ -32,6 +32,16 @@ const MAX_TRANSCRIPT_LINES: usize = 80;
 const MAX_TRANSCRIPT_BYTES: usize = 64 * 1024;
 const MAX_STREAM_BYTES: usize = 32 * 1024;
 
+const COLOR_BACKGROUND: Color = Color::Rgb(16, 23, 36);
+const COLOR_PANEL: Color = Color::Rgb(22, 31, 47);
+const COLOR_PANEL_SELECTED: Color = Color::Rgb(31, 45, 62);
+const COLOR_TEXT: Color = Color::Rgb(226, 232, 240);
+const COLOR_MUTED: Color = Color::Rgb(143, 157, 176);
+const COLOR_BORDER: Color = Color::Rgb(58, 73, 94);
+const COLOR_ACCENT: Color = Color::Rgb(104, 190, 187);
+const COLOR_SECONDARY: Color = Color::Rgb(176, 159, 233);
+const COLOR_WARNING: Color = Color::Rgb(237, 188, 119);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
     Profile,
@@ -39,6 +49,13 @@ enum Focus {
     Input,
     Submit,
     Continue,
+    Billing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsSection {
+    Model,
+    Script,
     Billing,
 }
 
@@ -63,6 +80,8 @@ struct ViewState {
     billing_preflight: Option<RequestBillingPreflight>,
     billing_error: Option<String>,
     billing_scroll: usize,
+    settings_open: bool,
+    settings_section: SettingsSection,
     pending_action: Option<PendingAction>,
     locale: &'static str,
 }
@@ -103,6 +122,8 @@ impl ViewState {
             billing_preflight: None,
             billing_error: None,
             billing_scroll: 0,
+            settings_open: false,
+            settings_section: SettingsSection::Model,
             pending_action: None,
             locale: terminal_locale(),
         }
@@ -199,7 +220,9 @@ async fn handle_terminal_event(
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 return Ok(true);
             }
-            if state.session.is_none() {
+            if state.settings_open {
+                handle_settings_key(app, state, key).await?;
+            } else if state.session.is_none() {
                 if handle_selection_key(app, state, key).await? {
                     return Ok(true);
                 }
@@ -209,14 +232,24 @@ async fn handle_terminal_event(
         }
         Event::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if state.session.is_none() {
+                if state.settings_open {
+                    handle_settings_click(app, state, mouse.column, mouse.row).await?;
+                } else if state.session.is_none() {
                     handle_selection_click(app, state, mouse.column, mouse.row).await?;
                 } else {
                     handle_game_click(app, state, mouse.column, mouse.row).await?;
                 }
             }
             MouseEventKind::ScrollUp if state.session.is_some() => {
-                if contains(game_layout(app_screen_area())[3], mouse.column, mouse.row) {
+                if state.settings_open {
+                    if state.settings_section == SettingsSection::Billing {
+                        scroll_billing(state, false);
+                    }
+                } else if contains(
+                    game_layout(app_screen_area()).billing,
+                    mouse.column,
+                    mouse.row,
+                ) {
                     state.focus = Focus::Billing;
                     scroll_billing(state, false);
                 } else {
@@ -224,7 +257,15 @@ async fn handle_terminal_event(
                 }
             }
             MouseEventKind::ScrollDown if state.session.is_some() => {
-                if contains(game_layout(app_screen_area())[3], mouse.column, mouse.row) {
+                if state.settings_open {
+                    if state.settings_section == SettingsSection::Billing {
+                        scroll_billing(state, true);
+                    }
+                } else if contains(
+                    game_layout(app_screen_area()).billing,
+                    mouse.column,
+                    mouse.row,
+                ) {
                     state.focus = Focus::Billing;
                     scroll_billing(state, true);
                 } else {
@@ -239,13 +280,147 @@ async fn handle_terminal_event(
     Ok(false)
 }
 
+async fn handle_settings_key(
+    app: &mut CliApp,
+    state: &mut ViewState,
+    key: KeyEvent,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match key.code {
+        KeyCode::F(2) | KeyCode::Esc | KeyCode::Char('s' | 'S') => {
+            state.settings_open = false;
+            if state.session.is_some() {
+                state.focus = Focus::Input;
+            }
+        }
+        KeyCode::Tab | KeyCode::Right => {
+            state.settings_section = next_settings_section(state.settings_section, true);
+            state.billing_scroll = 0;
+        }
+        KeyCode::BackTab | KeyCode::Left => {
+            state.settings_section = next_settings_section(state.settings_section, false);
+            state.billing_scroll = 0;
+        }
+        KeyCode::Char('1') => state.settings_section = SettingsSection::Model,
+        KeyCode::Char('2') => state.settings_section = SettingsSection::Script,
+        KeyCode::Char('3') => state.settings_section = SettingsSection::Billing,
+        KeyCode::Up | KeyCode::Down => match state.settings_section {
+            SettingsSection::Model => {
+                state.profile_index =
+                    move_index(state.profile_index, state.profiles.len(), key.code);
+            }
+            SettingsSection::Script => {
+                state.script_index = move_index(state.script_index, state.scripts.len(), key.code);
+            }
+            SettingsSection::Billing => scroll_billing(state, key.code == KeyCode::Down),
+        },
+        KeyCode::PageUp if state.settings_section == SettingsSection::Billing => {
+            for _ in 0..5 {
+                scroll_billing(state, false);
+            }
+        }
+        KeyCode::PageDown if state.settings_section == SettingsSection::Billing => {
+            for _ in 0..5 {
+                scroll_billing(state, true);
+            }
+        }
+        KeyCode::Enter if state.settings_section != SettingsSection::Billing => {
+            state.status = "选择已保存到本次 TUI；新周目开始时生效。".into();
+        }
+        KeyCode::Char('n' | 'N') => {
+            if state.busy || state.pending_action.is_some() {
+                state.status = "当前回合尚未结束，暂不能开始新周目。".into();
+            } else {
+                state.settings_open = false;
+                open_session(app, state, true).await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_settings_click(
+    app: &mut CliApp,
+    state: &mut ViewState,
+    x: u16,
+    y: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let layout = settings_layout(app_screen_area());
+    if contains(layout.close, x, y) {
+        state.settings_open = false;
+        if state.session.is_some() {
+            state.focus = Focus::Input;
+        }
+        return Ok(());
+    }
+    for (section, area) in [
+        (SettingsSection::Model, layout.model_tab),
+        (SettingsSection::Script, layout.script_tab),
+        (SettingsSection::Billing, layout.billing_tab),
+    ] {
+        if contains(area, x, y) {
+            if state.settings_section != section {
+                state.billing_scroll = 0;
+            }
+            state.settings_section = section;
+            return Ok(());
+        }
+    }
+    if contains(layout.body, x, y) {
+        match state.settings_section {
+            SettingsSection::Model if !state.profiles.is_empty() => {
+                let intro_rows = wrap_visual_lines(
+                    "所选模型只用于新周目；当前周目继续使用开局时冻结的配置。",
+                    usize::from(layout.body.width).max(1),
+                )
+                .len();
+                let row = usize::from(y.saturating_sub(layout.body.y));
+                if row >= intro_rows {
+                    state.profile_index =
+                        (row - intro_rows).min(state.profiles.len().saturating_sub(1));
+                }
+            }
+            SettingsSection::Script if !state.scripts.is_empty() => {
+                let intro_rows = wrap_visual_lines(
+                    "所选剧本只用于新周目；当前周目不会切换剧本。",
+                    usize::from(layout.body.width).max(1),
+                )
+                .len();
+                let row = usize::from(y.saturating_sub(layout.body.y));
+                if row >= intro_rows {
+                    state.script_index =
+                        (row - intro_rows).min(state.scripts.len().saturating_sub(1));
+                }
+            }
+            SettingsSection::Billing => {}
+            _ => {}
+        }
+    } else if contains(layout.new_run, x, y) {
+        if state.busy || state.pending_action.is_some() {
+            state.status = "当前回合尚未结束，暂不能开始新周目。".into();
+        } else {
+            state.settings_open = false;
+            open_session(app, state, true).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn handle_selection_key(
     app: &mut CliApp,
     state: &mut ViewState,
     key: KeyEvent,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     match key.code {
+        KeyCode::F(2) => {
+            state.settings_open = true;
+            state.settings_section = SettingsSection::Model;
+        }
         KeyCode::Esc => return Ok(true),
+        KeyCode::Char('s' | 'S') if state.focus != Focus::Input => {
+            state.settings_open = true;
+            state.settings_section = SettingsSection::Model;
+        }
         KeyCode::Char('q') if state.focus != Focus::Input => return Ok(true),
         KeyCode::Tab | KeyCode::BackTab => {
             state.focus = match state.focus {
@@ -358,6 +533,16 @@ async fn open_session(
                 "已打开当前周目。"
             }
             .into();
+            state.history.clear();
+            state.stream.clear();
+            state.active_turn_id = None;
+            state.stream_finalized = false;
+            state.history_scroll = 0;
+            state.pending_action = None;
+            state.billing = None;
+            state.billing_preflight = None;
+            state.billing_error = None;
+            state.billing_scroll = 0;
             state.phase = app.services.runtime.get_phase(&session.session_id).ok();
             load_history(app, state, &session.session_id);
             let run_id = session.memory_run_id.clone();
@@ -400,6 +585,14 @@ async fn handle_game_key(
     }
     match key.code {
         KeyCode::Esc => return Ok(true),
+        KeyCode::F(2) => {
+            state.settings_open = true;
+            state.settings_section = SettingsSection::Model;
+        }
+        KeyCode::Char('s' | 'S') if state.focus != Focus::Input => {
+            state.settings_open = true;
+            state.settings_section = SettingsSection::Model;
+        }
         KeyCode::Char('q') if state.focus != Focus::Input => return Ok(true),
         KeyCode::PageUp if state.focus == Focus::Billing => scroll_billing(state, false),
         KeyCode::PageDown if state.focus == Focus::Billing => scroll_billing(state, true),
@@ -453,11 +646,27 @@ fn push_draft(state: &mut ViewState, character: char) {
 }
 
 fn scroll_billing(state: &mut ViewState, down: bool) {
-    let model_count = state
-        .billing
-        .as_ref()
-        .map_or(0, |summary| summary.models.len());
-    let last_start = model_count.saturating_sub(1);
+    let area = if state.settings_open {
+        settings_layout(app_screen_area()).body
+    } else {
+        game_layout(app_screen_area()).billing
+    };
+    let visible_rows = if state.settings_open {
+        let info_rows =
+            settings_billing_info_lines(usize::from(area.width.saturating_sub(1)).max(1)).len();
+        usize::from(area.height).saturating_sub(info_rows) as u16
+    } else {
+        area.height.saturating_sub(2)
+    };
+    let visible = usize::from(visible_rows).max(1);
+    let width = if state.settings_open {
+        usize::from(area.width.saturating_sub(1)).max(1)
+    } else {
+        usize::from(area.width.saturating_sub(4)).max(1)
+    };
+    let last_start = billing_content_lines(state, width)
+        .len()
+        .saturating_sub(visible);
     state.billing_scroll = if down {
         state.billing_scroll.saturating_add(1).min(last_start)
     } else {
@@ -475,7 +684,12 @@ async fn handle_game_click(
     let controls = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(78), Constraint::Percentage(22)])
-        .split(chunks[2]);
+        .split(chunks.controls);
+    if contains(chunks.settings_button, x, y) {
+        state.settings_open = true;
+        state.settings_section = SettingsSection::Model;
+        return Ok(());
+    }
     if state.pending_action.is_some() {
         if contains(controls[1], x, y) {
             confirm_action(app, state).await;
@@ -485,10 +699,14 @@ async fn handle_game_click(
     if contains(controls[0], x, y) {
         state.focus = Focus::Input;
     } else if contains(controls[1], x, y) {
-        submit_action(app, state).await;
-    } else if contains(chunks[3], x, y) {
+        if state.busy {
+            cancel_game(app, state).await;
+        } else {
+            submit_action(app, state).await;
+        }
+    } else if contains(chunks.billing, x, y) {
         state.focus = Focus::Billing;
-    } else if contains(chunks[4], x, y) {
+    } else if contains(chunks.status, x, y) {
         if state.busy {
             cancel_game(app, state).await;
         } else {
@@ -543,10 +761,7 @@ async fn confirm_action(app: &mut CliApp, state: &mut ViewState) {
     };
     if latest != pending.preflight || latest_profile != pending.profile {
         state.billing_preflight = Some(latest);
-        state.profiles = app
-            .profiles
-            .list()
-            .unwrap_or_else(|_| state.profiles.clone());
+        refresh_profiles_preserving_selection(app, state);
         restore_pending_draft(state, pending.kind);
         state.status = "价格或本局上限刚有变化；请重新核对费用栏后再提交。".into();
         return;
@@ -596,7 +811,11 @@ fn load_request_preflight(
     state: &mut ViewState,
 ) -> Option<(RequestBillingPreflight, aoidos_llm::config::LlmProfile)> {
     let session = state.session.as_ref()?;
-    let profile_id = state.profiles.get(state.profile_index)?.profile_id.clone();
+    let frozen_profile = state.session_profile.as_ref()?.clone();
+    let selected_profile_id = state
+        .profiles
+        .get(state.profile_index)
+        .map(|profile| profile.profile_id.clone());
     let profiles = match app.profiles.list() {
         Ok(profiles) => profiles,
         Err(_) => {
@@ -604,21 +823,24 @@ fn load_request_preflight(
             return None;
         }
     };
-    let Some(profile_index) = profiles
+    let Some(profile) = profiles
         .iter()
-        .position(|profile| profile.profile_id == profile_id)
+        .find(|profile| profile.profile_id == frozen_profile.profile_id)
+        .cloned()
     else {
-        state.status = "所选模型配置已不存在；未发送请求。".into();
+        state.status = "当前周目使用的模型配置已不存在；未发送请求。".into();
         return None;
     };
     state.profiles = profiles;
-    state.profile_index = profile_index;
-    let profile = state.profiles[profile_index].clone();
-    if state
-        .session_profile
-        .as_ref()
-        .is_some_and(|frozen| frozen != &profile)
-    {
+    if let Some(index) = selected_profile_id.and_then(|id| {
+        state
+            .profiles
+            .iter()
+            .position(|profile| profile.profile_id == id)
+    }) {
+        state.profile_index = index;
+    }
+    if frozen_profile != profile {
         state.status = "当前周目的模型配置已变化；请关闭并重新打开周目后再发送。".into();
         return None;
     }
@@ -635,6 +857,23 @@ fn load_request_preflight(
             state.status = "读取本局价格或额度失败；未发送请求。".into();
             None
         }
+    }
+}
+
+fn refresh_profiles_preserving_selection(app: &CliApp, state: &mut ViewState) {
+    let selected_profile_id = state
+        .profiles
+        .get(state.profile_index)
+        .map(|profile| profile.profile_id.clone());
+    if let Ok(profiles) = app.profiles.list() {
+        if let Some(index) = selected_profile_id
+            .and_then(|id| profiles.iter().position(|profile| profile.profile_id == id))
+        {
+            state.profile_index = index;
+        } else {
+            state.profile_index = state.profile_index.min(profiles.len().saturating_sub(1));
+        }
+        state.profiles = profiles;
     }
 }
 
@@ -1039,83 +1278,133 @@ fn record_text(body: &serde_json::Value) -> Option<String> {
 }
 
 fn draw(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
+    frame.render_widget(
+        Block::default().style(Style::default().bg(COLOR_BACKGROUND)),
+        frame.area(),
+    );
     if state.session.is_none() {
         draw_selection(frame, state);
     } else {
         draw_game(frame, state);
+    }
+    if state.settings_open {
+        draw_settings(frame, state);
     }
 }
 
 fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
     let chunks = selection_layout(frame.area());
     frame.render_widget(
-        Paragraph::new("Aoidos · 终端游戏")
-            .block(Block::default().borders(Borders::ALL).title("欢迎"))
-            .style(Style::default().fg(Color::Cyan)),
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(
+                    " AOIDOS ",
+                    Style::default()
+                        .fg(COLOR_BACKGROUND)
+                        .bg(COLOR_ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "  故事从你的选择开始",
+                    Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(Span::styled(
+                "选择模型与剧本；打开周目不会自动发送请求。  S 设置",
+                Style::default().fg(COLOR_MUTED),
+            )),
+        ])
+        .block(Block::default().style(Style::default().bg(COLOR_BACKGROUND))),
         chunks[0],
     );
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[1]);
-    let profile_lines = state
-        .profiles
-        .iter()
-        .enumerate()
-        .map(|(index, profile)| {
-            let marker = if index == state.profile_index {
-                "› "
-            } else {
-                "  "
-            };
-            let text = format!(
-                "{marker}{} · {} / {}",
-                profile.profile_id, profile.provider_id, profile.model
-            );
-            Line::styled(
-                text,
-                row_style(index == state.profile_index, state.focus == Focus::Profile),
-            )
-        })
-        .collect::<Vec<_>>();
+    let profile_lines = if state.profiles.is_empty() {
+        vec![Line::styled(
+            "尚无模型配置，请先运行 `aoidos profiles`。",
+            Style::default().fg(COLOR_WARNING),
+        )]
+    } else {
+        state
+            .profiles
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| {
+                let marker = if index == state.profile_index {
+                    "› "
+                } else {
+                    "  "
+                };
+                let text = format!(
+                    "{marker}{} · {} / {}",
+                    profile.profile_id, profile.provider_id, profile.model
+                );
+                Line::styled(
+                    text,
+                    row_style(index == state.profile_index, state.focus == Focus::Profile),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     frame.render_widget(
         Paragraph::new(profile_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("模型 profile（↑↓ 选择）"),
-            )
+            .block(panel_block(
+                &format!(
+                    "模型  {}/{}",
+                    state
+                        .profile_index
+                        .saturating_add(1)
+                        .min(state.profiles.len()),
+                    state.profiles.len()
+                ),
+                state.focus == Focus::Profile,
+            ))
             .wrap(Wrap { trim: true }),
         columns[0],
     );
-    let script_lines = state
-        .scripts
-        .iter()
-        .enumerate()
-        .map(|(index, script)| {
-            let marker = if index == state.script_index {
-                "› "
-            } else {
-                "  "
-            };
-            let title = script
-                .display_names
-                .get(state.locale)
-                .unwrap_or(&script.title);
-            let text = format!("{marker}{title} · {}", script.script_id);
-            Line::styled(
-                text,
-                row_style(index == state.script_index, state.focus == Focus::Script),
-            )
-        })
-        .collect::<Vec<_>>();
+    let script_lines = if state.scripts.is_empty() {
+        vec![Line::styled(
+            "当前没有可用剧本。",
+            Style::default().fg(COLOR_WARNING),
+        )]
+    } else {
+        state
+            .scripts
+            .iter()
+            .enumerate()
+            .map(|(index, script)| {
+                let marker = if index == state.script_index {
+                    "› "
+                } else {
+                    "  "
+                };
+                let title = script
+                    .display_names
+                    .get(state.locale)
+                    .unwrap_or(&script.title);
+                let text = format!("{marker}{title} · {}", script.script_id);
+                Line::styled(
+                    text,
+                    row_style(index == state.script_index, state.focus == Focus::Script),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     frame.render_widget(
         Paragraph::new(script_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("剧本（←→ 切换）"),
-            )
+            .block(panel_block(
+                &format!(
+                    "剧本  {}/{}",
+                    state
+                        .script_index
+                        .saturating_add(1)
+                        .min(state.scripts.len()),
+                    state.scripts.len()
+                ),
+                state.focus == Focus::Script,
+            ))
             .wrap(Wrap { trim: true }),
         columns[1],
     );
@@ -1125,23 +1414,32 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         .split(chunks[2]);
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            " Enter  打开 / 继续当前周目 ",
+            "  Enter  打开 / 继续当前周目  ",
             button_style(),
         )]))
-        .block(Block::default().borders(Borders::ALL)),
+        .block(panel_block("开始", false)),
         actions[0],
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            " N  新建周目 ",
+            "  N  新建周目  ",
             button_style(),
         )]))
-        .block(Block::default().borders(Borders::ALL)),
+        .block(panel_block("新游戏", false)),
         actions[1],
     );
     frame.render_widget(
-        Paragraph::new(format!("{}    Tab / 鼠标可选择，Esc 退出", state.status))
-            .block(Block::default().borders(Borders::ALL).title("提示")),
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                state.status.clone(),
+                Style::default().fg(COLOR_TEXT),
+            )),
+            Line::from(Span::styled(
+                "↑↓ 选择 · Tab 切换 · Enter 打开 · N 新建 · Esc 退出",
+                Style::default().fg(COLOR_MUTED),
+            )),
+        ])
+        .block(panel_block("操作指南", false)),
         chunks[3],
     );
 }
@@ -1149,25 +1447,51 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
 fn draw_game(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
     let session = state.session.as_ref().expect("游戏界面始终有活动会话");
     let chunks = game_layout(frame.area());
-    let phase = state
-        .phase
-        .as_ref()
-        .map(|phase| format!("{:?}", phase.state.phase))
-        .unwrap_or_else(|| "读取中".into());
     frame.render_widget(
-        Paragraph::new(format!(
-            "{} · {} · {}",
-            session.title, session.script_id, phase
-        ))
-        .block(Block::default().borders(Borders::ALL).title("Aoidos")),
-        chunks[0],
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " ◉ ",
+                Style::default()
+                    .fg(COLOR_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                session.title.clone(),
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  ·  {}", session.script_id),
+                Style::default().fg(COLOR_MUTED),
+            ),
+        ]))
+        .style(Style::default().bg(COLOR_PANEL)),
+        chunks.header,
+    );
+    frame.render_widget(
+        Paragraph::new("S 设置")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(COLOR_ACCENT).bg(COLOR_PANEL))
+            .block(Block::default().style(Style::default().bg(COLOR_PANEL)))
+            .style(Style::default().fg(COLOR_ACCENT).bg(COLOR_PANEL)),
+        chunks.settings_button,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            phase_label(state),
+            Style::default()
+                .fg(phase_color(state))
+                .add_modifier(Modifier::BOLD),
+        )))
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(COLOR_PANEL)),
+        chunks.phase,
     );
     let mut transcript = state.history.iter().cloned().collect::<Vec<_>>();
     if !state.stream.is_empty() {
         transcript.push(format!("AI：{}", state.stream));
     }
-    let content_width = usize::from(chunks[1].width.saturating_sub(2)).max(1);
-    let visible_count = usize::from(chunks[1].height.saturating_sub(2)).max(1);
+    let content_width = usize::from(chunks.transcript.width.saturating_sub(4)).max(1);
+    let visible_count = usize::from(chunks.transcript.height.saturating_sub(2)).max(1);
     let mut visual_lines = Vec::new();
     for (index, text) in transcript.iter().enumerate() {
         let is_stream = !state.stream.is_empty() && index + 1 == transcript.len();
@@ -1182,47 +1506,67 @@ fn draw_game(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         .min(visual_lines.len().saturating_sub(visible_count));
     let visual_end = visual_lines.len().saturating_sub(offset);
     let visual_start = visual_end.saturating_sub(visible_count);
-    let lines = visual_lines[visual_start..visual_end]
-        .iter()
-        .map(|(text, is_stream)| {
-            if *is_stream {
-                Line::styled(text.clone(), Style::default().fg(Color::Cyan))
-            } else {
-                Line::from(text.clone())
-            }
-        })
-        .collect::<Vec<_>>();
+    let lines = if visual_lines.is_empty() {
+        vec![Line::from(vec![
+            Span::styled(
+                "暂时还没有对话。",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  在下方写下行动，提交前会先确认预算。",
+                Style::default().fg(COLOR_MUTED),
+            ),
+        ])]
+    } else {
+        visual_lines[visual_start..visual_end]
+            .iter()
+            .map(|(text, is_stream)| {
+                if *is_stream {
+                    Line::styled(text.clone(), Style::default().fg(COLOR_SECONDARY))
+                } else if let Some((speaker, body)) = text.split_once('：') {
+                    let color = if speaker == "你" {
+                        COLOR_ACCENT
+                    } else {
+                        COLOR_TEXT
+                    };
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{speaker}："),
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(body.to_owned(), Style::default().fg(COLOR_TEXT)),
+                    ])
+                } else {
+                    Line::styled(text.clone(), Style::default().fg(COLOR_MUTED))
+                }
+            })
+            .collect::<Vec<_>>()
+    };
     frame.render_widget(
         {
-            let block = Block::default().borders(Borders::ALL).title("对话与记录");
+            let block = panel_block("故事记录", false);
             Paragraph::new(lines).block(block)
         },
-        chunks[1],
+        chunks.transcript,
     );
     let billing_lines = billing_lines(
         state,
-        usize::from(chunks[3].height.saturating_sub(2)),
-        usize::from(chunks[3].width.saturating_sub(2)),
+        usize::from(chunks.billing.height.saturating_sub(2)),
+        usize::from(chunks.billing.width.saturating_sub(4)),
     );
     frame.render_widget(
-        Paragraph::new(billing_lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(billing_title(state))
-                .border_style(if state.focus == Focus::Billing {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                }),
-        ),
-        chunks[3],
+        Paragraph::new(billing_lines).block(panel_block(
+            &billing_title(state),
+            state.focus == Focus::Billing,
+        )),
+        chunks.billing,
     );
     let controls = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(78), Constraint::Percentage(22)])
-        .split(chunks[2]);
+        .split(chunks.controls);
     let input_style = if state.focus == Focus::Input {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(COLOR_TEXT)
     } else {
         Style::default()
     };
@@ -1233,36 +1577,78 @@ fn draw_game(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
             .find(|script| script.script_id == session.script_id)
             .and_then(|script| script.suggested_actions.get(state.locale))
             .map(|suggestion| {
-                format!("{suggestion}\n\n（剧本建议已填入；可编辑，按 Enter 才会发送）")
+                format!("{suggestion}\n\n剧本建议 · 可编辑；Enter 提交前会显示费用预览")
             })
-            .unwrap_or_else(|| "输入行动…".into())
+            .unwrap_or_else(|| "描述你接下来要做的事…".into())
     } else {
         state.draft.clone()
     };
+    let input_width = usize::from(controls[0].width.saturating_sub(4)).max(1);
+    let input_lines = wrap_visual_lines(&input, input_width)
+        .into_iter()
+        .map(Line::from)
+        .collect::<Vec<_>>();
+    let (cursor_column, cursor_row) = draft_cursor_position(&state.draft, input_width);
+    let input_height = controls[0].height.saturating_sub(2).max(1);
+    let cursor_row = cursor_row.min(u16::MAX as usize) as u16;
+    let input_scroll = cursor_row.saturating_sub(input_height.saturating_sub(1));
     frame.render_widget(
-        Paragraph::new(input)
+        Paragraph::new(input_lines)
             .style(input_style)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("行动（Shift+Enter 换行）"),
+                    .border_type(BorderType::Rounded)
+                    .border_style(if state.focus == Focus::Input {
+                        COLOR_ACCENT
+                    } else {
+                        COLOR_BORDER
+                    })
+                    .style(Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL))
+                    .title(Span::styled(
+                        " 行动  ·  Shift+Enter 换行 ",
+                        Style::default()
+                            .fg(COLOR_ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .padding(Padding::horizontal(1)),
             )
-            .wrap(Wrap { trim: true }),
+            .scroll((input_scroll, 0)),
         controls[0],
     );
     frame.render_widget(
         Paragraph::new(if state.busy {
-            "等待响应…"
+            vec![
+                Line::from(Span::styled(
+                    "正在生成",
+                    Style::default()
+                        .fg(COLOR_WARNING)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled("X 取消", Style::default().fg(COLOR_MUTED))),
+            ]
+        } else if let Some(pending) = &state.pending_action {
+            let label = match pending.kind {
+                PendingActionKind::SubmitInput(_) => "确认发送",
+                PendingActionKind::Continue => "确认继续",
+            };
+            vec![
+                Line::from(Span::styled(label, button_style())),
+                Line::from(Span::styled("Enter / Y", Style::default().fg(COLOR_MUTED))),
+            ]
         } else {
-            "提交行动"
+            vec![
+                Line::from(Span::styled("提交行动", button_style())),
+                Line::from(Span::styled(
+                    "Enter · 预览费用",
+                    Style::default().fg(COLOR_MUTED),
+                )),
+            ]
         })
-        .style(button_style())
-        .block(Block::default().borders(Borders::ALL).border_style(
-            if state.focus == Focus::Submit {
-                input_style
-            } else {
-                Style::default()
-            },
+        .alignment(Alignment::Center)
+        .block(panel_block(
+            if state.busy { "处理中" } else { "行动" },
+            state.focus == Focus::Submit,
         )),
         controls[1],
     );
@@ -1284,28 +1670,230 @@ fn draw_game(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         "没有待恢复操作"
     };
     frame.render_widget(
-        Paragraph::new(format!(
-            "{}  ·  {}  ·  PgUp/PgDn 或滚轮翻阅记录 · Esc 退出",
-            state.status, continue_label
-        ))
-        .block(Block::default().borders(Borders::ALL).title("状态"))
-        .style(if state.focus == Focus::Continue {
-            input_style
-        } else {
-            Style::default()
-        }),
-        chunks[4],
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "● ",
+                Style::default().fg(if state.busy {
+                    COLOR_WARNING
+                } else {
+                    COLOR_ACCENT
+                }),
+            ),
+            Span::styled(state.status.clone(), Style::default().fg(COLOR_TEXT)),
+            Span::styled(
+                format!("  ·  {continue_label}"),
+                Style::default().fg(if state.focus == Focus::Continue {
+                    COLOR_ACCENT
+                } else {
+                    COLOR_MUTED
+                }),
+            ),
+            Span::styled(
+                "  ·  PgUp/PgDn 翻阅 · Esc 退出",
+                Style::default().fg(COLOR_MUTED),
+            ),
+        ]))
+        .style(Style::default().bg(COLOR_PANEL)),
+        chunks.status,
     );
-    frame.set_cursor_position(ratatui::layout::Position::new(
-        controls[0].x.saturating_add(
-            1 + state
-                .draft
-                .chars()
-                .count()
-                .min(controls[0].width.saturating_sub(2) as usize) as u16,
-        ),
-        controls[0].y.saturating_add(1),
-    ));
+    if !state.settings_open && controls[0].width >= 5 && controls[0].height >= 3 {
+        frame.set_cursor_position(ratatui::layout::Position::new(
+            controls[0]
+                .x
+                .saturating_add(2 + cursor_column.min(u16::MAX as usize) as u16),
+            controls[0]
+                .y
+                .saturating_add(1 + cursor_row.saturating_sub(input_scroll)),
+        ));
+    }
+}
+
+fn draw_settings(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
+    let layout = settings_layout(frame.area());
+    frame.render_widget(Clear, layout.panel);
+    frame.render_widget(
+        Block::default()
+            .title(Span::styled(
+                " 设置 ",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(COLOR_ACCENT)
+            .style(Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL)),
+        layout.panel,
+    );
+    for (section, area, label) in [
+        (SettingsSection::Model, layout.model_tab, "1 模型"),
+        (SettingsSection::Script, layout.script_tab, "2 剧本"),
+        (SettingsSection::Billing, layout.billing_tab, "3 费用"),
+    ] {
+        frame.render_widget(
+            Paragraph::new(label).alignment(Alignment::Center).style(
+                if state.settings_section == section {
+                    Style::default()
+                        .fg(COLOR_BACKGROUND)
+                        .bg(COLOR_ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(COLOR_MUTED).bg(COLOR_PANEL_SELECTED)
+                },
+            ),
+            area,
+        );
+    }
+    frame.render_widget(
+        Paragraph::new("×")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(COLOR_MUTED).bg(COLOR_PANEL)),
+        layout.close,
+    );
+
+    let body = match state.settings_section {
+        SettingsSection::Model => {
+            let current_id = state
+                .session_profile
+                .as_ref()
+                .map(|profile| profile.profile_id.as_str());
+            let mut lines = vec![Line::styled(
+                "所选模型只用于新周目；当前周目继续使用开局时冻结的配置。",
+                Style::default().fg(COLOR_MUTED),
+            )];
+            if state.profiles.is_empty() {
+                lines.push(Line::styled(
+                    "没有可用模型配置。",
+                    Style::default().fg(COLOR_WARNING),
+                ));
+            } else {
+                lines.extend(state.profiles.iter().enumerate().map(|(index, profile)| {
+                    let selected = index == state.profile_index;
+                    let current = current_id == Some(profile.profile_id.as_str());
+                    let marker = if selected { "› " } else { "  " };
+                    let suffix = if current { "  · 当前周目" } else { "" };
+                    Line::styled(
+                        format!(
+                            "{marker}{} · {}/{} · max {}{}",
+                            profile.profile_id,
+                            profile.provider_id,
+                            profile.model,
+                            profile.sampling.max_tokens,
+                            suffix,
+                        ),
+                        row_style(selected, true),
+                    )
+                }));
+            }
+            lines
+        }
+        SettingsSection::Script => {
+            let current_script = state
+                .session
+                .as_ref()
+                .map(|session| session.script_id.as_str());
+            let mut lines = vec![Line::styled(
+                "所选剧本只用于新周目；当前周目不会切换剧本。",
+                Style::default().fg(COLOR_MUTED),
+            )];
+            if state.scripts.is_empty() {
+                lines.push(Line::styled(
+                    "没有可用剧本。",
+                    Style::default().fg(COLOR_WARNING),
+                ));
+            } else {
+                lines.extend(state.scripts.iter().enumerate().map(|(index, script)| {
+                    let selected = index == state.script_index;
+                    let current = current_script == Some(script.script_id.as_str());
+                    let title = script
+                        .display_names
+                        .get(state.locale)
+                        .unwrap_or(&script.title);
+                    Line::styled(
+                        format!(
+                            "{}{} · {}{}",
+                            if selected { "› " } else { "  " },
+                            title,
+                            script.script_id,
+                            if current { "  · 当前周目" } else { "" },
+                        ),
+                        row_style(selected, true),
+                    )
+                }));
+            }
+            lines
+        }
+        SettingsSection::Billing => {
+            let width = usize::from(layout.body.width.saturating_sub(1)).max(1);
+            let mut lines = settings_billing_info_lines(width);
+            let available = usize::from(layout.body.height).saturating_sub(lines.len());
+            lines.extend(billing_lines(state, available, width));
+            lines
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(body)
+            .style(Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL))
+            .wrap(Wrap { trim: true }),
+        layout.body,
+    );
+
+    let footer = if state.busy || state.pending_action.is_some() {
+        Line::from(vec![
+            Span::styled("新周目暂不可用", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                "  ·  当前操作结束后再试  ·  F2 / Esc 返回",
+                Style::default().fg(COLOR_WARNING),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("N  新建周目", button_style()),
+            Span::styled(
+                "  ·  保存选择并开始  ·  Tab 切页  ·  F2 / Esc 返回",
+                Style::default().fg(COLOR_MUTED),
+            ),
+        ])
+    };
+    frame.render_widget(
+        Paragraph::new(footer)
+            .alignment(Alignment::Center)
+            .block(panel_block("", false)),
+        layout.new_run,
+    );
+}
+
+fn draft_cursor_position(draft: &str, width: usize) -> (usize, usize) {
+    let width = width.max(1);
+    let mut column = 0usize;
+    let mut row = 0usize;
+    for (line_index, line) in draft.split('\n').enumerate() {
+        if line_index > 0 {
+            row = row.saturating_add(1);
+            column = 0;
+        }
+        for character in line.chars() {
+            let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+            if column > 0 && column.saturating_add(character_width) > width {
+                row = row.saturating_add(1);
+                column = 0;
+            }
+            column = column.saturating_add(character_width);
+        }
+    }
+    if column >= width {
+        row = row.saturating_add(1);
+        column = 0;
+    }
+    (column, row)
+}
+
+#[cfg(test)]
+fn draft_cursor_column(draft: &str, area: Rect) -> usize {
+    draft_cursor_position(draft, usize::from(area.width.saturating_sub(4)).max(1)).0
+}
+
+#[cfg(test)]
+fn draft_cursor_row(draft: &str, area: Rect) -> usize {
+    draft_cursor_position(draft, usize::from(area.width.saturating_sub(4)).max(1)).1
 }
 
 fn wrap_visual_lines(text: &str, width: usize) -> Vec<String> {
@@ -1333,31 +1921,81 @@ fn wrap_visual_lines(text: &str, width: usize) -> Vec<String> {
 fn row_style(selected: bool, focused: bool) -> Style {
     if selected && focused {
         Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
+            .fg(COLOR_BACKGROUND)
+            .bg(COLOR_ACCENT)
             .add_modifier(Modifier::BOLD)
     } else if selected {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(COLOR_SECONDARY)
+            .bg(COLOR_PANEL_SELECTED)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default()
+        Style::default().fg(COLOR_TEXT)
     }
 }
 
 fn button_style() -> Style {
     Style::default()
-        .fg(Color::Black)
-        .bg(Color::Cyan)
+        .fg(COLOR_BACKGROUND)
+        .bg(COLOR_ACCENT)
         .add_modifier(Modifier::BOLD)
+}
+
+fn panel_block(title: &str, focused: bool) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(if focused { COLOR_ACCENT } else { COLOR_BORDER })
+        .style(Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL))
+        .padding(Padding::horizontal(1))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(if focused { COLOR_ACCENT } else { COLOR_MUTED })
+                .add_modifier(Modifier::BOLD),
+        ))
+}
+
+fn phase_label(state: &ViewState) -> &'static str {
+    if state.busy {
+        "生成中"
+    } else if state
+        .phase
+        .as_ref()
+        .is_some_and(|phase| phase.state.check.is_some())
+    {
+        "等待判定"
+    } else if state
+        .phase
+        .as_ref()
+        .is_some_and(|phase| phase.state.resume_required || phase.state.needs_recovery)
+    {
+        "需要恢复"
+    } else if state.phase.is_some() {
+        "等待行动"
+    } else {
+        "读取中"
+    }
+}
+
+fn phase_color(state: &ViewState) -> Color {
+    if state.busy {
+        COLOR_WARNING
+    } else if state.phase.as_ref().is_some_and(|phase| {
+        phase.state.check.is_some() || phase.state.resume_required || phase.state.needs_recovery
+    }) {
+        COLOR_SECONDARY
+    } else {
+        COLOR_ACCENT
+    }
 }
 
 fn selection_layout(area: Rect) -> Vec<Rect> {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(5),
+            Constraint::Length(4),
+            Constraint::Min(8),
             Constraint::Length(3),
             Constraint::Length(3),
         ])
@@ -1365,70 +2003,188 @@ fn selection_layout(area: Rect) -> Vec<Rect> {
         .to_vec()
 }
 
-fn game_layout(area: Rect) -> Vec<Rect> {
-    Layout::default()
+#[derive(Clone, Copy)]
+struct GameLayout {
+    header: Rect,
+    settings_button: Rect,
+    phase: Rect,
+    transcript: Rect,
+    controls: Rect,
+    billing: Rect,
+    status: Rect,
+}
+
+#[derive(Clone, Copy)]
+struct SettingsLayout {
+    panel: Rect,
+    model_tab: Rect,
+    script_tab: Rect,
+    billing_tab: Rect,
+    close: Rect,
+    body: Rect,
+    new_run: Rect,
+}
+
+fn settings_layout(area: Rect) -> SettingsLayout {
+    let width = area.width.saturating_sub(4).min(92).max(area.width.min(24));
+    let height = area
+        .height
+        .saturating_sub(2)
+        .min(24)
+        .max(area.height.min(8));
+    let panel = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let inner = Block::default().borders(Borders::ALL).inner(panel);
+    let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(5),
-            Constraint::Length(5),
-            Constraint::Length(7),
+            Constraint::Length(2),
+            Constraint::Min(1),
             Constraint::Length(3),
         ])
-        .split(area)
-        .to_vec()
+        .split(inner);
+    let tabs = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+            Constraint::Percentage(10),
+        ])
+        .split(sections[0]);
+    SettingsLayout {
+        panel,
+        model_tab: tabs[0],
+        script_tab: tabs[1],
+        billing_tab: tabs[2],
+        close: tabs[3],
+        body: sections[1],
+        new_run: sections[2],
+    }
 }
 
-fn billing_lines(state: &ViewState, max_lines: usize, width: usize) -> Vec<Line<'static>> {
+fn next_settings_section(section: SettingsSection, forward: bool) -> SettingsSection {
+    match (section, forward) {
+        (SettingsSection::Model, true) | (SettingsSection::Billing, false) => {
+            SettingsSection::Script
+        }
+        (SettingsSection::Script, true) => SettingsSection::Billing,
+        (SettingsSection::Script, false) => SettingsSection::Model,
+        (SettingsSection::Billing, true) => SettingsSection::Model,
+        (SettingsSection::Model, false) => SettingsSection::Billing,
+    }
+}
+
+fn game_layout(area: Rect) -> GameLayout {
+    let wide = area.width >= 120;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(if wide {
+            [
+                Constraint::Length(3),
+                Constraint::Min(8),
+                Constraint::Length(5),
+                Constraint::Length(3),
+                Constraint::Length(0),
+            ]
+        } else {
+            [
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(5),
+                Constraint::Length(7),
+                Constraint::Length(3),
+            ]
+        })
+        .split(area);
+    let header_columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(24)])
+        .split(chunks[0]);
+    let header_actions = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(10), Constraint::Length(14)])
+        .split(header_columns[1]);
+    let (transcript, billing) = if wide {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(chunks[1]);
+        (columns[0], columns[1])
+    } else {
+        (chunks[1], chunks[3])
+    };
+    GameLayout {
+        header: header_columns[0],
+        settings_button: header_actions[0],
+        phase: header_actions[1],
+        transcript,
+        controls: chunks[2],
+        billing,
+        status: if wide { chunks[3] } else { chunks[4] },
+    }
+}
+
+fn billing_content_lines(state: &ViewState, width: usize) -> Vec<Line<'static>> {
     if let Some(error) = &state.billing_error {
-        return vec![Line::from(error.clone())];
+        return wrap_display_lines(error, width);
     }
     let Some(summary) = &state.billing else {
-        return vec![Line::from("打开周目后显示模型用量与费用。")];
+        return wrap_display_lines("打开周目后显示模型用量与费用。", width);
     };
     let mut lines = Vec::new();
     if let (Some(profile), Some(preflight)) = (
-        state.profiles.get(state.profile_index),
+        state
+            .session_profile
+            .as_ref()
+            .or_else(|| state.profiles.get(state.profile_index)),
         state.billing_preflight.as_ref(),
     ) {
-        lines.push(Line::from(truncate_display_width(
+        lines.extend(wrap_display_lines(
             &format!(
-                "请求：{} · {}/{} · 输出 ≤ {} Token",
-                profile.profile_id, profile.provider_id, profile.model, profile.sampling.max_tokens
+                "模型：{}/{} · 输出 ≤ {} Token",
+                profile.provider_id, profile.model, profile.sampling.max_tokens
             ),
             width,
-        )));
+        ));
         if let Some(price) = &preflight.selected_price {
-            lines.push(Line::from(truncate_display_width(
+            lines.extend(wrap_display_lines(
                 &format!(
-                    "价格：{} · {} / {} · {}",
+                    "价格：{} · {}/{} · 版本 {}",
                     price.currency, price.provider_id, price.model_id, price.version_id
                 ),
                 width,
-            )));
+            ));
         } else {
-            lines.push(Line::from("价格：未登记，不可发送"));
+            lines.extend(wrap_display_lines("价格：未登记，不可发送", width));
         }
         if let Some(budget) = &preflight.budget {
-            lines.push(Line::from(truncate_display_width(
+            lines.extend(wrap_display_lines(
                 &format!(
                     "本局上限：CNY {} / USD {}",
                     format_money(budget.cny_limit.nanos()),
                     format_money(budget.usd_limit.nanos())
                 ),
                 width,
-            )));
+            ));
         } else {
-            lines.push(Line::from("本局上限：未设置，不可发送"));
+            lines.extend(wrap_display_lines("本局上限：未设置，不可发送", width));
         }
     }
-    let remaining_lines = max_lines.saturating_sub(lines.len());
-    for item in summary
-        .models
-        .iter()
-        .skip(state.billing_scroll)
-        .take(remaining_lines)
-    {
+    for warning in summary.warnings.iter().filter(|warning| !warning.read) {
+        lines.extend(wrap_display_lines(
+            &format!(
+                "预算提醒：{} 已达到 {}%",
+                warning.currency, warning.threshold_percent
+            ),
+            width,
+        ));
+    }
+    for item in &summary.models {
         let settled = item
             .settled_amount
             .map(|amount| format_money(amount.nanos()))
@@ -1456,7 +2212,7 @@ fn billing_lines(state: &ViewState, max_lines: usize, width: usize) -> Vec<Line<
                 String::new()
             }
         );
-        lines.push(Line::from(truncate_display_width(&text, width)));
+        lines.extend(wrap_display_lines(&text, width));
     }
     if lines.is_empty() {
         lines.push(Line::from("本局尚无模型请求。"));
@@ -1464,50 +2220,28 @@ fn billing_lines(state: &ViewState, max_lines: usize, width: usize) -> Vec<Line<
     lines
 }
 
-fn billing_title(state: &ViewState) -> String {
-    let Some(summary) = &state.billing else {
-        return "本局费用".into();
-    };
-    let warnings = summary
-        .warnings
-        .iter()
-        .filter(|warning| !warning.read)
-        .map(|warning| format!("{} {}%", warning.currency, warning.threshold_percent))
-        .collect::<Vec<_>>();
-    let mut title = if warnings.is_empty() {
-        "本局费用".into()
-    } else {
-        format!("本局费用 · 预算提醒 {}", warnings.join(" / "))
-    };
-    if summary.models.len() > 2 {
-        let first = state
-            .billing_scroll
-            .saturating_add(1)
-            .min(summary.models.len());
-        let last = first.saturating_add(1).min(summary.models.len());
-        title.push_str(&format!(
-            " · {first}-{last}/{} Tab 后 PgUp/PgDn",
-            summary.models.len()
-        ));
-    }
-    title
+fn billing_lines(state: &ViewState, max_lines: usize, width: usize) -> Vec<Line<'static>> {
+    let lines = billing_content_lines(state, width);
+    let start = state
+        .billing_scroll
+        .min(lines.len().saturating_sub(max_lines));
+    lines.into_iter().skip(start).take(max_lines).collect()
 }
 
-fn truncate_display_width(text: &str, width: usize) -> String {
-    let mut output = String::new();
-    let mut used = 0usize;
-    for character in text.chars() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if used.saturating_add(character_width) > width {
-            if width > 0 && used < width {
-                output.push('…');
-            }
-            break;
-        }
-        output.push(character);
-        used += character_width;
-    }
-    output
+fn billing_title(state: &ViewState) -> String {
+    let _ = state;
+    "本局费用 · PgUp/PgDn 滚动".into()
+}
+
+fn settings_billing_info_lines(width: usize) -> Vec<Line<'static>> {
+    wrap_display_lines("账单只读；编辑预算和价格请使用桌面端设置。", width)
+}
+
+fn wrap_display_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    wrap_visual_lines(text, width)
+        .into_iter()
+        .map(Line::from)
+        .collect()
 }
 
 fn format_money(nanos: i64) -> String {

@@ -120,3 +120,9 @@ DeepSeek 以外的供应商余额尚未接入；这不表示供应商永久不�
 [足精度 Decimal](https://docs.rs/rust_decimal/latest/rust_decimal/)与 [jiff 时区](https://docs.rs/jiff/latest/jiff/)在实现时核验并集中 workspace 版本，不在设计提交中安装。字节输入估计必须包含完整序列化输入、协议固定开销与输出 / reasoning 上限；供应商适配器声明可证明的上界 / 保守系数，不能对任意 tokenizer 宣称 1 byte = 1 Token 永远成立。不能给出可靠上界时按模型输入硬限预留；超出估计完整结算且停新请求。未来 tokenizer 接入另行授权 / 验证，不暗加网络计数调用。
 
 验证重点是同请求重复 / 冲突回调、单局 CNY / USD 上限并发不足、登记与发送崩溃、结算提交不确定、无 usage / 取消、服务商币种归属、跨月报表 / 时区 / DST、价格与单局上限修改、溢出舍入、补价 / 分币种预警、分页 revision 和余额权限 / 缓存。单局原币上限估算不等于供应商账单；参考额度不是性能实测。三平台设置和精确展示由实施留证，最终 bun run verify 十三项通过。
+
+## 周目删除与账务义务
+
+[059 周目管理设计](../task/059-run-management-design.md)确认，canonical `billingRunId` 为 `sessionId`，不对应独立生成的 `memoryRunId`。现有剧情请求使用 `sessionId`，030 私有记忆请求曾使用 `memoryRunId`；060 将后者修正，并通过 `memory_run_sessions` 的精确关联迁移旧 scope。迁移会保留 requestId / pending settlement，合并 warnings；预算冲突将停止收费，直到玩家明确保存 canonical 上限。目录显式保存并核验 canonical `billingRunId`；清理还须覆盖迁移前的已验证 legacy scope，不依赖外键级联或猜测 UUID 映射。没有预算和请求的周目属于尚未配置，不是账本损坏。
+
+本局存在 `reserved` / `unconfirmed` 物理请求或 `billing_pending_settlements` outbox 时拒绝删除，须先解决费用义务。已有完整持久 usage 的请求可走本地结算恢复；当前没有任意费用核销入口，`unconfirmed` 若缺完整 usage 且无供应商回执等可核验证据，只能保留，不能手动改为 settled 或删除。删除不能把未知用量当零或从月报隐去未确认请求。所有请求已结算后，玩家显式确认才一并清除本局预算、预警、请求明细与可精确归属的本地账单审计：仅清理 target 明确关联到已核验周目 scope 的预算 / warning 操作，以及其已核验物理请求的结算审计；价格登记、模型选择和归属不明记录保留。共享价格版本、profile 价格选择及供应商侧账单不受影响。该清除不保证从全库 SQLite 备份物理擦除字节。
