@@ -435,6 +435,8 @@
     "latest": "Jump to latest",
     "earlierRecords": "Load earlier records",
     "compatRecord": "This record uses a format this version cannot display.",
+    "recordUnavailable": "This record is preserved, but it has no displayable body.",
+    "systemRecordUnavailable": "The system record is preserved, but it has no displayable message.",
     "noRecords": "No records yet. Your first action will start the story.",
     "noDifficulty": "No difficulty set",
     "diceMode": "Dice checks",

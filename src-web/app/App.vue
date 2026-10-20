@@ -13,6 +13,7 @@ import { useBilling } from "../features/billing/composables/useBilling";
 import { useUiPreferences } from "../features/game/composables/useUiPreferences";
 import { summarizeRunUsage } from "../features/billing/utils/run-usage";
 import { formatExactCurrency } from "../shared/utils/format";
+import { appErrorDescriptor } from "./error-message";
 
 const { t } = useI18n();
 const product = useProduct();
@@ -71,19 +72,8 @@ function faultReason(failure: unknown): string | undefined {
 const errorMessage = computed(() => {
   const failure = error.value;
   if (!failure) return undefined;
-  switch (failure.code) {
-    case "app.not-ready": return t("errors.appNotReady");
-    case "app.not-found": return t("errors.appNotFound");
-    case "app.bad-request":
-      return faultReason(failure) === "stalePresenceRevision" || faultReason(failure) === "targetUnavailable"
-        ? t("game.presenceChanged")
-        : t("errors.badRequest");
-    case "store.corrupt": return t("errors.storeCorrupt");
-    case "store.io": return t("errors.storeIo");
-    case "app.event-failed": return t("errors.appEventFailed");
-    case "app.busy": return t("errors.appBusy");
-    default: return t("errors.unknownWithCode", { code: failure.code });
-  }
+  const descriptor = appErrorDescriptor(failure, faultReason(failure));
+  return t(descriptor.key, "values" in descriptor ? descriptor.values : {});
 });
 const workspace = ref<InstanceType<typeof GameWorkspace>>();
 const settingsOpen = ref(false);

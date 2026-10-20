@@ -435,6 +435,8 @@
     "latest": "跳转到最新内容",
     "earlierRecords": "加载更早记录",
     "compatRecord": "此记录使用了当前版本无法显示的格式。",
+    "recordUnavailable": "此记录已保留，但没有可显示的正文。",
+    "systemRecordUnavailable": "系统记录已保留，但没有可显示的说明。",
     "noRecords": "还没有记录。提交第一个行动即可开始故事。",
     "noDifficulty": "未设置难度",
     "diceMode": "骰点判定",

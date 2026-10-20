@@ -87,4 +87,48 @@ describe("RecordFeed", () => {
     expect(wrapper.text()).toContain("guard");
     wrapper.unmount();
   });
+
+  it("renders bounded system messages instead of the generic compatibility placeholder", () => {
+    const wrapper = mount(RecordFeed, {
+      props: {
+        items: [
+          {
+            recordSeq: 1,
+            createdAt: "2026-10-20T00:00:00Z",
+            kind: "system",
+            body: { code: "roundAccepted", message: "回合已提交。\u0000\u0007", data: {} },
+          },
+          {
+            recordSeq: 2,
+            createdAt: "2026-10-20T00:00:01Z",
+            kind: "system",
+            body: { code: "futureSystemEvent", message: " ", data: {} },
+          },
+          {
+            recordSeq: 3,
+            createdAt: "2026-10-20T00:00:02Z",
+            kind: "system",
+            body: {
+              code: "longSystemEvent",
+              message: `${"x".repeat(1_999)}😀${"y".repeat(10)}`,
+              data: {},
+            },
+          },
+        ],
+        loadingOlder: false,
+        canRewind: false,
+      },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.text()).toContain("回合已提交。");
+    expect(wrapper.findAll("li")[0]!.find("p").text()).toBe("回合已提交。");
+    expect(wrapper.text()).toContain(
+      "The system record is preserved, but it has no displayable message.",
+    );
+    expect(wrapper.text()).not.toContain("This record uses a format this version cannot display.");
+    expect(wrapper.text()).not.toContain("futureSystemEvent");
+    expect(wrapper.findAll("li")[2]!.find("p").text()).toBe(`${"x".repeat(1_999)}😀…`);
+    wrapper.unmount();
+  });
 });

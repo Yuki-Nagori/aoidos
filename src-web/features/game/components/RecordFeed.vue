@@ -83,6 +83,19 @@ function finishReasonName(reason: string): string {
       return reason;
   }
 }
+
+function systemRecordMessage(message: string): string {
+  const safeMessage = Array.from(message)
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint === 0x09 || codePoint === 0x0a || (codePoint >= 0x20 && !(codePoint >= 0x7f && codePoint <= 0x9f));
+    })
+    .join("")
+    .trim();
+  if (!safeMessage) return t("game.systemRecordUnavailable");
+  const characters = Array.from(safeMessage);
+  return characters.length > 2_000 ? `${characters.slice(0, 2_000).join("")}…` : safeMessage;
+}
 </script>
 
 <template>
@@ -152,7 +165,13 @@ function finishReasonName(reason: string): string {
       <p v-else-if="item.body && 'code' in item.body && item.body.code === 'checkSkipped'">
         {{ t("game.checkSkipped") }}
       </p>
-      <p v-else class="whitespace-pre-wrap break-words">{{ t("game.compatRecord") }}</p>
+      <p
+        v-else-if="item.body && 'code' in item.body"
+        class="whitespace-pre-wrap break-words"
+      >
+        {{ systemRecordMessage(item.body.message) }}
+      </p>
+      <p v-else class="whitespace-pre-wrap break-words">{{ t("game.recordUnavailable") }}</p>
       <button
         type="button"
         v-if="props.canRewind &&
