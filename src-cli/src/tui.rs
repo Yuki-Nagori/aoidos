@@ -329,7 +329,7 @@ async fn open_session(
                 state.draft = suggestion;
             }
         }
-        Err(error) => state.status = format!("{}：{}", error.code, error.message),
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
     }
     Ok(())
 }
@@ -458,7 +458,7 @@ async fn submit_action(app: &mut CliApp, state: &mut ViewState) {
         }
         Err(error) => {
             state.draft = action;
-            state.status = format!("{}：{}", error.code, error.message);
+            state.status = friendly_error(&error.code, &error.message, state.locale);
         }
     }
 }
@@ -485,7 +485,7 @@ async fn cancel_game(app: &mut CliApp, state: &mut ViewState) {
             state.status = "已请求取消；已提交的记录仍会保留。".into();
             refresh_phase(app, state);
         }
-        Err(error) => state.status = format!("{}：{}", error.code, error.message),
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
     }
 }
 
@@ -497,7 +497,7 @@ async fn continue_game(app: &mut CliApp, state: &mut ViewState) {
     let phase = match app.services.runtime.get_phase(&id) {
         Ok(phase) => phase,
         Err(error) => {
-            state.status = format!("{}：{}", error.code, error.message);
+            state.status = friendly_error(&error.code, &error.message, state.locale);
             return;
         }
     };
@@ -524,7 +524,7 @@ async fn continue_game(app: &mut CliApp, state: &mut ViewState) {
             state.status = "继续处理中…".into();
             refresh_phase(app, state);
         }
-        Err(error) => state.status = format!("{}：{}", error.code, error.message),
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
     }
 }
 
@@ -558,7 +558,7 @@ fn handle_runtime_event(app: &CliApp, state: &mut ViewState, event: RuntimeEvent
                 refresh_turn_snapshot_for(app, state, &turn_id);
                 state.active_turn_id = Some(turn_id);
                 finalize_stream(state, true);
-                state.status = format!("{code}：{message}");
+                state.status = friendly_error(&code, &message, state.locale);
                 refresh_phase(app, state);
                 refresh_billing_for_active_session(app, state);
             }
@@ -579,7 +579,7 @@ fn handle_runtime_event(app: &CliApp, state: &mut ViewState, event: RuntimeEvent
                 .and_then(|phase| phase.state.last_operation.as_ref())
                 .and_then(|operation| operation.error.as_ref())
             {
-                state.status = format!("{}：{}", error.code, error.message);
+                state.status = friendly_error(&error.code, &error.message, state.locale);
             }
         }
         RuntimeEvent::Record(event) => {
@@ -649,7 +649,7 @@ fn refresh_phase(app: &CliApp, state: &mut ViewState) {
             })
             .and_then(|operation| operation.error.as_ref())
         {
-            state.status = format!("{}：{}", error.code, error.message);
+            state.status = friendly_error(&error.code, &error.message, state.locale);
         }
         refresh_turn_snapshot(app, state);
     }
@@ -1313,7 +1313,40 @@ fn terminal_locale() -> &'static str {
 }
 
 fn display_fault(fault: aoidos_engine::fault::Fault) -> io::Error {
-    io::Error::other(format!("{}：{}", fault.code, fault.message))
+    io::Error::other(friendly_error(
+        &fault.code,
+        &fault.message,
+        terminal_locale(),
+    ))
+}
+
+fn friendly_error(code: &str, message: &str, locale: &str) -> String {
+    let english = locale == "en";
+    match code {
+        "budget.exceeded" if english => {
+            "The run budget is insufficient. Check the limit for this currency in Billing settings.".into()
+        }
+        "budget.exceeded" => "本局预算不足，请在费用设置中检查对应币种的上限。".into(),
+        "budget.price-missing" if english => {
+            "No price is registered for this model. Register its price before sending a request.".into()
+        }
+        "budget.price-missing" => "尚未登记所选模型的价格，请先完成价格登记。".into(),
+        "budget.run-limit-missing" if english => {
+            "The run limit is not set. Set a budget before starting a request.".into()
+        }
+        "budget.run-limit-missing" => "本局费用上限尚未设置，请先完成预算设置。".into(),
+        "budget.settlement-backlog" if english => {
+            "The pending settlement queue is full. Restore pending items in Billing before retrying.".into()
+        }
+        "budget.settlement-backlog" => {
+            "待结算队列已满，请先在费用页面恢复待结算项目，再重试。".into()
+        }
+        "llm.missing-key" if english => {
+            "The selected model profile has no API key. Add one in Model settings.".into()
+        }
+        "llm.missing-key" => "所选模型配置缺少 API 密钥，请在模型设置中补充密钥。".into(),
+        _ => message.to_owned(),
+    }
 }
 
 struct TerminalSession;
@@ -1350,128 +1383,4 @@ impl Drop for TerminalSession {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        ViewState, append_bounded, apply_turn_snapshot, billing_lines, billing_title, game_layout,
-        scroll_billing, truncate_display_width, wrap_visual_lines,
-    };
-    use aoidos_app::billing::RunBillingSummary;
-    use aoidos_engine::billing::{BudgetWarning, ModelUsageSummary};
-
-    #[test]
-    fn transcript_stream_limit_counts_utf8_bytes_without_splitting_characters() {
-        let mut output = String::from("a");
-
-        append_bounded(&mut output, "中文", 7);
-        append_bounded(&mut output, "再", 7);
-
-        assert_eq!(output, "a中文");
-        assert_eq!(output.len(), 7);
-    }
-
-    #[test]
-    fn transcript_wraps_long_narration_into_scrollable_display_rows() {
-        assert_eq!(wrap_visual_lines("abcdef", 3), ["abc", "def"]);
-        assert_eq!(wrap_visual_lines("甲乙丙", 4), ["甲乙", "丙"]);
-        assert_eq!(wrap_visual_lines("a\nb", 3), ["a", "b"]);
-    }
-
-    #[test]
-    fn repeated_turn_snapshots_replace_stream_without_duplicating_text() {
-        let mut state = ViewState::new(Vec::new(), Vec::new());
-        let snapshot = || aoidos_engine::turn::TurnSnapshot {
-            turn_id: "turn-1".into(),
-            text: "完整正文".into(),
-            seq: aoidos_engine::turn::Sequences::default(),
-            outcome: None,
-            finish_reason: None,
-            error: None,
-        };
-
-        apply_turn_snapshot(&mut state, snapshot());
-        apply_turn_snapshot(&mut state, snapshot());
-
-        assert_eq!(state.stream, "完整正文");
-    }
-
-    #[test]
-    fn billing_panel_shows_original_currency_tokens_and_missing_usage() {
-        let mut state = ViewState::new(Vec::new(), Vec::new());
-        state.billing = Some(RunBillingSummary {
-            models: vec![ModelUsageSummary {
-                provider_id: "deepseek".into(),
-                currency: "CNY".parse().unwrap(),
-                model_id: "deepseek-flash".into(),
-                settled_amount: Some(serde_json::from_str("\"0.014\"").unwrap()),
-                reserved_amount: Some(serde_json::from_str("\"0.02\"").unwrap()),
-                known_tokens: Some(240),
-                incomplete_requests: 1,
-                request_count: 2,
-            }],
-            warnings: vec![BudgetWarning {
-                currency: "USD".parse().unwrap(),
-                threshold_percent: 80,
-                reached_at: "2026-10-20T00:00:00Z".into(),
-                read: false,
-            }],
-        });
-
-        let lines = billing_lines(&state, 2, 100)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(lines[0].contains("deepseek/deepseek-flash"));
-        assert!(lines[0].contains("CNY 结算0.01"));
-        assert!(lines[0].contains("tok:240"));
-        assert!(lines[0].contains("未知:1"));
-        assert!(billing_title(&state).contains("USD 80%"));
-    }
-
-    #[test]
-    fn billing_rows_are_truncated_by_terminal_display_width() {
-        assert_eq!(truncate_display_width("模型名称很长", 5), "模型…");
-        assert_eq!(truncate_display_width("abc", 2), "ab");
-    }
-
-    #[test]
-    fn game_layout_allocates_dedicated_billing_and_status_panels() {
-        let chunks = game_layout(ratatui::layout::Rect::new(0, 0, 100, 24));
-
-        assert_eq!(chunks.len(), 5);
-        assert_eq!(chunks[3].height, 4);
-        assert_eq!(chunks[4].height, 3);
-        assert_eq!(chunks.iter().map(|chunk| chunk.height).sum::<u16>(), 24);
-    }
-
-    #[test]
-    fn billing_groups_can_be_scrolled_with_keyboard_focus() {
-        let mut state = ViewState::new(Vec::new(), Vec::new());
-        state.billing = Some(RunBillingSummary {
-            models: (0..3)
-                .map(|index| ModelUsageSummary {
-                    provider_id: "provider".into(),
-                    currency: "USD".parse().unwrap(),
-                    model_id: format!("model-{index}"),
-                    settled_amount: None,
-                    reserved_amount: None,
-                    known_tokens: None,
-                    incomplete_requests: 0,
-                    request_count: 1,
-                })
-                .collect(),
-            warnings: Vec::new(),
-        });
-
-        scroll_billing(&mut state, true);
-        scroll_billing(&mut state, true);
-        let lines = billing_lines(&state, 1, 80);
-
-        assert!(lines[0].to_string().contains("model-2"));
-        assert!(billing_title(&state).contains("3-3/3"));
-        scroll_billing(&mut state, true);
-        assert_eq!(state.billing_scroll, 2);
-        scroll_billing(&mut state, false);
-        assert_eq!(state.billing_scroll, 1);
-    }
-}
+mod tests;
