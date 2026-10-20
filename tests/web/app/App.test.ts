@@ -131,11 +131,11 @@ describe("App", () => {
     await wrapper.get('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
-    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(10);
+    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(11);
     const dialog = wrapper.get('[role="dialog"]');
     const focusable = Array.from(
       dialog.element.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex]:not([tabindex="-1"])',
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex]:not([tabindex="-1"])',
       ),
     ).filter((element) => {
       let parent: HTMLElement | null = element;
@@ -150,39 +150,30 @@ describe("App", () => {
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
     expect(document.activeElement).toBe(focusable.at(-1));
-    await wrapper.get('select[aria-label="Theme"]').trigger("keydown", {
+    await wrapper.get('[role="combobox"][aria-label="Theme"]').trigger("keydown", {
       key: "Escape",
       isComposing: true,
     });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
     expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
-    expect(wrapper.get(".settings-form-grid").findAll("select")).toHaveLength(2);
-    const theme = wrapper.get('select[aria-label="Theme"]');
-    expect(theme.findAll("option").map((option) => option.text())).toEqual([
+    expect(wrapper.get(".settings-form-grid").findAll('[role="combobox"]')).toHaveLength(2);
+    const theme = wrapper.get('[role="combobox"][aria-label="Theme"]');
+    await theme.trigger("click");
+    expect(wrapper.findAll('[role="option"]').map((option) => option.text())).toEqual([
       "Dark",
       "Light",
       "Light Purple",
     ]);
-    const script = wrapper
-      .findAll("label")
-      .find((label) => label.text().includes("Scenario"))!
-      .get("select");
-    expect(script.findAll("option").map((option) => option.text())).toEqual(["Mistbell Cellar"]);
-    const model = wrapper.get('select[aria-label="Model"]');
-    expect(model.findAll("option").map((option) => option.text())).toEqual([
-      "DeepSeek V4.1 Flash",
-      "DeepSeek V4 Pro",
-    ]);
-    expect((model.element as HTMLSelectElement).value).toBe("deepseek-flash");
+    await theme.trigger("keydown", { key: "Escape" });
+    const script = wrapper.get('[role="combobox"][aria-label="Scenario"]');
+    expect(script.text()).toContain("Mistbell Cellar");
+    const model = wrapper.get('[role="combobox"][aria-label="Model"]');
+    expect(model.text()).toContain("DeepSeek V4.1 Flash");
     const language = wrapper.get('input[name="interface-language"][value="zh-Hans"]');
     await language.setValue();
     await vi.waitFor(() => {
-      expect(theme.findAll("option").map((option) => option.text())).toEqual([
-        "深色",
-        "浅色",
-        "浅紫",
-      ]);
-      expect(script.findAll("option").map((option) => option.text())).toEqual(["雾钟地窖"]);
+      expect(theme.text()).toContain("深色");
+      expect(script.text()).toContain("雾钟地窖");
     });
     const skinSwitch = wrapper.get('[role="switch"][aria-label="剧本皮肤"]');
     expect(skinSwitch.attributes("aria-checked")).toBe("true");

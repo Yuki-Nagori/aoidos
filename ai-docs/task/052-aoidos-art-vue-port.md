@@ -3,7 +3,7 @@
 - 状态：in-progress
 - 依赖：051、025、026、031、034、035、046
 - 优先级：P1
-- 创建 / 更新：2026-10-19 / 2026-10-19
+- 创建 / 更新：2026-10-19 / 2026-10-20
 
 ## 目标与背景
 
@@ -54,7 +54,7 @@
 | `stall-hint.html`                                                                                                                                                                        | `useSceneHint`、`GameWorkspace.vue`                              | 仅显示引擎实际领取的场景提示；无提示时显示真实不可用状态。                                                                                                                                                                                                                                                                                                        |
 | `settings.html`、`settings-model.html`、`settings-gameplay.html`、`billing.html`、`credits.html`、`#api`、`#gameplay`、`#billing`、`#price`、`#balance`、`#scenario`                     | `SetupPanel.vue`、`BillingPanel.vue`、locale / theme composables | 所有选项、费用、余额、价格和署名来自当前正式 API，不照搬静态预览结果。                                                                                                                                                                                                                                                                                            |
 | `memory-settings.html`、`memory-list.html`、`memory-pending.html`、`#memory`、`#memory-list`、`#memory-pending`                                                                          | `MemorySettingsPanel.vue`、`MemoryQueryPanel.vue`                | 设置 / 列表 / 待确认页复用正式配置和有界查询状态；记忆列表页同时提供 033 已实现的显式素材收集 / 批次操作；详情按需读取，枚举本地化。设计稿搜索框暂不接入：当前列表 API 只支持有界快照分页，客户端搜索已加载页会造成不完整结果；完整检索语义及可复用搜索输入组件已由 [053](053-memory-query-search-design.md) 定稿，实现由 [055](055-memory-search-impl.md) 承接。 |
-| `shortcuts.html`、`shortcuts-settings.html`、`#shortcuts`                                                                                                                                | 当前尚无全局快捷键注册表或改键持久化契约                         | 只沿用已实现的面板 / Escape / 输入交互；速查浮层、快捷键设置、改键和平台菜单接线由 [057](057-keyboard-shortcuts-impl.md) 承接，不以静态文案冒充已支持按键。                                                                                                                                                                                                       |
+| `shortcuts.html`、`shortcuts-settings.html`、`#shortcuts`                                                                                                                                | `KeyboardShortcuts.vue`、`shortcut-presentation.ts`              | 052 实现速查浮层、设置分区、筛选和平台化按键展示；明确标注这些是设计预览。真实全局分发、改键录制 / 保存、菜单接线由 [057](057-keyboard-shortcuts-impl.md) 承接，不能把展示层当作已生效按键。                                                                                                                                                                      |
 | `price-register.html`、`provider-balance.html`、`backfill-preview.html`                                                                                                                  | `BillingPanel.vue`、`useBilling`                                 | 复用账本已有的预览 / 确认历史补价流程。`backfill-preview.html` 的整页遮罩批量摘要与产品单请求补价契约不符；Vue 保留当前条目内联预览，不模拟批量操作或虚构汇总。                                                                                                                                                                                                   |
 | `loading.html`                                                                                                                                                                           | `WelcomeScreen.vue` 与各功能加载态                               | 只在对应数据读取期间显示局部加载状态，不把一个快照伪装成独立路由。                                                                                                                                                                                                                                                                                                |
 | `disconnected.html`                                                                                                                                                                      | `GameWorkspace.vue` 连接错误告警与显式重新连接                   | 使用现有 transport 连接错误驱动提示和重连；API 不提供最后同步时间、连续重试次数，因此不伪造这些值，也不加入后台轮询。                                                                                                                                                                                                                                             |
@@ -74,8 +74,9 @@
 - [x] 设计快照和屏幕清单有可复核版本；43 个目标设计页 / 组件状态均有对应 Vue 页面状态或有记录的范围排除，不遗留“样式像但状态缺失”的界面。
 - [x] 设计稿交互映射到正确的现有 Rust / IPC / composable 行为；无假数据、虚构成功反馈或第二套持久状态。
 - [ ] `dark`、`light`、`light-purple`、Mistbell 皮肤、zh-Hans / en，以及设计指定窗口尺寸 / 关键状态的表现通过检查；Vue 结构及几何布局与对应 HTML 可逐项核对，差异有具体原因和记录。
-- [x] 欢迎页主题 / 语言 / Mistbell 皮肤组合、欢迎页三个窗口尺寸与真实会话下设置抽屉三个视口的几何 / 十个分区内容，以及密钥缺失 / 剧本读取失败状态由 Chromium 自动回归覆盖；基线只保留已核对的数值锚点，不访问或依赖私有 `aoidos-art` 仓库。
+- [ ] 欢迎页主题 / 语言 / Mistbell 皮肤组合、欢迎页三个窗口尺寸与真实会话下设置抽屉三个视口的几何 / 十一个分区内容，以及自绘选择器和快捷键速查弹层的窄窗状态、密钥缺失 / 剧本读取失败状态由 Chromium 自动回归覆盖；基线只保留已核对的数值锚点，不访问或依赖私有 `aoidos-art` 仓库。
 - [x] 所有界面使用 Aoidos 正式 token 和本地化资源；预览工具代码、静态 HTML、生成字典及未登记 `--x-*` 不进入生产构建。
+- [ ] 产品选择器使用应用内可访问 listbox，不触发系统原生选择菜单；快捷键速查 / 设置的布局、平台键帽、分组和筛选与 `aoidos-art` 对照，未实现的改键与全局绑定有明确禁用状态。
 - [x] 关键路径和失败 / 禁用态有行为测试；键盘、焦点、IME、屏幕阅读语义、窄窗口和 reduced-motion 沿用对应产品契约。
 - [x] 架构 / 规范 / task 与实现同步，独立评审完成并处理发现；最终 `bun run verify` 通过。
 - [ ] 需要外部 WebView / DPI / 辅助技术证据的项目按平台实际验证并分别记录；本轮按用户决定暂缓实机验收，当前状态如实记为未验证，不据此宣称跨平台表现通过。
@@ -108,6 +109,8 @@
 - 2026-10-19，用户决定暂缓 052 的外部 WebView / DPI / 键盘 / 辅助技术人工验收；相关平台状态继续标记为未验证，不作为本轮自动化检查已通过的证据。
 - 2026-10-19，独立 review 发现记忆批次操作仅在组件的未使用 `all` 视图可见；已将显式素材收集、批次准备 / 发送 / 恢复 / 完成入口放回应用实际使用的记忆列表视图，并通过行为测试确认列表页可见、待确认页不误显。
 - 2026-10-19，独立 review 还发现设置焦点循环会命中隐藏页、IME Escape 会关闭抽屉、对局内设置关闭不恢复触发焦点，以及密钥状态旧读取可能覆盖刚保存结果。已修复焦点可见性 / IME 优先级 / 触发元素恢复和密钥请求代次，并补充相应行为测试；后续复核未发现遗留代码问题。
+- 2026-10-20，对照 `aoidos-art` 基线补齐应用内自绘选择器、完整快捷键设置展示和速查浮层；列表框支持方向键 / Home / End / Enter / Escape、禁用项跳过及点击外部关闭。快捷键筛选和平台键位只读，改键按钮明确禁用，真实绑定仍由 057 实现。新增组件 / 浏览器行为回归并同步 052、057 和快捷键架构边界；验证结果待本轮执行后补记。
+- 2026-10-20，对照 `aoidos-art` 的 `--x-solid` 叠层修正设置抽屉和模态框：半透明 `--panel` 现在叠在主题专用的近不透明底色上，保持普通卡片半透明。独立 review 同时补出长选择器活动项滚动、记忆算法复选框标签边界和收件人胶囊样式覆盖问题；均已修复。受影响 Rust / Vitest、类型、lint、格式、i18n 和视觉回归通过。
 - 2026-10-19，`bun run verify` 全项通过；Vitest 47 个文件、425 项通过。覆盖率：语句 99.63%、分支 99.15%、函数 100%、行 99.73%；Rust workspace 测试、格式、lint、类型、构建、依赖与文档检查通过。
 - 2026-10-19，复核关键交互行为证据：`ActionComposer.test.ts` 覆盖输入 / 命令建议、禁用提交与无障碍角色，`GameStage.test.ts` 覆盖快捷键、Escape、焦点返回和折叠态 inert，`useGameInput.test.ts` 覆盖 IME 输入，`App.test.ts` 覆盖设置抽屉焦点循环 / 恢复与 tab 语义，`GameWorkspace.test.ts` 覆盖连接失败提示和显式重连；`appcss.test.ts` 验证 reduced-motion，Chromium 视觉回归验证 640×480 欢迎页 / 设置抽屉无横向溢出。以上测试支撑本标准，不替代真实屏幕阅读器或原生 IME 验收。
 - WebView / DPI / 键盘与辅助技术检查：按用户决定暂缓；未执行的平台保持未验证状态。自动化覆盖设置抽屉隐藏页焦点、IME Escape 和触发元素焦点恢复，不替代后续实机检查。

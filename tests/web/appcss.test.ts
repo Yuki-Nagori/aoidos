@@ -155,4 +155,19 @@ describe("token 目录与 app.css 互校", () => {
     );
     expect(css).not.toMatch(/\.record-feed\s*\{[^}]*scroll-behavior:\s*smooth/);
   });
+
+  it("为设置抽屉和模态框使用不透出舞台的主题底层", () => {
+    expect(css).toContain("--overlay-solid: var(--panel)");
+    expect(css).toContain(':root[data-theme="dark"]');
+    expect(css).toContain(':root[data-theme="light"]');
+    expect(css).toContain(':root[data-theme="light-purple"]');
+    for (const selector of [".settings-dialog", ".shortcut-dialog", ".confirmation-card"]) {
+      const block = css.match(
+        new RegExp(`${selector.replaceAll(".", "\\.")}\\s*\\{([^}]+)\\}`),
+      )?.[1];
+      expect(block, `${selector} 缺少模态面板底层`).toContain(
+        "background: linear-gradient(var(--panel), var(--panel)), var(--overlay-solid)",
+      );
+    }
+  });
 });

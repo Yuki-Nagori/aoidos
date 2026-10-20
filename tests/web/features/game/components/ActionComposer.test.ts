@@ -91,9 +91,14 @@ describe("ActionComposer", () => {
       global: { plugins: [i18n] },
     });
 
-    const select = wrapper.get("select");
-    expect(select.findAll("option").map((option) => option.text())).toEqual(["Narration", "Mira"]);
-    await select.setValue("keeper");
+    const select = wrapper.get('[role="combobox"]');
+    expect(select.text()).toContain("Narration");
+    await select.trigger("click");
+    expect(wrapper.findAll('[role="option"]').map((option) => option.text())).toEqual([
+      "Narration",
+      "Mira",
+    ]);
+    await wrapper.findAll('[role="option"]')[1]!.trigger("click");
     expect(wrapper.emitted("selectRecipient")).toEqual([["keeper"]]);
     wrapper.unmount();
   });

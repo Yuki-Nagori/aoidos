@@ -3,6 +3,8 @@ import { computed, nextTick, ref, watch } from "vue";
 import BillingPanel from "../../features/billing/components/BillingPanel.vue";
 import SettingsSectionHeading from "./SettingsSectionHeading.vue";
 import SettingsSectionIcon from "./SettingsSectionIcon.vue";
+import SelectMenu from "../../shared/components/SelectMenu.vue";
+import KeyboardShortcuts from "./KeyboardShortcuts.vue";
 import { useI18n } from "vue-i18n";
 import type { useProduct } from "../../features/product/composables/useProduct";
 import type { useTheme } from "../../features/theme/composables/useTheme";
@@ -35,6 +37,7 @@ const sections = computed(() => [
   { id: "memory-list", label: t("settings.sections.memory-list") },
   { id: "memory-pending", label: t("settings.sections.memory-pending") },
   { id: "scenario", label: t("settings.sections.scenario") },
+  { id: "shortcuts", label: t("settings.sections.shortcuts") },
 ] as const);
 const activeSectionTitle = computed(
   () => sections.value.find((section) => section.id === activeSection.value)?.label ?? t("settings.title"),
@@ -71,14 +74,14 @@ function focusableElements(): HTMLElement[] {
   if (!panel.value) return [];
   return Array.from(
     panel.value.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+      'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
     ),
   ).filter(isVisible);
 }
 function onKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
   if (event.key === "Escape") {
-    if (event.isComposing || event.keyCode === 229) return;
+    if (isComposingEvent(event)) return;
     event.preventDefault();
     emit("close");
     return;
@@ -95,6 +98,9 @@ function onKeydown(event: KeyboardEvent): void {
     event.preventDefault();
     first.focus();
   }
+}
+function isComposingEvent(event: KeyboardEvent): boolean {
+  return event.isComposing || event.key === "Process";
 }
 const selectedScript = computed(() =>
   product.scripts.value.find((script) => script.scriptId === product.scriptId.value),
@@ -191,19 +197,19 @@ function themeName(id: string, fallback: string): string {
               :title="t('settings.sections.appearance')"
               @close="emit('close')"
             />
-            <label>
+            <div class="settings-field">
               {{ t("settings.theme") }}
-              <select
-                :value="theme.theme.value"
-                :aria-label="t('settings.theme')"
+              <SelectMenu
+                :model-value="theme.theme.value"
+                :options="theme.themes.value.map((option) => ({
+                  value: option.id,
+                  label: themeName(option.id, option.name),
+                }))"
+                :label="t('settings.theme')"
                 :disabled="theme.saving.value"
-                @change="theme.setTheme(($event.target as HTMLSelectElement).value)"
-              >
-                <option v-for="option in theme.themes.value" :key="option.id" :value="option.id">
-                  {{ themeName(option.id, option.name) }}
-                </option>
-              </select>
-            </label>
+                @update:model-value="theme.setTheme"
+              />
+            </div>
             <div v-if="product.scriptId.value === 'mistbell'" class="settings-skin card">
               <div class="settings-skin-copy">
                 <strong>{{
@@ -293,34 +299,29 @@ function themeName(id: string, fallback: string): string {
           <section v-show="activeSection === 'api'" id="api" class="settings-section">
             <SettingsSectionHeading :title="t('settings.sections.api')" @close="emit('close')" />
             <div class="settings-form-grid">
-              <label>
+              <div class="settings-field">
                 {{ t("settings.provider") }}
-                <select
-                  v-model="product.providerId.value"
-                  :aria-label="t('settings.provider')"
+                <SelectMenu
+                  :model-value="product.providerId.value"
+                  :options="product.providerOptions.map((provider) => ({
+                    value: provider.id,
+                    label: provider.label,
+                  }))"
+                  :label="t('settings.provider')"
                   :disabled="product.busy.value"
-                >
-                  <option
-                    v-for="provider in product.providerOptions"
-                    :key="provider.id"
-                    :value="provider.id"
-                  >
-                    {{ provider.label }}
-                  </option>
-                </select>
-              </label>
-              <label>
+                  @update:model-value="product.providerId.value = $event"
+                />
+              </div>
+              <div class="settings-field">
                 {{ t("settings.model") }}
-                <select
-                  v-model="product.model.value"
-                  :aria-label="t('settings.model')"
+                <SelectMenu
+                  :model-value="product.model.value"
+                  :options="product.models.value.map((model) => ({ value: model.id, label: model.label }))"
+                  :label="t('settings.model')"
                   :disabled="product.busy.value"
-                >
-                  <option v-for="model in product.models.value" :key="model.id" :value="model.id">
-                    {{ model.label }}
-                  </option>
-                </select>
-              </label>
+                  @update:model-value="product.model.value = $event"
+                />
+              </div>
             </div>
             <div
               class="settings-key-card card"
@@ -372,18 +373,19 @@ function themeName(id: string, fallback: string): string {
               :title="t('settings.sections.gameplay')"
               @close="emit('close')"
             />
-            <label>
+            <div class="settings-field">
               {{ t("settings.script") }}
-              <select v-model="product.scriptId.value" :disabled="product.busy.value">
-                <option
-                  v-for="script in product.scripts.value"
-                  :key="script.scriptId"
-                  :value="script.scriptId"
-                >
-                  {{ script.displayNames[locale.resolved.value] ?? script.title }}
-                </option>
-              </select>
-            </label>
+              <SelectMenu
+                :model-value="product.scriptId.value"
+                :options="product.scripts.value.map((script) => ({
+                  value: script.scriptId,
+                  label: script.displayNames[locale.resolved.value] ?? script.title,
+                }))"
+                :label="t('settings.script')"
+                :disabled="product.busy.value"
+                @update:model-value="product.scriptId.value = $event"
+              />
+            </div>
             <fieldset class="settings-choice-group">
               <legend>{{ t("game.diceMode") }}</legend>
               <div class="settings-segmented">
@@ -507,6 +509,14 @@ function themeName(id: string, fallback: string): string {
               <h4>{{ t("settings.credits") }}</h4>
               <pre>{{ selectedScript.attributions }}</pre>
             </section>
+          </section>
+
+          <section v-show="activeSection === 'shortcuts'" id="shortcuts" class="settings-section">
+            <SettingsSectionHeading
+              :title="t('settings.sections.shortcuts')"
+              @close="emit('close')"
+            />
+            <KeyboardShortcuts />
           </section>
         </div>
       </div>

@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-19。
+更新日期：2026-10-20。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -20,7 +20,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 周目结局     | [结局与落幕](ending-flow.md)              | 周目规则快照、数值标签、规范事实与 AI 叙事边界；054 已定稿，056 待实现                                  |
 | 回合与判定   | [阶段机](turn-state-machine.md)           | 五阶段、三档判定、场景推进、中断恢复与因果回退；023 已实现并验收                                        |
 | 界面结构     | [界面交互](ui-shell.md)                   | 舞台覆盖层、面板四态、记录呈现与输入；025 已实现、平台验收待完成；051 拆分前端架构，052 移植 aoidos-art |
-| 键盘交互     | [快捷键与键盘交互](keyboard-shortcuts.md) | 已有输入 / Escape 约定；全局速查、改键与平台接线由 057 承接                                             |
+| 键盘交互     | [快捷键与键盘交互](keyboard-shortcuts.md) | 052 已移植只读展示；动作注册、全局分发、改键与平台接线由 057 承接                                       |
 | 国际化       | [界面国际化](i18n.md)                     | zh-Hans / en、语言偏好、首窗原生文案与精确格式化；034 已验收                                            |
 | 主题与皮肤   | [主题架构](theming.md)                    | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 已三平台验收                                             |
 | 存储基建     | [存储基建](storage.md)                    | 数据目录、SQLite、实例锁与原子写                                                                        |
@@ -48,7 +48,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | [记忆搜索](memory.md#记忆搜索053-已定稿055-待实现) | [053](../task/053-memory-query-search-design.md) | [055](../task/055-memory-search-impl.md) 检索、IPC 与共享输入组件                                                                                                                                               |
 | [结局与周目落幕](ending-flow.md)                   | [054](../task/054-ending-flow-design.md)         | [056](../task/056-ending-flow-impl.md) 规则冻结、标签、AI 叙事与终态恢复                                                                                                                                        |
 | [回合与阶段机](turn-state-machine.md)              | [012](../task/012-turn-state-machine-design.md)  | [023](../task/023-turn-state-machine-impl.md) 产品入口、判定与恢复                                                                                                                                              |
-| [快捷键与键盘交互](keyboard-shortcuts.md)          | `aoidos-art` 已采纳方案                          | [057](../task/057-keyboard-shortcuts-impl.md) 全局分发、速查、改键与平台接线                                                                                                                                    |
+| [快捷键与键盘交互](keyboard-shortcuts.md)          | `aoidos-art` 已采纳方案                          | [052](../task/052-aoidos-art-vue-port.md) 只读视觉层；[057](../task/057-keyboard-shortcuts-impl.md) 动作注册、全局分发、改键与平台接线                                                                          |
 | [界面结构与交互](ui-shell.md)                      | [008](../task/008-ui-shell-design.md)            | [004](../task/004-tailwind-v4.md) 样式底座；[025](../task/025-ui-shell-impl.md) 完整界面，[046](../task/046-scene-presence-ui-impl.md) 在场角色选择，[057](../task/057-keyboard-shortcuts-impl.md) 快捷键与改键 |
 | [界面国际化](i18n.md)                              | [028](../task/028-i18n-design.md)                | [034](../task/034-i18n-impl.md) 底座 / 原生，025 / 031 消费                                                                                                                                                     |
 | [主题与剧本皮肤](theming.md)                       | [009](../task/009-theming-design.md)             | [004](../task/004-tailwind-v4.md) 默认样式 / 映射，[026](../task/026-theming-impl.md) 运行时                                                                                                                    |

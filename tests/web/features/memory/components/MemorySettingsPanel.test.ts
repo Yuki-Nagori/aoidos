@@ -144,7 +144,7 @@ describe("MemorySettingsPanel", () => {
       .findAll("button")
       .find((button) => button.text() === "Restore application inheritance")!
       .trigger("click");
-    expect(forms[1]!.get("select").element).toHaveProperty("value", "exponential");
+    expect(forms[1]!.get('[role="combobox"]').text()).toContain("Exponential");
     const inheritedBaseStrength = forms[1]!.find('input[type="number"]');
     expect((inheritedBaseStrength.element as HTMLInputElement).value).toBe("500000");
     expect((inheritedBaseStrength.element as HTMLInputElement).disabled).toBe(true);

@@ -7,6 +7,7 @@ import type { useBilling } from "../composables/useBilling";
 import { summarizeRunUsage } from "../utils/run-usage";
 import { billingErrorDescriptor } from "../utils/billing-error";
 import { formatPeakSchedule } from "../utils/price-schedule";
+import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const { t } = useI18n();
 const props = defineProps<{
@@ -474,13 +475,18 @@ const billingErrorMessage = computed(() => {
         </span>
       </div>
       <form class="billing-price-form grid gap-3" @submit.prevent="billing.savePrice">
-        <label>
+        <div class="grid gap-1 text-sm text-muted">
           {{ t("billing.currency") }}
-          <select v-model="billing.priceCurrency.value">
-            <option value="CNY">{{ t("billing.currencyCny") }}</option>
-            <option value="USD">{{ t("billing.currencyUsd") }}</option>
-          </select>
-        </label>
+          <SelectMenu
+            :model-value="billing.priceCurrency.value"
+            :options="[
+              { value: 'CNY', label: t('billing.currencyCny') },
+              { value: 'USD', label: t('billing.currencyUsd') },
+            ]"
+            :label="t('billing.currency')"
+            @update:model-value="billing.priceCurrency.value = $event"
+          />
+        </div>
         <label>
           {{ t("billing.unitTokens") }}
           <input v-model="billing.unitTokens.value" inputmode="numeric" autocomplete="off" />

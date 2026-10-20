@@ -10,7 +10,8 @@ defineProps<{
     | "memory"
     | "memory-list"
     | "memory-pending"
-    | "scenario";
+    | "scenario"
+    | "shortcuts";
 }>();
 </script>
 
@@ -52,6 +53,10 @@ defineProps<{
     <template v-else-if="name === 'memory-pending'">
       <circle cx="12" cy="12" r="9" />
       <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.5v.4M12 16.6v.1" />
+    </template>
+    <template v-else-if="name === 'shortcuts'">
+      <rect x="3" y="6" width="18" height="12" rx="2.5" />
+      <path d="M7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8" />
     </template>
     <template v-else>
       <path d="M5 5a2 2 0 0 1 2-2h12v16H7a2 2 0 0 0-2 2zM5 19V5" />

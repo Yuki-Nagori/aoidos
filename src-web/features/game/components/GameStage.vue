@@ -73,7 +73,7 @@ function isEditingTarget(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
     (target.isContentEditable ||
-      target.matches("input, textarea, select, [contenteditable='true']"))
+      target.matches("input, textarea, [contenteditable='true']"))
   );
 }
 function closePanel(): void {

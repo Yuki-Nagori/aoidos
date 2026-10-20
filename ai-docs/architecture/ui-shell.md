@@ -1,6 +1,6 @@
 # 界面结构与交互
 
-更新日期：2026-10-19；官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。页面视觉与状态样例以用户维护的 `aoidos-art` 为准，先由 [051](../task/051-web-ui-architecture-refactor.md) 整理 Vue 结构，再由 [052](../task/052-aoidos-art-vue-port.md) 移植；静态 HTML 只作为设计输入，不进入产品运行时。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
+更新日期：2026-10-20；官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。页面视觉与状态样例以用户维护的 `aoidos-art` 为准，先由 [051](../task/051-web-ui-architecture-refactor.md) 整理 Vue 结构，再由 [052](../task/052-aoidos-art-vue-port.md) 移植；静态 HTML 只作为设计输入，不进入产品运行时。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
 
 ## 舞台与覆盖层
 
@@ -27,6 +27,12 @@ Vue 页面按窗口级顶栏、居中 16:9 舞台和右侧浮动面板组合，�
 计费页的服务商余额只查询当前已接通的供应商；目前仅 DeepSeek 返回真实余额快照。界面按快照展示服务状态、查询时间、缓存过期提示和各原币账户，不把账户余额与本地账单估算混为一谈，也不为未接通的供应商模拟结果。
 
 053 已定稿记忆全库有界检索和共享 `SearchInput`：共享组件只提供受控输入、可访问名称与清除，memory feature 管理防抖、筛选、游标、迟到响应和状态；[055](../task/055-memory-search-impl.md) 接入检索服务。054 定稿的结局 UI 区分引擎规范事实摘要与非权威 AI 叙事，不提供固定结局选项；[056](../task/056-ending-flow-impl.md) 接入终态和显式叙事恢复。
+
+## 统一设置与输入选择器
+
+设置抽屉由 `SetupPanel.vue` 管理，分区包括外观、API、游戏、费用、记忆、剧本与快捷键。产品选择器统一使用 `shared/components/SelectMenu.vue` 绘制应用内 combobox / listbox，避免系统原生选择菜单造成平台外观差异；选择项支持方向键、Home / End、Enter、Escape 和外部点击关闭。回复对象菜单沿用 `aoidos-art` 的玻璃菜单、角色标记、方向键提示和在场说明。选择项与在场信息仍来自实际目录 / 场景快照，不补造设计稿未提供的角色职业。
+
+052 已移植快捷键速查和设置的只读视觉层，按平台展示键帽并支持本地筛选；静态键表只描述设计状态，改键控件保持禁用。全局分发、动作注册、持久化和平台菜单接线属于 057。当前弹层只处理其自身可见的关闭与筛选交互，不注册全局快捷键。
 
 ## 面板四态
 
@@ -69,7 +75,7 @@ prefers-reduced-motion 时取消位移动画，使用 120ms 淡入淡出；LED �
 
 面板是非模态 aside，有可读标题；按钮提供 aria-expanded / aria-controls，钉住按钮提供 aria-pressed。Tab 在可见界面自然行进，不为面板锁焦点；需要确认破坏性回退时才使用模态并恢复原焦点。新记录不自动抢焦点；状态提示用简短 polite live region，正文流不逐 token 朗读。错误和三档结果同时有文字 / 图标，不只靠颜色区分。
 
-键盘打开面板用 Ctrl+Shift+M（macOS 为 Cmd+Shift+M）；Escape 优先级为 IME → 指令菜单 / 上下文菜单 → 模态 → 非钉住面板。焦点处于 input、textarea、select、contenteditable 或模态时，舞台快捷键全部停用；菜单触发箭头键只由菜单处理。全局快捷键、平台提示、速查浮层与改键尚未实现；设计基线 `aoidos-art` 提交 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde` 已明确完整键位与保留键边界，由 [057](../task/057-keyboard-shortcuts-impl.md) 承接。实现必须让 IME 组字优先、保留系统编辑键、不为付费或破坏性操作提供快捷键，并在组件卸载时移除全局监听。
+键盘打开面板用 Ctrl+Shift+M（macOS 为 Cmd+Shift+M）；Escape 优先级为 IME → 指令菜单 / 上下文菜单 → 模态 → 非钉住面板。焦点处于 input、textarea、select、contenteditable 或模态时，舞台快捷键全部停用；菜单触发箭头键只由菜单处理。全局动作分发、改键和平台菜单接线尚未实现；052 已提供只读速查与设置视觉层，真实接线由 [057](../task/057-keyboard-shortcuts-impl.md) 承接。设计基线 `aoidos-art` 提交 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde` 已明确完整键位与保留键边界。实现必须让 IME 组字优先、保留系统编辑键、不为付费或破坏性操作提供快捷键，并在组件卸载时移除全局监听。
 
 文档层（`html` / `body`）固定视口并禁用滚动与 overscroll，避免 macOS WKWebView 整页橡皮筋回弹；页面滚动只发生在明确的内部内容区。记录滚动区使用 overscroll-behavior: contain；不要在 window 上统一 preventDefault。面板外滚轮归舞台，面板 / 菜单内滚轮不穿透；面板的非滚动 chrome 消费其区域滚轮，避免操作标题时舞台缩放。键盘 / 指针捕获以及全局快捷键监听在卸载时释放。
 

@@ -13,6 +13,7 @@ import {
   saveMemoryAppConfig,
   saveMemoryScriptConfig,
 } from "../../../api/memory";
+import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const props = defineProps<{ scriptId: string }>();
 const { t } = useI18n();
@@ -120,13 +121,13 @@ function updateScriptNumber(key: NumericField, event: Event): void {
   if (!invalid) scriptDraft.value[key] = value;
 }
 
-function updateAppAlgorithm(event: Event): void {
-  if (appDraft.value) appDraft.value.algorithm = (event.target as HTMLSelectElement).value as Algorithm;
+function updateAppAlgorithm(value: string): void {
+  if (appDraft.value) appDraft.value.algorithm = value as Algorithm;
   updateInvalidNumbers(appInvalidNumbers, appNumericFields.value, "halfLifeRounds", false);
 }
 
-function updateScriptAlgorithm(event: Event): void {
-  scriptDraft.value.algorithm = (event.target as HTMLSelectElement).value as Algorithm;
+function updateScriptAlgorithm(value: string): void {
+  scriptDraft.value.algorithm = value as Algorithm;
   updateInvalidNumbers(scriptInvalidNumbers, scriptNumericFields.value, "halfLifeRounds", false);
 }
 
@@ -290,14 +291,20 @@ watch(
         </button>
       </p>
       <form v-if="appDraft" class="grid gap-3 p-2" @submit.prevent="saveApp">
-        <label>
+        <div class="grid gap-1 text-sm text-muted">
           {{ t("memorySettings.algorithm") }}
-          <select :value="appDraft.algorithm" :disabled="appBusy" @change="updateAppAlgorithm">
-            <option value="none">{{ t("memorySettings.algorithms.none") }}</option>
-            <option value="exponential">{{ t("memorySettings.algorithms.exponential") }}</option>
-            <option value="segmented">{{ t("memorySettings.algorithms.segmented") }}</option>
-          </select>
-        </label>
+          <SelectMenu
+            :model-value="appDraft.algorithm"
+            :options="[
+              { value: 'none', label: t('memorySettings.algorithms.none') },
+              { value: 'exponential', label: t('memorySettings.algorithms.exponential') },
+              { value: 'segmented', label: t('memorySettings.algorithms.segmented') },
+            ]"
+            :label="t('memorySettings.algorithm')"
+            :disabled="appBusy"
+            @update:model-value="updateAppAlgorithm"
+          />
+        </div>
         <label v-for="field in appNumericFields" :key="field.key">
           {{ fieldLabels[field.key] }}
           <input
@@ -342,24 +349,28 @@ watch(
         <p class="text-sm text-muted">
           {{ t("memorySettings.inherited", { version: scriptConfig.appConfigVersion }) }}
         </p>
-        <label class="flex items-center gap-2">
-          <input
-            type="checkbox"
-            :checked="scriptDraft.algorithm !== undefined"
-            :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
-            @change="toggleOverride('algorithm', $event)"
-          />
-          {{ t("memorySettings.fields.algorithm") }}
-          <select
-            :value="scriptDraft.algorithm ?? scriptConfig.inherited.algorithm"
+        <div class="flex items-center gap-2">
+          <label class="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              :checked="scriptDraft.algorithm !== undefined"
+              :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
+              @change="toggleOverride('algorithm', $event)"
+            />
+            {{ t("memorySettings.fields.algorithm") }}
+          </label>
+          <SelectMenu
+            :model-value="scriptDraft.algorithm ?? scriptConfig.inherited.algorithm"
+            :options="[
+              { value: 'none', label: t('memorySettings.algorithms.none') },
+              { value: 'exponential', label: t('memorySettings.algorithms.exponential') },
+              { value: 'segmented', label: t('memorySettings.algorithms.segmented') },
+            ]"
+            :label="t('memorySettings.fields.algorithm')"
             :disabled="scriptBusyIds.has(scriptConfig.scriptId) || scriptDraft.algorithm === undefined"
-            @change="updateScriptAlgorithm"
-          >
-            <option value="none">{{ t("memorySettings.algorithms.none") }}</option>
-            <option value="exponential">{{ t("memorySettings.algorithms.exponential") }}</option>
-            <option value="segmented">{{ t("memorySettings.algorithms.segmented") }}</option>
-          </select>
-        </label>
+            @update:model-value="updateScriptAlgorithm"
+          />
+        </div>
         <label v-for="field in scriptNumericFields" :key="field.key" class="grid gap-1">
           <span class="flex items-center gap-2">
             <input

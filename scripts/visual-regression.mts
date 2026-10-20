@@ -653,6 +653,7 @@ try {
       { id: "memory-list", target: "memory-query" },
       { id: "memory-pending", target: "memory-query" },
       { id: "scenario", target: "scenario" },
+      { id: "shortcuts", target: "shortcuts" },
     ];
     for (const [index, section] of sections.entries()) {
       const button = page.locator(".settings-nav button").nth(index);
@@ -673,6 +674,25 @@ try {
       if (section.id === "memory-list")
         await page.locator('#memory-query button[aria-controls^="memory-entry-"]').waitFor();
       if (section.id === "memory-pending") await page.locator("#memory-query article").waitFor();
+      if (section.id === "appearance") {
+        assert.equal(
+          await page.locator("select").count(),
+          0,
+          "App selectors must use the custom menu",
+        );
+        const themeMenu = page.getByRole("combobox", { name: /theme/i });
+        await themeMenu.click();
+        await page.getByRole("listbox", { name: /theme/i }).waitFor();
+        await themeMenu.press("Escape");
+      }
+      if (section.id === "shortcuts") {
+        await page.locator("#shortcuts .shortcut-row").first().waitFor();
+        await page.getByRole("button", { name: /view reference|查看速查表/i }).click();
+        const shortcutDialog = page.getByRole("dialog", { name: /keyboard shortcuts|快捷键/i });
+        await shortcutDialog.waitFor();
+        await shortcutDialog.press("Escape");
+        await shortcutDialog.waitFor({ state: "detached" });
+      }
       const sectionLayout = await measureSettings(page);
       assert.equal(
         sectionLayout.visibleSections,
@@ -705,7 +725,7 @@ try {
   }
 
   console.log(
-    `欢迎页与设置视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个欢迎页窗口、3 个真实会话设置窗口、10 个分区（含账单 / 记忆数据）和 2 种失败状态。`,
+    `欢迎页与设置视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个欢迎页窗口、3 个真实会话设置窗口、11 个分区（含账单 / 记忆数据 / 快捷键）和 2 种失败状态。`,
   );
 } finally {
   await browser?.close();
