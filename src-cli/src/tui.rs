@@ -1,7 +1,7 @@
 //! 终端视图只把键盘 / 鼠标转换成操作；游戏状态仍由共享 app 与 engine 所有。
 
 use crate::{CliApp, events::RuntimeEvent};
-use aoidos_app::billing::RunBillingSummary;
+use aoidos_app::billing::{RequestBillingPreflight, RunBillingSummary};
 use aoidos_engine::{
     game::{assets::ScriptInfo, product::OpenedSession, state::PhaseSnapshot},
     ports::TurnEvent,
@@ -48,6 +48,7 @@ struct ViewState {
     profile_index: usize,
     script_index: usize,
     session: Option<OpenedSession>,
+    session_profile: Option<LlmProfile>,
     phase: Option<PhaseSnapshot>,
     history: VecDeque<String>,
     draft: String,
@@ -59,9 +60,24 @@ struct ViewState {
     busy: bool,
     status: String,
     billing: Option<RunBillingSummary>,
+    billing_preflight: Option<RequestBillingPreflight>,
     billing_error: Option<String>,
     billing_scroll: usize,
+    pending_action: Option<PendingAction>,
     locale: &'static str,
+}
+
+#[derive(Clone)]
+struct PendingAction {
+    kind: PendingActionKind,
+    preflight: RequestBillingPreflight,
+    profile: LlmProfile,
+}
+
+#[derive(Clone)]
+enum PendingActionKind {
+    SubmitInput(String),
+    Continue,
 }
 
 impl ViewState {
@@ -72,6 +88,7 @@ impl ViewState {
             profile_index: 0,
             script_index: 0,
             session: None,
+            session_profile: None,
             phase: None,
             history: VecDeque::new(),
             draft: String::new(),
@@ -83,8 +100,10 @@ impl ViewState {
             busy: false,
             status: "选择 profile 与剧本，然后按 Enter 开始。".into(),
             billing: None,
+            billing_preflight: None,
             billing_error: None,
             billing_scroll: 0,
+            pending_action: None,
             locale: terminal_locale(),
         }
     }
@@ -292,10 +311,31 @@ async fn open_session(
     state: &mut ViewState,
     start_new: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(profile) = state.profiles.get(state.profile_index) else {
+    let Some(profile_id) = state
+        .profiles
+        .get(state.profile_index)
+        .map(|profile| profile.profile_id.clone())
+    else {
         state.status = "没有可用 profile。".into();
         return Ok(());
     };
+    let profiles = match app.profiles.list() {
+        Ok(profiles) => profiles,
+        Err(_) => {
+            state.status = "重新读取模型配置失败；无法打开周目。".into();
+            return Ok(());
+        }
+    };
+    let Some(profile_index) = profiles
+        .iter()
+        .position(|profile| profile.profile_id == profile_id)
+    else {
+        state.status = "所选模型配置已不存在；无法打开周目。".into();
+        return Ok(());
+    };
+    state.profiles = profiles;
+    state.profile_index = profile_index;
+    let profile = state.profiles[profile_index].clone();
     let Some(script) = state.scripts.get(state.script_index) else {
         state.status = "没有可用剧本。".into();
         return Ok(());
@@ -320,8 +360,10 @@ async fn open_session(
             .into();
             state.phase = app.services.runtime.get_phase(&session.session_id).ok();
             load_history(app, state, &session.session_id);
-            refresh_billing(app, state, &session.memory_run_id);
+            let run_id = session.memory_run_id.clone();
             state.session = Some(session);
+            state.session_profile = Some(profile);
+            refresh_billing(app, state, &run_id);
             state.focus = Focus::Input;
             if state.draft.is_empty()
                 && let Some(suggestion) = state.suggested_action().map(str::to_owned)
@@ -339,6 +381,23 @@ async fn handle_game_key(
     state: &mut ViewState,
     key: KeyEvent,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    if state.pending_action.is_some() {
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => confirm_action(app, state).await,
+            KeyCode::Esc | KeyCode::Char('n' | 'N') => {
+                let pending = state.pending_action.take().expect("待确认操作存在");
+                let is_submit = matches!(&pending.kind, PendingActionKind::SubmitInput(_));
+                restore_pending_draft(state, pending.kind);
+                state.status = if is_submit {
+                    "已取消发送；行动草稿已保留。".into()
+                } else {
+                    "已取消继续请求。".into()
+                };
+            }
+            _ => state.status = "请按 Y 确认，或按 Esc 取消。".into(),
+        }
+        return Ok(false);
+    }
     match key.code {
         KeyCode::Esc => return Ok(true),
         KeyCode::Char('q') if state.focus != Focus::Input => return Ok(true),
@@ -417,6 +476,12 @@ async fn handle_game_click(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(78), Constraint::Percentage(22)])
         .split(chunks[2]);
+    if state.pending_action.is_some() {
+        if contains(controls[1], x, y) {
+            confirm_action(app, state).await;
+        }
+        return Ok(());
+    }
     if contains(controls[0], x, y) {
         state.focus = Focus::Input;
     } else if contains(controls[1], x, y) {
@@ -437,10 +502,72 @@ async fn submit_action(app: &mut CliApp, state: &mut ViewState) {
     if state.busy || state.draft.trim().is_empty() {
         return;
     }
-    let Some(session) = state.session.as_ref() else {
+    if state.pending_action.is_some() {
+        return;
+    }
+    let Some((preflight, profile)) = load_request_preflight(app, state) else {
         return;
     };
-    let action = std::mem::take(&mut state.draft);
+    if preflight.budget.is_none() {
+        state.status = "本局未设置 CNY / USD 上限；请先在设置中配置预算，再发送。".into();
+        return;
+    }
+    let Some(price) = preflight.selected_price.as_ref() else {
+        state.status = "当前 profile 没有有效的登记价格；请先在价格登记中确认费率。".into();
+        return;
+    };
+    let currency = price.currency.clone();
+    state.billing_preflight = Some(preflight.clone());
+    state.pending_action = Some(PendingAction {
+        kind: PendingActionKind::SubmitInput(state.draft.clone()),
+        preflight,
+        profile: profile.clone(),
+    });
+    state.status = format!(
+        "请求预览：{} · {}/{} · {} 价格 · 输出 ≤ {} Token；确认详情见本局费用栏。按 Y 发送，Esc 取消。",
+        profile.profile_id,
+        profile.provider_id,
+        profile.model,
+        currency,
+        profile.sampling.max_tokens,
+    );
+}
+
+async fn confirm_action(app: &mut CliApp, state: &mut ViewState) {
+    let Some(pending) = state.pending_action.take() else {
+        return;
+    };
+    let Some((latest, latest_profile)) = load_request_preflight(app, state) else {
+        restore_pending_draft(state, pending.kind);
+        return;
+    };
+    if latest != pending.preflight || latest_profile != pending.profile {
+        state.billing_preflight = Some(latest);
+        state.profiles = app
+            .profiles
+            .list()
+            .unwrap_or_else(|_| state.profiles.clone());
+        restore_pending_draft(state, pending.kind);
+        state.status = "价格或本局上限刚有变化；请重新核对费用栏后再提交。".into();
+        return;
+    }
+    match pending.kind {
+        PendingActionKind::SubmitInput(input) => send_action(app, state, input).await,
+        PendingActionKind::Continue => continue_game_unchecked(app, state).await,
+    }
+}
+
+fn restore_pending_draft(state: &mut ViewState, kind: PendingActionKind) {
+    if let PendingActionKind::SubmitInput(input) = kind {
+        state.draft = input;
+    }
+}
+
+async fn send_action(app: &mut CliApp, state: &mut ViewState, action: String) {
+    let Some(session) = state.session.as_ref() else {
+        state.draft = action;
+        return;
+    };
     match app
         .services
         .runtime
@@ -449,6 +576,7 @@ async fn submit_action(app: &mut CliApp, state: &mut ViewState) {
     {
         Ok(_) => {
             state.add_history(format!("你：{action}"));
+            state.draft.clear();
             state.busy = true;
             state.stream.clear();
             state.active_turn_id = None;
@@ -459,6 +587,53 @@ async fn submit_action(app: &mut CliApp, state: &mut ViewState) {
         Err(error) => {
             state.draft = action;
             state.status = friendly_error(&error.code, &error.message, state.locale);
+        }
+    }
+}
+
+fn load_request_preflight(
+    app: &CliApp,
+    state: &mut ViewState,
+) -> Option<(RequestBillingPreflight, aoidos_llm::config::LlmProfile)> {
+    let session = state.session.as_ref()?;
+    let profile_id = state.profiles.get(state.profile_index)?.profile_id.clone();
+    let profiles = match app.profiles.list() {
+        Ok(profiles) => profiles,
+        Err(_) => {
+            state.status = "重新读取模型配置失败；未发送请求。".into();
+            return None;
+        }
+    };
+    let Some(profile_index) = profiles
+        .iter()
+        .position(|profile| profile.profile_id == profile_id)
+    else {
+        state.status = "所选模型配置已不存在；未发送请求。".into();
+        return None;
+    };
+    state.profiles = profiles;
+    state.profile_index = profile_index;
+    let profile = state.profiles[profile_index].clone();
+    if state
+        .session_profile
+        .as_ref()
+        .is_some_and(|frozen| frozen != &profile)
+    {
+        state.status = "当前周目的模型配置已变化；请关闭并重新打开周目后再发送。".into();
+        return None;
+    }
+    let preflight = app.services.billing.request_preflight(
+        &session.memory_run_id,
+        &profile.profile_id,
+        &profile.provider_id,
+        &profile.model,
+        aoidos_engine::game::product::billing_route_policy(&profile.provider_id),
+    );
+    match preflight {
+        Ok(preflight) => Some((preflight, profile)),
+        Err(_) => {
+            state.status = "读取本局价格或额度失败；未发送请求。".into();
+            None
         }
     }
 }
@@ -490,6 +665,38 @@ async fn cancel_game(app: &mut CliApp, state: &mut ViewState) {
 }
 
 async fn continue_game(app: &mut CliApp, state: &mut ViewState) {
+    if state.busy || state.pending_action.is_some() {
+        return;
+    }
+    let Some((preflight, profile)) = load_request_preflight(app, state) else {
+        return;
+    };
+    if preflight.budget.is_none() {
+        state.status = "本局未设置 CNY / USD 上限；请先在设置中配置预算，再继续。".into();
+        return;
+    }
+    let Some(price) = preflight.selected_price.as_ref() else {
+        state.status = "当前 profile 没有有效的登记价格；请先在价格登记中确认费率。".into();
+        return;
+    };
+    let currency = price.currency.clone();
+    state.billing_preflight = Some(preflight.clone());
+    state.pending_action = Some(PendingAction {
+        kind: PendingActionKind::Continue,
+        preflight,
+        profile: profile.clone(),
+    });
+    state.status = format!(
+        "继续请求预览：{} · {}/{} · {} 价格 · 输出 ≤ {} Token；确认详情见本局费用栏。按 Y 继续，Esc 取消。",
+        profile.profile_id,
+        profile.provider_id,
+        profile.model,
+        currency,
+        profile.sampling.max_tokens,
+    );
+}
+
+async fn continue_game_unchecked(app: &mut CliApp, state: &mut ViewState) {
     let Some(session) = state.session.as_ref() else {
         return;
     };
@@ -767,9 +974,12 @@ fn refresh_billing(app: &CliApp, state: &mut ViewState, run_id: &str) {
                 .min(summary.models.len().saturating_sub(1));
             state.billing = Some(summary);
             state.billing_error = None;
+            let preflight = load_request_preflight(app, state).map(|(preflight, _)| preflight);
+            state.billing_preflight = preflight;
         }
         Err(_) => {
             state.billing = None;
+            state.billing_preflight = None;
             state.billing_error = Some("费用账本暂时不可用".into());
         }
     }
@@ -1162,7 +1372,7 @@ fn game_layout(area: Rect) -> Vec<Rect> {
             Constraint::Length(3),
             Constraint::Min(5),
             Constraint::Length(5),
-            Constraint::Length(4),
+            Constraint::Length(7),
             Constraint::Length(3),
         ])
         .split(area)
@@ -1177,11 +1387,47 @@ fn billing_lines(state: &ViewState, max_lines: usize, width: usize) -> Vec<Line<
         return vec![Line::from("打开周目后显示模型用量与费用。")];
     };
     let mut lines = Vec::new();
+    if let (Some(profile), Some(preflight)) = (
+        state.profiles.get(state.profile_index),
+        state.billing_preflight.as_ref(),
+    ) {
+        lines.push(Line::from(truncate_display_width(
+            &format!(
+                "请求：{} · {}/{} · 输出 ≤ {} Token",
+                profile.profile_id, profile.provider_id, profile.model, profile.sampling.max_tokens
+            ),
+            width,
+        )));
+        if let Some(price) = &preflight.selected_price {
+            lines.push(Line::from(truncate_display_width(
+                &format!(
+                    "价格：{} · {} / {} · {}",
+                    price.currency, price.provider_id, price.model_id, price.version_id
+                ),
+                width,
+            )));
+        } else {
+            lines.push(Line::from("价格：未登记，不可发送"));
+        }
+        if let Some(budget) = &preflight.budget {
+            lines.push(Line::from(truncate_display_width(
+                &format!(
+                    "本局上限：CNY {} / USD {}",
+                    format_money(budget.cny_limit.nanos()),
+                    format_money(budget.usd_limit.nanos())
+                ),
+                width,
+            )));
+        } else {
+            lines.push(Line::from("本局上限：未设置，不可发送"));
+        }
+    }
+    let remaining_lines = max_lines.saturating_sub(lines.len());
     for item in summary
         .models
         .iter()
         .skip(state.billing_scroll)
-        .take(max_lines)
+        .take(remaining_lines)
     {
         let settled = item
             .settled_amount
