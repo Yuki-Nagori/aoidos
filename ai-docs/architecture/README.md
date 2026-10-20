@@ -126,7 +126,7 @@ src-cli
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。033 已接入记忆产品处理链路，真实样本与生产参数验收仍在进行；计费运行时由 engine 持有账本并实现 LLM 的预算端口。端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
 
-058 正在将游戏运行链路迁入 `aoidos-app`。该 crate 负责 profile / 凭据服务、回合协调器、诊断状态、代理快照及 `Product` / runtime 装配；Tauri 和 `src-cli/` 中的 `aoidos-cli` 在进程内复用它，不启动彼此子进程。入口为实现 engine 事件端口、共享数据根锁和受控展示类型保留少量直接依赖；这些 adapter 不复制业务状态机。engine 和领域 crate 不依赖 app，两个入口也不互相依赖。细节见[分层规范](../standards/layering.md)和[TS / Rust 边界](ts-rust-boundary.md)。
+058 正在将游戏运行链路迁入 `aoidos-app`。该 crate 负责 profile / 凭据服务、回合协调器、诊断状态、代理快照、`Product` / runtime 装配及当前周目只读计费摘要；Tauri 和 `src-cli/` 中的 `aoidos-cli` 在进程内复用它，不启动彼此子进程。入口为实现 engine 事件端口、共享数据根锁和受控展示类型保留少量直接依赖；这些 adapter 不复制业务状态机。engine 和领域 crate 不依赖 app，两个入口也不互相依赖。细节见[分层规范](../standards/layering.md)和[TS / Rust 边界](ts-rust-boundary.md)。
 
 前端 IPC 调用放在 `src-web/api/`；功能私有逻辑留在 `features/<feature>/`，跨功能共用逻辑放在 `shared/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
 

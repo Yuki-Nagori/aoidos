@@ -1,5 +1,6 @@
 //! 桌面与 CLI 共用的进程内应用服务；入口适配器负责事件投递与用户交互。
 
+pub mod billing;
 pub mod profiles;
 
 use aoidos_engine::{
@@ -52,6 +53,7 @@ pub struct GameServices {
     pub product: Product,
     pub runtime: Service,
     pub factory: Arc<ProfileFactory>,
+    pub billing: billing::BillingService,
 }
 
 impl GameServices {
@@ -76,18 +78,20 @@ impl GameServices {
         );
         let product = Product::new(
             root,
-            storage,
+            storage.clone(),
             turns.coordinator.clone(),
             phase_events,
             factory.clone(),
         );
         let runtime = Service::new(turns.coordinator.clone(), factory.clone());
+        let billing = billing::BillingService::new(storage);
 
         Ok(Self {
             turns,
             product,
             runtime,
             factory,
+            billing,
         })
     }
 }

@@ -1,6 +1,7 @@
 //! 终端视图只把键盘 / 鼠标转换成操作；游戏状态仍由共享 app 与 engine 所有。
 
 use crate::{CliApp, events::RuntimeEvent};
+use aoidos_app::billing::RunBillingSummary;
 use aoidos_engine::{
     game::{assets::ScriptInfo, product::OpenedSession, state::PhaseSnapshot},
     ports::TurnEvent,
@@ -38,6 +39,7 @@ enum Focus {
     Input,
     Submit,
     Continue,
+    Billing,
 }
 
 struct ViewState {
@@ -56,6 +58,9 @@ struct ViewState {
     focus: Focus,
     busy: bool,
     status: String,
+    billing: Option<RunBillingSummary>,
+    billing_error: Option<String>,
+    billing_scroll: usize,
     locale: &'static str,
 }
 
@@ -77,6 +82,9 @@ impl ViewState {
             focus: Focus::Profile,
             busy: false,
             status: "选择 profile 与剧本，然后按 Enter 开始。".into(),
+            billing: None,
+            billing_error: None,
+            billing_scroll: 0,
             locale: terminal_locale(),
         }
     }
@@ -120,6 +128,9 @@ async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = EventStream::new();
+    let mut billing_refresh = tokio::time::interval(Duration::from_secs(1));
+    billing_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    billing_refresh.tick().await;
     loop {
         terminal.draw(|frame| draw(frame, state))?;
         tokio::select! {
@@ -135,6 +146,9 @@ async fn event_loop(
                     handle_runtime_event(app, state, event);
                 }
             }
+            _ = billing_refresh.tick(), if state.busy => {
+                refresh_billing_for_active_session(app, state);
+            }
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
                 if app.event_bridge.take_overflowed() {
                     if let Some(session_id) = state
@@ -145,6 +159,7 @@ async fn event_loop(
                         load_history(app, state, &session_id);
                     }
                     refresh_phase(app, state);
+                    refresh_billing_for_active_session(app, state);
                     state.status = "事件通知有丢失，已从当前状态与记录重新同步。".into();
                 }
                 if state.busy {
@@ -182,10 +197,20 @@ async fn handle_terminal_event(
                 }
             }
             MouseEventKind::ScrollUp if state.session.is_some() => {
-                state.history_scroll = state.history_scroll.saturating_add(3);
+                if contains(game_layout(app_screen_area())[3], mouse.column, mouse.row) {
+                    state.focus = Focus::Billing;
+                    scroll_billing(state, false);
+                } else {
+                    state.history_scroll = state.history_scroll.saturating_add(3);
+                }
             }
             MouseEventKind::ScrollDown if state.session.is_some() => {
-                state.history_scroll = state.history_scroll.saturating_sub(3);
+                if contains(game_layout(app_screen_area())[3], mouse.column, mouse.row) {
+                    state.focus = Focus::Billing;
+                    scroll_billing(state, true);
+                } else {
+                    state.history_scroll = state.history_scroll.saturating_sub(3);
+                }
             }
             _ => {}
         },
@@ -206,7 +231,7 @@ async fn handle_selection_key(
         KeyCode::Tab | KeyCode::BackTab => {
             state.focus = match state.focus {
                 Focus::Profile => Focus::Script,
-                Focus::Script | Focus::Submit | Focus::Continue => Focus::Profile,
+                Focus::Script | Focus::Submit | Focus::Continue | Focus::Billing => Focus::Profile,
                 Focus::Input => Focus::Profile,
             };
         }
@@ -295,6 +320,7 @@ async fn open_session(
             .into();
             state.phase = app.services.runtime.get_phase(&session.session_id).ok();
             load_history(app, state, &session.session_id);
+            refresh_billing(app, state, &session.session_id);
             state.session = Some(session);
             state.focus = Focus::Input;
             if state.draft.is_empty()
@@ -316,6 +342,8 @@ async fn handle_game_key(
     match key.code {
         KeyCode::Esc => return Ok(true),
         KeyCode::Char('q') if state.focus != Focus::Input => return Ok(true),
+        KeyCode::PageUp if state.focus == Focus::Billing => scroll_billing(state, false),
+        KeyCode::PageDown if state.focus == Focus::Billing => scroll_billing(state, true),
         KeyCode::PageUp => state.history_scroll = state.history_scroll.saturating_add(10),
         KeyCode::PageDown => state.history_scroll = state.history_scroll.saturating_sub(10),
         KeyCode::Char('x') | KeyCode::Char('X') if state.busy => {
@@ -325,7 +353,8 @@ async fn handle_game_key(
             state.focus = match state.focus {
                 Focus::Input => Focus::Submit,
                 Focus::Submit => Focus::Continue,
-                Focus::Continue | Focus::Profile | Focus::Script => Focus::Input,
+                Focus::Continue => Focus::Billing,
+                Focus::Billing | Focus::Profile | Focus::Script => Focus::Input,
             };
         }
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -364,6 +393,19 @@ fn push_draft(state: &mut ViewState, character: char) {
     }
 }
 
+fn scroll_billing(state: &mut ViewState, down: bool) {
+    let model_count = state
+        .billing
+        .as_ref()
+        .map_or(0, |summary| summary.models.len());
+    let last_start = model_count.saturating_sub(1);
+    state.billing_scroll = if down {
+        state.billing_scroll.saturating_add(1).min(last_start)
+    } else {
+        state.billing_scroll.saturating_sub(1)
+    };
+}
+
 async fn handle_game_click(
     app: &mut CliApp,
     state: &mut ViewState,
@@ -380,6 +422,8 @@ async fn handle_game_click(
     } else if contains(controls[1], x, y) {
         submit_action(app, state).await;
     } else if contains(chunks[3], x, y) {
+        state.focus = Focus::Billing;
+    } else if contains(chunks[4], x, y) {
         if state.busy {
             cancel_game(app, state).await;
         } else {
@@ -501,6 +545,7 @@ fn handle_runtime_event(app: &CliApp, state: &mut ViewState, event: RuntimeEvent
                 finalize_stream(state, false);
                 state.status = format!("操作结束：{outcome:?}");
                 refresh_phase(app, state);
+                refresh_billing_for_active_session(app, state);
             }
         }
         RuntimeEvent::Turn(TurnEvent::Failed {
@@ -515,6 +560,7 @@ fn handle_runtime_event(app: &CliApp, state: &mut ViewState, event: RuntimeEvent
                 finalize_stream(state, true);
                 state.status = format!("{code}：{message}");
                 refresh_phase(app, state);
+                refresh_billing_for_active_session(app, state);
             }
         }
         RuntimeEvent::Phase(event) => {
@@ -543,6 +589,7 @@ fn handle_runtime_event(app: &CliApp, state: &mut ViewState, event: RuntimeEvent
                 .is_some_and(|session| session.session_id == event.session_id)
             {
                 load_history(app, state, &event.session_id);
+                refresh_billing(app, state, &event.session_id);
             }
         }
         RuntimeEvent::Migration(event) => {
@@ -699,6 +746,32 @@ fn load_history(app: &CliApp, state: &mut ViewState, session_id: &str) {
         return;
     };
     display_view(&session, state, view);
+}
+
+fn refresh_billing_for_active_session(app: &CliApp, state: &mut ViewState) {
+    if let Some(session_id) = state
+        .session
+        .as_ref()
+        .map(|session| session.session_id.clone())
+    {
+        refresh_billing(app, state, &session_id);
+    }
+}
+
+fn refresh_billing(app: &CliApp, state: &mut ViewState, session_id: &str) {
+    match app.services.billing.run_summary(session_id) {
+        Ok(summary) => {
+            state.billing_scroll = state
+                .billing_scroll
+                .min(summary.models.len().saturating_sub(1));
+            state.billing = Some(summary);
+            state.billing_error = None;
+        }
+        Err(_) => {
+            state.billing = None;
+            state.billing_error = Some("费用账本暂时不可用".into());
+        }
+    }
 }
 
 fn display_view(
@@ -915,6 +988,24 @@ fn draw_game(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         },
         chunks[1],
     );
+    let billing_lines = billing_lines(
+        state,
+        usize::from(chunks[3].height.saturating_sub(2)),
+        usize::from(chunks[3].width.saturating_sub(2)),
+    );
+    frame.render_widget(
+        Paragraph::new(billing_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(billing_title(state))
+                .border_style(if state.focus == Focus::Billing {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                }),
+        ),
+        chunks[3],
+    );
     let controls = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(78), Constraint::Percentage(22)])
@@ -992,7 +1083,7 @@ fn draw_game(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         } else {
             Style::default()
         }),
-        chunks[3],
+        chunks[4],
     );
     frame.set_cursor_position(ratatui::layout::Position::new(
         controls[0].x.saturating_add(
@@ -1070,10 +1161,111 @@ fn game_layout(area: Rect) -> Vec<Rect> {
             Constraint::Length(3),
             Constraint::Min(5),
             Constraint::Length(5),
+            Constraint::Length(4),
             Constraint::Length(3),
         ])
         .split(area)
         .to_vec()
+}
+
+fn billing_lines(state: &ViewState, max_lines: usize, width: usize) -> Vec<Line<'static>> {
+    if let Some(error) = &state.billing_error {
+        return vec![Line::from(error.clone())];
+    }
+    let Some(summary) = &state.billing else {
+        return vec![Line::from("打开周目后显示模型用量与费用。")];
+    };
+    let mut lines = Vec::new();
+    for item in summary
+        .models
+        .iter()
+        .skip(state.billing_scroll)
+        .take(max_lines)
+    {
+        let settled = item
+            .settled_amount
+            .map(|amount| format_money(amount.nanos()))
+            .unwrap_or_else(|| "—".into());
+        let reserved = item
+            .reserved_amount
+            .map(|amount| format_money(amount.nanos()))
+            .unwrap_or_else(|| "—".into());
+        let tokens = item
+            .known_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "—".into());
+        let text = format!(
+            "{}/{} {} 结算{} 预留{} tok:{} 请求:{}{}",
+            item.provider_id,
+            item.model_id,
+            item.currency,
+            settled,
+            reserved,
+            tokens,
+            item.request_count,
+            if item.incomplete_requests > 0 {
+                format!(" 未知:{}", item.incomplete_requests)
+            } else {
+                String::new()
+            }
+        );
+        lines.push(Line::from(truncate_display_width(&text, width)));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from("本局尚无模型请求。"));
+    }
+    lines
+}
+
+fn billing_title(state: &ViewState) -> String {
+    let Some(summary) = &state.billing else {
+        return "本局费用".into();
+    };
+    let warnings = summary
+        .warnings
+        .iter()
+        .filter(|warning| !warning.read)
+        .map(|warning| format!("{} {}%", warning.currency, warning.threshold_percent))
+        .collect::<Vec<_>>();
+    let mut title = if warnings.is_empty() {
+        "本局费用".into()
+    } else {
+        format!("本局费用 · 预算提醒 {}", warnings.join(" / "))
+    };
+    if summary.models.len() > 2 {
+        let first = state
+            .billing_scroll
+            .saturating_add(1)
+            .min(summary.models.len());
+        let last = first.saturating_add(1).min(summary.models.len());
+        title.push_str(&format!(
+            " · {first}-{last}/{} Tab 后 PgUp/PgDn",
+            summary.models.len()
+        ));
+    }
+    title
+}
+
+fn truncate_display_width(text: &str, width: usize) -> String {
+    let mut output = String::new();
+    let mut used = 0usize;
+    for character in text.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used.saturating_add(character_width) > width {
+            if width > 0 && used < width {
+                output.push('…');
+            }
+            break;
+        }
+        output.push(character);
+        used += character_width;
+    }
+    output
+}
+
+fn format_money(nanos: i64) -> String {
+    let cents = nanos.saturating_add(5_000_000) / 10_000_000;
+    format!("{}.{:02}", cents / 100, cents % 100)
 }
 
 fn app_screen_area() -> Rect {
@@ -1159,7 +1351,12 @@ impl Drop for TerminalSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{ViewState, append_bounded, apply_turn_snapshot, wrap_visual_lines};
+    use super::{
+        ViewState, append_bounded, apply_turn_snapshot, billing_lines, billing_title, game_layout,
+        scroll_billing, truncate_display_width, wrap_visual_lines,
+    };
+    use aoidos_app::billing::RunBillingSummary;
+    use aoidos_engine::billing::{BudgetWarning, ModelUsageSummary};
 
     #[test]
     fn transcript_stream_limit_counts_utf8_bytes_without_splitting_characters() {
@@ -1195,5 +1392,86 @@ mod tests {
         apply_turn_snapshot(&mut state, snapshot());
 
         assert_eq!(state.stream, "完整正文");
+    }
+
+    #[test]
+    fn billing_panel_shows_original_currency_tokens_and_missing_usage() {
+        let mut state = ViewState::new(Vec::new(), Vec::new());
+        state.billing = Some(RunBillingSummary {
+            models: vec![ModelUsageSummary {
+                provider_id: "deepseek".into(),
+                currency: "CNY".parse().unwrap(),
+                model_id: "deepseek-flash".into(),
+                settled_amount: Some(serde_json::from_str("\"0.014\"").unwrap()),
+                reserved_amount: Some(serde_json::from_str("\"0.02\"").unwrap()),
+                known_tokens: Some(240),
+                incomplete_requests: 1,
+                request_count: 2,
+            }],
+            warnings: vec![BudgetWarning {
+                currency: "USD".parse().unwrap(),
+                threshold_percent: 80,
+                reached_at: "2026-10-20T00:00:00Z".into(),
+                read: false,
+            }],
+        });
+
+        let lines = billing_lines(&state, 2, 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(lines[0].contains("deepseek/deepseek-flash"));
+        assert!(lines[0].contains("CNY 结算0.01"));
+        assert!(lines[0].contains("tok:240"));
+        assert!(lines[0].contains("未知:1"));
+        assert!(billing_title(&state).contains("USD 80%"));
+    }
+
+    #[test]
+    fn billing_rows_are_truncated_by_terminal_display_width() {
+        assert_eq!(truncate_display_width("模型名称很长", 5), "模型…");
+        assert_eq!(truncate_display_width("abc", 2), "ab");
+    }
+
+    #[test]
+    fn game_layout_allocates_dedicated_billing_and_status_panels() {
+        let chunks = game_layout(ratatui::layout::Rect::new(0, 0, 100, 24));
+
+        assert_eq!(chunks.len(), 5);
+        assert_eq!(chunks[3].height, 4);
+        assert_eq!(chunks[4].height, 3);
+        assert_eq!(chunks.iter().map(|chunk| chunk.height).sum::<u16>(), 24);
+    }
+
+    #[test]
+    fn billing_groups_can_be_scrolled_with_keyboard_focus() {
+        let mut state = ViewState::new(Vec::new(), Vec::new());
+        state.billing = Some(RunBillingSummary {
+            models: (0..3)
+                .map(|index| ModelUsageSummary {
+                    provider_id: "provider".into(),
+                    currency: "USD".parse().unwrap(),
+                    model_id: format!("model-{index}"),
+                    settled_amount: None,
+                    reserved_amount: None,
+                    known_tokens: None,
+                    incomplete_requests: 0,
+                    request_count: 1,
+                })
+                .collect(),
+            warnings: Vec::new(),
+        });
+
+        scroll_billing(&mut state, true);
+        scroll_billing(&mut state, true);
+        let lines = billing_lines(&state, 1, 80);
+
+        assert!(lines[0].to_string().contains("model-2"));
+        assert!(billing_title(&state).contains("3-3/3"));
+        scroll_billing(&mut state, true);
+        assert_eq!(state.billing_scroll, 2);
+        scroll_billing(&mut state, false);
+        assert_eq!(state.billing_scroll, 1);
     }
 }
