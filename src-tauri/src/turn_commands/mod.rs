@@ -3,33 +3,12 @@
 use crate::{events, ipc::CmdError};
 use aoidos_engine::fault::Fault;
 use aoidos_engine::ports::{EventPort, PreparedEvent, TurnEvent};
-use aoidos_engine::turn::Coordinator;
+#[cfg(test)]
 use aoidos_llm::proxy::SystemProxySnapshot;
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// 统一运行服务；产品后续接入同一个协调器，不新建调试 / private 门禁。
-pub struct TurnService {
-    pub coordinator: Coordinator,
-    pub diagnostics: Arc<Mutex<aoidos_engine::record::calibration::Calibration>>,
-    pub proxy_snapshot: SystemProxySnapshot,
-}
-
-impl TurnService {
-    /// # Errors
-    /// 协调器容量参数非法时拒绝初始化。
-    pub fn new(
-        events: Arc<dyn EventPort>,
-        proxy_snapshot: SystemProxySnapshot,
-    ) -> Result<Self, Fault> {
-        Ok(Self {
-            coordinator: Coordinator::new(events, 16)?,
-            diagnostics: Arc::new(Mutex::new(
-                aoidos_engine::record::calibration::Calibration::default(),
-            )),
-            proxy_snapshot,
-        })
-    }
-}
+/// Tauri 命令保留稳定的本地名称，实际运行状态由入口共用的应用层持有。
+pub type TurnService = aoidos_app::TurnRuntime;
 
 /// 窗口投递函数，仅接收已准备信封和登记事件名。
 pub type WindowDelivery = dyn Fn(&str, serde_json::Value) -> Result<(), Fault> + Send + Sync;

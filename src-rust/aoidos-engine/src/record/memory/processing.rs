@@ -205,6 +205,31 @@ impl DispatchBudget {
 
 impl BudgetPort for DispatchBudget {
     fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial> {
+        self.reserve_checked(attempt, None)
+    }
+
+    fn reserve_with_input_upper_bound(
+        &self,
+        attempt: &AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), BudgetDenial> {
+        self.reserve_checked(attempt, Some(input_tokens))
+    }
+
+    fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
+        self.inner.settle(attempt, outcome);
+        if !matches!(outcome, AttemptOutcome::Settled { .. }) {
+            self.mark_unknown(attempt, "llm.unknown");
+        }
+    }
+}
+
+impl DispatchBudget {
+    fn reserve_checked(
+        &self,
+        attempt: &AttemptIdentity,
+        input_tokens: Option<u64>,
+    ) -> Result<(), BudgetDenial> {
         if attempt.attempt != 1
             || self
                 .dispatched
@@ -215,7 +240,12 @@ impl BudgetPort for DispatchBudget {
             return Err(dispatch_denied());
         }
 
-        self.inner.reserve(attempt)?;
+        if let Some(input_tokens) = input_tokens {
+            self.inner
+                .reserve_with_input_upper_bound(attempt, input_tokens)?;
+        } else {
+            self.inner.reserve(attempt)?;
+        }
         if let Err(error) = self.persistence.dispatch(attempt) {
             self.inner.settle(attempt, &AttemptOutcome::NotDispatched);
             *self
@@ -229,13 +259,6 @@ impl BudgetPort for DispatchBudget {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(attempt.clone());
         Ok(())
-    }
-
-    fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
-        self.inner.settle(attempt, outcome);
-        if !matches!(outcome, AttemptOutcome::Settled { .. }) {
-            self.mark_unknown(attempt, "llm.unknown");
-        }
     }
 }
 

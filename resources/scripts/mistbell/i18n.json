@@ -3,5 +3,9 @@
   "displayNames": {
     "en": "Mistbell Cellar",
     "zh-Hans": "雾钟地窖"
+  },
+  "suggestedActions": {
+    "en": "I look around, trying to understand where I am and notice any possible exits.",
+    "zh-Hans": "我环顾四周，试着弄清自己身在何处，并留意可能的出口。"
   }
 }

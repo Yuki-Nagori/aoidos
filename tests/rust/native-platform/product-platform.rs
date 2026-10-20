@@ -1,8 +1,8 @@
 //! 正式会话命令与真实 DeepSeek HTTP/SSE adapter；所有请求仅到回环服务。
 
+use aoidos_app::profiles::Profiles;
 use aoidos_engine::game::product::{Product, ProfileFactory};
 use aoidos_lib::{
-    game_commands::SavedProfiles,
     store_commands::{StorageEvents, StorageService},
     turn_commands::{TurnService, WindowEvents},
 };
@@ -293,7 +293,7 @@ fn run(dir: PathBuf, restarting: bool) -> Result<(), Box<dyn std::error::Error>>
             };
             let turns = TurnService::new(events.clone(), SystemProxySnapshot::default())?;
             let factory = ProfileFactory::with_builder(
-                Arc::new(SavedProfiles),
+                Arc::new(Profiles::new(&fixture_dir.join("llm"))),
                 storage.storage.clone(),
                 turns.proxy_snapshot.clone(),
                 turns.diagnostics.clone(),

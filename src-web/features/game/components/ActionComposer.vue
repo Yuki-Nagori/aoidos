@@ -7,6 +7,7 @@ import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const props = defineProps<{
   modelValue: string;
+  suggestedAction?: string;
   preview: ComposerPreview;
   submitDisabled: boolean;
   submitLabel: string;
@@ -96,6 +97,14 @@ defineExpose({ focus });
       {{ props.submitLabel }}
     </button>
   </form>
+  <button
+    v-if="props.suggestedAction && !props.modelValue.trim()"
+    type="button"
+    class="mt-2 text-left text-xs text-muted underline decoration-dotted underline-offset-4"
+    @click="emit('update:modelValue', props.suggestedAction)"
+  >
+    {{ t("game.trySuggestedAction") }}: {{ props.suggestedAction }}
+  </button>
   <p v-if="props.tooLarge" class="mt-2 text-xs text-danger" role="alert">
     {{ t("game.actionTooLarge") }}
   </p>

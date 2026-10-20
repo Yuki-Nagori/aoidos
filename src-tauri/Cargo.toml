@@ -13,6 +13,7 @@ tauri-build.workspace = true
 serde_json.workspace = true
 
 [dependencies]
+aoidos-app.workspace = true
 aoidos-json.workspace = true
 aoidos-billing.workspace = true
 tokio.workspace = true

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, toRef } from "vue";
+import { ref, toRef, watch } from "vue";
 import ActionComposer from "./ActionComposer.vue";
 import GameStage from "./GameStage.vue";
 import RecordFeed from "./RecordFeed.vue";
@@ -10,6 +10,7 @@ import { useGameWorkspace } from "../composables/useGameWorkspace";
 
 const props = defineProps<{
   session: OpenedSession;
+  suggestedAction?: string;
   productBusy: boolean;
   preferences: ReturnType<typeof useUiPreferences>;
   errorMessage?: string;
@@ -40,6 +41,15 @@ const {
   emitError: (error) => emit("error", error),
   emitHistoryRevision: (revision) => emit("historyRevision", revision),
 });
+watch(
+  [() => props.session.sessionId, () => props.suggestedAction],
+  () => {
+    if (!input.draft.value.trim() && props.suggestedAction) {
+      input.draft.value = props.suggestedAction;
+    }
+  },
+  { immediate: true, flush: "sync" },
+);
 defineExpose({ reconnect });
 </script>
 <template>
@@ -285,6 +295,7 @@ defineExpose({ reconnect });
             <ActionComposer
               ref="composer"
               v-model="input.draft.value"
+              :suggested-action="props.suggestedAction"
               :preview="composerPreview"
               :submit-label="composerSubmitLabel"
               :too-large="input.tooLarge.value"

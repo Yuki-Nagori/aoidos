@@ -38,7 +38,7 @@ impl LedgerBudgetPort {
         }
     }
 
-    fn reserve_attempt(&self, attempt: &AttemptIdentity) -> Result<(), String> {
+    fn reserve_attempt(&self, attempt: &AttemptIdentity, input_tokens: u64) -> Result<(), String> {
         if attempt.model != self.model_id {
             return Err("budget.price-missing".into());
         }
@@ -57,7 +57,10 @@ impl LedgerBudgetPort {
                 .ok_or(BillingError::PriceMissing)
                 .map_err(billing_fault)?;
                 let reserve = price
-                    .upper_bound_cost(self.max_input_tokens, u64::from(attempt.max_tokens))
+                    .upper_bound_cost(
+                        input_tokens.min(self.max_input_tokens),
+                        u64::from(attempt.max_tokens),
+                    )
                     .and_then(|cost| cost.reserve().map_err(Into::into))
                     .map_err(|_| Fault::new("budget.price-missing", "模型价格或预留上界不可用"))?;
                 let reservation = Reservation {
@@ -219,7 +222,16 @@ impl LedgerBudgetPort {
 
 impl BudgetPort for LedgerBudgetPort {
     fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial> {
-        self.reserve_attempt(attempt)
+        self.reserve_attempt(attempt, self.max_input_tokens)
+            .map_err(|reason| BudgetDenial { reason })
+    }
+
+    fn reserve_with_input_upper_bound(
+        &self,
+        attempt: &AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), BudgetDenial> {
+        self.reserve_attempt(attempt, input_tokens)
             .map_err(|reason| BudgetDenial { reason })
     }
 
@@ -417,6 +429,39 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn reservation_uses_the_current_input_bound_instead_of_the_model_window() {
+        let (storage, root) = storage();
+        configure(&storage, "0.20");
+        let port = LedgerBudgetPort::new(
+            storage.clone(),
+            "run-1".into(),
+            "profile-1".into(),
+            "provider".into(),
+            "model".into(),
+            "direct".into(),
+            1_000_000,
+        );
+
+        port.reserve_with_input_upper_bound(&attempt("model", "bounded-request"), 100)
+            .unwrap();
+
+        let reserved: i64 = storage
+            .with_database(|connection| {
+                connection
+                    .query_row(
+                        "SELECT reserved_nanos FROM billing_physical_requests WHERE request_id='bounded-request'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(query_fault)
+            })
+            .unwrap();
+        assert_eq!(reserved, NanoMoney::parse("0.19").unwrap().nanos());
+        storage.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

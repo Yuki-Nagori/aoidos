@@ -443,6 +443,7 @@
     "preferenceSaveFailed": "偏好设置保存失败。",
     "preferenceLoadFailed": "偏好设置读取失败。",
     "actionPlaceholder": "描述你的行动。输入 / 查看可用快捷命令。",
+    "trySuggestedAction": "试试剧本的开场行动",
     "actionTooLarge": "行动超过 32 KiB UTF-8 输入上限，请缩短后再发送。",
     "contentRequired": "请补充内容后再发送；草稿已保留。",
     "commandSuggestions": "命令建议",

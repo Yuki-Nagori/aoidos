@@ -26,6 +26,7 @@ pub struct ScriptInfo {
     pub script_id: String,
     pub title: String,
     pub display_names: BTreeMap<String, String>,
+    pub suggested_actions: BTreeMap<String, String>,
     pub attributions: String,
 }
 #[derive(Debug, serde::Deserialize)]
@@ -33,6 +34,7 @@ pub struct ScriptInfo {
 struct ScriptI18n {
     version: u32,
     display_names: BTreeMap<String, String>,
+    suggested_actions: BTreeMap<String, String>,
 }
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -110,10 +112,12 @@ pub fn list() -> Result<Vec<ScriptInfo>, Fault> {
         .iter()
         .map(|raw| {
             entity_directory(raw.id)?;
+            let localization = parse_i18n(raw.i18n)?;
             Ok(ScriptInfo {
                 script_id: raw.id.into(),
                 title: scenario(raw.id)?.title,
-                display_names: parse_display_names(raw.i18n)?,
+                display_names: localization.display_names,
+                suggested_actions: localization.suggested_actions,
                 attributions: raw.notices.join("\n\n"),
             })
         })
@@ -139,21 +143,24 @@ fn script_revision(body: &[u8], entities: &[u8], directory_revision: u64) -> Str
     bytes.extend_from_slice(&revision_bytes);
     crate::record::format::hash(&bytes)
 }
-fn parse_display_names(source: &str) -> Result<BTreeMap<String, String>, Fault> {
+fn parse_i18n(source: &str) -> Result<ScriptI18n, Fault> {
     let metadata: ScriptI18n = serde_json::from_str(source).map_err(invalid_localization)?;
-    let valid = metadata.version == 1
-        && metadata.display_names.len() == 2
-        && ["en", "zh-Hans"]
-            .iter()
-            .all(|locale| metadata.display_names.contains_key(*locale))
-        && metadata
-            .display_names
-            .values()
-            .all(|name| !name.trim().is_empty() && name.len() <= 256);
-    if !valid {
+    if !valid_localizations(metadata.version, &metadata.display_names, 256)
+        || !valid_localizations(metadata.version, &metadata.suggested_actions, 512)
+    {
         return Err(invalid_localization_data());
     }
-    Ok(metadata.display_names)
+    Ok(metadata)
+}
+fn valid_localizations(version: u32, values: &BTreeMap<String, String>, max_bytes: usize) -> bool {
+    version == 1
+        && values.len() == 2
+        && ["en", "zh-Hans"]
+            .iter()
+            .all(|locale| values.contains_key(*locale))
+        && values
+            .values()
+            .all(|value| !value.trim().is_empty() && value.len() <= max_bytes)
 }
 fn find(id: &str) -> Result<&'static RawScript, Fault> {
     BUNDLED.iter().find(|raw| raw.id == id).ok_or_else(unknown)

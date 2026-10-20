@@ -215,6 +215,13 @@ impl PreparedGeneration {
         if bytes > MAX_INPUT_BYTES {
             return Err(Fault::bad_request());
         }
+        if serde_json::to_vec(&p.input)
+            .map_err(|_| Fault::bad_request())?
+            .len()
+            > MAX_INPUT_BYTES
+        {
+            return Err(Fault::bad_request());
+        }
         request.provider_request.stops = request.guard.server_stops(caps.stop_limit);
         Ok(Self {
             provider,

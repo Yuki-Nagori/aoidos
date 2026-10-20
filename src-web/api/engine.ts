@@ -153,6 +153,7 @@ export interface ScriptInfo {
   scriptId: string;
   title: string;
   displayNames: Record<Locale, string>;
+  suggestedActions: Record<Locale, string>;
   attributions: string;
 }
 export interface OpenedSession {

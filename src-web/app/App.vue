@@ -19,6 +19,13 @@ const product = useProduct();
 const theme = useTheme(product.scriptId);
 const locale = useLocale();
 const preferences = useUiPreferences();
+const suggestedAction = computed(() => {
+  const session = product.session.value;
+  if (!session) return undefined;
+  return product.scripts.value
+    .find((script) => script.scriptId === session.scriptId)
+    ?.suggestedActions[locale.resolved.value];
+});
 const sessionId = computed(() => product.session.value?.sessionId);
 const billingProfile = computed(() =>
   product.profiles.value.find((profile) => profile.profileId === product.profileId.value),
@@ -151,6 +158,7 @@ void preferences.load();
         v-if="product.session.value"
         ref="workspace"
         :session="product.session.value"
+        :suggested-action="suggestedAction"
         :product-busy="product.busy.value"
         :error-message="errorMessage"
         :preferences="preferences"

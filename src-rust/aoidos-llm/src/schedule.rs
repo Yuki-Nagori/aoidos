@@ -131,6 +131,15 @@ pub trait BudgetPort: Send + Sync {
     /// # Errors
     /// 本地额度不足或预算状态异常时返回 [`BudgetDenial`]（code 属 budget 命名空间）。
     fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial>;
+    /// 使用当前冻结输入的保守 Token 上界预留；旧适配器默认沿用既有策略。
+    fn reserve_with_input_upper_bound(
+        &self,
+        attempt: &AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), BudgetDenial> {
+        let _ = input_tokens;
+        self.reserve(attempt)
+    }
     /// 每次成功预留的尝试恰结算一次。
     fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome);
 }
@@ -306,7 +315,10 @@ pub async fn run_generation_with_output(
             max_tokens: provider_request.sampling.max_tokens,
             temperature,
         };
-        if let Err(denial) = budget.reserve(&identity) {
+        if let Err(denial) = budget.reserve_with_input_upper_bound(
+            &identity,
+            request.provider_request.input.token_upper_bound(),
+        ) {
             return Err(RunError::Budget {
                 reason: denial.reason,
             });

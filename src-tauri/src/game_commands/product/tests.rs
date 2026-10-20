@@ -1,5 +1,10 @@
 use super::*;
-use aoidos_engine::{game::product::ProfileFactory, storage::Storage, turn::Coordinator};
+use aoidos_engine::{
+    fault::Fault,
+    game::product::{ProfileFactory, ProfileSource, ResolvedProfile},
+    storage::Storage,
+    turn::Coordinator,
+};
 use std::sync::{Arc, Mutex};
 use tauri::{
     Manager,
@@ -54,10 +59,8 @@ impl ProfileSource for Profiles {
 }
 #[test]
 fn saved_profile_rejects_invalid_identity_before_touching_persistent_state() {
-    assert_eq!(
-        SavedProfiles.freeze("").err().unwrap().code,
-        "app.bad-request"
-    );
+    let profiles = aoidos_app::profiles::Profiles::new(std::path::Path::new("."));
+    assert_eq!(profiles.freeze("").err().unwrap().code, "app.bad-request");
 }
 #[tokio::test]
 async fn session_commands_accept_only_complete_selection_and_preserve_saved_identity() {

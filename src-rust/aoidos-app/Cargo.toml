@@ -1,0 +1,12 @@
+[package]
+name = "aoidos-app"
+description = "Aoidos 入口共用的 Rust 应用运行服务"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aoidos-engine.workspace = true
+aoidos-llm.workspace = true
+aoidos-store.workspace = true
+serde_json.workspace = true
+secrecy.workspace = true

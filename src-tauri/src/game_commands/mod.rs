@@ -5,7 +5,6 @@ use crate::ipc::CmdError;
 use aoidos_engine::game::{runtime::Service, state::*};
 
 mod product;
-pub use product::SavedProfiles;
 pub use product::{list_scripts, open_session};
 
 #[derive(serde::Deserialize)]

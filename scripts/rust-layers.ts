@@ -23,8 +23,11 @@ const ALLOWED_DEPENDENCIES: Record<string, readonly string[]> = {
     "aoidos-store",
     "aoidos-theme",
   ],
+  "aoidos-app": ["aoidos-engine", "aoidos-llm", "aoidos-store"],
+  "aoidos-cli": ["aoidos-app", "aoidos-engine", "aoidos-llm", "aoidos-store"],
   aoidos: [
     "aoidos-billing",
+    "aoidos-app",
     "aoidos-engine",
     "aoidos-json",
     "aoidos-llm",
@@ -32,7 +35,14 @@ const ALLOWED_DEPENDENCIES: Record<string, readonly string[]> = {
     "aoidos-store",
     "aoidos-theme",
   ],
-  "aoidos-native-tests": ["aoidos", "aoidos-engine", "aoidos-llm", "aoidos-locale", "aoidos-store"],
+  "aoidos-native-tests": [
+    "aoidos",
+    "aoidos-app",
+    "aoidos-engine",
+    "aoidos-llm",
+    "aoidos-locale",
+    "aoidos-store",
+  ],
 };
 
 export function checkWorkspaceLayers(

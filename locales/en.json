@@ -443,6 +443,7 @@
     "preferenceSaveFailed": "The preference could not be saved.",
     "preferenceLoadFailed": "Preferences could not be loaded.",
     "actionPlaceholder": "Describe your action. Use / for available shortcuts.",
+    "trySuggestedAction": "Try the opening action",
     "actionTooLarge": "This action exceeds the 32 KiB UTF-8 input limit. Shorten it before sending.",
     "contentRequired": "Add text before sending; the draft has been kept.",
     "commandSuggestions": "Command suggestions",
