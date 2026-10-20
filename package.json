@@ -11,6 +11,7 @@
     "tauri": "bun scripts/toolchain.mts tauri",
     "tauri:build": "bun scripts/toolchain.mts tauri build",
     "tauri:dev": "bun scripts/toolchain.mts tauri dev",
+    "cli": "bun scripts/cargo.mts run -p aoidos-cli --",
     "test": "bun run theme:defaults:check && vitest run",
     "test:watch": "vitest",
     "test:coverage": "bun run theme:defaults:check && vitest run --coverage",

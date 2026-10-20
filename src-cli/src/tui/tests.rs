@@ -1,7 +1,8 @@
 use super::{
     ViewState, append_bounded, apply_turn_snapshot, billing_lines, billing_title, cancel_game,
-    continue_game, friendly_error, game_layout, handle_runtime_event, open_session, scroll_billing,
-    submit_action, truncate_display_width, wrap_visual_lines,
+    confirm_action, continue_game, friendly_error, game_layout, handle_game_key,
+    handle_runtime_event, open_session, refresh_billing, scroll_billing, submit_action,
+    truncate_display_width, wrap_visual_lines,
 };
 use crate::{CliApp, EVENT_CAPACITY, EventBridge};
 use aoidos_app::{GameServices, TurnRuntime, billing::RunBillingSummary, profiles::Profiles};
@@ -138,7 +139,7 @@ fn game_layout_allocates_dedicated_billing_and_status_panels() {
     let chunks = game_layout(ratatui::layout::Rect::new(0, 0, 100, 24));
 
     assert_eq!(chunks.len(), 5);
-    assert_eq!(chunks[3].height, 4);
+    assert_eq!(chunks[3].height, 7);
     assert_eq!(chunks[4].height, 3);
     assert_eq!(chunks.iter().map(|chunk| chunk.height).sum::<u16>(), 24);
 }
@@ -183,13 +184,21 @@ async fn fake_provider_opens_reopens_without_sending_then_runs_suggested_action(
     let root = std::env::temp_dir().join(format!("aoidos-cli-lifecycle-{unique}"));
     std::fs::create_dir_all(&root).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
-    let mut app = fake_app(&root, calls.clone());
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        false,
+        ledger_budget.clone(),
+        Arc::new(AtomicBool::new(false)),
+    );
     let profiles = vec![fake_profile()];
     let scripts = aoidos_engine::game::assets::list().unwrap();
     let mut state = ViewState::new(profiles, scripts);
 
     open_session(&mut app, &mut state, false).await.unwrap();
     let first_session = state.session.as_ref().unwrap().session_id.clone();
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(!state.draft.is_empty(), "开局后应提供可编辑的剧本建议");
 
@@ -202,6 +211,31 @@ async fn fake_provider_opens_reopens_without_sending_then_runs_suggested_action(
 
     let action = state.draft.clone();
     submit_action(&mut app, &mut state).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "请求预览不能调用 Provider");
+    assert!(state.pending_action.is_some());
+    let preview = billing_lines(&state, 5, 100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(preview.contains("fake · deepseek/deepseek-v4-pro"));
+    assert!(preview.contains("价格：CNY"));
+    assert!(preview.contains("本局上限：CNY 100.00 / USD 0.00"));
+    handle_game_key(
+        &mut app,
+        &mut state,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(state.pending_action.is_none());
+    assert_eq!(state.draft, action, "取消发送时保留草稿");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "取消预览不能调用 Provider");
+    submit_action(&mut app, &mut state).await;
+    confirm_action(&mut app, &mut state).await;
     assert!(state.busy);
     tokio::time::timeout(Duration::from_secs(10), async {
         while state.busy {
@@ -272,6 +306,135 @@ async fn fake_provider_opens_reopens_without_sending_then_runs_suggested_action(
 }
 
 #[tokio::test]
+async fn tui_missing_run_budget_stops_before_confirmation() {
+    let root = test_root("preflight-missing");
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut app = fake_app(&root, calls.clone());
+    let mut state = new_state();
+    open_session(&mut app, &mut state, false).await.unwrap();
+    let draft = state.draft.clone();
+
+    submit_action(&mut app, &mut state).await;
+
+    assert!(state.status.contains("未设置"));
+    assert!(state.pending_action.is_none());
+    assert_eq!(state.draft, draft, "预算缺失时保留行动草稿");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn tui_missing_selected_price_stops_before_confirmation() {
+    let root = test_root("preflight-no-price");
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        false,
+        ledger_budget,
+        Arc::new(AtomicBool::new(false)),
+    );
+    let mut state = new_state();
+    open_session(&mut app, &mut state, false).await.unwrap();
+    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    configure_test_budget(&app.storage, &run_id, "100");
+    let draft = state.draft.clone();
+
+    submit_action(&mut app, &mut state).await;
+
+    assert!(state.status.contains("没有有效的登记价格"));
+    assert!(state.pending_action.is_none());
+    assert_eq!(state.draft, draft, "价格缺失时保留行动草稿");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn tui_rechecks_run_limits_before_confirmed_dispatch() {
+    let root = test_root("preflight-changed");
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        false,
+        ledger_budget.clone(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let mut state = new_state();
+    open_session(&mut app, &mut state, false).await.unwrap();
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
+    let draft = state.draft.clone();
+
+    submit_action(&mut app, &mut state).await;
+    assert!(state.pending_action.is_some());
+    update_test_limit(
+        &app.storage,
+        &state.session.as_ref().unwrap().memory_run_id,
+        "99",
+        1,
+    );
+    confirm_action(&mut app, &mut state).await;
+
+    assert!(state.pending_action.is_none());
+    assert_eq!(state.draft, draft, "预览失效时保留行动草稿");
+    assert!(state.status.contains("刚有变化"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "旧上限下的确认不得派发");
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn tui_rejects_profile_changes_after_opening_a_session() {
+    let root = test_root("preflight-profile-change");
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        false,
+        ledger_budget.clone(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let mut state = new_state();
+    open_session(&mut app, &mut state, false).await.unwrap();
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
+
+    submit_action(&mut app, &mut state).await;
+    assert!(state.pending_action.is_some());
+    let mut changed_profile = fake_profile();
+    changed_profile.sampling.max_tokens += 1;
+    app.profiles.save(changed_profile).unwrap();
+    confirm_action(&mut app, &mut state).await;
+
+    assert!(state.pending_action.is_none());
+    assert!(!state.draft.is_empty(), "配置变化时保留尚未派发的草稿");
+    assert!(state.status.contains("配置已变化"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "旧确认不能派发请求");
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn tui_cancel_then_explicit_resume_does_not_duplicate_player_action() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -280,14 +443,23 @@ async fn tui_cancel_then_explicit_resume_does_not_duplicate_player_action() {
     let root = std::env::temp_dir().join(format!("aoidos-cli-resume-{unique}"));
     std::fs::create_dir_all(&root).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
-    let mut app = fake_app_with_gate(&root, calls.clone(), true);
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        true,
+        ledger_budget.clone(),
+        Arc::new(AtomicBool::new(false)),
+    );
     let mut state = ViewState::new(
         vec![fake_profile()],
         aoidos_engine::game::assets::list().unwrap(),
     );
     open_session(&mut app, &mut state, false).await.unwrap();
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
     let action = state.draft.clone();
     submit_action(&mut app, &mut state).await;
+    confirm_action(&mut app, &mut state).await;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !state
             .phase
@@ -312,6 +484,9 @@ async fn tui_cancel_then_explicit_resume_does_not_duplicate_player_action() {
     let calls_before_resume = calls.load(Ordering::SeqCst);
 
     continue_game(&mut app, &mut state).await;
+    assert!(state.pending_action.is_some(), "继续骰判前必须预览并确认");
+    assert_eq!(calls.load(Ordering::SeqCst), calls_before_resume);
+    confirm_action(&mut app, &mut state).await;
     assert!(
         state
             .phase
@@ -319,6 +494,8 @@ async fn tui_cancel_then_explicit_resume_does_not_duplicate_player_action() {
             .is_some_and(|phase| phase.state.check.is_some())
     );
     continue_game(&mut app, &mut state).await;
+    assert!(state.pending_action.is_some(), "恢复前必须再次确认");
+    confirm_action(&mut app, &mut state).await;
     tokio::time::timeout(Duration::from_secs(10), async {
         while state.busy {
             let event = app.events.recv().await.expect("事件桥仍然打开");
@@ -358,18 +535,21 @@ async fn tui_provider_auth_failure_is_visible_and_marks_the_operation_failed() {
     let root = test_root("provider-failure");
     std::fs::create_dir_all(&root).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
     let mut app = fake_app_with_options(
         &root,
         calls.clone(),
         false,
-        Arc::new(AllowAll),
+        ledger_budget.clone(),
         Arc::new(AtomicBool::new(true)),
     );
     let mut state = new_state();
     state.locale = "zh-Hans";
     open_session(&mut app, &mut state, false).await.unwrap();
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
 
     submit_action(&mut app, &mut state).await;
+    confirm_action(&mut app, &mut state).await;
     wait_for_turn(&mut app, &mut state).await;
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -406,10 +586,10 @@ async fn tui_billing_panel_refreshes_after_fake_provider_reservation_and_settlem
     let mut state = new_state();
     open_session(&mut app, &mut state, false).await.unwrap();
     let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
-    configure_test_ledger(&app.storage, &run_id, "100");
-    ledger_budget.configure(app.storage.clone(), run_id.clone());
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
 
     submit_action(&mut app, &mut state).await;
+    confirm_action(&mut app, &mut state).await;
     wait_for_turn(&mut app, &mut state).await;
 
     assert_eq!(
@@ -476,10 +656,10 @@ async fn tui_budget_rejection_does_not_dispatch_fake_provider_request() {
     state.locale = "zh-Hans";
     open_session(&mut app, &mut state, false).await.unwrap();
     let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
-    configure_test_ledger(&app.storage, &run_id, "0");
-    ledger_budget.configure(app.storage.clone(), run_id.clone());
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "0");
 
     submit_action(&mut app, &mut state).await;
+    confirm_action(&mut app, &mut state).await;
     wait_for_turn(&mut app, &mut state).await;
 
     assert_eq!(
@@ -579,10 +759,12 @@ fn fake_app_with_options(
     );
     let runtime =
         aoidos_engine::game::runtime::Service::new(turns.coordinator.clone(), factory.clone());
+    let profiles = Arc::new(Profiles::new(&root.join("llm")));
+    profiles.save(fake_profile()).unwrap();
     CliApp {
         _instance_lock: aoidos_store::lock::acquire(root).unwrap(),
         storage: storage.clone(),
-        profiles: Arc::new(Profiles::new(&root.join("llm"))),
+        profiles,
         services: GameServices {
             turns,
             product,
@@ -775,6 +957,26 @@ fn configure_test_ledger(storage: &Storage, run_id: &str, cny_limit: &str) {
         "validUntil": null
     }))
     .unwrap();
+    configure_test_budget(storage, run_id, cny_limit);
+    storage
+        .with_database(|connection| {
+            BillingLedger::register_price(connection, &price, "2020-01-01T00:00:00Z").unwrap();
+            BillingLedger::select_profile_price(
+                connection,
+                "fake",
+                "deepseek",
+                "deepseek-v4-pro",
+                "direct",
+                serde_json::from_value(serde_json::json!("CNY")).unwrap(),
+                "2020-01-01T00:00:00Z",
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn configure_test_budget(storage: &Storage, run_id: &str, cny_limit: &str) {
     storage
         .with_database(|connection| {
             BillingLedger::set_settings(
@@ -786,15 +988,33 @@ fn configure_test_ledger(storage: &Storage, run_id: &str, cny_limit: &str) {
                 "2020-01-01T00:00:00Z",
             )
             .unwrap();
-            BillingLedger::register_price(connection, &price, "2020-01-01T00:00:00Z").unwrap();
-            BillingLedger::select_profile_price(
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn configure_tui_test_billing(
+    app: &mut CliApp,
+    state: &mut ViewState,
+    budget: &RunLedgerBudget,
+    cny_limit: &str,
+) {
+    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    configure_test_ledger(&app.storage, &run_id, cny_limit);
+    budget.configure(app.storage.clone(), run_id.clone());
+    refresh_billing(app, state, &run_id);
+}
+
+fn update_test_limit(storage: &Storage, run_id: &str, cny_limit: &str, revision: u64) {
+    storage
+        .with_database(|connection| {
+            BillingLedger::set_settings(
                 connection,
-                "fake",
-                "deepseek",
-                "deepseek-v4-pro",
-                "direct",
-                serde_json::from_value(serde_json::json!("CNY")).unwrap(),
-                "2020-01-01T00:00:00Z",
+                run_id,
+                serde_json::from_value(serde_json::json!(cny_limit)).unwrap(),
+                serde_json::from_value(serde_json::json!("0")).unwrap(),
+                Some(revision),
+                "2020-01-02T00:00:00Z",
             )
             .unwrap();
             Ok(())

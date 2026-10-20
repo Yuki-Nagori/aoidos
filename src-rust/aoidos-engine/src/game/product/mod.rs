@@ -182,7 +182,8 @@ impl RoundFactory for ProfileFactory {
         self.for_profile(&id, Some(run_id))
     }
 }
-fn billing_route_policy(provider_id: &str) -> &str {
+/// 返回计费账本用于匹配当前供应商价格的路由身份。
+pub fn billing_route_policy(provider_id: &str) -> &str {
     if provider_id == "openrouter" {
         "openrouter"
     } else {
