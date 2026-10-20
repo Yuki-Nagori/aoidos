@@ -1,8 +1,9 @@
 use super::{
-    ViewState, append_bounded, apply_turn_snapshot, billing_lines, billing_title, cancel_game,
-    confirm_action, continue_game, friendly_error, game_layout, handle_game_key,
-    handle_runtime_event, open_session, refresh_billing, scroll_billing, submit_action,
-    truncate_display_width, wrap_visual_lines,
+    SettingsSection, ViewState, append_bounded, apply_turn_snapshot, billing_lines, billing_title,
+    cancel_game, confirm_action, continue_game, draft_cursor_column, draft_cursor_position,
+    draft_cursor_row, friendly_error, game_layout, handle_game_key, handle_runtime_event,
+    load_request_preflight, next_settings_section, open_session, refresh_billing, scroll_billing,
+    settings_layout, submit_action, wrap_visual_lines,
 };
 use crate::{CliApp, EVENT_CAPACITY, EventBridge};
 use aoidos_app::{GameServices, TurnRuntime, billing::RunBillingSummary, profiles::Profiles};
@@ -55,6 +56,21 @@ fn transcript_wraps_long_narration_into_scrollable_display_rows() {
 }
 
 #[test]
+fn draft_cursor_uses_terminal_width_for_unicode_and_wrapped_lines() {
+    let input = ratatui::layout::Rect::new(0, 0, 10, 5);
+
+    assert_eq!(draft_cursor_column("甲乙", input), 4);
+    assert_eq!(draft_cursor_row("甲乙", input), 0);
+    assert_eq!(draft_cursor_column("甲乙丙", input), 0);
+    assert_eq!(draft_cursor_row("甲乙丙", input), 1);
+    assert_eq!(draft_cursor_column("abc\n中文", input), 4);
+    assert_eq!(draft_cursor_row("abc\n中文", input), 1);
+    assert_eq!(draft_cursor_position("甲乙丙丁", 5), (4, 1));
+    assert_eq!(draft_cursor_position("abc\n", 3), (0, 1));
+    assert_eq!(draft_cursor_position(&"x".repeat(100), 5).1, 20);
+}
+
+#[test]
 fn repeated_turn_snapshots_replace_stream_without_duplicating_text() {
     let mut state = ViewState::new(Vec::new(), Vec::new());
     let snapshot = || aoidos_engine::turn::TurnSnapshot {
@@ -98,18 +114,31 @@ fn billing_panel_shows_original_currency_tokens_and_missing_usage() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
+    let rendered = lines.join("\n");
 
-    assert!(lines[0].contains("deepseek/deepseek-flash"));
-    assert!(lines[0].contains("CNY 结算0.01"));
-    assert!(lines[0].contains("tok:240"));
-    assert!(lines[0].contains("未知:1"));
-    assert!(billing_title(&state).contains("USD 80%"));
+    assert!(rendered.contains("deepseek/deepseek-flash"));
+    assert!(rendered.contains("CNY 结算0.01"));
+    assert!(rendered.contains("tok:240"));
+    assert!(rendered.contains("未知:1"));
+    assert!(rendered.contains("预算提醒：USD 已达到 80%"));
+    assert!(billing_title(&state).contains("PgUp/PgDn"));
 }
 
 #[test]
-fn billing_rows_are_truncated_by_terminal_display_width() {
-    assert_eq!(truncate_display_width("模型名称很长", 5), "模型…");
-    assert_eq!(truncate_display_width("abc", 2), "ab");
+fn billing_details_wrap_without_dropping_model_or_price_metadata() {
+    let lines = super::wrap_display_lines(
+        "价格：CNY · deepseek/deepseek-v4.1-flash · 版本 官方 2026-10",
+        24,
+    );
+    let rendered = lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let flattened = rendered.replace('\n', "");
+
+    assert!(flattened.contains("deepseek/deepseek-v4.1-flash"));
+    assert!(flattened.contains("官方 2026-10"));
 }
 
 #[test]
@@ -138,17 +167,68 @@ fn billing_failures_show_guidance_without_exposing_internal_codes() {
 fn game_layout_allocates_dedicated_billing_and_status_panels() {
     let chunks = game_layout(ratatui::layout::Rect::new(0, 0, 100, 24));
 
-    assert_eq!(chunks.len(), 5);
-    assert_eq!(chunks[3].height, 7);
-    assert_eq!(chunks[4].height, 3);
-    assert_eq!(chunks.iter().map(|chunk| chunk.height).sum::<u16>(), 24);
+    assert_eq!(chunks.billing.height, 7);
+    assert_eq!(chunks.status.height, 3);
+    assert_eq!(
+        [
+            chunks.header,
+            chunks.transcript,
+            chunks.controls,
+            chunks.billing,
+            chunks.status
+        ]
+        .iter()
+        .map(|chunk| chunk.height)
+        .sum::<u16>(),
+        24
+    );
+}
+
+#[test]
+fn game_layout_places_billing_beside_the_transcript_on_wide_terminals() {
+    let chunks = game_layout(ratatui::layout::Rect::new(0, 0, 120, 30));
+
+    assert_eq!(chunks.transcript.y, chunks.billing.y);
+    assert_eq!(chunks.transcript.height, chunks.billing.height);
+    assert_eq!(
+        chunks.transcript.x + chunks.transcript.width,
+        chunks.billing.x
+    );
+    assert_eq!(chunks.transcript.width + chunks.billing.width, 120);
+    assert!(chunks.transcript.width > chunks.billing.width);
+}
+
+#[test]
+fn settings_tabs_cycle_in_order_and_modal_stays_inside_terminal() {
+    assert_eq!(
+        next_settings_section(SettingsSection::Model, true),
+        SettingsSection::Script
+    );
+    assert_eq!(
+        next_settings_section(SettingsSection::Script, true),
+        SettingsSection::Billing
+    );
+    assert_eq!(
+        next_settings_section(SettingsSection::Billing, true),
+        SettingsSection::Model
+    );
+
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    let layout = settings_layout(area);
+    assert!(layout.panel.width <= area.width);
+    assert!(layout.panel.height <= area.height);
+    assert!(layout.panel.x + layout.panel.width <= area.width);
+    assert!(layout.panel.y + layout.panel.height <= area.height);
+    assert!(layout.model_tab.x < layout.script_tab.x);
+    assert!(layout.script_tab.x < layout.billing_tab.x);
+    assert!(layout.billing_tab.x < layout.close.x);
 }
 
 #[test]
 fn billing_groups_can_be_scrolled_with_keyboard_focus() {
     let mut state = ViewState::new(Vec::new(), Vec::new());
     state.billing = Some(RunBillingSummary {
-        models: (0..3)
+        models: (0..12)
             .map(|index| ModelUsageSummary {
                 provider_id: "provider".into(),
                 currency: "USD".parse().unwrap(),
@@ -168,9 +248,9 @@ fn billing_groups_can_be_scrolled_with_keyboard_focus() {
     let lines = billing_lines(&state, 1, 80);
 
     assert!(lines[0].to_string().contains("model-2"));
-    assert!(billing_title(&state).contains("3-3/3"));
+    assert!(billing_title(&state).contains("PgUp/PgDn"));
     scroll_billing(&mut state, true);
-    assert_eq!(state.billing_scroll, 2);
+    assert_eq!(state.billing_scroll, 3);
     scroll_billing(&mut state, false);
     assert_eq!(state.billing_scroll, 1);
 }
@@ -218,7 +298,7 @@ async fn fake_provider_opens_reopens_without_sending_then_runs_suggested_action(
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(preview.contains("fake · deepseek/deepseek-v4-pro"));
+    assert!(preview.contains("模型：deepseek/deepseek-v4-pro"));
     assert!(preview.contains("价格：CNY"));
     assert!(preview.contains("本局上限：CNY 100.00 / USD 0.00"));
     handle_game_key(
@@ -427,6 +507,47 @@ async fn tui_rejects_profile_changes_after_opening_a_session() {
     assert!(!state.draft.is_empty(), "配置变化时保留尚未派发的草稿");
     assert!(state.status.contains("配置已变化"));
     assert_eq!(calls.load(Ordering::SeqCst), 0, "旧确认不能派发请求");
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn selecting_a_profile_for_the_next_run_keeps_active_run_profile_pinned() {
+    let root = test_root("settings-next-profile");
+    std::fs::create_dir_all(&root).unwrap();
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        Arc::new(AtomicUsize::new(0)),
+        false,
+        ledger_budget.clone(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let mut state = new_state();
+    open_session(&mut app, &mut state, false).await.unwrap();
+    configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
+
+    let mut next_profile = fake_profile();
+    next_profile.profile_id = "next-run".into();
+    next_profile.model = "deepseek-v4-flash".into();
+    app.profiles.save(next_profile).unwrap();
+    state.profiles = app.profiles.list().unwrap();
+    state.profile_index = 1;
+
+    let (_, active_profile) = load_request_preflight(&app, &mut state).unwrap();
+
+    assert_eq!(active_profile.profile_id, "fake");
+    assert_eq!(state.profile_index, 1, "保留新周目的模型选择");
+
+    open_session(&mut app, &mut state, true).await.unwrap();
+    assert_eq!(
+        state.session_profile.as_ref().unwrap().profile_id,
+        "next-run",
+        "新周目才应用设置中的模型选择"
+    );
 
     app.shutdown().await;
     drop(state);

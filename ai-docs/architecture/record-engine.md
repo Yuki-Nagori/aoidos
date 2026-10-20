@@ -1,6 +1,6 @@
 # 对局记录与上下文引擎
 
-更新日期：2026-10-19；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。实现由 [022](../task/022-record-engine-impl.md) 承接，阶段决策归 [012](../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../task/045-scene-presence-dialogue-impl.md) 承接。
+更新日期：2026-10-20；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。已开周目目录、恢复选择与删除语义由 [059](../task/059-run-management-design.md) 定稿，060 待实现。阶段决策归 [012](../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../task/045-scene-presence-dialogue-impl.md) 承接。
 
 ## 方案与边界
 
@@ -20,6 +20,8 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 ```
 
 `RecordWriter` 归 aoidos-engine；SQL / 文件 IO 原语归 aoidos-store，域层通过普通接口使用。Tauri 层准备事件和适配平台，不拥有记录语法、预算或状态转换。store 已提供 journal 追加 / 同步 / 尾行修复和 applied 幂等事务原语；engine 负责记录语法、持久化写入方、投影、迁移与偏好服务。产品阶段机与控制命令由 023 接入。
+
+周目列表与预览按 059 只读、分页地校验目录元数据和 transcript header；不能调用会恢复 / 修复文件的 `Session::open`。明确选择后才创建 writer 并进入 023 恢复路径，恢复后仍等待玩家显式继续，不自动提交行动。删除覆盖同会话主记录、partial 与 `.recovery-<uuid>.bak`；共享 SQLite 备份不随单局删除，且不能宣传为安全擦除。
 
 ## 文件与块结构
 
