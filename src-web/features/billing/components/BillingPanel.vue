@@ -477,7 +477,7 @@ const billingErrorMessage = computed(() => {
       </div>
       <form class="billing-price-form grid gap-3" @submit.prevent="billing.savePrice">
         <div class="billing-price-base-grid">
-          <label class="billing-price-field">
+          <div class="billing-price-field">
             <span>{{ t("billing.currency") }}</span>
             <SelectMenu
               :model-value="billing.priceCurrency.value"
@@ -488,7 +488,7 @@ const billingErrorMessage = computed(() => {
               :label="t('billing.currency')"
               @update:model-value="billing.priceCurrency.value = $event"
             />
-          </label>
+          </div>
           <label class="billing-price-field">
             <span>{{ t("billing.unitTokens") }}</span>
             <input v-model="billing.unitTokens.value" inputmode="numeric" autocomplete="off" />

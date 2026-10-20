@@ -986,7 +986,11 @@
 
   .settings-theme-field {
     display: grid;
+    min-width: 0;
     gap: 0.625rem;
+    margin: 0;
+    border: 0;
+    padding: 0;
   }
 
   .settings-field-label {
@@ -1614,14 +1618,57 @@
   }
 
   .settings-skin {
-    gap: 0.75rem;
+    gap: 0.625rem;
+  }
+
+  .settings-skin-section {
+    display: grid;
+    min-width: 0;
+    gap: 0.625rem;
+  }
+
+  .settings-skin-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    color: var(--ink);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .settings-skin .script-ic {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5625rem;
   }
 
   .settings-skin-copy {
     display: grid;
     min-width: 0;
     flex: 1;
-    gap: 0.2rem;
+    gap: 0.125rem;
+  }
+
+  .settings-skin-copy strong {
+    font-size: 0.75rem;
+  }
+
+  .settings-skin-copy > span {
+    font-size: 0.71875rem;
+  }
+
+  .settings-skin-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--warning) 10%, var(--panel));
+    padding: 0.625rem 0.75rem;
+    color: var(--warning);
+    font-size: 0.75rem;
+    line-height: 1.5;
   }
 
   .settings-choice-group {

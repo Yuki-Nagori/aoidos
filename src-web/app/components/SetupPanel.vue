@@ -202,9 +202,9 @@ function themeName(id: string, fallback: string): string {
               :title="t('settings.sections.appearance')"
               @close="emit('close')"
             />
-            <div class="settings-theme-field">
-              <span class="settings-field-label">{{ t("settings.theme") }}</span>
-              <div class="settings-theme-grid" role="group" :aria-label="t('settings.theme')">
+            <fieldset class="settings-theme-field">
+              <legend class="settings-field-label">{{ t("settings.theme") }}</legend>
+              <div class="settings-theme-grid">
                 <button
                   v-for="option in theme.themes.value"
                   :key="option.id"
@@ -233,33 +233,54 @@ function themeName(id: string, fallback: string): string {
                   </span>
                 </button>
               </div>
-            </div>
-            <div v-if="product.scriptId.value === 'mistbell'" class="settings-skin card">
-              <div class="settings-skin-copy">
-                <strong>{{
-                  selectedScript?.displayNames[locale.resolved.value] ?? selectedScript?.title
-                }}</strong>
-                <span class="text-sm text-muted">{{ t("settings.scriptSkin") }}</span>
+            </fieldset>
+            <section
+              v-if="product.scriptId.value === 'mistbell'"
+              class="settings-skin-section"
+              :aria-label="t('settings.scriptSkin')"
+            >
+              <div class="settings-skin-heading">
+                <strong>{{ t("settings.scriptSkin") }}</strong>
+                <button
+                  type="button"
+                  role="switch"
+                  class="settings-switch"
+                  :aria-checked="!theme.disabled.value"
+                  :aria-label="t('settings.scriptSkin')"
+                  @click="theme.toggleSkin"
+                >
+                  <span aria-hidden="true" />
+                </button>
               </div>
-              <button
-                type="button"
-                role="switch"
-                class="settings-switch"
-                :aria-checked="!theme.disabled.value"
-                :aria-label="t('settings.scriptSkin')"
-                @click="theme.toggleSkin"
-              >
-                <span aria-hidden="true" />
-              </button>
-              <span class="text-sm">{{
-                theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin")
-              }}</span>
-            </div>
+              <div class="settings-skin card">
+                <span class="script-ic" aria-hidden="true">
+                  <svg class="i" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" />
+                    <path d="M10 20a2 2 0 0 0 4 0" />
+                  </svg>
+                </span>
+                <div class="settings-skin-copy">
+                  <strong>{{
+                    selectedScript?.displayNames[locale.resolved.value] ?? selectedScript?.title
+                  }}</strong>
+                  <span v-if="theme.skinTokenCount.value !== null" class="text-sm text-muted">
+                    {{ t("settings.skinTokenSummary", { count: theme.skinTokenCount.value }) }}
+                  </span>
+                </div>
+                <button type="button" class="btn" @click="theme.toggleSkin">
+                  {{ theme.disabled.value ? t("settings.enableSkin") : t("settings.disableSkin") }}
+                </button>
+              </div>
+              <div v-if="theme.warningCount.value" class="settings-skin-warning">
+                <svg class="i" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 4 21 19H3z" />
+                  <path d="M12 10v4M12 16.6v.1" />
+                </svg>
+                <span>{{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}</span>
+              </div>
+            </section>
             <p v-if="themeErrorMessage" role="status">{{ themeErrorMessage }}</p>
             <p v-if="skinErrorMessage" role="status">{{ skinErrorMessage }}</p>
-            <p v-else-if="theme.warningCount.value">
-              {{ t("settings.skinWarnings", { count: theme.warningCount.value }) }}
-            </p>
             <fieldset class="settings-choice-group">
               <legend>{{ t("settings.language") }}</legend>
               <div class="settings-segmented">

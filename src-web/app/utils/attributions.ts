@@ -1,8 +1,8 @@
-export type AttributionInlinePart =
+type AttributionInlinePart =
   | { kind: "text" | "strong" | "code"; value: string }
   | { kind: "link"; value: string; href: string };
 
-export type AttributionBlock =
+type AttributionBlock =
   | { kind: "heading"; parts: AttributionInlinePart[] }
   | { kind: "paragraph"; parts: AttributionInlinePart[] }
   | { kind: "list"; items: AttributionInlinePart[][] };

@@ -213,6 +213,23 @@ describe("token 目录与 app.css 互校", () => {
     expect(css).toMatch(/\.settings-theme-grid\s*\{[^}]*repeat\(2, minmax\(0, 1fr\)\)/);
   });
 
+  it("剧本皮肤按设计分开标题开关与剧本信息卡", () => {
+    const component = readFileSync(
+      resolve(__dirname, "../../src-web/app/components/SetupPanel.vue"),
+      "utf8",
+    );
+    expect(component).toContain('class="settings-skin-section"');
+    expect(component).toContain('class="settings-skin-heading"');
+    expect(component).toContain('class="settings-skin card"');
+    expect(component).toContain('class="settings-skin-copy"');
+    expect(component).toContain('class="settings-skin-warning"');
+    expect(css).toMatch(/\.settings-skin-section\s*\{[^}]*gap:\s*0\.625rem/);
+    expect(css).toMatch(/\.settings-skin \.script-ic\s*\{[^}]*width:\s*2rem/);
+    expect(css).toMatch(
+      /\.settings-skin-warning\s*\{[^}]*border: 1px solid color-mix\([^;]+\);[^}]*background: color-mix\([^;]+\);[^}]*padding: 0\.625rem 0\.75rem/,
+    );
+  });
+
   it("为快捷键、分段选项、开关和记忆参数保留设计稿的尺寸与视觉状态", () => {
     const kbd = css.match(/:where\(\.kbd\)\s*\{([^}]+)\}/)?.[1];
     expect(kbd).toContain("height: 1.125rem");

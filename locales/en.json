@@ -92,6 +92,7 @@
     },
     "enableSkin": "Enable scenario skin",
     "disableSkin": "Disable scenario skin",
+    "skinTokenSummary": "Overrides {count} accent tokens without changing backgrounds or panels.",
     "scriptSkin": "Scenario skin",
     "skinWarnings": "The scenario skin has {count} compatibility warnings.",
     "model": "Model",

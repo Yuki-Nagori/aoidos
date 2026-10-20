@@ -1,7 +1,7 @@
 <script setup lang="ts" generic="T extends string">
 import { computed, nextTick, onMounted, onScopeDispose, ref, useId, watch } from "vue";
 
-export interface SelectMenuOption<T extends string = string> {
+interface SelectMenuOption<T extends string = string> {
   value: T;
   label: string;
   description?: string;

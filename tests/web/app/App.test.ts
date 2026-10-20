@@ -44,9 +44,14 @@ describe("App", () => {
       if (command === "theme_skin_load")
         return {
           scriptId: "mistbell",
-          status: "missing",
-          tokens: {},
-          warnings: [],
+          status: "valid",
+          tokens: {
+            "--accent": "#5cc8b4",
+            "--on-accent": "#102126",
+            "--accent-violet": "#a88bff",
+            "--accent-warm": "#f0924a",
+          },
+          warnings: [{ code: "protected-token", token: "--panel" }],
           warningsTruncated: false,
         };
       if (command === "locale_get_preference")
@@ -159,9 +164,7 @@ describe("App", () => {
     });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
     expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
-    expect(
-      wrapper.get('[role="group"][aria-label="Theme"]').findAll(".settings-theme-card"),
-    ).toHaveLength(3);
+    expect(wrapper.get(".settings-theme-field").findAll(".settings-theme-card")).toHaveLength(3);
     const theme = wrapper.get('.settings-theme-card[aria-label="Dark"]');
     expect(theme.attributes("aria-pressed")).toBe("true");
     await wrapper.get('.settings-theme-card[aria-label="Light Purple"]').trigger("click");
@@ -180,6 +183,15 @@ describe("App", () => {
       ).toBe("true");
       expect(script.text()).toContain("雾钟地窖");
     });
+    expect(wrapper.get(".settings-skin-section .settings-skin-heading").text()).toContain(
+      "剧本皮肤",
+    );
+    expect(wrapper.get(".settings-skin .script-ic svg").classes()).toContain("i");
+    await vi.waitFor(() =>
+      expect(wrapper.get(".settings-skin-copy").text()).toContain("覆盖 4 个强调色 token"),
+    );
+    expect(wrapper.get(".settings-skin-warning").text()).toContain("剧本皮肤有 1 条兼容性提示。");
+    expect(wrapper.get(".settings-skin-warning svg").classes()).toContain("i");
     const skinSwitch = wrapper.get('[role="switch"][aria-label="剧本皮肤"]');
     expect(skinSwitch.attributes("aria-checked")).toBe("true");
     await skinSwitch.trigger("click");

@@ -92,6 +92,7 @@
     },
     "enableSkin": "启用剧本皮肤",
     "disableSkin": "关闭剧本皮肤",
+    "skinTokenSummary": "覆盖 {count} 个强调色 token，不改变背景与面板。",
     "scriptSkin": "剧本皮肤",
     "skinWarnings": "剧本皮肤有 {count} 条兼容性提示。",
     "model": "模型",
