@@ -184,8 +184,12 @@ describe("App", () => {
     expect(wrapper.get(".scenario-script-copy").text()).toContain("雾钟地窖");
     expect(wrapper.get(".scenario-attributions").text()).toContain("CC BY 4.0");
     expect(
-      wrapper.findAll(".scenario-attribution-document h5").map((heading) => heading.text()),
+      wrapper
+        .findAll(".scenario-attribution-section > .scenario-attribution-heading")
+        .map((heading) => heading.text()),
     ).toEqual(["Script License", "SRD Attribution"]);
+    expect(wrapper.findAll(".scenario-resource-table tr")).toHaveLength(2);
+    expect(wrapper.get(".scenario-resource-table").text()).toContain("舞台图");
     await wrapper.get('.settings-nav button[aria-controls="gameplay"]').trigger("click");
     await wrapper.get('input[name="dice-mode"][value="auto"]').setValue();
     await vi.waitFor(() => {

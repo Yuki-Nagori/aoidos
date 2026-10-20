@@ -101,7 +101,13 @@
     "keySet": "Key is set",
     "keyMissing": "Key is not set",
     "script": "Scenario",
-    "credits": "Scenario credits and license"
+    "credits": "Scenario credits and license",
+    "viewFullAttribution": "View full attribution and license text",
+    "resources": "Resources",
+    "stageArt": "Stage art",
+    "resourcePlaceholder": "Placeholder (not final)",
+    "skinFile": "theme.css",
+    "tokens": "tokens"
   },
   "shortcuts": {
     "title": "Keyboard shortcuts",
@@ -109,11 +115,10 @@
     "viewSheet": "View reference",
     "filter": "Filter actions or keys",
     "settingsNote": "Input, menu and dialog keys are interaction contracts. This page currently previews the design; customization is not connected.",
-    "pendingImplementation": "Rebinding and preference storage are planned for a later task",
     "change": "Change",
     "reset": "Restore all defaults",
-    "customize": "Back to settings",
     "unbound": "Unbound",
+    "locked": "This shortcut is fixed and cannot be changed",
     "imeNote": "Shortcuts should yield to the input method while text is composing.",
     "status": {
       "adopted": "Adopted",
@@ -319,6 +324,7 @@
     "revision": "Settings revision {revision}",
     "priceReady": "A price is registered for the selected provider, route and model.",
     "priceMissing": "Register a price before sending a paid request.",
+    "priceImmutableNote": "Registered price versions cannot be edited. Add a new version when prices change; prior requests keep their frozen version.",
     "currency": "Provider billing currency",
     "unitTokens": "Price unit (tokens)",
     "inputUncached": "Uncached input price per unit",

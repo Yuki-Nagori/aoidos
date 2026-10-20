@@ -511,46 +511,20 @@ function themeName(id: string, fallback: string): string {
               class="scenario-attributions"
               :aria-label="t('settings.credits')"
             >
-              <h4>{{ t("settings.credits") }}</h4>
-              <details
+              <section
                 v-for="document in attributionDocuments"
                 :key="document.id"
-                class="scenario-attribution-document"
+                class="scenario-attribution-section"
               >
-                <summary>
-                  <h5>{{ document.heading ?? t("settings.credits") }}</h5>
-                </summary>
-                <div class="scenario-attribution-body">
-                  <template v-for="(block, index) in document.blocks" :key="index">
-                    <h6 v-if="block.kind === 'heading'" class="scenario-attribution-heading">
-                      <template v-for="(part, partIndex) in block.parts" :key="partIndex">
-                        <a
-                          v-if="part.kind === 'link'"
-                          :href="part.href"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >{{ part.value }}</a>
-                        <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
-                        <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
-                        <template v-else>{{ part.value }}</template>
-                      </template>
-                    </h6>
-                    <p v-else-if="block.kind === 'paragraph'">
-                      <template v-for="(part, partIndex) in block.parts" :key="partIndex">
-                        <a
-                          v-if="part.kind === 'link'"
-                          :href="part.href"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >{{ part.value }}</a>
-                        <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
-                        <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
-                        <template v-else>{{ part.value }}</template>
-                      </template>
-                    </p>
-                    <ul v-else>
-                      <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
-                        <template v-for="(part, partIndex) in item" :key="partIndex">
+                <div class="scenario-attribution-heading">
+                  {{ document.heading ?? t("settings.credits") }}
+                </div>
+                <details class="scenario-attribution-document">
+                  <summary>{{ t("settings.viewFullAttribution") }}</summary>
+                  <div class="scenario-attribution-body">
+                    <template v-for="(block, index) in document.blocks" :key="index">
+                      <h6 v-if="block.kind === 'heading'">
+                        <template v-for="(part, partIndex) in block.parts" :key="partIndex">
                           <a
                             v-if="part.kind === 'link'"
                             :href="part.href"
@@ -561,11 +535,63 @@ function themeName(id: string, fallback: string): string {
                           <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
                           <template v-else>{{ part.value }}</template>
                         </template>
-                      </li>
-                    </ul>
-                  </template>
-                </div>
-              </details>
+                      </h6>
+                      <p v-else-if="block.kind === 'paragraph'">
+                        <template v-for="(part, partIndex) in block.parts" :key="partIndex">
+                          <a
+                            v-if="part.kind === 'link'"
+                            :href="part.href"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >{{ part.value }}</a>
+                          <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                          <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                          <template v-else>{{ part.value }}</template>
+                        </template>
+                      </p>
+                      <ul v-else>
+                        <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
+                          <template v-for="(part, partIndex) in item" :key="partIndex">
+                            <a
+                              v-if="part.kind === 'link'"
+                              :href="part.href"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >{{ part.value }}</a>
+                            <strong v-else-if="part.kind === 'strong'">{{ part.value }}</strong>
+                            <code v-else-if="part.kind === 'code'">{{ part.value }}</code>
+                            <template v-else>{{ part.value }}</template>
+                          </template>
+                        </li>
+                      </ul>
+                    </template>
+                  </div>
+                </details>
+              </section>
+            </section>
+            <section
+              v-if="selectedScript?.scriptId === 'mistbell'"
+              class="scenario-resource-section"
+            >
+              <h4>{{ t("settings.resources") }}</h4>
+              <table class="scenario-resource-table">
+                <tbody>
+                  <tr>
+                    <td>{{ t("settings.stageArt") }}</td>
+                    <td class="text-muted">{{ t("settings.resourcePlaceholder") }}</td>
+                  </tr>
+                  <tr>
+                    <td>{{ t("settings.scriptSkin") }}</td>
+                    <td class="mono">
+                      {{ t("settings.skinFile") }}<template
+                        v-if="theme.skinTokenCount.value !== null"
+                      >
+                        · {{ theme.skinTokenCount.value }} {{ t("settings.tokens") }}
+                      </template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </section>
           </section>
 

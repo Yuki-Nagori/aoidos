@@ -92,6 +92,7 @@ it("applies only validated current-script constants and removes its sheet on dis
   expect(document.documentElement.dataset.script).toBe("mistbell");
   expect(sheets[0]).toContain(':root[data-script="mistbell"]{--accent:#abcdef12}');
   expect(theme.warningCount.value).toBe(0);
+  expect(theme.skinTokenCount.value).toBe(1);
   expect(document.adoptedStyleSheets).toHaveLength(1);
   scope.stop();
   expect(document.adoptedStyleSheets).toEqual([]);

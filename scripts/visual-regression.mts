@@ -602,7 +602,7 @@ try {
     const { page, pageErrors } = await openWelcome(browser, viewport, {
       theme: "dark",
       locale: "en",
-      skin: false,
+      skin: true,
       skinTokens,
       themes,
       activeSession: true,
@@ -686,6 +686,32 @@ try {
       if (section.id === "price") {
         const form = page.locator("#billing .billing-price-form");
         await form.waitFor();
+        assert.equal(
+          await form.locator(".billing-price-base-grid .billing-price-field").count(),
+          2,
+        );
+        assert.equal(
+          await form
+            .locator(".billing-price-rates-grid")
+            .first()
+            .locator(".billing-price-field")
+            .count(),
+          3,
+        );
+        const rateColumns = await form
+          .locator(".billing-price-rates-grid")
+          .first()
+          .evaluate((element) => {
+            const columns = Array.from(element.children).map((child) =>
+              Math.round(child.getBoundingClientRect().left),
+            );
+            return new Set(columns).size;
+          });
+        assert.equal(
+          rateColumns,
+          viewport.width <= 720 ? 2 : 3,
+          `Price rates must follow the design's ${viewport.width <= 720 ? "two" : "three"}-column layout at ${viewport.width}px`,
+        );
         const overflows = await form.evaluate((element) => {
           const right = element.getBoundingClientRect().right;
           return Array.from(element.querySelectorAll("input")).some(
@@ -698,6 +724,11 @@ try {
         const credits = page.locator("#scenario .scenario-attribution-document");
         assert.equal(await credits.count(), 2, "Each bundled notice should have its own card");
         assert.equal(await page.locator("#scenario .scenario-attributions pre").count(), 0);
+        assert.equal(await page.locator("#scenario .scenario-resource-table tr").count(), 2);
+        const resourceText =
+          (await page.locator("#scenario .scenario-resource-table").textContent()) ?? "";
+        assert.match(resourceText, /theme\.css/);
+        assert.match(resourceText, /4 tokens/);
         await credits.first().locator("summary").click();
         await page
           .locator('#scenario a[href="https://creativecommons.org/licenses/by/4.0/"]')
@@ -708,9 +739,24 @@ try {
         await page.locator("#billing .billing-balance-card").waitFor();
       }
       if (section.id === "memory") {
-        await page.locator("#memory summary").nth(0).click();
-        await page.locator("#memory summary").nth(1).click();
         await page.locator("#memory input[type=number]").first().waitFor();
+        assert.equal(await page.locator("#memory details").count(), 0);
+        assert.equal(await page.locator("#memory .memory-settings-group").count(), 2);
+        assert.equal(await page.locator('#memory input[name="memory-app-algorithm"]').count(), 3);
+        const memoryColumns = await page
+          .locator("#memory .memory-parameter-grid")
+          .first()
+          .evaluate((element) => {
+            const columns = Array.from(element.children).map((child) =>
+              Math.round(child.getBoundingClientRect().left),
+            );
+            return new Set(columns).size;
+          });
+        assert.equal(
+          memoryColumns,
+          2,
+          "Memory parameters remain two columns at every design viewport",
+        );
       }
       if (section.id === "memory-list")
         await page.locator('#memory-query button[aria-controls^="memory-entry-"]').waitFor();
@@ -728,9 +774,15 @@ try {
       }
       if (section.id === "shortcuts") {
         await page.locator("#shortcuts .shortcut-row").first().waitFor();
+        assert.equal(await page.locator("#shortcuts .shortcut-search").count(), 0);
+        assert.ok(await page.locator("#shortcuts .shortcut-lock").count());
         await page.getByRole("button", { name: /view reference|查看速查表/i }).click();
         const shortcutDialog = page.getByRole("dialog", { name: /keyboard shortcuts|快捷键/i });
         await shortcutDialog.waitFor();
+        assert.ok(await shortcutDialog.locator('input[type="search"]').count());
+        assert.ok(await shortcutDialog.locator(".shortcut-row .tag").count());
+        await shortcutDialog.locator('input[type="search"]').fill("Send");
+        assert.equal(await shortcutDialog.locator(".shortcut-row").count(), 1);
         await shortcutDialog.press("Escape");
         await shortcutDialog.waitFor({ state: "detached" });
       }

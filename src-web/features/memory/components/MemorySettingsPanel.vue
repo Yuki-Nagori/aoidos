@@ -13,7 +13,6 @@ import {
   saveMemoryAppConfig,
   saveMemoryScriptConfig,
 } from "../../../api/memory";
-import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const props = defineProps<{ scriptId: string }>();
 const { t } = useI18n();
@@ -280,62 +279,90 @@ watch(
 </script>
 
 <template>
-  <div class="grid gap-3">
-    <p class="text-sm text-muted">{{ t("memorySettings.explanation") }}</p>
-    <details class="glass-panel">
-      <summary>{{ t("memorySettings.appDefaults") }}</summary>
+  <div class="memory-settings-groups">
+    <p class="note">{{ t("memorySettings.explanation") }}</p>
+    <section class="memory-settings-group">
+      <div class="memory-settings-heading">
+        <h4>{{ t("memorySettings.appDefaults") }}</h4>
+        <span v-if="appConfig" class="tag mono">v{{ appConfig.configVersion }}</span>
+      </div>
       <p v-if="appError" role="alert">
         {{ t("memorySettings.error") }}
         <button type="button" class="underline" @click="loadApp(true)">
           {{ t("common.retry") }}
         </button>
       </p>
-      <form v-if="appDraft" class="grid gap-3 p-2" @submit.prevent="saveApp">
-        <div class="grid gap-1 text-sm text-muted">
-          {{ t("memorySettings.algorithm") }}
-          <SelectMenu
-            :model-value="appDraft.algorithm"
-            :options="[
-              { value: 'none', label: t('memorySettings.algorithms.none') },
-              { value: 'exponential', label: t('memorySettings.algorithms.exponential') },
-              { value: 'segmented', label: t('memorySettings.algorithms.segmented') },
-            ]"
-            :label="t('memorySettings.algorithm')"
-            :disabled="appBusy"
-            @update:model-value="updateAppAlgorithm"
-          />
+      <form v-if="appDraft" class="memory-settings-form" @submit.prevent="saveApp">
+        <fieldset class="settings-choice-group">
+          <legend>{{ t("memorySettings.algorithm") }}</legend>
+          <div class="settings-segmented">
+            <label
+              v-for="option in [
+                { value: 'none', label: t('memorySettings.algorithms.none') },
+                { value: 'exponential', label: t('memorySettings.algorithms.exponential') },
+                { value: 'segmented', label: t('memorySettings.algorithms.segmented') },
+              ]"
+              :key="option.value"
+              :class="{
+                'is-selected': appDraft.algorithm === option.value,
+                'is-disabled': appBusy,
+              }"
+            >
+              <input
+                type="radio"
+                name="memory-app-algorithm"
+                :value="option.value"
+                :checked="appDraft.algorithm === option.value"
+                :disabled="appBusy"
+                @change="updateAppAlgorithm(option.value)"
+              />
+              <span>{{ option.label }}</span>
+            </label>
+          </div>
+        </fieldset>
+        <p class="note">{{ t("memorySettings.algorithmHint") }}</p>
+        <div class="memory-parameter-grid">
+          <label v-for="field in appNumericFields" :key="field.key" class="memory-number-field">
+            <span>{{ fieldLabels[field.key] }}</span>
+            <input
+              type="number"
+              class="memory-number-input"
+              step="1"
+              :min="field.min"
+              :max="field.max"
+              required
+              :value="appNumberDraft[field.key] ?? appDraft[field.key]"
+              :disabled="appBusy"
+              @input="updateAppNumber(field.key, $event)"
+            />
+          </label>
         </div>
-        <label v-for="field in appNumericFields" :key="field.key" class="memory-number-field">
-          {{ fieldLabels[field.key] }}
-          <input
-            type="number"
-            class="memory-number-input"
-            step="1"
-            :min="field.min"
-            :max="field.max"
-            required
-            :value="appNumberDraft[field.key] ?? appDraft[field.key]"
-            :disabled="appBusy"
-            @input="updateAppNumber(field.key, $event)"
-          />
-        </label>
-        <p class="text-sm text-muted">{{ t("memorySettings.algorithmHint") }}</p>
         <p v-if="appHasInvalidNumber" role="alert" class="text-sm">
           {{ t("memorySettings.invalidNumber") }}
         </p>
-        <button type="button" :disabled="appBusy" @click="restoreAppDefaults">
-          {{ t("memorySettings.restoreAppDefaults") }}
-        </button>
-        <button type="submit" :disabled="appBusy || !appConfig || appHasInvalidNumber">
-          {{ appBusy ? t("memorySettings.saving") : t("memorySettings.save") }}
-        </button>
-        <p v-if="appSaved" role="status">{{ t("memorySettings.saved") }}</p>
+        <div class="memory-settings-actions">
+          <button type="button" class="btn" :disabled="appBusy" @click="restoreAppDefaults">
+            {{ t("memorySettings.restoreAppDefaults") }}
+          </button>
+          <button
+            type="submit"
+            class="btn primary"
+            :disabled="appBusy || !appConfig || appHasInvalidNumber"
+          >
+            {{ appBusy ? t("memorySettings.saving") : t("memorySettings.save") }}
+          </button>
+        </div>
+        <p v-if="appSaved" role="status" class="memory-settings-saved">
+          {{ t("memorySettings.saved") }}
+        </p>
       </form>
       <p v-if="!appError && !appDraft" role="status">{{ t("common.loading") }}</p>
-    </details>
+    </section>
 
-    <details class="glass-panel">
-      <summary>{{ t("memorySettings.scriptOverrides", { script: scriptId }) }}</summary>
+    <section class="memory-settings-group">
+      <div class="memory-settings-heading">
+        <h4>{{ t("memorySettings.scriptOverrides", { script: scriptId }) }}</h4>
+      </div>
       <p v-if="scriptError" role="alert">
         {{ t("memorySettings.error") }}
         <button
@@ -346,80 +373,103 @@ watch(
           {{ t("common.retry") }}
         </button>
       </p>
-      <form v-if="scriptConfig" class="grid gap-3 p-2" @submit.prevent="saveScript">
-        <p class="text-sm text-muted">
+      <form v-if="scriptConfig" class="memory-settings-form" @submit.prevent="saveScript">
+        <p class="note">
           {{ t("memorySettings.inherited", { version: scriptConfig.appConfigVersion }) }}
         </p>
-        <div class="flex items-center gap-2">
-          <label class="inline-flex items-center gap-2">
+        <fieldset class="settings-choice-group">
+          <legend>
+            <label class="memory-override-label">
+              <input
+                type="checkbox"
+                :checked="scriptDraft.algorithm !== undefined"
+                :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
+                @change="toggleOverride('algorithm', $event)"
+              />
+              {{ t("memorySettings.fields.algorithm") }}
+            </label>
+          </legend>
+          <div class="settings-segmented">
+            <label
+              v-for="option in [
+                { value: 'none', label: t('memorySettings.algorithms.none') },
+                { value: 'exponential', label: t('memorySettings.algorithms.exponential') },
+                { value: 'segmented', label: t('memorySettings.algorithms.segmented') },
+              ]"
+              :key="option.value"
+              :class="{
+                'is-selected': (scriptDraft.algorithm ?? scriptConfig.inherited.algorithm) === option.value,
+                'is-disabled': scriptBusyIds.has(scriptConfig.scriptId) || scriptDraft.algorithm === undefined,
+              }"
+            >
+              <input
+                type="radio"
+                :name="`memory-script-algorithm-${scriptConfig.scriptId}`"
+                :value="option.value"
+                :checked="(scriptDraft.algorithm ?? scriptConfig.inherited.algorithm) === option.value"
+                :disabled="scriptBusyIds.has(scriptConfig.scriptId) || scriptDraft.algorithm === undefined"
+                @change="updateScriptAlgorithm(option.value)"
+              />
+              <span>{{ option.label }}</span>
+            </label>
+          </div>
+        </fieldset>
+        <p class="note">{{ t("memorySettings.algorithmHint") }}</p>
+        <div class="memory-parameter-grid">
+          <label
+            v-for="field in scriptNumericFields"
+            :key="field.key"
+            class="memory-number-field"
+          >
+            <span class="memory-override-label">
+              <input
+                type="checkbox"
+                :checked="scriptDraft[field.key] !== undefined"
+                :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
+                @change="toggleOverride(field.key, $event)"
+              />
+              {{ fieldLabels[field.key] }}
+            </span>
             <input
-              type="checkbox"
-              :checked="scriptDraft.algorithm !== undefined"
-              :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
-              @change="toggleOverride('algorithm', $event)"
+              type="number"
+              class="memory-number-input"
+              step="1"
+              :min="field.min"
+              :max="field.max"
+              required
+              :value="scriptNumberDraft[field.key] ?? scriptDraft[field.key] ?? scriptConfig.inherited[field.key]"
+              :disabled="scriptBusyIds.has(scriptConfig.scriptId) || scriptDraft[field.key] === undefined"
+              @input="updateScriptNumber(field.key, $event)"
             />
-            {{ t("memorySettings.fields.algorithm") }}
           </label>
-          <SelectMenu
-            :model-value="scriptDraft.algorithm ?? scriptConfig.inherited.algorithm"
-            :options="[
-              { value: 'none', label: t('memorySettings.algorithms.none') },
-              { value: 'exponential', label: t('memorySettings.algorithms.exponential') },
-              { value: 'segmented', label: t('memorySettings.algorithms.segmented') },
-            ]"
-            :label="t('memorySettings.fields.algorithm')"
-            :disabled="scriptBusyIds.has(scriptConfig.scriptId) || scriptDraft.algorithm === undefined"
-            @update:model-value="updateScriptAlgorithm"
-          />
         </div>
-        <label
-          v-for="field in scriptNumericFields"
-          :key="field.key"
-          class="memory-number-field"
-        >
-          <span class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              :checked="scriptDraft[field.key] !== undefined"
-              :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
-              @change="toggleOverride(field.key, $event)"
-            />
-            {{ fieldLabels[field.key] }}
-          </span>
-          <input
-            type="number"
-            class="memory-number-input"
-            step="1"
-            :min="field.min"
-            :max="field.max"
-            required
-            :value="scriptNumberDraft[field.key] ?? scriptDraft[field.key] ?? scriptConfig.inherited[field.key]"
-            :disabled="scriptBusyIds.has(scriptConfig.scriptId) || scriptDraft[field.key] === undefined"
-            @input="updateScriptNumber(field.key, $event)"
-          />
-        </label>
-        <p class="text-sm text-muted">{{ t("memorySettings.algorithmHint") }}</p>
         <p v-if="scriptHasInvalidNumber" role="alert" class="text-sm">
           {{ t("memorySettings.invalidNumber") }}
         </p>
-        <button
-          type="button"
-          :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
-          @click="restoreScriptDefaults"
-        >
-          {{ t("memorySettings.restoreScriptDefaults") }}
-        </button>
-        <button
-          type="submit"
-          :disabled="scriptBusyIds.has(scriptConfig.scriptId) || scriptHasInvalidNumber"
-        >
-          {{
-            scriptBusyIds.has(scriptConfig.scriptId) ? t("memorySettings.saving") : t("memorySettings.save")
-          }}
-        </button>
-        <p v-if="scriptSaved" role="status">{{ t("memorySettings.saved") }}</p>
+        <div class="memory-settings-actions">
+          <p v-if="scriptSaved" role="status" class="memory-settings-saved">
+            {{ t("memorySettings.saved") }}
+          </p>
+          <button
+            type="button"
+            class="btn"
+            :disabled="scriptBusyIds.has(scriptConfig.scriptId)"
+            @click="restoreScriptDefaults"
+          >
+            {{ t("memorySettings.restoreScriptDefaults") }}
+          </button>
+          <button
+            type="submit"
+            class="btn primary"
+            :disabled="scriptBusyIds.has(scriptConfig.scriptId) || scriptHasInvalidNumber"
+          >
+            {{
+              scriptBusyIds.has(scriptConfig.scriptId) ? t("memorySettings.saving") : t("memorySettings.save")
+            }}
+          </button>
+        </div>
       </form>
       <p v-if="!scriptError && !scriptConfig" role="status">{{ t("common.loading") }}</p>
-    </details>
+    </section>
   </div>
 </template>

@@ -101,7 +101,13 @@
     "keySet": "密钥已设置",
     "keyMissing": "密钥未设置",
     "script": "剧本",
-    "credits": "剧本署名与许可"
+    "credits": "剧本署名与许可",
+    "viewFullAttribution": "查看完整署名与许可文本",
+    "resources": "资源",
+    "stageArt": "舞台图",
+    "resourcePlaceholder": "占位（未定稿）",
+    "skinFile": "theme.css",
+    "tokens": "tokens"
   },
   "shortcuts": {
     "title": "快捷键",
@@ -109,11 +115,10 @@
     "viewSheet": "查看速查表",
     "filter": "筛选操作或按键",
     "settingsNote": "输入、菜单与对话框键属于交互约定。当前仅展示按键设计，尚未接入自定义。",
-    "pendingImplementation": "改键与偏好保存由后续任务接入",
     "change": "修改",
     "reset": "全部恢复默认",
-    "customize": "返回设置",
     "unbound": "未绑定",
+    "locked": "此快捷键固定，不可修改",
     "imeNote": "输入法组字时，快捷键应让位给输入法。",
     "status": {
       "adopted": "已采纳",
@@ -319,6 +324,7 @@
     "revision": "设置修订 {revision}",
     "priceReady": "已为当前服务商、路由和模型登记价格。",
     "priceMissing": "发送付费请求前必须登记价格。",
+    "priceImmutableNote": "价格版本一经登记不可修改；改价请登记新版本，历史请求保持原冻结价格。",
     "currency": "服务商计价币种",
     "unitTokens": "价格计量 Token 数",
     "inputUncached": "未缓存输入单价",

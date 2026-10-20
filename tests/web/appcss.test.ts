@@ -242,6 +242,17 @@ describe("token 目录与 app.css 互校", () => {
     expect(field).toContain("width: 100%");
     expect(field).toContain("min-width: 0");
 
+    const segmentedOption = css.match(/\.settings-segmented label\s*\{([^}]+)\}/)?.[1];
+    expect(segmentedOption).toContain("min-height: 1.5rem");
+
+    const memoryGrid = css.match(/\.memory-parameter-grid\s*\{([^}]+)\}/)?.[1];
+    expect(memoryGrid).toContain("repeat(2, minmax(0, 1fr))");
+    const priceBase = css.match(/\.billing-price-base-grid\s*\{([^}]+)\}/)?.[1];
+    expect(priceBase).toContain("repeat(2, minmax(0, 1fr))");
+    expect(css).toMatch(
+      /\.billing-price-rates-grid\s*\{\s*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+    );
+
     for (const file of [
       "../../src-web/features/billing/components/BillingPanel.vue",
       "../../src-web/features/memory/components/MemoryQueryPanel.vue",

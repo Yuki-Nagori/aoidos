@@ -1,7 +1,23 @@
 /**
  * 052 的快捷键展示数据。057 接入唯一动作注册表后会以其取代此视图清单。
  */
-export const shortcutGroups = [
+type ShortcutPresentationRow = {
+  id: string;
+  labelKey: string;
+  noteKey: string;
+  statusKey: string;
+  keys: string[];
+  status: "adopted" | "documented" | "unbound";
+  locked?: boolean;
+};
+
+type ShortcutPresentationGroup = {
+  id: string;
+  labelKey: string;
+  rows: ShortcutPresentationRow[];
+};
+
+export const shortcutGroups: ShortcutPresentationGroup[] = [
   {
     id: "global",
     labelKey: "shortcuts.groups.global",
@@ -29,6 +45,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["Escape"],
         status: "documented",
+        locked: true,
       },
     ],
   },
@@ -73,6 +90,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["Enter"],
         status: "documented",
+        locked: true,
       },
       {
         id: "newline",
@@ -81,6 +99,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["Shift+Enter"],
         status: "documented",
+        locked: true,
       },
       {
         id: "roll",
@@ -119,6 +138,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["/"],
         status: "documented",
+        locked: true,
       },
       {
         id: "move-candidate",
@@ -127,6 +147,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["ArrowUp", "ArrowDown"],
         status: "documented",
+        locked: true,
       },
       {
         id: "complete-candidate",
@@ -135,6 +156,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.adopted",
         keys: ["Tab", "Enter"],
         status: "adopted",
+        locked: true,
       },
       {
         id: "close-menu",
@@ -143,6 +165,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["Escape"],
         status: "documented",
+        locked: true,
       },
     ],
   },
@@ -157,6 +180,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["Tab", "Shift+Tab"],
         status: "documented",
+        locked: true,
       },
       {
         id: "close-dialog",
@@ -165,6 +189,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.documented",
         keys: ["Escape"],
         status: "documented",
+        locked: true,
       },
       {
         id: "activate",
@@ -173,6 +198,7 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.adopted",
         keys: ["Enter"],
         status: "adopted",
+        locked: true,
       },
       {
         id: "move-section",
@@ -181,7 +207,8 @@ export const shortcutGroups = [
         statusKey: "shortcuts.status.adopted",
         keys: ["ArrowUp", "ArrowDown"],
         status: "adopted",
+        locked: true,
       },
     ],
   },
-] as const;
+];
