@@ -7,6 +7,7 @@ edition.workspace = true
 [[bin]]
 name = "aoidos"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 aoidos-app.workspace = true
@@ -22,3 +23,6 @@ secrecy.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+tokio-util.workspace = true

@@ -78,6 +78,7 @@ const script = {
   scriptId: "mistbell",
   title: "雾钟地窖",
   displayNames: { "zh-Hans": "雾钟地窖", en: "Mistbell Cellar" },
+  suggestedActions: { "zh-Hans": "这是什么地方？", en: "Where am I?" },
   attributions:
     "# Mistbell License\n\nReleased under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).\n\n# SRD Attribution\n\n## Scope\n\n- Preserve attribution.\n- Keep source references visible.",
 };

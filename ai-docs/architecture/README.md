@@ -78,7 +78,7 @@ src-tauri（Tauri 装配、命令注册与平台事件适配）
   ▼
 src-rust/（独立业务 crate：engine 按单向依赖组合 billing / memory / llm / store）
 
-src-cli/（CLI / TUI 二进制入口，直接调用共享应用服务）
+src-cli/（CLI / TUI 二进制入口，直接调用共享应用服务；fake Provider 覆盖显式提交与重启恢复，常见费用错误按终端语言提供提示）
 ```
 
 ### Rust 工作区依赖图
