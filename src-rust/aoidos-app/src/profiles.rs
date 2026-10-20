@@ -260,8 +260,10 @@ mod tests {
     use secrecy::ExposeSecret;
     use std::{
         collections::BTreeMap,
-        sync::Mutex,
-        time::{SystemTime, UNIX_EPOCH},
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
     };
 
     #[derive(Default)]
@@ -299,13 +301,20 @@ mod tests {
     }
 
     fn temp_dir() -> std::path::PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!("aoidos-app-profiles-{suffix}"));
-        std::fs::create_dir_all(&directory).unwrap();
-        directory
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+        loop {
+            let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "aoidos-app-profiles-{}-{sequence}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&directory) {
+                Ok(()) => return directory,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("创建 profile 测试目录失败：{error}"),
+            }
+        }
     }
 
     fn profile() -> LlmProfile {

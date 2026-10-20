@@ -6,27 +6,28 @@ use super::{
 use crate::{CliApp, EVENT_CAPACITY, EventBridge};
 use aoidos_app::{GameServices, TurnRuntime, billing::RunBillingSummary, profiles::Profiles};
 use aoidos_engine::{
-    billing::{BudgetWarning, ModelUsageSummary},
+    billing::{BillingLedger, BudgetWarning, LedgerBudgetPort, ModelUsageSummary},
     fault::Fault,
     game::product::{ProfileFactory, ProfileSource, ResolvedProfile},
     storage::Storage,
 };
 use aoidos_llm::{
     config::{FrozenProfile, LlmProfile, ProfileMode, ProxyConfig},
+    error::ProviderError,
     provider::{
         Provider, ProviderCapabilities, ProviderDelta, ProviderFinish, ProviderRequest,
-        ProviderStream, RequestMode, StartFuture,
+        ProviderStream, RequestMode, StartFuture, Usage,
     },
     proxy::SystemProxySnapshot,
     sampling::Sampling,
-    schedule::AllowAll,
+    schedule::{AllowAll, AttemptIdentity, AttemptOutcome, BudgetDenial, BudgetPort},
 };
 use futures::stream;
 use secrecy::SecretString;
 use std::{
     path::Path,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -352,11 +353,203 @@ async fn tui_cancel_then_explicit_resume_does_not_duplicate_player_action() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[tokio::test]
+async fn tui_provider_auth_failure_is_visible_and_marks_the_operation_failed() {
+    let root = test_root("provider-failure");
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        false,
+        Arc::new(AllowAll),
+        Arc::new(AtomicBool::new(true)),
+    );
+    let mut state = new_state();
+    state.locale = "zh-Hans";
+    open_session(&mut app, &mut state, false).await.unwrap();
+
+    submit_action(&mut app, &mut state).await;
+    wait_for_turn(&mut app, &mut state).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(state.status.contains("认证") || state.status.contains("密钥"));
+    assert!(!state.status.contains("llm.auth"));
+    assert_eq!(
+        state
+            .phase
+            .as_ref()
+            .and_then(|phase| phase.state.last_operation.as_ref())
+            .map(|operation| operation.outcome),
+        Some(aoidos_engine::game::state::OperationOutcome::Failed)
+    );
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn tui_billing_panel_refreshes_after_fake_provider_reservation_and_settlement() {
+    let root = test_root("billing-lifecycle");
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        false,
+        ledger_budget.clone(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let mut state = new_state();
+    open_session(&mut app, &mut state, false).await.unwrap();
+    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    configure_test_ledger(&app.storage, &run_id, "100");
+    ledger_budget.configure(app.storage.clone(), run_id.clone());
+
+    submit_action(&mut app, &mut state).await;
+    wait_for_turn(&mut app, &mut state).await;
+
+    assert_eq!(
+        state
+            .phase
+            .as_ref()
+            .and_then(|phase| phase.state.last_operation.as_ref())
+            .map(|operation| operation.outcome),
+        Some(aoidos_engine::game::state::OperationOutcome::Completed),
+        "计费成功路径应完成整个回合操作"
+    );
+
+    let summary = app.services.billing.run_summary(&run_id).unwrap();
+    assert!(
+        calls.load(Ordering::SeqCst) > 0,
+        "回合应实际调用 fake Provider；状态={}；计费={:?}",
+        state.status,
+        state.billing
+    );
+    assert_eq!(summary.models.len(), 1);
+    let model = &summary.models[0];
+    assert_eq!(model.provider_id, "deepseek");
+    assert_eq!(model.currency.to_string(), "CNY");
+    assert_eq!(model.model_id, "deepseek-v4-pro");
+    assert!(
+        model
+            .settled_amount
+            .is_some_and(|amount| amount.nanos() > 0)
+    );
+    assert_eq!(model.reserved_amount, None, "成功完成后不应遗留预留金额");
+    assert_eq!(model.known_tokens, Some(model.request_count * 120));
+    assert_eq!(model.incomplete_requests, 0);
+    assert_eq!(model.request_count, calls.load(Ordering::SeqCst) as u64);
+    assert_eq!(
+        state
+            .billing
+            .as_ref()
+            .and_then(|billing| billing.models.first())
+            .and_then(|model| model.settled_amount),
+        model.settled_amount,
+        "回合终态应刷新 TUI 费用面板"
+    );
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn tui_budget_rejection_does_not_dispatch_fake_provider_request() {
+    let root = test_root("budget-rejection");
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ledger_budget = Arc::new(RunLedgerBudget::default());
+    let mut app = fake_app_with_options(
+        &root,
+        calls.clone(),
+        false,
+        ledger_budget.clone(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let mut state = new_state();
+    state.locale = "zh-Hans";
+    open_session(&mut app, &mut state, false).await.unwrap();
+    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    configure_test_ledger(&app.storage, &run_id, "0");
+    ledger_budget.configure(app.storage.clone(), run_id.clone());
+
+    submit_action(&mut app, &mut state).await;
+    wait_for_turn(&mut app, &mut state).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "预算门禁拒绝后不能调用 Provider"
+    );
+    assert!(state.status.contains("预算不足"));
+    assert!(
+        app.services
+            .billing
+            .run_summary(&run_id)
+            .unwrap()
+            .models
+            .is_empty()
+    );
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn test_root(suffix: &str) -> std::path::PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("aoidos-cli-{suffix}-{unique}"))
+}
+
+fn new_state() -> ViewState {
+    ViewState::new(
+        vec![fake_profile()],
+        aoidos_engine::game::assets::list().unwrap(),
+    )
+}
+
+async fn wait_for_turn(app: &mut CliApp, state: &mut ViewState) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while state.busy {
+            let event = app.events.recv().await.expect("事件桥仍然打开");
+            handle_runtime_event(app, state, event);
+        }
+    })
+    .await
+    .expect("假 Provider 回合应在限定时间内结束");
+}
+
 fn fake_app(root: &Path, calls: Arc<AtomicUsize>) -> CliApp {
     fake_app_with_gate(root, calls, false)
 }
 
 fn fake_app_with_gate(root: &Path, calls: Arc<AtomicUsize>, request_check_once: bool) -> CliApp {
+    fake_app_with_options(
+        root,
+        calls,
+        request_check_once,
+        Arc::new(AllowAll),
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+fn fake_app_with_options(
+    root: &Path,
+    calls: Arc<AtomicUsize>,
+    request_check_once: bool,
+    budget: Arc<dyn BudgetPort>,
+    fail_next_request: Arc<AtomicBool>,
+) -> CliApp {
     let (sender, events) = tokio::sync::mpsc::channel(EVENT_CAPACITY);
     let bridge = Arc::new(EventBridge::new(sender));
     let storage = Arc::new(Storage::new(root, bridge.clone(), bridge.clone()));
@@ -367,6 +560,7 @@ fn fake_app_with_gate(root: &Path, calls: Arc<AtomicUsize>, request_check_once: 
     let provider: Arc<dyn Provider> = Arc::new(FakeProvider {
         calls,
         request_check_once: AtomicBool::new(request_check_once),
+        fail_next_request,
     });
     let factory = ProfileFactory::with_builder(
         source,
@@ -374,7 +568,7 @@ fn fake_app_with_gate(root: &Path, calls: Arc<AtomicUsize>, request_check_once: 
         proxy_snapshot,
         turns.diagnostics.clone(),
         Arc::new(move |_, _, _| Ok(provider.clone())),
-        Arc::new(AllowAll),
+        budget,
     );
     let product = aoidos_engine::game::product::Product::new(
         root,
@@ -435,6 +629,7 @@ impl ProfileSource for FakeProfileSource {
 struct FakeProvider {
     calls: Arc<AtomicUsize>,
     request_check_once: AtomicBool,
+    fail_next_request: Arc<AtomicBool>,
 }
 
 impl Provider for FakeProvider {
@@ -460,6 +655,9 @@ impl Provider for FakeProvider {
         _cancellation: CancellationToken,
     ) -> StartFuture<'a> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_next_request.swap(false, Ordering::SeqCst) {
+            return Box::pin(async { Err(ProviderError::Auth) });
+        }
         let text = match &request.input {
             aoidos_llm::provider::ProviderInput::Completion(input)
                 if input.prompt.contains("[AOIDOS:CHECK-PROPOSAL]") =>
@@ -480,9 +678,126 @@ impl Provider for FakeProvider {
         Box::pin(async move {
             let deltas = vec![
                 Ok(ProviderDelta::Text(text.into())),
+                Ok(ProviderDelta::Usage(Usage {
+                    prompt_tokens: 100,
+                    completion_tokens: 20,
+                    cached_prompt_tokens: Some(0),
+                    cache_creation_tokens: Some(0),
+                    reasoning_tokens: None,
+                })),
                 Ok(ProviderDelta::Finish(ProviderFinish::Stop)),
             ];
             Ok(Box::pin(stream::iter(deltas)) as ProviderStream)
         })
     }
+}
+
+#[derive(Default)]
+struct RunLedgerBudget {
+    storage: Mutex<Option<Arc<Storage>>>,
+    run_id: Mutex<Option<String>>,
+}
+
+impl RunLedgerBudget {
+    fn configure(&self, storage: Arc<Storage>, run_id: String) {
+        *self.storage.lock().unwrap() = Some(storage);
+        *self.run_id.lock().unwrap() = Some(run_id);
+    }
+
+    fn for_attempt(&self, attempt: &AttemptIdentity) -> Result<LedgerBudgetPort, BudgetDenial> {
+        let storage = self
+            .storage
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| BudgetDenial {
+                reason: "test storage is not configured".into(),
+            })?;
+        let run_id = self
+            .run_id
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| BudgetDenial {
+                reason: "test run is not configured".into(),
+            })?;
+        Ok(LedgerBudgetPort::new(
+            storage,
+            run_id,
+            "fake".into(),
+            "deepseek".into(),
+            attempt.model.clone(),
+            "direct".into(),
+            1_000_000,
+        ))
+    }
+}
+
+impl BudgetPort for RunLedgerBudget {
+    fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial> {
+        self.for_attempt(attempt)?.reserve(attempt)
+    }
+
+    fn reserve_with_input_upper_bound(
+        &self,
+        attempt: &AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), BudgetDenial> {
+        self.for_attempt(attempt)?
+            .reserve_with_input_upper_bound(attempt, input_tokens)
+    }
+
+    fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
+        if let Ok(port) = self.for_attempt(attempt) {
+            port.settle(attempt, outcome);
+        }
+    }
+}
+
+fn configure_test_ledger(storage: &Storage, run_id: &str, cny_limit: &str) {
+    let price = serde_json::from_value(serde_json::json!({
+        "versionId": "cli-test-price-v1",
+        "providerId": "deepseek",
+        "modelId": "deepseek-v4-pro",
+        "routePolicy": "direct",
+        "currency": "CNY",
+        "unitTokens": 1000,
+        "inputUncached": "0.000001",
+        "inputCached": "0.000001",
+        "inputCachedWrite": "0.000001",
+        "output": "0.000001",
+        "schedule": null,
+        "usageMappingVersion": "test-v1",
+        "sourceKind": "user",
+        "sourceUrl": null,
+        "checkedAt": "2020-01-01T00:00:00Z",
+        "effectiveFrom": "2020-01-01T00:00:00Z",
+        "validUntil": null
+    }))
+    .unwrap();
+    storage
+        .with_database(|connection| {
+            BillingLedger::set_settings(
+                connection,
+                run_id,
+                serde_json::from_value(serde_json::json!(cny_limit)).unwrap(),
+                serde_json::from_value(serde_json::json!("0")).unwrap(),
+                None,
+                "2020-01-01T00:00:00Z",
+            )
+            .unwrap();
+            BillingLedger::register_price(connection, &price, "2020-01-01T00:00:00Z").unwrap();
+            BillingLedger::select_profile_price(
+                connection,
+                "fake",
+                "deepseek",
+                "deepseek-v4-pro",
+                "direct",
+                serde_json::from_value(serde_json::json!("CNY")).unwrap(),
+                "2020-01-01T00:00:00Z",
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
 }
