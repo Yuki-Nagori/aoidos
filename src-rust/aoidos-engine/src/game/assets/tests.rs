@@ -36,6 +36,8 @@ fn default_original_and_attributions_are_available_without_runtime_files() {
     assert_eq!(scripts[0].title, "雾钟地窖");
     assert_eq!(scripts[0].display_names["zh-Hans"], "雾钟地窖");
     assert_eq!(scripts[0].display_names["en"], "Mistbell Cellar");
+    assert!(scripts[0].suggested_actions["zh-Hans"].contains("环顾四周"));
+    assert!(scripts[0].suggested_actions["en"].starts_with("I look around"));
     assert!(scripts[0].attributions.contains("Creative Commons"));
 }
 
@@ -148,27 +150,25 @@ fn script_revision_covers_both_original_text_and_entity_manifest() {
 #[test]
 fn script_i18n_rejects_invalid_or_incomplete_display_names() {
     let oversized = format!(
-        r#"{{"version":1,"displayNames":{{"en":"{}","zh-Hans":"雾钟地窖"}}}}"#,
+        r#"{{"version":1,"displayNames":{{"en":"{}","zh-Hans":"雾钟地窖"}},"suggestedActions":{{"en":"look around","zh-Hans":"环顾四周"}}}}"#,
         "x".repeat(257)
     );
     for source in [
-        r#"{"version":2,"displayNames":{"en":"Mistbell Cellar","zh-Hans":"雾钟地窖"}}"#,
-        r#"{"version":1,"displayNames":{"en":"Mistbell Cellar"}}"#,
-        r#"{"version":1,"displayNames":{"en":" ","zh-Hans":"雾钟地窖"}}"#,
-        r#"{"version":1,"displayNames":{"en":"Mistbell Cellar","zh-Hans":"雾钟地窖","bad_tag":"Bad"}}"#,
+        r#"{"version":2,"displayNames":{"en":"Mistbell Cellar","zh-Hans":"雾钟地窖"},"suggestedActions":{"en":"look around","zh-Hans":"环顾四周"}}"#,
+        r#"{"version":1,"displayNames":{"en":"Mistbell Cellar"},"suggestedActions":{"en":"look around","zh-Hans":"环顾四周"}}"#,
+        r#"{"version":1,"displayNames":{"en":" ","zh-Hans":"雾钟地窖"},"suggestedActions":{"en":"look around","zh-Hans":"环顾四周"}}"#,
+        r#"{"version":1,"displayNames":{"en":"Mistbell Cellar","zh-Hans":"雾钟地窖","bad_tag":"Bad"},"suggestedActions":{"en":"look around","zh-Hans":"环顾四周"}}"#,
+        r#"{"version":1,"displayNames":{"en":"Mistbell Cellar","zh-Hans":"雾钟地窖"},"suggestedActions":{"en":"look around"}}"#,
         &oversized,
     ] {
-        assert_eq!(
-            parse_display_names(source).unwrap_err().code,
-            "app.not-ready"
-        );
+        assert_eq!(parse_i18n(source).unwrap_err().code, "app.not-ready");
     }
 }
 
 #[test]
 fn malformed_localization_json_maps_to_a_safe_not_ready_fault() {
-    let fault = parse_display_names(
-        r#"{"version":1,"displayNames":{"en":"Mistbell Cellar","zh-Hans":"雾钟地窖"}"#,
+    let fault = parse_i18n(
+        r#"{"version":1,"displayNames":{"en":"Mistbell Cellar","zh-Hans":"雾钟地窖"},"suggestedActions":{"en":"look around","zh-Hans":"环顾四周"}"#,
     )
     .unwrap_err();
 

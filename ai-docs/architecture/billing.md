@@ -64,7 +64,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 当前以 `billing_physical_requests` 的状态及 `reserved_nanos` 表达预算占用；缓存写入用量和 `billing_price_versions.schedule_json` 由追加迁移保存，旧写入费率 / 时段保持 NULL。`billing_pending_settlements` 是有界恢复 outbox，只保存最多 256 条待恢复请求的数值用量、摘要和稳定诊断码，不保存正文、密钥或供应商原始响应。尚无独立预算分配表或历史补价来源；不能把设计表名误认为已创建的 schema。engine 在共享 SQLite 连接上按顺序应用 `aoidos-billing::schema::SCHEMA` 及其追加迁移，store 不依赖计费领域。
 
-发送前持单在飞租约，在 BEGIN IMMEDIATE 事务中校验 PriceVersion 与当前 runBudget，按请求原币选择 CNY 或 USD 限额，判断该币种 settled + reserved + unconfirmed + 本次预留 <= 单局上限，并原子提交原币请求与对应分配。为保证已发送请求的完整用量有界可恢复，未决物理请求与待结算 outbox 按 requestId 去重后共用 256 个容量名额，达到上限时阻止新请求。任一币种未配置上限或额度不足则拒绝且不发 HTTP；不能借用另一币种额度。比较与修改使用整数，不能先查后写。dispatchAt 为持久发送意图时刻，紧接发送；长时间排队在登记前结束；调试请求必须显式关联合法测试周目，不创建绕过单局额度的虚拟预算。网络不可与 SQLite 原子提交，崩溃在登记与发送之间仍可能消耗未知，恢复标 unconfirmed，不以“没看到响应”推断没发送。时段归属按该持久边界，是本地可审计约定，不能声称精确等于供应商收件时刻。
+发送前持单在飞租约，在 BEGIN IMMEDIATE 事务中校验 PriceVersion 与当前 runBudget，按请求原币选择 CNY 或 USD 限额，判断该币种 settled + reserved + unconfirmed + 本次预留 <= 单局上限，并原子提交原币请求与对应分配。输入预留逐次按冻结 ProviderInput 的完整 JSON 字节长度加 1 KiB 请求封套余量计算，并受模型上下文窗口上限约束；`PreparedGeneration` 在派发前同时限制原文和序列化输入不超过 256 KiB，避免为短请求预留整个模型窗口。此值是本地请求的保守预留，不替代供应商账单用量；结算仍以实际 usage 为准。为保证已发送请求的完整用量有界可恢复，未决物理请求与待结算 outbox 按 requestId 去重后共用 256 个容量名额，达到上限时阻止新请求。任一币种未配置上限或额度不足则拒绝且不发 HTTP；不能借用另一币种额度。比较与修改使用整数，不能先查后写。dispatchAt 为持久发送意图时刻，紧接发送；长时间排队在登记前结束；调试请求必须显式关联合法测试周目，不创建绕过单局额度的虚拟预算。网络不可与 SQLite 原子提交，崩溃在登记与发送之间仍可能消耗未知，恢复标 unconfirmed，不以“没看到响应”推断没发送。时段归属按该持久边界，是本地可审计约定，不能声称精确等于供应商收件时刻。
 
 状态机为 reserved → settled / unconfirmed；unconfirmed 只有获得可核验完整 usage 或显式人工审计处置才能 → settled。预算已预留、但取消明确发生在 `provider.start` 调用前时，以 `notDispatched` 和零 usage 结算并释放预留；进入 provider 调用后，超时 / 取消 / 断流 / 缺 usage 都不能推断为未发送或退款。零 usage 只有供应商完整合法报告或上述发送前证据才接受。人工处置必须明确实际费用或保留未知，记录理由与审计，不自动把未知抹成零。
 

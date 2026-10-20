@@ -66,6 +66,34 @@ describe("ActionComposer", () => {
     wrapper.unmount();
   });
 
+  it("offers the scenario opening action as an editable draft without submitting it", async () => {
+    const wrapper = mount(ActionComposer, {
+      props: {
+        modelValue: "",
+        suggestedAction: "I look around.",
+        preview: {
+          mode: "inCharacter",
+          slashActive: false,
+          candidates: [],
+          invalidSlash: false,
+          contentRequired: false,
+        },
+        submitDisabled: false,
+        submitLabel: "Submit action",
+        tooLarge: false,
+        slashMenuDismissed: false,
+        rewindSelectorOpen: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    const suggestion = wrapper.get('button[type="button"]');
+    expect(suggestion.text()).toContain("I look around.");
+    await suggestion.trigger("click");
+    expect(wrapper.emitted("update:modelValue")).toEqual([["I look around."]]);
+    expect(wrapper.emitted("submit")).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("offers only the supplied in-scene recipients and defaults to narration", async () => {
     const wrapper = mount(ActionComposer, {
       props: {

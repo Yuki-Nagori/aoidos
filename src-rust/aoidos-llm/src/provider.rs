@@ -92,6 +92,16 @@ impl ProviderInput {
             Self::Chat(_) => RequestMode::Chat,
         }
     }
+
+    /// 以序列化输入字节数加供应商请求封套余量给出保守 Token 上界。
+    #[must_use]
+    pub fn token_upper_bound(&self) -> u64 {
+        const PROVIDER_ENVELOPE_BYTES: u64 = 1024;
+
+        serde_json::to_vec(self).map_or(u64::MAX, |encoded| {
+            (encoded.len() as u64).saturating_add(PROVIDER_ENVELOPE_BYTES)
+        })
+    }
 }
 
 /// 一次物理请求的全部输入：模式已选定，只带适用的服务端 stop 子集；
@@ -231,6 +241,29 @@ mod tests {
         assert_eq!(hotter.model, request.model);
         assert_eq!(hotter.stops, request.stops);
         assert_eq!(hotter.sampling.max_tokens, 128);
+    }
+
+    #[test]
+    fn input_upper_bound_counts_utf8_bytes_and_chat_framing() {
+        let completion = ProviderInput::Completion(CompletionInput {
+            prompt: "中文".into(),
+        });
+        let chat = ProviderInput::Chat(ChatInput {
+            messages: vec![ChatMessage {
+                role: ChatRole::User,
+                content: "你好".into(),
+            }],
+            assistant_prefix: Some("说".into()),
+        });
+
+        assert_eq!(
+            completion.token_upper_bound(),
+            serde_json::to_vec(&completion).unwrap().len() as u64 + 1024
+        );
+        assert_eq!(
+            chat.token_upper_bound(),
+            serde_json::to_vec(&chat).unwrap().len() as u64 + 1024
+        );
     }
 
     #[test]

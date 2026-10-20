@@ -145,6 +145,8 @@ interface ScriptInfo {
   title: string;
   /** 仅供界面选择器使用；缺少当前语言时回退到 title。 */
   displayNames: Record<Locale, string>;
+  /** 剧本首轮行动建议；只作为可编辑草稿展示，不自动提交。 */
+  suggestedActions: Record<Locale, string>;
   attributions: string;
 }
 interface OpenedSession {

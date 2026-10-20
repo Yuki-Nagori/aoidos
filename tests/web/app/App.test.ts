@@ -24,6 +24,10 @@ describe("App", () => {
             scriptId: "mistbell",
             title: "雾钟地窖",
             displayNames: { en: "Mistbell Cellar", "zh-Hans": "雾钟地窖" },
+            suggestedActions: {
+              en: "I look around, trying to understand where I am and notice any possible exits.",
+              "zh-Hans": "我环顾四周，试着弄清自己身在何处，并留意可能的出口。",
+            },
             attributions:
               "# Script License\n\nCC BY 4.0\n\n# SRD Attribution\n\nWizards of the Coast",
           },
@@ -272,6 +276,10 @@ describe("App", () => {
             scriptId: "mistbell",
             title: "雾钟地窖",
             displayNames: { en: "Mistbell Cellar", "zh-Hans": "雾钟地窖" },
+            suggestedActions: {
+              en: "I look around, trying to understand where I am and notice any possible exits.",
+              "zh-Hans": "我环顾四周，试着弄清自己身在何处，并留意可能的出口。",
+            },
             attributions: "CC BY 4.0",
           },
         ];

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-rust/aoidos-theme", "src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-rust/aoidos-billing", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "src-rust/aoidos-locale", "src-rust/aoidos-app", "tests/rust/native-platform"]
+members = ["src-rust/aoidos-theme", "src-rust/aoidos-memory", "src-rust/aoidos-script", "src-rust/aoidos-json", "src-rust/aoidos-billing", "src-tauri", "src-rust/aoidos-store", "src-rust/aoidos-llm", "src-rust/aoidos-engine", "src-rust/aoidos-locale", "src-rust/aoidos-app", "src-cli", "tests/rust/native-platform"]
 
 [workspace.package]
 version = "0.1.0"
@@ -31,6 +31,11 @@ aoidos-memory = { path = "src-rust/aoidos-memory" }
 aoidos-theme = { path = "src-rust/aoidos-theme" }
 aoidos-locale = { path = "src-rust/aoidos-locale" }
 aoidos-app = { path = "src-rust/aoidos-app" }
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+unicode-width = "0.2.2"
+rpassword = "7.5.4"
 sys-locale = "0.3.2"
 jiff = { version = "0.2.38", features = ["serde"] }
 rust_decimal = "1.43"

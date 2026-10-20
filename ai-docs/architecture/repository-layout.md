@@ -38,11 +38,14 @@
 │   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）
 │   ├── src/store_commands/   # 存储参数适配及有界平台事件队列
 │   └── build.rs               # tauri-build
+├── src-cli/                   # CLI / TUI 二进制入口（参数、终端事件与展示 adapter）
+│   ├── Cargo.toml              # aoidos-cli workspace package
+│   └── src/                    # clap 命令、运行时事件桥与 Ratatui 界面
 ├── src-rust/                  # 不依赖 tauri 的业务 crate
 │   ├── aoidos-script/         # 剧本原文解析 / 格式校验，不执行内容规则
 │   ├── aoidos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
 │   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
-│   ├── aoidos-app/            # 058：profile / 凭据服务与 GUI / CLI 共用游戏装配
+│   ├── aoidos-app/            # profile / 凭据服务与 GUI / CLI 共用游戏装配
 │   ├── aoidos-theme/          # 主题目录 / 偏好 / 剧本皮肤校验，含 assets/themes/ 与 build.rs
 │   ├── aoidos-billing/        # 模型计价、周期、账本与预算领域规则
 │   ├── aoidos-memory/         # 记忆模型、仓储、批次、轮回节点与恢复协议

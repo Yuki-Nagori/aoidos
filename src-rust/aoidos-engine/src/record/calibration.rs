@@ -112,19 +112,18 @@ pub struct CalibrationBudget {
 }
 impl BudgetPort for CalibrationBudget {
     fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial> {
-        if self.automatic
-            && self
-                .diagnostics
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .report(&self.bucket)
-                .paused
-        {
-            return Err(BudgetDenial {
-                reason: "token-estimation-needs-calibration".into(),
-            });
-        }
+        self.ensure_automatic_budget_active()?;
         self.inner.reserve(attempt)
+    }
+
+    fn reserve_with_input_upper_bound(
+        &self,
+        attempt: &AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), BudgetDenial> {
+        self.ensure_automatic_budget_active()?;
+        self.inner
+            .reserve_with_input_upper_bound(attempt, input_tokens)
     }
     fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
         self.inner.settle(attempt, outcome);
@@ -148,6 +147,25 @@ impl BudgetPort for CalibrationBudget {
                         actual_output: Some(*completion_tokens),
                     },
                 );
+        }
+    }
+}
+
+impl CalibrationBudget {
+    fn ensure_automatic_budget_active(&self) -> Result<(), BudgetDenial> {
+        if self.automatic
+            && self
+                .diagnostics
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .report(&self.bucket)
+                .paused
+        {
+            Err(BudgetDenial {
+                reason: "token-estimation-needs-calibration".into(),
+            })
+        } else {
+            Ok(())
         }
     }
 }

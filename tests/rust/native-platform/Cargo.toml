@@ -19,6 +19,7 @@ reqwest.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 aoidos.workspace = true
+aoidos-app.workspace = true
 aoidos-engine.workspace = true
 aoidos-locale.workspace = true
 aoidos-store.workspace = true
