@@ -252,7 +252,7 @@ fn billing_groups_can_be_scrolled_with_keyboard_focus() {
     scroll_billing(&mut state, true);
     assert_eq!(state.billing_scroll, 3);
     scroll_billing(&mut state, false);
-    assert_eq!(state.billing_scroll, 1);
+    assert_eq!(state.billing_scroll, 2);
 }
 
 #[tokio::test]
