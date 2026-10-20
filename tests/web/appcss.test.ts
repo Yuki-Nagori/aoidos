@@ -170,4 +170,60 @@ describe("token 目录与 app.css 互校", () => {
       );
     }
   });
+
+  it("选择器铺满字段宽度，并沿用设计稿的主题遮罩与浅色记录面板", () => {
+    const trigger = css.match(/\.select-menu \.select-menu-trigger\s*\{([^}]+)\}/)?.[1];
+    expect(trigger).toMatch(/width:\s*100%/);
+
+    for (const [theme, color] of [
+      ["dark", "rgba(4, 8, 12, 0.55)"],
+      ["light", "rgba(40, 36, 60, 0.28)"],
+      ["light-purple", "rgba(30, 40, 50, 0.25)"],
+    ]) {
+      expect(css).toContain(`:root[data-theme="${theme}"]`);
+      expect(css).toContain(`--overlay-scrim: ${color}`);
+    }
+
+    const settingsBackdrop = css.match(/\.settings-backdrop\s*\{([^}]+)\}/)?.[1];
+    expect(settingsBackdrop).toContain("var(--overlay-scrim) 70%, transparent");
+    expect(settingsBackdrop).not.toContain("opacity:");
+    expect(settingsBackdrop).not.toContain("backdrop-filter");
+    expect(css).toMatch(
+      /:root\[data-theme="light"\] \.dialogue-panel\s*\{[^}]*background:\s*linear-gradient\(var\(--panel\), var\(--panel\)\), var\(--overlay-solid\)/,
+    );
+  });
+
+  it("为快捷键、分段选项、开关和记忆参数保留设计稿的尺寸与视觉状态", () => {
+    const kbd = css.match(/:where\(\.kbd\)\s*\{([^}]+)\}/)?.[1];
+    expect(kbd).toContain("height: 1.125rem");
+    expect(kbd).toContain("border-radius: 0.3125rem");
+
+    const segmented = css.match(/\.settings-segmented\s*\{([^}]+)\}/)?.[1];
+    expect(segmented).toContain("gap: 0.1875rem");
+    expect(segmented).toContain("padding: 0.1875rem");
+    expect(segmented).toContain("background: var(--field-surface)");
+    const selected = css.match(/\.settings-segmented label\.is-selected\s*\{([^}]+)\}/)?.[1];
+    expect(selected).toContain("color: var(--accent)");
+    expect(selected).toContain("40%, transparent");
+
+    const toggle = css.match(/\.settings-switch\s*\{([^}]+)\}/)?.[1];
+    expect(toggle).toContain("width: 1.875rem");
+    expect(toggle).toContain("height: 1.125rem");
+    const knob = css.match(/\.settings-switch span\s*\{([^}]+)\}/)?.[1];
+    expect(knob).toContain("width: 0.75rem");
+    expect(knob).toContain("height: 0.75rem");
+
+    const numberInput = css.match(/\.settings-section \.memory-number-input\s*\{([^}]+)\}/)?.[1];
+    expect(numberInput).toContain("min-height: 2.125rem");
+    expect(numberInput).toContain("var(--field-surface)");
+    expect(numberInput).toContain("font-variant-numeric: tabular-nums");
+
+    expect(css).toMatch(
+      /\.settings-section input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="search"\]\)/,
+    );
+
+    const shortcutDialog = css.match(/\.shortcut-dialog\s*\{([^}]+)\}/)?.[1];
+    expect(shortcutDialog).toContain("width: min(51.25rem, 100%)");
+    expect(shortcutDialog).toContain("calc(100dvh - 4.5rem)");
+  });
 });

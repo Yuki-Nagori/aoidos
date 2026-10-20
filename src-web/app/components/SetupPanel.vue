@@ -105,6 +105,18 @@ function isComposingEvent(event: KeyboardEvent): boolean {
 const selectedScript = computed(() =>
   product.scripts.value.find((script) => script.scriptId === product.scriptId.value),
 );
+const attributionDocuments = computed(() => {
+  const source = selectedScript.value?.attributions.trim();
+  if (!source) return [];
+  return source.split(/\n{2,}(?=#\s)/).map((document, index) => {
+    const heading = /^#\s+([^\n]+)(?:\n|$)/.exec(document);
+    return {
+      id: index,
+      heading: heading?.[1],
+      body: heading ? document.slice(heading[0].length).trim() : document,
+    };
+  });
+});
 const selectedProviderLabel = computed(
   () =>
     product.providerOptions.find((option) => option.id === product.providerId.value)?.label ??
@@ -507,7 +519,14 @@ function themeName(id: string, fallback: string): string {
               :aria-label="t('settings.credits')"
             >
               <h4>{{ t("settings.credits") }}</h4>
-              <pre>{{ selectedScript.attributions }}</pre>
+              <article
+                v-for="document in attributionDocuments"
+                :key="document.id"
+                class="scenario-attribution-document"
+              >
+                <h5 v-if="document.heading">{{ document.heading }}</h5>
+                <pre>{{ document.body }}</pre>
+              </article>
             </section>
           </section>
 

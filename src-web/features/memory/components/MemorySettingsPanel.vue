@@ -305,10 +305,11 @@ watch(
             @update:model-value="updateAppAlgorithm"
           />
         </div>
-        <label v-for="field in appNumericFields" :key="field.key">
+        <label v-for="field in appNumericFields" :key="field.key" class="memory-number-field">
           {{ fieldLabels[field.key] }}
           <input
             type="number"
+            class="memory-number-input"
             step="1"
             :min="field.min"
             :max="field.max"
@@ -371,7 +372,11 @@ watch(
             @update:model-value="updateScriptAlgorithm"
           />
         </div>
-        <label v-for="field in scriptNumericFields" :key="field.key" class="grid gap-1">
+        <label
+          v-for="field in scriptNumericFields"
+          :key="field.key"
+          class="memory-number-field"
+        >
           <span class="flex items-center gap-2">
             <input
               type="checkbox"
@@ -383,6 +388,7 @@ watch(
           </span>
           <input
             type="number"
+            class="memory-number-input"
             step="1"
             :min="field.min"
             :max="field.max"

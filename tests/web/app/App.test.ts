@@ -24,7 +24,8 @@ describe("App", () => {
             scriptId: "mistbell",
             title: "雾钟地窖",
             displayNames: { en: "Mistbell Cellar", "zh-Hans": "雾钟地窖" },
-            attributions: "CC BY 4.0",
+            attributions:
+              "# Script License\n\nCC BY 4.0\n\n# SRD Attribution\n\nWizards of the Coast",
           },
         ];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
@@ -182,6 +183,9 @@ describe("App", () => {
     await wrapper.get('.settings-nav button[aria-controls="scenario"]').trigger("click");
     expect(wrapper.get(".scenario-script-copy").text()).toContain("雾钟地窖");
     expect(wrapper.get(".scenario-attributions").text()).toContain("CC BY 4.0");
+    expect(
+      wrapper.findAll(".scenario-attribution-document h5").map((heading) => heading.text()),
+    ).toEqual(["Script License", "SRD Attribution"]);
     await wrapper.get('.settings-nav button[aria-controls="gameplay"]').trigger("click");
     await wrapper.get('input[name="dice-mode"][value="auto"]').setValue();
     await vi.waitFor(() => {
