@@ -106,6 +106,7 @@ mod tests {
         assert!(summary.warnings.is_empty());
         assert_eq!(service.run_summary("").unwrap_err().code, "app.bad-request");
 
+        drop(service);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
