@@ -16,6 +16,7 @@
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `bun install`                          | 安装依赖（同时启用 husky pre-commit）                                                                         |
 | `bun run tauri:dev`                    | 桌面窗口开发（Vite HMR + cargo 增量编译）                                                                     |
+| `bun run cli`                          | 编译并启动交互式终端游戏；可用 `bun run cli -- key set --provider deepseek` 等参数调用 CLI 子命令             |
 | `bun run dev`                          | 浏览器纯前端预览（无 IPC，命令走前端回退）                                                                    |
 | `bun run build`                        | typecheck + Vite 生产构建 → `dist/`（`build:web` 含 i18n 预检）                                               |
 | `bun run verify`                       | 任务收尾时运行的完整本地门禁，构成见下                                                                        |

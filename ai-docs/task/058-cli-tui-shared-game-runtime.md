@@ -99,6 +99,7 @@
 - 2026-10-20：issue #179 指出的浅色对白面板底色例外已写入 UI 规范，与 `.dialogue-panel` 的 `--overlay-solid` 实现一致。
 - 2026-10-20：CLI/TUI 计费摘要通过 `aoidos-app::BillingService` 从共享 SQLite 读取；周目打开、回合执行期间每秒、回合终态、记录更新和事件溢出恢复时刷新，显示按供应商、原币与模型分组的已结算 / 预留金额、已知 Token、请求数、用量缺失和预算提醒；金额显示到 0.01，不做跨币换算。模型明细可在费用面板内滚动，窄终端按显示宽度截断。
 - 2026-10-20：CLI fake Provider 集成测试发现费用摘要误用会话 `session_id` 查询账本；计费账本以 memory `run_id` 为作用域，已统一改用 `OpenedSession.memory_run_id`，并以真实账本适配器覆盖预算拒绝、预留、结算和 TUI 刷新。
+- 2026-10-20：补充根脚本 `bun run cli` 启动终端游戏，并允许通过 `--` 向 `aoidos` binary 透传 `key`、`profiles` 等子命令；启动方式同步到构建与开发文档。
 - 2026-10-20：main CI 的 profile 配额测试因并行测试临时目录可能碰撞而偶发 `store.not-found`；改用进程号和原子序号生成名称，并以独占目录创建消除共享与误删。
 - 2026-10-20：GUI 将 `budget.exceeded` 映射到现有额度本地化文案；RecordFeed 展示持久化 system message，移除控制字符并限制长度，空说明与无正文记录使用准确的保留提示，不将 system code 输出给玩家。
 - 2026-10-20：独立 review 找到 UTF-16 截断可能拆开 emoji；改为按 Unicode code point 截断并增加边界断言。代码复核确认控制字符会清理且记录正文保持 Vue 文本插值。
