@@ -23,14 +23,14 @@
 }
 
 :root[data-theme="light"] {
-  --overlay-solid: #f5f5f5;
-  --overlay-scrim: rgba(40, 36, 60, 0.28);
+  --overlay-solid: rgba(248, 250, 251, 0.92);
+  --overlay-scrim: rgba(30, 40, 50, 0.25);
   --field-surface: rgba(255, 255, 255, 0.85);
 }
 
 :root[data-theme="light-purple"] {
-  --overlay-solid: rgba(248, 250, 251, 0.92);
-  --overlay-scrim: rgba(30, 40, 50, 0.25);
+  --overlay-solid: #f5f5f5;
+  --overlay-scrim: rgba(40, 36, 60, 0.28);
   --field-surface: #ffffff;
 }
 
@@ -943,7 +943,7 @@
     background: var(--warning);
   }
 
-  .settings-section input:not([type="checkbox"]):not([type="radio"]):not([type="search"]) {
+  .settings-section :where(input:not([type="checkbox"]):not([type="radio"]):not([type="search"])) {
     min-height: 2.6rem;
     border: 1px solid var(--hairline);
     border-radius: 0.65rem;

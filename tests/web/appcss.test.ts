@@ -177,8 +177,8 @@ describe("token 目录与 app.css 互校", () => {
 
     for (const [theme, color] of [
       ["dark", "rgba(4, 8, 12, 0.55)"],
-      ["light", "rgba(40, 36, 60, 0.28)"],
-      ["light-purple", "rgba(30, 40, 50, 0.25)"],
+      ["light", "rgba(30, 40, 50, 0.25)"],
+      ["light-purple", "rgba(40, 36, 60, 0.28)"],
     ]) {
       expect(css).toContain(`:root[data-theme="${theme}"]`);
       expect(css).toContain(`--overlay-scrim: ${color}`);
@@ -219,7 +219,7 @@ describe("token 目录与 app.css 互校", () => {
     expect(numberInput).toContain("font-variant-numeric: tabular-nums");
 
     expect(css).toMatch(
-      /\.settings-section input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="search"\]\)/,
+      /\.settings-section\s+:where\(input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="search"\]\)\)/,
     );
 
     const shortcutDialog = css.match(/\.shortcut-dialog\s*\{([^}]+)\}/)?.[1];
