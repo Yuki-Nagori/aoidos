@@ -93,6 +93,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     aoidos_memory::schema::MATERIAL_CURSOR_MIGRATION,
     aoidos_memory::schema::EFFECT_EVIDENCE_PROGRESS_MIGRATION,
     aoidos_memory::schema::MATERIAL_POSITION_MIGRATION,
+    crate::run_catalog::SCHEMA,
 ];
 
 pub struct Storage {
@@ -119,6 +120,7 @@ impl Storage {
                     if valid!=1 {return Err(aoidos_store::error::StoreError::Corrupt("business applied schema mismatch".into()));}
                     aoidos_memory::schema::verify(connection)?;
                     crate::game::catalog::verify_entity_registry_schema(connection)?;
+                    crate::run_catalog::verify(connection)?;
                     aoidos_theme::schema::verify(connection)?;
                     aoidos_locale::schema::verify(connection)?;
                     aoidos_billing::schema::verify(connection)
@@ -786,6 +788,38 @@ impl Storage {
     /// 初始化 / 迁移失败的业务服务返回 not-ready；诊断查询不经过此门禁。
     pub fn ready(&self) -> Result<(), Fault> {
         self.with_database(|_| Ok(()))
+    }
+
+    /// 返回 SQLite 权威周目目录的一页摘要；不打开记录文件或恢复任何状态。
+    /// # Errors
+    /// 游标过期、页大小非法或目录数据损坏时拒绝返回。
+    pub fn run_catalog_page(
+        &self,
+        cursor: Option<&crate::run_catalog::RunCursor>,
+        page_size: usize,
+    ) -> Result<crate::run_catalog::RunPage, Fault> {
+        self.with_database(|connection| crate::run_catalog::page(connection, cursor, page_size))
+    }
+
+    /// 登记已成功创建并初始化的周目；账本范围固定为 sessionId。
+    /// # Errors
+    /// 身份冲突、无效 profile 快照或持久化失败时拒绝登记。
+    pub fn register_new_run(&self, run: &crate::run_catalog::NewRun) -> Result<(), Fault> {
+        self.with_database(|connection| crate::run_catalog::register_new(connection, run))
+    }
+
+    /// 按目录 revision CAS 为旧周目绑定公开 profile 快照。
+    /// # Errors
+    /// 周目状态或 revision 已变化、profile 无效或数据库不可用时拒绝。
+    pub fn bind_run_profile(
+        &self,
+        session_id: &str,
+        expected_revision: u64,
+        profile: &aoidos_llm::config::LlmProfile,
+    ) -> Result<u64, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::bind_profile(connection, session_id, expected_revision, profile)
+        })
     }
     /// 登记解释器借用唯一连接；领域条件、投影与 applied 标记在回调内同事务提交。
     /// 回调不递归获取本存储锁；阻塞调用由引擎 blocking 边界调度，不在持锁期间 await。

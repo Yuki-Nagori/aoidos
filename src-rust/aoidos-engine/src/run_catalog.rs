@@ -1,0 +1,708 @@
+//! 已开周目的 SQLite 权威目录与生命周期操作记录。
+
+use aoidos_llm::config::LlmProfile;
+use aoidos_store::error::StoreError;
+use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
+
+use crate::fault::Fault;
+
+/// 060 为周目索引、当前选择及可恢复删除流程追加的首个 schema。
+pub const SCHEMA: &str = r#"
+CREATE TABLE session_catalog_meta (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  scan_incomplete INTEGER NOT NULL DEFAULT 1 CHECK(scan_incomplete IN (0, 1))
+);
+INSERT INTO session_catalog_meta(id, revision) VALUES(1, 1);
+CREATE TABLE session_catalog (
+  session_id TEXT PRIMARY KEY CHECK(length(session_id) = 36),
+  script_id TEXT NOT NULL CHECK(length(script_id) BETWEEN 1 AND 64),
+  created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+  memory_run_id TEXT UNIQUE CHECK(memory_run_id IS NULL OR length(memory_run_id) = 36),
+  billing_run_id TEXT CHECK(billing_run_id IS NULL OR length(billing_run_id) = 36),
+  profile_id TEXT CHECK(profile_id IS NULL OR length(profile_id) BETWEEN 1 AND 256),
+  profile_schema_version INTEGER CHECK(profile_schema_version IS NULL OR profile_schema_version > 0),
+  profile_snapshot BLOB CHECK(profile_snapshot IS NULL OR length(profile_snapshot) <= 65536),
+  state TEXT NOT NULL CHECK(state IN (
+    'ready', 'needs-profile-binding', 'billing-not-configured',
+    'billing-reconciliation-required', 'recovery-required', 'needs-repair',
+    'script-unavailable', 'settlement-pending', 'deleting'
+  )),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
+);
+CREATE INDEX session_catalog_order ON session_catalog(created_at DESC, session_id DESC);
+CREATE TABLE active_session (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  session_id TEXT CHECK(session_id IS NULL OR length(session_id) = 36),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
+);
+CREATE TABLE session_deletion_ops (
+  operation_id TEXT PRIMARY KEY CHECK(length(operation_id) = 36),
+  session_id TEXT NOT NULL CHECK(length(session_id) = 36),
+  state TEXT NOT NULL CHECK(state IN (
+    'requested', 'owner-closed', 'files-quarantined',
+    'database-purged', 'files-purged', 'completed', 'needs-repair'
+  )),
+  manifest BLOB CHECK(manifest IS NULL OR length(manifest) <= 4194304),
+  result_code TEXT CHECK(result_code IS NULL OR length(result_code) <= 64),
+  created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+  updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
+);
+CREATE INDEX session_deletion_pending ON session_deletion_ops(state, updated_at, operation_id)
+  WHERE state <> 'completed';
+"#;
+
+pub const DEFAULT_PAGE_SIZE: usize = 50;
+pub const MAX_PAGE_SIZE: usize = 200;
+const MAX_PROFILE_SNAPSHOT_BYTES: usize = 65_536;
+
+/// 目录行的可执行状态；只反映恢复与配置能力，不是游戏事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunState {
+    Ready,
+    NeedsProfileBinding,
+    BillingNotConfigured,
+    BillingReconciliationRequired,
+    RecoveryRequired,
+    NeedsRepair,
+    ScriptUnavailable,
+    SettlementPending,
+    Deleting,
+}
+
+impl RunState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NeedsProfileBinding => "needs-profile-binding",
+            Self::BillingNotConfigured => "billing-not-configured",
+            Self::BillingReconciliationRequired => "billing-reconciliation-required",
+            Self::RecoveryRequired => "recovery-required",
+            Self::NeedsRepair => "needs-repair",
+            Self::ScriptUnavailable => "script-unavailable",
+            Self::SettlementPending => "settlement-pending",
+            Self::Deleting => "deleting",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, Fault> {
+        match value {
+            "ready" => Ok(Self::Ready),
+            "needs-profile-binding" => Ok(Self::NeedsProfileBinding),
+            "billing-not-configured" => Ok(Self::BillingNotConfigured),
+            "billing-reconciliation-required" => Ok(Self::BillingReconciliationRequired),
+            "recovery-required" => Ok(Self::RecoveryRequired),
+            "needs-repair" => Ok(Self::NeedsRepair),
+            "script-unavailable" => Ok(Self::ScriptUnavailable),
+            "settlement-pending" => Ok(Self::SettlementPending),
+            "deleting" => Ok(Self::Deleting),
+            _ => Err(corrupt()),
+        }
+    }
+}
+
+/// 目录查询游标锚定目录 revision，目录发生变化后必须重新从第一页读取。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunCursor {
+    pub catalog_revision: u64,
+    pub after_created_at: String,
+    pub after_session_id: String,
+}
+
+/// 不包含 transcript、凭据或绝对路径的周目摘要。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummary {
+    pub session_id: String,
+    pub script_id: String,
+    pub created_at: String,
+    pub memory_run_id: Option<String>,
+    pub billing_run_id: Option<String>,
+    pub profile_id: Option<String>,
+    pub revision: u64,
+    pub state: RunState,
+    pub active: bool,
+}
+
+/// 有界目录页及旧数据发现进度。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPage {
+    pub entries: Vec<RunSummary>,
+    pub next_cursor: Option<RunCursor>,
+    pub catalog_revision: u64,
+    pub scan_incomplete: bool,
+}
+
+/// 创建周目时冻结的公开配置与三种独立身份。
+#[derive(Debug, Clone)]
+pub struct NewRun {
+    pub session_id: String,
+    pub script_id: String,
+    pub created_at: String,
+    pub memory_run_id: String,
+    pub profile: LlmProfile,
+}
+
+/// 将新建周目登记为 canonical 账本身份与不可变公开 profile 快照。
+///
+/// # Errors
+/// 任一身份、profile 或 SQLite 状态不合法时拒绝登记。
+pub fn register_new(connection: &mut rusqlite::Connection, run: &NewRun) -> Result<(), Fault> {
+    if !crate::record::format::valid_uuid(&run.session_id)
+        || !crate::record::format::valid_uuid(&run.memory_run_id)
+        || !aoidos_script::valid_id(&run.script_id)
+        || run.created_at.is_empty()
+        || run.created_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+    run.profile.validate().map_err(|_| Fault::bad_request())?;
+    let snapshot = aoidos_json::to_vec(&run.profile).map_err(|_| Fault::bad_request())?;
+    if snapshot.len() > MAX_PROFILE_SNAPSHOT_BYTES {
+        return Err(Fault::bad_request());
+    }
+    let state = if billing_configured(connection, &run.session_id)? {
+        RunState::Ready
+    } else {
+        RunState::BillingNotConfigured
+    };
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    if let Some(existing) = transaction
+        .query_row(
+            "SELECT script_id, created_at, memory_run_id, billing_run_id, profile_id, profile_snapshot FROM session_catalog WHERE session_id=?1",
+            [&run.session_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<Vec<u8>>>(5)?)),
+        )
+        .optional()
+        .map_err(database)?
+    {
+        if existing.0 == run.script_id
+            && existing.1 == run.created_at
+            && existing.2.as_deref() == Some(&run.memory_run_id)
+            && existing.3.as_deref() == Some(&run.session_id)
+            && existing.4.as_deref() == Some(&run.profile.profile_id)
+            && existing.5.as_deref() == Some(snapshot.as_slice())
+        {
+            return transaction.commit().map_err(database);
+        }
+        return Err(corrupt());
+    }
+    bump_revision(&transaction)?;
+    transaction
+        .execute(
+            "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,profile_id,profile_schema_version,profile_snapshot,state,revision,updated_at) VALUES(?1,?2,?3,?4,?1,?5,1,?6,?7,1,?3)",
+            rusqlite::params![run.session_id, run.script_id, run.created_at, run.memory_run_id, run.profile.profile_id, snapshot, state.as_str()],
+        )
+        .map_err(database)?;
+    transaction
+        .execute(
+            "INSERT INTO active_session(id,session_id,revision,updated_at) VALUES(1,?1,1,?2) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,revision=active_session.revision+1,updated_at=excluded.updated_at",
+            rusqlite::params![run.session_id, run.created_at],
+        )
+        .map_err(database)?;
+    transaction.commit().map_err(database)
+}
+
+/// 按固定排序返回一页周目摘要；不会读取或恢复 transcript。
+///
+/// # Errors
+/// 非法页大小、旧 revision 游标或目录损坏时失败关闭。
+pub fn page(
+    connection: &rusqlite::Connection,
+    cursor: Option<&RunCursor>,
+    page_size: usize,
+) -> Result<RunPage, Fault> {
+    if !(1..=MAX_PAGE_SIZE).contains(&page_size) {
+        return Err(Fault::bad_request());
+    }
+    let (revision, incomplete): (i64, i64) = connection
+        .query_row(
+            "SELECT revision, scan_incomplete FROM session_catalog_meta WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(database)?;
+    let revision = u64::try_from(revision).map_err(|_| corrupt())?;
+    if cursor.is_some_and(|cursor| cursor.catalog_revision != revision) {
+        return Err(stale_revision());
+    }
+    if let Some(cursor) = cursor
+        && (!crate::record::format::valid_uuid(&cursor.after_session_id)
+            || cursor.after_created_at.is_empty()
+            || cursor.after_created_at.len() > 64)
+    {
+        return Err(Fault::bad_request());
+    }
+    let active_id = connection
+        .query_row(
+            "SELECT session_id FROM active_session WHERE id=1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(database)?
+        .flatten();
+    let fetch_limit = i64::try_from(page_size + 1).map_err(|_| Fault::bad_request())?;
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id, script_id, created_at, memory_run_id, billing_run_id, profile_id, state, revision FROM session_catalog WHERE (?1 IS NULL OR created_at < ?1 OR (created_at = ?1 AND session_id < ?2)) ORDER BY created_at DESC, session_id DESC LIMIT ?3",
+        )
+        .map_err(database)?;
+    let mut rows = statement
+        .query(rusqlite::params![
+            cursor.map(|value| value.after_created_at.as_str()),
+            cursor.map(|value| value.after_session_id.as_str()),
+            fetch_limit
+        ])
+        .map_err(database)?;
+    let mut entries = Vec::with_capacity(page_size);
+    while let Some(row) = rows.next().map_err(database)? {
+        if entries.len() == page_size {
+            break;
+        }
+        let session_id: String = row.get(0).map_err(database)?;
+        let state: String = row.get(6).map_err(database)?;
+        let row_revision =
+            u64::try_from(row.get::<_, i64>(7).map_err(database)?).map_err(|_| corrupt())?;
+        entries.push(RunSummary {
+            active: active_id.as_deref() == Some(&session_id),
+            session_id,
+            script_id: row.get(1).map_err(database)?,
+            created_at: row.get(2).map_err(database)?,
+            memory_run_id: row.get(3).map_err(database)?,
+            billing_run_id: row.get(4).map_err(database)?,
+            profile_id: row.get(5).map_err(database)?,
+            revision: row_revision,
+            state: RunState::parse(&state)?,
+        });
+    }
+    let next_cursor = if entries.len() == page_size {
+        let last = entries.last().expect("full page has a last item");
+        let has_more: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_catalog WHERE created_at < ?1 OR (created_at = ?1 AND session_id < ?2))",
+                [&last.created_at, &last.session_id],
+                |row| row.get(0),
+            )
+            .map_err(database)?;
+        has_more.then(|| RunCursor {
+            catalog_revision: revision,
+            after_created_at: last.created_at.clone(),
+            after_session_id: last.session_id.clone(),
+        })
+    } else {
+        None
+    };
+    Ok(RunPage {
+        entries,
+        next_cursor,
+        catalog_revision: revision,
+        scan_incomplete: incomplete != 0,
+    })
+}
+
+/// 将玩家明确选择的公开 profile 绑定到尚无快照的旧周目。
+///
+/// 如果该周目已经存在任一账本数据，绑定后先进入 reconciliation 状态，
+/// 防止旧 scope 尚未核对时把周目误报为可继续收费。
+///
+/// # Errors
+/// 目录项缺失、状态不符、revision 过期或公开 profile 无效时拒绝写入。
+pub fn bind_profile(
+    connection: &mut rusqlite::Connection,
+    session_id: &str,
+    expected_revision: u64,
+    profile: &LlmProfile,
+) -> Result<u64, Fault> {
+    if !crate::record::format::valid_uuid(session_id) || expected_revision == 0 {
+        return Err(Fault::bad_request());
+    }
+    profile.validate().map_err(|_| Fault::bad_request())?;
+    let snapshot = aoidos_json::to_vec(profile).map_err(|_| Fault::bad_request())?;
+    if snapshot.len() > MAX_PROFILE_SNAPSHOT_BYTES {
+        return Err(Fault::bad_request());
+    }
+
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let (memory_run_id, state, revision): (Option<String>, String, i64) = transaction
+        .query_row(
+            "SELECT memory_run_id, state, revision FROM session_catalog WHERE session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(database)?
+        .ok_or_else(|| Fault::new("app.not-found", "周目不存在"))?;
+    let revision = u64::try_from(revision).map_err(|_| corrupt())?;
+    if revision != expected_revision {
+        return Err(stale_revision());
+    }
+    if state != RunState::NeedsProfileBinding.as_str() {
+        return Err(Fault::new("app.conflict", "该周目不需要绑定模型配置"));
+    }
+
+    let has_legacy_ledger_data = memory_run_id
+        .as_deref()
+        .filter(|run_id| *run_id != session_id)
+        .map(|run_id| has_ledger_data_for_scope(&transaction, run_id))
+        .transpose()?
+        .unwrap_or(false);
+    let next_state = if has_legacy_ledger_data {
+        RunState::BillingReconciliationRequired
+    } else if billing_configured(&transaction, session_id)? {
+        RunState::Ready
+    } else {
+        RunState::BillingNotConfigured
+    };
+    let next_revision = revision.checked_add(1).ok_or_else(corrupt)?;
+    transaction
+        .execute(
+            "UPDATE session_catalog SET profile_id=?1,profile_schema_version=1,profile_snapshot=?2,state=?3,revision=?4,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE session_id=?5 AND revision=?6 AND state='needs-profile-binding'",
+            rusqlite::params![profile.profile_id, snapshot, next_state.as_str(), next_revision, session_id, revision],
+        )
+        .map_err(database)?;
+    bump_revision(&transaction)?;
+    transaction.commit().map_err(database)?;
+    Ok(next_revision)
+}
+
+fn has_ledger_data_for_scope(
+    connection: &rusqlite::Connection,
+    run_id: &str,
+) -> Result<bool, Fault> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_physical_requests WHERE run_id=?1)",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(database)
+}
+
+fn stale_revision() -> Fault {
+    Fault::new("app.conflict", "周目目录已变化，请重新加载")
+        .with_detail(serde_json::json!({ "reason": "staleRevision" }))
+}
+
+fn billing_configured(connection: &rusqlite::Connection, run_id: &str) -> Result<bool, Fault> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1)",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(database)
+}
+
+fn bump_revision(connection: &rusqlite::Connection) -> Result<i64, Fault> {
+    connection
+        .execute(
+            "UPDATE session_catalog_meta SET revision=revision+1 WHERE id=1",
+            [],
+        )
+        .map_err(database)?;
+    connection
+        .query_row(
+            "SELECT revision FROM session_catalog_meta WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(database)
+}
+
+fn database(_: rusqlite::Error) -> Fault {
+    Fault::new("store.database", "周目目录存储失败")
+}
+
+fn corrupt() -> Fault {
+    Fault::new("store.corrupt", "周目目录数据损坏")
+}
+
+/// 确认目录迁移结构完整，避免部分 schema 被当作可用目录。
+pub fn verify(connection: &rusqlite::Connection) -> Result<(), StoreError> {
+    let valid: i64 = connection
+        .query_row(
+            "SELECT count(*) = 4 FROM sqlite_master WHERE type='table' AND name IN ('session_catalog_meta','session_catalog','active_session','session_deletion_ops')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(aoidos_store::db::sqlite_error)?;
+    if valid != 1 {
+        return Err(StoreError::Corrupt(
+            "session catalog schema mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile() -> LlmProfile {
+        LlmProfile {
+            profile_id: "test-profile".into(),
+            provider_id: "deepseek".into(),
+            model: "deepseek-v4.1-flash".into(),
+            mode: aoidos_llm::config::ProfileMode::Completion,
+            thinking: false,
+            sampling: aoidos_llm::sampling::Sampling {
+                temperature: 1.0,
+                max_tokens: 1024,
+            },
+            proxy: aoidos_llm::config::ProxyConfig::System,
+        }
+    }
+
+    fn connection() -> rusqlite::Connection {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(aoidos_billing::schema::SCHEMA)
+            .unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+    }
+
+    #[test]
+    fn schema_creates_catalog_selection_and_deletion_journal() {
+        let connection = connection();
+
+        verify(&connection).unwrap();
+        let revision: i64 = connection
+            .query_row(
+                "SELECT revision FROM session_catalog_meta WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(revision, 1);
+    }
+
+    #[test]
+    fn catalog_rejects_secret_sized_or_unknown_state_values() {
+        let connection = connection();
+        let id = "00000000-0000-4000-8000-000000000001";
+
+        assert!(connection.execute(
+            "INSERT INTO session_catalog(session_id,script_id,created_at,state,revision,updated_at,profile_snapshot) VALUES(?1,'mistbell','2026-10-21T00:00:00Z','ready',1,'2026-10-21T00:00:00Z',zeroblob(65537))",
+            [id],
+        ).is_err());
+        assert!(connection.execute(
+            "INSERT INTO session_catalog(session_id,script_id,created_at,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-21T00:00:00Z','unknown',1,'2026-10-21T00:00:00Z')",
+            [id],
+        ).is_err());
+    }
+
+    #[test]
+    fn new_run_uses_session_identity_for_billing_and_freezes_only_public_profile() {
+        let mut connection = connection();
+        let run = NewRun {
+            session_id: "00000000-0000-4000-8000-000000000001".into(),
+            script_id: "mistbell".into(),
+            created_at: "2026-10-21T00:00:00Z".into(),
+            memory_run_id: "00000000-0000-4000-8000-000000000002".into(),
+            profile: profile(),
+        };
+
+        register_new(&mut connection, &run).unwrap();
+        register_new(&mut connection, &run).unwrap();
+        let page = page(&connection, None, DEFAULT_PAGE_SIZE).unwrap();
+
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            page.entries[0].billing_run_id.as_deref(),
+            Some(run.session_id.as_str())
+        );
+        assert_eq!(
+            page.entries[0].memory_run_id.as_deref(),
+            Some(run.memory_run_id.as_str())
+        );
+        assert_eq!(page.entries[0].state, RunState::BillingNotConfigured);
+        let persisted_profile: Vec<u8> = connection
+            .query_row(
+                "SELECT profile_snapshot FROM session_catalog WHERE session_id=?1",
+                [&run.session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            String::from_utf8(persisted_profile)
+                .unwrap()
+                .contains("test-profile")
+        );
+        assert_eq!(page.catalog_revision, 2);
+    }
+
+    #[test]
+    fn directory_pages_are_keyset_ordered_and_revision_bound() {
+        let connection = connection();
+        for (id, created_at) in [
+            (
+                "00000000-0000-4000-8000-000000000001",
+                "2026-10-19T00:00:00Z",
+            ),
+            (
+                "00000000-0000-4000-8000-000000000002",
+                "2026-10-20T00:00:00Z",
+            ),
+            (
+                "00000000-0000-4000-8000-000000000003",
+                "2026-10-20T00:00:00Z",
+            ),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO session_catalog(session_id,script_id,created_at,state,revision,updated_at) VALUES(?1,'mistbell',?2,'needs-profile-binding',1,?2)",
+                    rusqlite::params![id, created_at],
+                )
+                .unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO active_session(id,session_id,revision,updated_at) VALUES(1,'00000000-0000-4000-8000-000000000003',1,'2026-10-21T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+
+        let first = page(&connection, None, 2).unwrap();
+        assert_eq!(
+            first.entries[0].session_id,
+            "00000000-0000-4000-8000-000000000003"
+        );
+        assert!(first.entries[0].active);
+        assert_eq!(
+            first.entries[1].session_id,
+            "00000000-0000-4000-8000-000000000002"
+        );
+        let second = page(&connection, first.next_cursor.as_ref(), 2).unwrap();
+        assert_eq!(
+            second.entries[0].session_id,
+            "00000000-0000-4000-8000-000000000001"
+        );
+        assert!(second.next_cursor.is_none());
+
+        let stale = RunCursor {
+            catalog_revision: 0,
+            after_created_at: "2026-10-20T00:00:00Z".into(),
+            after_session_id: "00000000-0000-4000-8000-000000000002".into(),
+        };
+        assert_eq!(
+            page(&connection, Some(&stale), 2).unwrap_err().code,
+            "app.conflict"
+        );
+    }
+
+    #[test]
+    fn profile_binding_is_explicit_revisioned_and_never_treats_old_ledger_as_ready() {
+        let mut connection = connection();
+        let session_id = "00000000-0000-4000-8000-000000000011";
+        let memory_run_id = "00000000-0000-4000-8000-000000000012";
+        connection
+            .execute(
+                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                rusqlite::params![session_id, memory_run_id],
+            )
+            .unwrap();
+
+        let revision = bind_profile(&mut connection, session_id, 1, &profile()).unwrap();
+        assert_eq!(revision, 2);
+        let (state, profile_id, snapshot): (String, String, Vec<u8>) = connection
+            .query_row(
+                "SELECT state,profile_id,profile_snapshot FROM session_catalog WHERE session_id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(state, RunState::BillingNotConfigured.as_str());
+        assert_eq!(profile_id, "test-profile");
+        assert!(
+            String::from_utf8(snapshot)
+                .unwrap()
+                .contains("test-profile")
+        );
+        assert_eq!(page(&connection, None, 10).unwrap().catalog_revision, 2);
+
+        assert_eq!(
+            bind_profile(&mut connection, session_id, 1, &profile())
+                .unwrap_err()
+                .detail
+                .as_ref()
+                .and_then(|detail| detail.get("reason"))
+                .and_then(serde_json::Value::as_str),
+            Some("staleRevision")
+        );
+        assert_eq!(
+            bind_profile(&mut connection, session_id, 2, &profile())
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+    }
+
+    #[test]
+    fn profile_binding_with_legacy_scope_stays_blocked_for_billing_reconciliation() {
+        let mut connection = connection();
+        let session_id = "00000000-0000-4000-8000-000000000021";
+        let memory_run_id = "00000000-0000-4000-8000-000000000022";
+        connection
+            .execute(
+                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                rusqlite::params![session_id, memory_run_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-20T00:00:00Z')",
+                [memory_run_id],
+            )
+            .unwrap();
+
+        bind_profile(&mut connection, session_id, 1, &profile()).unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM session_catalog WHERE session_id=?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, RunState::BillingReconciliationRequired.as_str());
+    }
+
+    #[test]
+    fn profile_binding_keeps_a_canonical_budget_ready() {
+        let mut connection = connection();
+        let session_id = "00000000-0000-4000-8000-000000000031";
+        connection
+            .execute(
+                "INSERT INTO session_catalog(session_id,script_id,created_at,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z','needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                [session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-20T00:00:00Z')",
+                [session_id],
+            )
+            .unwrap();
+
+        bind_profile(&mut connection, session_id, 1, &profile()).unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM session_catalog WHERE session_id=?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, RunState::Ready.as_str());
+    }
+}

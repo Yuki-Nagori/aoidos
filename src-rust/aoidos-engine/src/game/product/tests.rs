@@ -424,6 +424,21 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
         .memory_run_for_session(&first.session_id)
         .unwrap();
     assert_eq!(first.memory_run_id, first_run.run_id);
+    let catalog = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap();
+    assert_eq!(catalog.entries.len(), 1);
+    assert_eq!(catalog.entries[0].session_id, first.session_id);
+    assert_eq!(
+        catalog.entries[0].memory_run_id.as_deref(),
+        Some(first.memory_run_id.as_str())
+    );
+    assert_eq!(
+        catalog.entries[0].billing_run_id.as_deref(),
+        Some(first.session_id.as_str())
+    );
+    assert!(catalog.entries[0].active);
     assert_eq!(
         fixture
             .service

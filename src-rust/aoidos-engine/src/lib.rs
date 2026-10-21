@@ -7,6 +7,7 @@ pub mod game;
 pub mod ports;
 pub mod record;
 pub mod request;
+pub mod run_catalog;
 pub mod turn;
 
 #[cfg(debug_assertions)]

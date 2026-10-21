@@ -103,6 +103,26 @@ impl Profiles {
         profile.validate().map_err(invalid_profile)
     }
 
+    /// 读取可随周目冻结的公开配置，不触碰 OS 凭据库。
+    /// # Errors
+    /// profile 缺失或配置文件损坏时返回稳定 Fault。
+    pub fn public_profile(&self, profile_id: &str) -> Result<LlmProfile, Fault> {
+        config::validate_identifier("profileId", profile_id).map_err(invalid_profile)?;
+        let _guard = self
+            .profile_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let profile = self
+            .store()
+            .load()
+            .map_err(store_fault)?
+            .into_iter()
+            .find(|profile| profile.profile_id == profile_id)
+            .ok_or_else(profile_missing)?;
+        profile.validate().map_err(invalid_profile)?;
+        Ok(profile)
+    }
+
     /// 删除 profile；不存在时也成功，保持幂等。
     ///
     /// # Errors
@@ -221,6 +241,10 @@ impl Profiles {
 impl aoidos_engine::game::product::ProfileSource for Profiles {
     fn validate_profile(&self, profile_id: &str) -> Result<(), Fault> {
         Profiles::validate_profile(self, profile_id)
+    }
+
+    fn public_profile(&self, profile_id: &str) -> Result<LlmProfile, Fault> {
+        Profiles::public_profile(self, profile_id)
     }
 
     fn freeze(&self, profile_id: &str) -> Result<ResolvedProfile, Fault> {
@@ -411,6 +435,31 @@ mod tests {
             "app.not-found"
         );
         assert_eq!(reads.load(Ordering::Relaxed), 0);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn public_profile_snapshot_does_not_read_or_copy_secret_material() {
+        let directory = temp_dir();
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let credentials = Box::new(MemoryCredentials(
+            Mutex::new(BTreeMap::new()),
+            reads.clone(),
+        ));
+        let service = Profiles::with_credentials(&directory, credentials);
+        service.save(profile()).unwrap();
+        service
+            .set_key(
+                "deepseek",
+                secrecy::SecretString::from("not-to-be-snapshotted"),
+            )
+            .unwrap();
+
+        let snapshot = service.public_profile("narration").unwrap();
+        assert_eq!(snapshot.profile_id, "narration");
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        assert!(!encoded.contains("not-to-be-snapshotted"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

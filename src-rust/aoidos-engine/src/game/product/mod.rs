@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{fault::Fault, record::calibration::Calibration, storage::Storage, turn::Coordinator};
 use aoidos_llm::{
-    config::FrozenProfile,
+    config::{FrozenProfile, LlmProfile},
     provider::Provider,
     proxy::{ProxyAuth, SystemProxySnapshot},
     schedule::{AllowAll, BudgetPort},
@@ -36,6 +36,18 @@ pub trait ProfileSource: Send + Sync {
             return Err(Fault::bad_request());
         }
         Ok(())
+    }
+
+    /// 读取不含凭据的公开 profile 快照；应用持久化 adapter 应避免访问密钥库。
+    ///
+    /// # Errors
+    /// 配置不存在或结构无效时返回稳定 Fault。
+    fn public_profile(&self, id: &str) -> Result<LlmProfile, Fault> {
+        let resolved = self.freeze(id)?;
+        if resolved.frozen.profile.profile_id != id {
+            return Err(Fault::bad_request());
+        }
+        Ok(resolved.frozen.profile)
     }
 
     /// # Errors
@@ -144,9 +156,17 @@ impl ProfileFactory {
         )
     }
 
-    fn validate_profile(&self, id: &str) -> Result<(), Fault> {
+    /// 返回可持久化的公开配置快照，不向目录写入任何凭据值。
+    /// # Errors
+    /// 配置缺失或结构无效时返回稳定 Fault。
+    pub fn public_profile(&self, id: &str) -> Result<LlmProfile, Fault> {
         aoidos_llm::config::validate_identifier("profileId", id).map_err(invalid_profile)?;
-        self.source.validate_profile(id)
+        let profile = self.source.public_profile(id)?;
+        if profile.profile_id != id {
+            return Err(Fault::bad_request());
+        }
+        profile.validate().map_err(invalid_profile)?;
+        Ok(profile)
     }
 
     /// 按已冻结周目 profile 准备一个受统一账本约束的私有请求。
@@ -327,7 +347,8 @@ impl Product {
         crate::blocking::run(move || preferences.get()).await?;
         let factory = self.factory.clone();
         let check_id = profile_id.clone();
-        crate::blocking::run(move || factory.validate_profile(&check_id)).await?;
+        let profile_snapshot =
+            crate::blocking::run(move || factory.public_profile(&check_id)).await?;
         if let Some(previous) = &previous {
             match service.get_phase(&previous.session_id) {
                 Ok(_) => {
@@ -343,19 +364,21 @@ impl Product {
         let records = self.storage.records.clone();
         let old = previous.clone();
         let selected_script = script_id.clone();
-        let session = crate::blocking::run(move || match old {
-            Some(selection) if !start_new && selection.script_id == selected_script => {
-                records.open(&selection.script_id, &selection.session_id)
-            }
-            _ => records.create(builtin::header(&selected_script)?),
+        let (session, created_new) = crate::blocking::run(move || match old {
+            Some(selection) if !start_new && selection.script_id == selected_script => records
+                .open(&selection.script_id, &selection.session_id)
+                .map(|session| (session, false)),
+            _ => records
+                .create(builtin::header(&selected_script)?)
+                .map(|session| (session, true)),
         })
         .await?;
-        let id = session
+        let header = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .header()
-            .session_id
             .clone();
+        let id = header.session_id.clone();
         let context = match builtin::open(
             self.storage.clone(),
             session,
@@ -380,6 +403,23 @@ impl Product {
         if let Err(error) = service.register(context) {
             self.close_record(&id).await;
             return Err(error);
+        }
+        if created_new {
+            let registration = crate::run_catalog::NewRun {
+                session_id: id.clone(),
+                script_id: header.script_id,
+                created_at: header.created_at,
+                memory_run_id: memory_run.run_id.clone(),
+                profile: profile_snapshot,
+            };
+            let storage = self.storage.clone();
+            if let Err(error) =
+                crate::blocking::run(move || storage.register_new_run(&registration)).await
+            {
+                let _ = service.close_session(&id).await;
+                self.close_record(&id).await;
+                return Err(error);
+            }
         }
         let selection = Selection {
             version: 1,
