@@ -839,6 +839,25 @@ impl Storage {
         })
     }
 
+    /// owner 已关闭后清除指向目标的 SQLite 活动选择；不推进删除 journal 阶段。
+    /// # Errors
+    /// 调用方必须先持共享生命周期锁并关闭 owner；身份不匹配或写入失败时拒绝修改。
+    pub fn clear_run_active_selection_for_deletion(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::clear_active_selection_for_deletion(
+                connection,
+                operation_id,
+                session_id,
+                updated_at,
+            )
+        })
+    }
+
     /// 显式推进一批旧 transcript 发现；只读取 header，不打开或修复会话。
     /// # Errors
     /// 数据库不可用或批次无法原子登记时返回稳定错误，未提交批次会重新排队。

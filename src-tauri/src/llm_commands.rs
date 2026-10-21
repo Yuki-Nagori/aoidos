@@ -26,6 +26,16 @@ static APP_PROFILES: OnceLock<ProfileService> = OnceLock::new();
 /// 注入式凭据单测使用的串行锁；生产 profile / 密钥一致性由 aoidos-app 管理。
 #[cfg(test)]
 static KEY_LOCK: Mutex<()> = Mutex::new(());
+#[cfg(test)]
+/// 命令测试共用进程级配置目录，涉及初始化或改写 profile 的用例必须串行。
+static PROFILE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn profile_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    PROFILE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 static PROMPT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 struct PromptPermit<'a>(&'a AtomicBool);
@@ -527,7 +537,10 @@ mod tests {
                 .unwrap()
                 .set
         );
-        init_llm_dir(tdir("async-command"));
+        {
+            let _profile_guard = profile_test_lock();
+            init_llm_dir(tdir("async-command"));
+        }
         let provider = unique("async-probe");
         // 未知操作必须在原生交互前拒绝，装配入口也覆盖。
         assert_eq!(
@@ -567,6 +580,7 @@ mod tests {
 
     #[test]
     fn commands_round_trip_through_shared_dir() {
+        let _profile_guard = profile_test_lock();
         // 命令级冒烟：OnceLock 目录全进程共享（先到先得），断言只用唯一 id 相对化。
         let dir = tdir("commands");
         init_llm_dir(dir);
@@ -624,6 +638,7 @@ mod tests {
 
     #[test]
     fn status_command_reads_through_shared_vault() {
+        let _profile_guard = profile_test_lock();
         // 命令级：对从未设置过的唯一 id 读状态 / 清除（NoEntry 幂等路径），
         // 不写入任何真实凭据。目录由先到的测试注入（OnceLock 全进程共享）。
         init_llm_dir(tdir("vault-probe"));
@@ -635,6 +650,7 @@ mod tests {
     }
     #[tokio::test]
     async fn freeze_and_debug_submission_use_saved_configuration_once() {
+        let _profile_guard = profile_test_lock();
         init_llm_dir(tdir("turn-profile"));
         let id = unique("turn-profile");
         let mut profile = deepseek_profile(&id);
@@ -684,6 +700,7 @@ mod tests {
             freeze_submission("").err().unwrap().code(),
             "app.bad-request"
         );
+        drop(_profile_guard);
         let service = crate::turn_commands::TurnService::new(
             std::sync::Arc::new(crate::turn_commands::WindowEvents::new(|_, _| Ok(()))),
             aoidos_llm::proxy::SystemProxySnapshot::default(),

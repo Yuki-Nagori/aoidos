@@ -64,7 +64,10 @@ const MAX_PROFILE_SNAPSHOT_BYTES: usize = 65_536;
 pub(crate) mod legacy_scan;
 pub use legacy_scan::LegacyScanResult;
 mod deletion;
-pub use deletion::{DeletionOperation, RunDeletionCheck, deletion_check, request_deletion};
+pub use deletion::{
+    DeletionOperation, RunDeletionCheck, clear_active_selection_for_deletion, deletion_check,
+    request_deletion,
+};
 
 /// 目录行的可执行状态；只反映恢复与配置能力，不是游戏事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1300,6 +1303,198 @@ mod tests {
                 )
                 .unwrap(),
             2
+        );
+    }
+
+    #[test]
+    fn clearing_active_selection_keeps_journal_requested_until_manifest_is_frozen() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let target = open_target(&connection, &run.session_id, 1).unwrap();
+        activate(&mut connection, &target, "2026-10-21T00:01:00Z").unwrap();
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+
+        let first = deletion::clear_active_selection_for_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            "2026-10-21T00:03:00Z",
+        )
+        .unwrap();
+        assert_eq!(first.state, "requested");
+        assert_eq!(first.catalog_revision, 4);
+        assert_eq!(active_selection(&connection).unwrap(), None);
+
+        let active_revision: i64 = connection
+            .query_row(
+                "SELECT revision FROM active_session WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let replay = deletion::clear_active_selection_for_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            "2026-10-21T00:04:00Z",
+        )
+        .unwrap();
+        assert_eq!(replay, first);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT revision FROM active_session WHERE id=1",
+                    [],
+                    |row| { row.get::<_, i64>(0) }
+                )
+                .unwrap(),
+            active_revision
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state FROM session_deletion_ops WHERE operation_id=?1",
+                    [&operation_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "requested"
+        );
+    }
+
+    #[test]
+    fn clearing_inactive_deletion_target_preserves_another_active_run() {
+        let mut connection = connection();
+        let target = register_test_run(&mut connection);
+        let active = NewRun {
+            session_id: "00000000-0000-4000-8000-000000000021".into(),
+            script_id: "mistbell".into(),
+            created_at: "2026-10-21T00:00:01Z".into(),
+            memory_run_id: "00000000-0000-4000-8000-000000000022".into(),
+            profile: profile(),
+        };
+        insert_memory_mapping(
+            &connection,
+            &active.session_id,
+            &active.memory_run_id,
+            &active.script_id,
+        );
+        register_new(&mut connection, &active).unwrap();
+        let target_open = open_target(&connection, &target.session_id, 1).unwrap();
+        activate(&mut connection, &target_open, "2026-10-21T00:01:00Z").unwrap();
+        let active_open = open_target(&connection, &active.session_id, 1).unwrap();
+        activate(&mut connection, &active_open, "2026-10-21T00:02:00Z").unwrap();
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &target.session_id,
+            1,
+            "2026-10-21T00:03:00Z",
+        )
+        .unwrap();
+        let revision_before: i64 = connection
+            .query_row(
+                "SELECT revision FROM session_catalog_meta WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let cleared = deletion::clear_active_selection_for_deletion(
+            &mut connection,
+            &operation_id,
+            &target.session_id,
+            "2026-10-21T00:04:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(cleared.state, "requested");
+        assert_eq!(
+            active_selection(&connection).unwrap().unwrap().session_id,
+            active.session_id
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT revision FROM session_catalog_meta WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            revision_before
+        );
+    }
+
+    #[test]
+    fn clearing_active_selection_rolls_back_when_revision_update_fails() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let target = open_target(&connection, &run.session_id, 1).unwrap();
+        activate(&mut connection, &target, "2026-10-21T00:01:00Z").unwrap();
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+        let catalog_revision_before: i64 = connection
+            .query_row(
+                "SELECT revision FROM session_catalog_meta WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_catalog_revision BEFORE UPDATE ON session_catalog_meta
+                 BEGIN SELECT RAISE(ABORT, 'injected revision failure'); END;",
+            )
+            .unwrap();
+
+        assert!(
+            deletion::clear_active_selection_for_deletion(
+                &mut connection,
+                &operation_id,
+                &run.session_id,
+                "2026-10-21T00:03:00Z",
+            )
+            .is_err()
+        );
+        assert_eq!(
+            active_selection(&connection).unwrap().unwrap().session_id,
+            run.session_id
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT revision FROM session_catalog_meta WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            catalog_revision_before
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state FROM session_deletion_ops WHERE operation_id=?1",
+                    [&operation_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "requested"
         );
     }
 

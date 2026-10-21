@@ -95,7 +95,7 @@ CREATE TABLE point_allocations (
 
 目录分页和预览不得调用 `Session::open`（其恢复可修复文件）或 `builtin::open`（会初始化记忆）。旧局缺 profile 时须标记需绑定，不使用当前新局选择代替。玩家显式选择周目后，engine 按目录 revision、三身份映射和冻结 profile 快照校验目标；恢复记录与记忆 owner 成功后，才以 SQLite CAS 更新活动选择，并尽力写入 `active-session.json` 镜像。恢复结果的 `selectionMirrorPending` 明确报告镜像未写入；SQLite 仍是权威选择，后续读取会尝试修复镜像，普通重开也沿用该诊断。若 SQLite 提交结果不确定，只在 `store.commit-unknown` 时读回权威选择；明确的 revision / 状态冲突不能被读回结果掩盖。按会话冻结 profile 时直接使用目录快照，并从当前凭据库按 provider / proxy 引用读取密钥，不以同 ID 的新配置替代历史快照。Tauri typed API 与 Web API 类型已接通显式恢复；CLI/TUI 已接入分页、旧存档显式扫描和周目恢复，Web 选择界面、删除及启动前向恢复仍待实施。
 
-删除设计要求显式确认并由 engine journal 前向恢复，覆盖单局记录、partial / repair backup、run-scoped 记忆 / 实体及本局已结算账本。transcript 隔离清单最多 8,192 项 / 4 MiB，memory run 目录作为单一同卷项隔离后分批递归清理，不跟随符号链接。当前共享服务只提供只读计费检查；engine 另有尚未接入 app 的内部原子意图原语，会复核目录 revision、身份与费用门禁，再幂等写入 `requested` journal 并将目录置为 `deleting`。生命周期互斥、owner 关闭、完整隔离清单、跨存储清理与启动前向恢复仍待实现，因此目前不能启动删除。删除执行时，存在 `reserved` / `unconfirmed` 请求或待结算 outbox 必须拒绝；若 `unconfirmed` 缺少完整 usage 且无可核验证据，当前没有任意费用核销入口，只能保留该局。直接引用被删局来源或动态实体的跨周目刻痕失效，但剧本轮回代数高水位与全库 migration backups 保留；文件 unlink 不代表安全擦除。不得依赖外键级联清理共享业务库。
+删除设计要求显式确认并由 engine journal 前向恢复，覆盖单局记录、partial / repair backup、run-scoped 记忆 / 实体及本局已结算账本。transcript 隔离清单最多 8,192 项 / 4 MiB，memory run 目录作为单一同卷项隔离后分批递归清理，不跟随符号链接。当前共享服务只提供只读计费检查；engine 已实现原子登记 `requested` journal 并将目录置为 `deleting`，以及 owner 关闭后清除指向目标的 SQLite 权威活动选择。后者刻意保持 journal 为 `requested`：按 059，只有隔离 manifest 与 hash 冻结后，才能在同一事务推进至 `owner-closed`。活动文件镜像清理、冻结隔离清单、跨存储清理与启动前向恢复仍待实现，因此目前不能启动删除。删除执行时，存在 `reserved` / `unconfirmed` 请求或待结算 outbox 必须拒绝；若 `unconfirmed` 缺少完整 usage 且无可核验证据，当前没有任意费用核销入口，只能保留该局。直接引用被删局来源或动态实体的跨周目刻痕失效，但剧本轮回代数高水位与全库 migration backups 保留；文件 unlink 不代表安全擦除。不得依赖外键级联清理共享业务库。
 
 ## 原子写工具（全仓唯一实现）
 

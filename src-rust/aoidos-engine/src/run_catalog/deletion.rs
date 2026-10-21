@@ -130,6 +130,68 @@ pub fn request_deletion(
     })
 }
 
+/// owner 已由 app 生命周期门关闭后，清除指向目标的 SQLite 权威活动选择。
+///
+/// 调用方必须先持有共享生命周期锁、确认没有在飞回合并关闭 owner；本函数不推进 journal，
+/// 因为 `owner-closed` 必须与冻结删除 manifest 在同一事务提交。清除活动文件镜像由 app 完成。
+/// 重放时只在活动选择仍指向目标的情况下更新 revision。
+///
+/// # Errors
+/// 操作身份不匹配、阶段不合法或 SQLite 写入失败时拒绝修改。
+pub fn clear_active_selection_for_deletion(
+    connection: &mut rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    updated_at: &str,
+) -> Result<DeletionOperation, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let (target_id, state): (String, String) = transaction
+        .query_row(
+            "SELECT session_id,state FROM session_deletion_ops WHERE operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?
+        .ok_or_else(|| Fault::new("app.not-found", "删除操作不存在"))?;
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    if state == "requested" {
+        let changed = transaction
+            .execute(
+                "UPDATE active_session SET session_id=NULL,revision=revision+1,updated_at=?1 WHERE id=1 AND session_id=?2",
+                rusqlite::params![updated_at, session_id],
+            )
+            .map_err(database)?;
+        if changed > 0 {
+            bump_revision(&transaction)?;
+        }
+    } else if !matches!(
+        state.as_str(),
+        "owner-closed" | "files-quarantined" | "database-purged" | "files-purged" | "completed"
+    ) {
+        return Err(corrupt());
+    }
+    let revision = catalog_revision(&transaction)?;
+    transaction.commit().map_err(database)?;
+    Ok(DeletionOperation {
+        operation_id: operation_id.to_owned(),
+        session_id: session_id.to_owned(),
+        state,
+        catalog_revision: revision,
+    })
+}
+
 fn catalog_revision(connection: &rusqlite::Connection) -> Result<u64, Fault> {
     connection
         .query_row(
