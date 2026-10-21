@@ -117,7 +117,7 @@ async fn completion_stream_yields_text_usage_finish() {
                 prompt_tokens: 10,
                 completion_tokens: 5,
                 cached_prompt_tokens: Some(0),
-                cache_creation_tokens: None,
+                cache_creation_tokens: Some(0),
                 reasoning_tokens: None,
             })),
             Ok(ProviderDelta::Finish(ProviderFinish::Stop)),

@@ -159,8 +159,13 @@ impl LedgerBudgetPort {
                 .ok_or_else(|| Fault::new("app.not-found", "待恢复的费用记录不存在"))?;
             let (price, dispatch_at) = BillingLedger::request_price_context(connection, request_id)
                 .map_err(billing_fault)?;
-            if (pending.input_cached_write.is_none() && price.input_cached_write.is_some())
-                || (pending.input_cached_write.is_some_and(|tokens| tokens > 0)
+            let input_cached_write = match pending.input_cached_write {
+                Some(tokens) => Some(tokens),
+                None if legacy_deepseek_mapping_has_no_cache_write(&price) => Some(0),
+                None => None,
+            };
+            if (input_cached_write.is_none() && price.input_cached_write.is_some())
+                || (input_cached_write.is_some_and(|tokens| tokens > 0)
                     && price.input_cached_write.is_none())
             {
                 return Err(Fault::new(
@@ -171,7 +176,7 @@ impl LedgerBudgetPort {
             let normalized = NormalizedUsage::from_provider_with_cache_write(
                 pending.input_total,
                 pending.input_cached,
-                pending.input_cached_write,
+                input_cached_write,
                 pending.output_total,
                 pending.reasoning_included,
             )
@@ -183,7 +188,7 @@ impl LedgerBudgetPort {
             let settlement = Settlement {
                 input_total: pending.input_total,
                 input_cached: normalized.input_cached,
-                input_cached_write: pending.input_cached_write.unwrap_or(0),
+                input_cached_write: input_cached_write.unwrap_or(0),
                 output_total: pending.output_total,
                 reasoning_included: pending.reasoning_included,
                 total_tokens: normalized.total_tokens,
@@ -191,7 +196,7 @@ impl LedgerBudgetPort {
                 result_digest: digest(
                     pending.input_total,
                     normalized.input_cached,
-                    pending.input_cached_write.unwrap_or(0),
+                    input_cached_write.unwrap_or(0),
                     pending.output_total,
                     amount,
                 ),
@@ -242,6 +247,17 @@ impl BudgetPort for LedgerBudgetPort {
 
 fn invalid_settlement_usage(_: aoidos_billing::price::PriceError) -> Fault {
     Fault::new("budget.invalid-usage", "供应商用量不合法，费用仍待确认")
+}
+
+/// DeepSeek 旧用量映射只有缓存命中数；未命中输入按普通输入计价，没有独立写入用量。
+fn legacy_deepseek_mapping_has_no_cache_write(price: &aoidos_billing::price::PriceVersion) -> bool {
+    price.provider_id == "deepseek"
+        && price.model_id == "deepseek-flash"
+        && price.usage_mapping_version == aoidos_billing::providers::deepseek::LEGACY_USAGE_MAPPING
+        && price.input_cached_write.as_ref() == Some(&price.input_uncached)
+        && price.schedule.as_ref().is_none_or(|schedule| {
+            schedule.peak.input_cached_write.as_ref() == Some(&schedule.peak.input_uncached)
+        })
 }
 
 fn invalid_settlement_cost(_: aoidos_billing::price::PriceError) -> Fault {
@@ -379,6 +395,34 @@ mod tests {
             effective_from: "2020-01-01T00:00:00Z".into(),
             valid_until: None,
         }
+    }
+
+    fn legacy_deepseek_price() -> PriceVersion {
+        let mut price = price();
+        price.version_id = "deepseek-flash-cny-2026-10-21-v1".into();
+        price.provider_id = "deepseek".into();
+        price.model_id = "deepseek-flash".into();
+        price.unit_tokens = 1_000_000;
+        price.input_uncached = UnitPrice::parse("1").unwrap();
+        price.input_cached = UnitPrice::parse("0.02").unwrap();
+        price.input_cached_write = Some(price.input_uncached.clone());
+        price.output = UnitPrice::parse("4").unwrap();
+        price.usage_mapping_version =
+            aoidos_billing::providers::deepseek::LEGACY_USAGE_MAPPING.into();
+        price
+    }
+
+    #[test]
+    fn legacy_deepseek_zero_write_compatibility_requires_matching_frozen_rates() {
+        let mut price = legacy_deepseek_price();
+        assert!(legacy_deepseek_mapping_has_no_cache_write(&price));
+
+        price.input_cached_write = Some(UnitPrice::parse("1.01").unwrap());
+        assert!(!legacy_deepseek_mapping_has_no_cache_write(&price));
+
+        price.input_cached_write = Some(price.input_uncached.clone());
+        price.usage_mapping_version = "different-mapping".into();
+        assert!(!legacy_deepseek_mapping_has_no_cache_write(&price));
     }
 
     fn storage() -> (Arc<Storage>, std::path::PathBuf) {
@@ -712,6 +756,84 @@ mod tests {
             "app.not-found"
         );
 
+        storage.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_deepseek_usage_retries_with_zero_separate_cache_writes() {
+        let (storage, root) = storage();
+        let mut frozen_price = legacy_deepseek_price();
+        frozen_price.effective_from = "2020-01-01T00:00:00Z".into();
+        let port = LedgerBudgetPort::new(
+            storage.clone(),
+            "run-1".into(),
+            "profile-1".into(),
+            "deepseek".into(),
+            "deepseek-flash".into(),
+            "direct".into(),
+            100,
+        );
+        storage
+            .with_database(|connection| {
+                BillingLedger::set_settings(
+                    connection,
+                    "run-1",
+                    NanoMoney::parse("5").unwrap(),
+                    NanoMoney::ZERO,
+                    None,
+                    "2020-01-01T00:00:00Z",
+                )
+                .map_err(billing_fault)?;
+                BillingLedger::register_price(connection, &frozen_price, "2020-01-01T00:00:00Z")
+                    .map_err(billing_fault)?;
+                BillingLedger::select_profile_price(
+                    connection,
+                    "profile-1",
+                    "deepseek",
+                    "deepseek-flash",
+                    "direct",
+                    Currency::Cny,
+                    "2020-01-01T00:00:00Z",
+                )
+                .map_err(billing_fault)?;
+                Ok(())
+            })
+            .unwrap();
+        port.reserve(&attempt("deepseek-flash", "legacy-deepseek-request"))
+            .unwrap();
+        storage
+            .with_database(|connection| {
+                BillingLedger::stage_settlement(
+                    connection,
+                    &PendingSettlement {
+                        request_id: "legacy-deepseek-request".into(),
+                        input_total: 100,
+                        input_cached: Some(10),
+                        input_cached_write: None,
+                        output_total: 20,
+                        reasoning_included: None,
+                        diagnostic_code: Some("budget.invalid-usage".into()),
+                    },
+                    "2020-01-01T00:00:01Z",
+                )
+                .map_err(billing_fault)
+            })
+            .unwrap();
+
+        port.retry_pending_settlement("legacy-deepseek-request", "2020-01-01T00:00:02Z")
+            .unwrap();
+
+        let request = storage
+            .with_database(|connection| {
+                let page = BillingLedger::list_requests(connection, "run-1", None, None)
+                    .map_err(billing_fault)?;
+                Ok(page.items.into_iter().next().unwrap())
+            })
+            .unwrap();
+        assert_eq!(request.state, "settled");
+        assert_eq!(request.input_cached_write, Some(0));
+        assert!(!request.settlement_pending);
         storage.close().unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }

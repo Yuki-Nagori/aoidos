@@ -28,6 +28,11 @@ enum Command {
         #[command(subcommand)]
         action: KeyAction,
     },
+    /// 仅从本地账本恢复费用结算，不会重新发送供应商请求。
+    Billing {
+        #[command(subcommand)]
+        action: BillingAction,
+    },
     /// 打开可点击的终端游戏界面。
     Play,
 }
@@ -41,6 +46,16 @@ enum KeyAction {
     Clear {
         #[arg(long)]
         provider: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BillingAction {
+    RetrySettlement {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        request_id: String,
     },
 }
 
@@ -131,6 +146,25 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     println!("已清除 {} 凭据。", provider_id.as_str());
                 }
             }
+        }
+        Command::Billing { action } => {
+            let mut app = CliApp::open(root)?;
+            let result = app
+                .storage
+                .ready()
+                .map_err(fault_error)
+                .and_then(|()| match action {
+                    BillingAction::RetrySettlement { run_id, request_id } => {
+                        app.services
+                            .billing
+                            .retry_pending_settlement(&run_id, &request_id)
+                            .map_err(fault_error)?;
+                        Ok(())
+                    }
+                });
+            app.shutdown().await;
+            result?;
+            println!("已从本地用量恢复费用结算；没有重新发送模型请求。");
         }
         Command::Play => {
             let mut app = CliApp::open(root)?;

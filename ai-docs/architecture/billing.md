@@ -38,6 +38,8 @@ OpenCode Go 的公开 [`/zen/go/v1/models`](https://opencode.ai/zen/go/v1/models
 
 保存原始、受界限约束的 usage 与归一化字段：inputTotal、inputCachedRead、inputCachedWrite、inputUncached、outputTotal、reasoningIncluded、totalTokens；未知项省略。inputUncached = inputTotal - inputCachedRead - inputCachedWrite，缓存明确不支持时两项为 0。reasoning 作为输出子集展示，不再重复计费；供应商若分开返回推理 Token，适配器先按其冻结映射并入 outputTotal。完整 usage 缺失或计数无法安全转换、持久化时不虚构 usage，保持 unconfirmed；完整数值已进入恢复队列但归一化或计价校验失败时保持 reserved 并显示诊断。总 Token = inputTotal + outputTotal，不重复加缓存或 reasoning。
 
+DeepSeek 官方 usage 与价格只区分缓存命中 / 未命中，没有独立缓存写入 Token；当前适配器将 `inputCachedWrite` 显式记为 0，未命中输入按普通输入计价。旧 `deepseek-chat-completion-usage-v1` 请求若缓存写入费率与普通未命中输入费率相同，可在本地恢复时将缺失的独立写入量解释为 0；其他 Provider 或费率不相同的旧记录仍保持待确认，不能套用此兼容规则。
+
 PriceVersion 可附 IANA 时区、星期、半开时间窗、时段单价与版本化节假日表；跨午夜拆窗，重叠、空价和非法时区拒绝。优先级为显式日期覆盖 → 星期 / 时间窗 → 基准价。日历声明覆盖年份及调整工作日策略；未覆盖 / 无法确定采用可适用最高价并标 estimated，不默认为假日优惠。内置日历随版本更新，手动覆盖明确来源；不自动推断节假日。
 
 DeepSeek API 的 [USD 价格](https://api-docs.deepseek.com/quick_start/pricing/)与[人民币价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)均有峰谷价：周一至周五 UTC 01:00–04:00 / 06:00–10:00（北京时间 09:00–12:00 / 14:00–18:00），中国公众假日全天非峰时，谷价为峰价一半。2026 年公众假日表依据[国务院办公厅通知](https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm)，价格日历版本为 `deepseek-api-utc-weekday-holiday-2026-v1`；未覆盖年份不推断假日折扣，峰时按较高价格保守预留，官方新日历发布后新增版本。OpenCode Go 对 DeepSeek V4.1 Flash / V4 Pro / V4 Flash / Vision Exp 列出独立峰谷费率；其官方时段相同，但只明确周末全天非峰时，不排除中国公众假日。两种接入分别登记独立费率和日历版本。每笔按 `dispatchAt` 选择单价并冻结版本；预留覆盖可适用最高费率。设置界面以本周为基准，将官方 UTC 窗口转换到已选报表时区；这只改变说明文字，不改变费率判定时区。

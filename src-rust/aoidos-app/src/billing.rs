@@ -4,8 +4,8 @@ pub use aoidos_billing::money::{Currency, NanoMoney};
 pub use aoidos_billing::price::PriceVersion;
 use aoidos_engine::{
     billing::{
-        BillingError, BillingLedger, BudgetSettings, BudgetWarning, ModelUsageSummary,
-        SuggestedLimits,
+        BillingError, BillingLedger, BudgetSettings, BudgetWarning, LedgerBudgetPort,
+        ModelUsageSummary, SuggestedLimits,
     },
     fault::Fault,
     storage::Storage,
@@ -251,6 +251,20 @@ impl BillingService {
             let warnings = BillingLedger::warnings(connection, run_id).map_err(billing_fault)?;
             Ok(RunBillingSummary { models, warnings })
         })
+    }
+
+    /// 用账本已保存的用量恢复一次请求结算；不会再次联系模型供应商。
+    pub fn retry_pending_settlement(&self, run_id: &str, request_id: &str) -> Result<(), Fault> {
+        let owner = self.storage.with_database(|connection| {
+            BillingLedger::request_run_id(connection, request_id)
+                .map_err(billing_fault)?
+                .ok_or_else(|| Fault::new("app.not-found", "费用记录不存在"))
+        })?;
+        if owner != run_id {
+            return Err(Fault::new("app.not-found", "费用记录不存在"));
+        }
+        let updated_at = now()?;
+        LedgerBudgetPort::retry_pending_in_storage(&self.storage, request_id, &updated_at)
     }
 
     /// 读取 CLI 发送确认需要展示的当前价格与双币种额度，不创建或修改账本数据。

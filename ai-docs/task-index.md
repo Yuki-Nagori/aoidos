@@ -106,7 +106,7 @@ ai-docs/
 | 055  | [实现：记忆检索与共用搜索输入](task/055-memory-search-impl.md)                       | 底层·记忆 / 界面  | 031、034、052、053                                         | planned     |
 | 056  | [实现：标签驱动结局与周目落幕](task/056-ending-flow-impl.md)                         | 底层·引擎 / 界面  | 018、019、020、023、027、032、035、039、040、041、052、054 | planned     |
 | 057  | [实现：全局快捷键与改键](task/057-keyboard-shortcuts-impl.md)                        | 界面·交互         | 025、034、052、055                                         | planned     |
-| 058  | [CLI / TUI 共用游戏运行层](task/058-cli-tui-shared-game-runtime.md)                  | 跨端·运行入口     | 013、018、019、020、023、035、040、041                     | in-progress |
+| 058  | [CLI / TUI 共用游戏运行层](task/058-cli-tui-shared-game-runtime.md)                  | 跨端·运行入口     | 013、018、019、020、023、035、040、041                     | done        |
 | 060  | [已开周目选择与安全删除](task/060-run-management-impl.md)                            | 跨端·存储 / 界面  | 013、022、023、029、035、058、059                          | planned     |
 | 061  | [内置计价默认值与 TUI 账单设置](task/061-billing-defaults-tui-settings.md)           | 跨端·计费设置     | 019、027、035、058                                         | done        |
 
@@ -116,7 +116,7 @@ ai-docs/
 
 051 先整理现有 Web 前端的应用组合、feature 与 shared 边界，并保持当前行为；052 再以独立的 `aoidos-art` 设计快照为视觉基准移植 Vue 页面。052 接受 025、035 已实现的现有能力供 UI 消费，但不把两项任务尚未完成的外部验收标成通过；设计稿中尚无后端接口的操作不能用假数据实现。052 核对发现的完整记忆检索与结局生成 / 周目落幕已分别由 053、054 定稿并通过独立评审，实现由 055、056 承接；052 只记录设计稿映射和未接入状态，不反向扩张 031、032 或自身范围。快捷键速查与设置视觉层已由 052 移植，实际动作注册、全局分发、改键与偏好持久化由 057 承接；057 复用 052 的页面和 055 的搜索输入，不将静态键位展示视为已接线能力。
 
-058 接受 035 已交付的应用接口与仓库内验证，三平台桌面 UI 验收仍由 035 跟踪。按[分层规范](standards/layering.md)，`aoidos-app` 已加入 workspace，负责 profile / 凭据服务及共用回合协调器、诊断状态、代理快照、`Product` 与 engine runtime 装配；Tauri 仍解析数据根并提供窗口事件，CLI/TUI binary 位于根 `src-cli/` 并使用同一数据根。最终 Tauri GUI 与 `aoidos-cli` 是并列 adapter；GUI 不启动 CLI 子进程，engine 不反向依赖 app，入口之间无依赖。TUI 用于验收 profile / OS key / Provider / 记录 / 账本，fake-provider 自动测试不访问网络；用户于 2026-10-20 明确放行 CLI DeepSeek 真实 API 验收，不等待 035 的桌面 UI 留证，该例外不关闭 035 也不扩大其他费用实验。CLI 在发送玩家行动、继续或恢复之前展示 profile、模型、计价币种、本局双币上限和输出 Token 上限，并在确认时重读 profile 与账本；每个物理请求仍服从调度器的既定重试策略且逐次计费，真实验收须使用 CNY 上限不高于 ¥5 的周目并累计核对总费用。预算输入上界遵守 035 的可靠估算 / 保守回退，不把字符估算直接当作 token 硬上限。Mistbell 的首行动建议可编辑且只有显式提交才发送；重开不会自动请求。GUI 的首轮交互、计费错误和记录展示也通过共享契约对齐；该工作不扩张 052 的视觉移植范围。
+058 接受 035 已交付的应用接口与仓库内验证，三平台桌面 UI 验收仍由 035 跟踪。按[分层规范](standards/layering.md)，`aoidos-app` 已加入 workspace，负责 profile / 凭据服务及共用回合协调器、诊断状态、代理快照、`Product` 与 engine runtime 装配；Tauri 仍解析数据根并提供窗口事件，CLI/TUI binary 位于根 `src-cli/` 并使用同一数据根。最终 Tauri GUI 与 `aoidos-cli` 是并列 adapter；GUI 不启动 CLI 子进程，engine 不反向依赖 app，入口之间无依赖。TUI 用于验收 profile / OS key / Provider / 记录 / 账本，fake-provider 自动测试不访问网络；用户于 2026-10-20 明确放行 CLI DeepSeek 真实 API 验收，不等待 035 的桌面 UI 留证，该例外不关闭 035 也不扩大其他费用实验。CLI 在发送玩家行动、继续或恢复之前展示 profile、模型、计价币种、本局双币上限和输出 Token 上限，并在确认时重读 profile 与账本；每个物理请求仍服从调度器的既定重试策略且逐次计费。2026-10-21 已在 CNY ¥5 / USD $0 的周目中完成一次确认、2 个物理请求和正常终态；本局费用 ¥0.00107564，连同此前已结算的请求，实验累计 ¥0.00443364，低于授权的 ¥5。预算输入上界遵守 035 的可靠估算 / 保守回退，不把字符估算直接当作 token 硬上限。Mistbell 的首行动建议可编辑且只有显式提交才发送；重开不会自动请求。GUI 的首轮交互、计费错误和记录展示也通过共享契约对齐；该工作不扩张 052 的视觉移植范围。
 
 CLI/TUI 设置页提供模型、剧本、DeepSeek 内置价目确认与本局额度编辑；手工价格编辑仍由 GUI 提供。061 将 GUI 与 TUI 的 DeepSeek profile / API Key 配置流程默认预选 CNY、允许改选 USD，并通过共享 `aoidos-app::BillingService` 保存价目选择与额度设置；币种不从界面语言或凭据推断。已开周目列表、历史周目选择及安全删除另由 059 定协议、060 实现；不能只删除 transcript 文件而遗留 SQLite 记忆 / 实体 / 费用数据，也不能把新局 profile 静默套到旧周目。
 

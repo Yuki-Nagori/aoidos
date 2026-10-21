@@ -95,7 +95,12 @@ impl ProfileFactory {
             durable_billing: false,
         })
     }
-    fn for_profile(&self, id: &str, run_id: Option<&str>) -> Result<FrozenRound, Fault> {
+    fn for_profile(
+        &self,
+        id: &str,
+        provider_session_id: Option<&str>,
+        billing_run_id: Option<&str>,
+    ) -> Result<FrozenRound, Fault> {
         aoidos_llm::config::validate_identifier("profileId", id).map_err(invalid_profile)?;
         self.storage.ready()?;
         let resolved = self.source.freeze(id)?;
@@ -109,7 +114,7 @@ impl ProfileFactory {
             resolved.proxy_auth.as_ref(),
         )?;
         let dice = self.storage.preferences.get()?.dice_mode;
-        let budget: Arc<dyn BudgetPort> = match (self.durable_billing, run_id) {
+        let budget: Arc<dyn BudgetPort> = match (self.durable_billing, billing_run_id) {
             (true, Some(run_id)) => {
                 let route = billing_route_policy(&profile.provider_id);
                 let capabilities = provider.capabilities(
@@ -135,7 +140,7 @@ impl ProfileFactory {
             dice,
             budget,
             self.diagnostics.clone(),
-            run_id.map(str::to_owned),
+            provider_session_id.map(str::to_owned),
         )
     }
 
@@ -162,7 +167,7 @@ impl ProfileFactory {
             Fault,
         >,
     ) -> Result<crate::request::PreparedGeneration, Fault> {
-        let frozen = self.for_profile(profile_id, Some(run_id))?;
+        let frozen = self.for_profile(profile_id, Some(run_id), Some(run_id))?;
         let mode = frozen.generation.request_mode();
         let (input, guard) = build_input(mode)?;
         frozen.generation.prepare(input, guard, false)
@@ -188,16 +193,30 @@ impl RoundFactory for ProfileFactory {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or_else(no_selection)?;
-        self.for_profile(&id, None)
+        self.for_profile(&id, None, None)
     }
-    fn freeze_for_run(&self, run_id: &str) -> Result<FrozenRound, Fault> {
+    fn freeze_for_session(&self, session_id: &str) -> Result<FrozenRound, Fault> {
         let id = self
             .selected
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or_else(no_selection)?;
-        self.for_profile(&id, Some(run_id))
+        if self.durable_billing {
+            let billing_run = self
+                .storage
+                .memory_run_for_session(session_id)
+                .map_err(|error| {
+                    if error.code == "app.bad-request" {
+                        Fault::new("app.not-found", "会话不存在")
+                    } else {
+                        error
+                    }
+                })?;
+            self.for_profile(&id, Some(session_id), Some(&billing_run.run_id))
+        } else {
+            self.for_profile(&id, Some(session_id), None)
+        }
     }
 }
 /// 返回计费账本用于匹配当前供应商价格的路由身份。

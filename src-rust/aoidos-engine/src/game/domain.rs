@@ -51,9 +51,9 @@ pub trait RoundFactory: Send + Sync {
     /// 未登记 profile、凭据缺失、代理 / 能力或偏好不合法均拒绝接纳。
     fn freeze(&self) -> Result<FrozenRound, Fault>;
 
-    /// runtime 已知 session 身份时，为回合冻结稳定的计费范围。
+    /// runtime 已知 session 身份时，为回合冻结其配置与账单周目。
     /// 自定义 / 测试 factory 可沿用旧行为；产品计费实现会覆盖此方法。
-    fn freeze_for_run(&self, _run_id: &str) -> Result<FrozenRound, Fault> {
+    fn freeze_for_session(&self, _session_id: &str) -> Result<FrozenRound, Fault> {
         self.freeze()
     }
 }

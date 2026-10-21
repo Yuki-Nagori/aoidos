@@ -42,6 +42,7 @@ fn durable_factory_requires_run_identity_and_freezes_provider_price_route() {
         calls: AtomicUsize::new(0),
         error: Mutex::new(None),
         identity: Mutex::new(None),
+        model: Mutex::new("deepseek-v4-pro".into()),
         provider_id: Mutex::new("deepseek".into()),
         gate: Mutex::new(None),
     });
@@ -56,9 +57,127 @@ fn durable_factory_requires_run_identity_and_freezes_provider_price_route() {
         factory.freeze().err().unwrap().code,
         "budget.run-limit-missing"
     );
-    assert!(factory.freeze_for_run("run-1").is_ok());
+    assert_eq!(
+        factory
+            .freeze_for_session("not-a-session")
+            .err()
+            .unwrap()
+            .code,
+        "app.not-found"
+    );
     storage.close().unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn durable_session_freeze_reserves_against_its_memory_run_budget() {
+    use crate::billing::BillingLedger;
+    use aoidos_billing::{
+        money::{Currency, NanoMoney},
+        providers::deepseek,
+    };
+    use aoidos_llm::{
+        guard::GuardSpec,
+        provider::{CompletionInput, ProviderInput, RequestMode},
+        schedule::{AttemptIdentity, AttemptKind},
+    };
+
+    let fixture = Fixture::new();
+    *fixture.source.model.lock().unwrap() = "deepseek-flash".into();
+    let factory = ProfileFactory::new(
+        fixture.source.clone(),
+        fixture.storage.clone(),
+        SystemProxySnapshot::default(),
+        Arc::new(Mutex::new(Calibration::default())),
+    );
+    let product = Arc::new(Product::new(
+        &fixture.root,
+        fixture.storage.clone(),
+        fixture.coordinator.clone(),
+        Arc::new(PhaseEventsFixture::default()),
+        factory.clone(),
+    ));
+    let service = Service::new(fixture.coordinator.clone(), factory.clone());
+    let opened = product
+        .open(&service, "default".into(), "mistbell".into(), true)
+        .await
+        .unwrap();
+    let now = "2026-10-21T00:00:00Z";
+    let price = deepseek::flash_prices()
+        .into_iter()
+        .find(|price| price.currency == Currency::Cny)
+        .unwrap();
+    fixture
+        .storage
+        .with_database(|connection| {
+            BillingLedger::register_price(connection, &price, now)
+                .map_err(|_| Fault::bad_request())?;
+            BillingLedger::select_profile_price(
+                connection,
+                "default",
+                "deepseek",
+                "deepseek-flash",
+                "direct",
+                Currency::Cny,
+                now,
+            )
+            .map_err(|_| Fault::bad_request())?;
+            BillingLedger::set_settings(
+                connection,
+                &opened.memory_run_id,
+                NanoMoney::parse("5").unwrap(),
+                NanoMoney::ZERO,
+                None,
+                now,
+            )
+            .map_err(|_| Fault::bad_request())?;
+            Ok(())
+        })
+        .unwrap();
+
+    let frozen = factory.freeze_for_session(&opened.session_id).unwrap();
+    let input = ProviderInput::Completion(CompletionInput {
+        prompt: "只验证预算预留，不发送网络请求。".into(),
+    });
+    let input_upper_bound = input.token_upper_bound();
+    let prepared = frozen
+        .generation
+        .prepare(input, GuardSpec::default(), false)
+        .unwrap();
+    let attempt = AttemptIdentity {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        turn_id: "budget-identity-test".into(),
+        attempt: 1,
+        kind: AttemptKind::Initial,
+        model: "deepseek-flash".into(),
+        mode: RequestMode::Completion,
+        max_tokens: 2048,
+        temperature: 1.0,
+    };
+    prepared
+        .budget
+        .reserve_with_input_upper_bound(&attempt, input_upper_bound)
+        .unwrap();
+
+    let counts = fixture
+        .storage
+        .with_database(|connection| {
+            let count_for = |run_id: &str| {
+                connection.query_row(
+                    "SELECT count(*) FROM billing_physical_requests WHERE run_id=?1",
+                    [run_id],
+                    |row| row.get::<_, i64>(0),
+                )
+            };
+            Ok((
+                count_for(&opened.memory_run_id).map_err(|_| Fault::bad_request())?,
+                count_for(&opened.session_id).map_err(|_| Fault::bad_request())?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(counts, (1, 0));
+    service.shutdown().await;
+    fixture.close().await;
 }
 
 #[test]
@@ -166,6 +285,7 @@ struct Source {
     calls: AtomicUsize,
     error: Mutex<Option<Fault>>,
     identity: Mutex<Option<String>>,
+    model: Mutex<String>,
     provider_id: Mutex<String>,
     gate: Mutex<Option<Arc<PrepareGate>>>,
 }
@@ -188,7 +308,7 @@ impl ProfileSource for Source {
                         .clone()
                         .unwrap_or_else(|| id.into()),
                     provider_id: self.provider_id.lock().unwrap().clone(),
-                    model: "deepseek-v4-pro".into(),
+                    model: self.model.lock().unwrap().clone(),
                     mode: aoidos_llm::config::ProfileMode::Completion,
                     thinking: false,
                     sampling: aoidos_llm::sampling::Sampling {
@@ -237,6 +357,7 @@ impl Fixture {
             calls: AtomicUsize::new(0),
             error: Mutex::new(None),
             identity: Mutex::new(None),
+            model: Mutex::new("deepseek-v4-pro".into()),
             provider_id: Mutex::new("deepseek".into()),
             gate: Mutex::new(None),
         });
@@ -1382,7 +1503,7 @@ async fn invalid_input_and_configuration_leave_selection_and_records_untouched()
     assert_eq!(
         fixture
             .factory
-            .for_profile("default", None)
+            .for_profile("default", None, None)
             .err()
             .unwrap()
             .code,
@@ -1591,7 +1712,12 @@ async fn a_closed_phase_service_refuses_reopen_and_switch_without_erasing_select
 fn factory_validates_identity_and_propagates_provider_build_failures() {
     let fixture = Fixture::new();
     assert_eq!(
-        fixture.factory.for_profile("", None).err().unwrap().code,
+        fixture
+            .factory
+            .for_profile("", None, None)
+            .err()
+            .unwrap()
+            .code,
         "app.bad-request"
     );
     let resolved = fixture.source.freeze("default").unwrap();
@@ -1616,7 +1742,11 @@ fn factory_validates_identity_and_propagates_provider_build_failures() {
         Arc::new(AllowAll),
     );
     assert_eq!(
-        factory.for_profile("default", None).err().unwrap().code,
+        factory
+            .for_profile("default", None, None)
+            .err()
+            .unwrap()
+            .code,
         "llm.proxy-error"
     );
     fixture.storage.close().unwrap();
