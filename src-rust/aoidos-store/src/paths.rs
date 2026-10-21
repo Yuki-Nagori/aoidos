@@ -1,6 +1,14 @@
 //! 路径组件消毒与工作区标识：防穿越、Windows 保留名与非法字符。
 
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(windows)]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
 use super::error::{Result, StoreError};
 
@@ -125,6 +133,56 @@ fn fnv1a(data: &[u8]) -> u64 {
 
 fn short_hash(data: &[u8]) -> String {
     format!("{:08x}", fnv1a(data) as u32)
+}
+
+/// 将操作系统原生路径字符串编码为可持久化字节；只在本地恢复，不作为跨平台交换格式。
+/// Unix 保留原始字节，Windows 使用 UTF-16 小端编码。
+#[cfg(unix)]
+pub(crate) fn encode_native_os_str(value: &OsStr) -> Result<Vec<u8>> {
+    Ok(value.as_bytes().to_vec())
+}
+
+/// 将操作系统原生路径字符串编码为可持久化字节；只在本地恢复，不作为跨平台交换格式。
+#[cfg(windows)]
+pub(crate) fn encode_native_os_str(value: &OsStr) -> Result<Vec<u8>> {
+    Ok(value.encode_wide().flat_map(u16::to_le_bytes).collect())
+}
+
+/// 解码本机存储的 Unix 路径字节，不要求路径内容为 UTF-8。
+#[cfg(unix)]
+pub(crate) fn decode_native_os_str(bytes: &[u8]) -> Result<OsString> {
+    Ok(OsString::from_vec(bytes.to_vec()))
+}
+
+/// 解码本机存储的 Windows 路径；拒绝不完整的 UTF-16 代码单元。
+#[cfg(windows)]
+pub(crate) fn decode_native_os_str(bytes: &[u8]) -> Result<OsString> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err(StoreError::InvalidPath(
+            "native path encoding is malformed".into(),
+        ));
+    }
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    Ok(OsString::from_wide(&units))
+}
+
+/// 当前平台没有已验证的原生路径编码时，拒绝持久化和恢复路径栈。
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn encode_native_os_str(_value: &OsStr) -> Result<Vec<u8>> {
+    Err(StoreError::InvalidPath(
+        "native path encoding is unsupported".into(),
+    ))
+}
+
+/// 当前平台没有已验证的原生路径编码时，拒绝恢复路径栈。
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn decode_native_os_str(_bytes: &[u8]) -> Result<OsString> {
+    Err(StoreError::InvalidPath(
+        "native path encoding is unsupported".into(),
+    ))
 }
 
 /// 归一化路径分隔符：拼接而来的路径可能混合 `/` 与 `\`，交给 SQLite 等
@@ -336,6 +394,42 @@ mod tests {
         assert_eq!(
             normalize(path).as_os_str().as_bytes(),
             path.as_os_str().as_bytes()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_path_codec_round_trips_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let original = OsStr::from_bytes(b"nested/\xff-name");
+        let encoded = encode_native_os_str(original).unwrap();
+        let decoded = decode_native_os_str(&encoded).unwrap();
+
+        assert_eq!(decoded.as_os_str(), original);
+        assert_eq!(encoded, b"nested/\xff-name");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_path_codec_round_trips_unpaired_utf16() {
+        let original = OsString::from_wide(&[0x006e, 0xd800, 0x006d]);
+        let encoded = encode_native_os_str(&original).unwrap();
+        let decoded = decode_native_os_str(&encoded).unwrap();
+
+        assert_eq!(encoded, [0x6e, 0x00, 0x00, 0xd8, 0x6d, 0x00]);
+        assert_eq!(
+            decoded.encode_wide().collect::<Vec<_>>(),
+            [0x006e, 0xd800, 0x006d]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_path_codec_rejects_partial_utf16_code_units() {
+        assert_eq!(
+            decode_native_os_str(&[0x61]).unwrap_err().code(),
+            "invalid-path"
         );
     }
 }

@@ -6,11 +6,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(unix)]
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-#[cfg(windows)]
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
-
 #[cfg(any(windows, not(any(unix, windows))))]
 use std::io;
 
@@ -364,7 +359,7 @@ fn encode_cleanup_stack(stack: &[PathBuf]) -> Result<Vec<u8>> {
     );
     for path in stack {
         validate_relative_path(path)?;
-        let encoded = encode_os_str(path.as_os_str());
+        let encoded = crate::paths::encode_native_os_str(path.as_os_str())?;
         bytes.extend_from_slice(
             &u32::try_from(encoded.len())
                 .map_err(|_| StoreError::InvalidPath("cleanup path is too long".into()))?
@@ -398,7 +393,7 @@ fn decode_cleanup_stack(quarantine: &Path, bytes: &[u8]) -> Result<Vec<PathBuf>>
             .checked_add(length)
             .filter(|end| *end <= bytes.len())
             .ok_or_else(|| StoreError::InvalidPath("cleanup stack is truncated".into()))?;
-        let path = PathBuf::from(decode_os_str(&bytes[cursor..end])?);
+        let path = PathBuf::from(crate::paths::decode_native_os_str(&bytes[cursor..end])?);
         validate_relative_path(&path)?;
         if !path.starts_with(quarantine)
             || stack
@@ -430,46 +425,6 @@ fn read_cleanup_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
     );
     *cursor = end;
     Ok(value)
-}
-
-#[cfg(unix)]
-fn encode_os_str(value: &std::ffi::OsStr) -> Vec<u8> {
-    value.as_bytes().to_vec()
-}
-
-#[cfg(windows)]
-fn encode_os_str(value: &std::ffi::OsStr) -> Vec<u8> {
-    value.encode_wide().flat_map(u16::to_le_bytes).collect()
-}
-
-#[cfg(unix)]
-fn decode_os_str(bytes: &[u8]) -> Result<OsString> {
-    Ok(OsString::from_vec(bytes.to_vec()))
-}
-
-#[cfg(windows)]
-fn decode_os_str(bytes: &[u8]) -> Result<OsString> {
-    if !bytes.len().is_multiple_of(2) {
-        return Err(StoreError::InvalidPath(
-            "cleanup path encoding is malformed".into(),
-        ));
-    }
-    let units = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
-    Ok(OsString::from_wide(units))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn encode_os_str(_value: &std::ffi::OsStr) -> Vec<u8> {
-    Vec::new()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn decode_os_str(_bytes: &[u8]) -> Result<OsString> {
-    Err(StoreError::InvalidPath(
-        "cleanup path encoding is unsupported".into(),
-    ))
 }
 
 fn same_filesystem(left: ObjectId, right: ObjectId) -> bool {
