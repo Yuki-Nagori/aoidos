@@ -71,10 +71,11 @@
 
 ## 验证计划与结果
 
-| 日期       | 环境 / 命令                                                  | 预期                                                   | 实际结果                                                                                                                                         |
-| ---------- | ------------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 2026-10-21 | `bun run test:affected`、`format:affected`、`lint:affected`  | 生命周期、恢复冻结配置、typed IPC 与消费端契约保持一致 | Rust workspace 通过，aoidos-engine 513 项通过 / 3 项显式忽略，aoidos-cli 27 项通过；466 项 Vitest 通过；格式、分层、i18n、Clippy 与 Web 构建通过 |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_check` | 只读删除门禁核验 revision、身份映射及所有已知账本范围  | 2 项定向测试通过；确认 canonical 未结账单、legacy 未确认请求和结算 outbox 均被检查；未启动删除或写入 journal                                     |
+| 日期       | 环境 / 命令                                                    | 预期                                                             | 实际结果                                                                                                                                         |
+| ---------- | -------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-10-21 | `bun run test:affected`、`format:affected`、`lint:affected`    | 生命周期、恢复冻结配置、typed IPC 与消费端契约保持一致           | Rust workspace 通过，aoidos-engine 513 项通过 / 3 项显式忽略，aoidos-cli 27 项通过；466 项 Vitest 通过；格式、分层、i18n、Clippy 与 Web 构建通过 |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_check`   | 只读删除门禁核验 revision、身份映射及所有已知账本范围            | 2 项定向测试通过；确认 canonical 未结账单、legacy 未确认请求和结算 outbox 均被检查；未启动删除或写入 journal                                     |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_request` | 删除意图与目录封锁同事务提交；重复操作幂等且未结账单不写 journal | 3 项定向测试通过；目录更新失败时 journal 与 revision 均回滚；尚未接入 app 入口                                                                   |
 
 ## 风险与回退
 
@@ -97,6 +98,7 @@
 - 2026-10-21：显式恢复统一经 `RunLifecycleService` 暴露给 Tauri 与 CLI/TUI；恢复结果带回无凭据的冻结公开 profile，CLI 费用操作使用 canonical `sessionId` 账本范围。TUI 新增已开周目分页、旧存档显式扫描及恢复入口；选择器回归测试确认恢复不调用 Provider。桌面选择界面、迁移 UI、安全删除与启动恢复仍待实现。
 - 2026-10-21：修复 TUI 恢复后错误依赖现行 profile 的问题；目录恢复与普通重开均取得周目冻结快照，费用预检和回合请求都使用同一份模型参数，已保存配置修改或删除不影响正在进行的周目。目录项改为单行裁切，鼠标定位与滚动保持一条摘要对应一行；翻页只在成功读取后更新历史游标。存储文档、IPC 命令表和 `selectionMirrorPending` 类型说明同步更新。
 - 2026-10-21：新增只读删除计费检查，由共享 app 生命周期服务调用；engine 先按目录 revision 核验 canonical `sessionId`、memory 映射与剧本，再让 billing ledger 统计 canonical 和已核验 legacy scope 的未结请求及 pending settlement。损坏身份、repair / deleting 状态与过期 revision 均失败关闭。此接口不关闭 owner、不生成删除 journal，也不代表删除已可执行；隔离清单、关联数据清理、生命周期串行化和前向恢复仍待完成。
+- 2026-10-21：补齐 engine 内部删除意图事务原语：在 `IMMEDIATE` 事务内重新检查 revision / 三身份 / 账单义务，幂等登记 `requested` journal 并将目录状态置为 `deleting`；操作 ID 重放返回现有状态，其他操作不能并发占用同一周目，未结义务不写入任何状态。该原语暂不暴露给 app，待生命周期互斥、owner 安全关闭、冻结 manifest 与前向执行器接通后再开放。
 
 ## 完成摘要
 

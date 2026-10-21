@@ -818,6 +818,27 @@ impl Storage {
         })
     }
 
+    /// 在 SQLite 事务内登记删除意图并封锁目录项；不关闭 owner 或执行文件清理。
+    /// # Errors
+    /// revision / 身份不匹配、账单仍未结清或写入失败时拒绝登记。
+    pub fn request_run_deletion(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        expected_revision: u64,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::request_deletion(
+                connection,
+                operation_id,
+                session_id,
+                expected_revision,
+                updated_at,
+            )
+        })
+    }
+
     /// 显式推进一批旧 transcript 发现；只读取 header，不打开或修复会话。
     /// # Errors
     /// 数据库不可用或批次无法原子登记时返回稳定错误，未提交批次会重新排队。

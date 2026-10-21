@@ -1,6 +1,6 @@
 //! 周目删除前只读核验；实际删除由后续 journal 执行器负责。
 
-use super::{RunState, corrupt, database, stale_revision};
+use super::{RunState, bump_revision, corrupt, database, stale_revision};
 use crate::fault::Fault;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
@@ -26,6 +26,119 @@ impl RunDeletionCheck {
     pub const fn billing_clear(&self) -> bool {
         self.unresolved_request_count == 0 && self.pending_settlement_count == 0
     }
+}
+
+/// 已持久化的删除操作状态；manifest 在 owner 关闭后才冻结。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionOperation {
+    pub operation_id: String,
+    pub session_id: String,
+    pub state: String,
+    pub catalog_revision: u64,
+}
+
+/// 在同一 SQLite 事务中登记删除意图并封锁目标周目。
+///
+/// 该底层原语暂不暴露给应用入口；必须与生命周期互斥、owner 关闭和 journal 前向执行器一起接入。
+/// 相同操作重放返回现有状态，不同操作不能并发占用同一周目。
+///
+/// # Errors
+/// 身份、目录 revision 或账单门禁失效时拒绝登记。
+pub fn request_deletion(
+    connection: &mut rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    expected_revision: u64,
+    updated_at: &str,
+) -> Result<DeletionOperation, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || expected_revision == 0
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    if let Some(operation) = transaction
+        .query_row(
+            "SELECT session_id,state FROM session_deletion_ops WHERE operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(database)?
+    {
+        if operation.0 != session_id {
+            return Err(Fault::new("app.conflict", "删除操作编号已用于其他周目"));
+        }
+        let revision = catalog_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Ok(DeletionOperation {
+            operation_id: operation_id.to_owned(),
+            session_id: session_id.to_owned(),
+            state: operation.1,
+            catalog_revision: revision,
+        });
+    }
+
+    let pending_for_session: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_deletion_ops WHERE session_id=?1 AND state<>'completed')",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if pending_for_session {
+        return Err(Fault::new("app.conflict", "该周目已有删除操作待恢复"));
+    }
+
+    let check = deletion_check(&transaction, session_id, expected_revision)?;
+    if !check.billing_clear() {
+        return Err(Fault::new(
+            "billing.settlement-pending",
+            "该周目仍有未完成的费用结算",
+        ));
+    }
+    let next_revision = expected_revision.checked_add(1).ok_or_else(corrupt)?;
+    transaction
+        .execute(
+            "INSERT INTO session_deletion_ops(operation_id,session_id,state,created_at,updated_at) VALUES(?1,?2,'requested',?3,?3)",
+            rusqlite::params![operation_id, session_id, updated_at],
+        )
+        .map_err(database)?;
+    let changed = transaction
+        .execute(
+            "UPDATE session_catalog SET state='deleting',revision=?1,updated_at=?2 WHERE session_id=?3 AND revision=?4",
+            rusqlite::params![next_revision, updated_at, session_id, expected_revision],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(stale_revision());
+    }
+    let catalog_revision = u64::try_from(bump_revision(&transaction)?).map_err(|_| corrupt())?;
+    transaction.commit().map_err(database)?;
+    Ok(DeletionOperation {
+        operation_id: operation_id.to_owned(),
+        session_id: session_id.to_owned(),
+        state: "requested".into(),
+        catalog_revision,
+    })
+}
+
+fn catalog_revision(connection: &rusqlite::Connection) -> Result<u64, Fault> {
+    connection
+        .query_row(
+            "SELECT revision FROM session_catalog_meta WHERE id=1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(database)
+        .and_then(|revision| u64::try_from(revision).map_err(|_| corrupt()))
 }
 
 /// 核验周目身份并检查所有已知账本范围的未决义务；只读，不启动删除。

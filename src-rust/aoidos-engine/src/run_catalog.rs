@@ -64,7 +64,7 @@ const MAX_PROFILE_SNAPSHOT_BYTES: usize = 65_536;
 pub(crate) mod legacy_scan;
 pub use legacy_scan::LegacyScanResult;
 mod deletion;
-pub use deletion::{RunDeletionCheck, deletion_check};
+pub use deletion::{DeletionOperation, RunDeletionCheck, deletion_check, request_deletion};
 
 /// 目录行的可执行状态；只反映恢复与配置能力，不是游戏事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1128,6 +1128,178 @@ mod tests {
                 .unwrap_err()
                 .code,
             "app.conflict"
+        );
+    }
+
+    #[test]
+    fn deletion_request_is_atomic_idempotent_and_revision_bound() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let first = deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+        assert_eq!(first.state, "requested");
+        assert_eq!(first.catalog_revision, 3);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state,revision FROM session_catalog WHERE session_id=?1",
+                    [&run.session_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .unwrap(),
+            ("deleting".into(), 2)
+        );
+
+        let replay = deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:03:00Z",
+        )
+        .unwrap();
+        assert_eq!(replay, first);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM session_deletion_ops WHERE session_id=?1",
+                    [&run.session_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+
+        let other_operation = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            deletion::request_deletion(
+                &mut connection,
+                &other_operation,
+                &run.session_id,
+                2,
+                "2026-10-21T00:04:00Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
+        );
+        assert_eq!(
+            deletion::request_deletion(
+                &mut connection,
+                &operation_id,
+                "00000000-0000-4000-8000-000000000099",
+                2,
+                "2026-10-21T00:04:00Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
+        );
+    }
+
+    #[test]
+    fn deletion_request_keeps_catalog_unchanged_when_billing_is_unresolved() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        connection
+            .execute(
+                "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('price','deepseek','deepseek-v4.1-flash','default','USD',1000000,'1','1','1','v1','manual','2026-10-21','2026-10-21','2026-10-21')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,0,0,1,'2026-10-21')",
+                [&run.session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,updated_at) VALUES('pending-delete',?1,'turn','test-profile',1,'deepseek','deepseek-v4.1-flash','default','price','USD','2026-10-21','reserved',1,'2026-10-21')",
+                [&run.session_id],
+            )
+            .unwrap();
+        let result = deletion::request_deletion(
+            &mut connection,
+            &uuid::Uuid::new_v4().to_string(),
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        );
+        assert_eq!(result.unwrap_err().code, "billing.settlement-pending");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state,revision FROM session_catalog WHERE session_id=?1",
+                    [&run.session_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .unwrap(),
+            ("billing-not-configured".into(), 1)
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM session_deletion_ops", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn deletion_request_rolls_back_its_journal_when_catalog_update_fails() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_deletion_catalog_update BEFORE UPDATE ON session_catalog WHEN NEW.state='deleting' BEGIN SELECT RAISE(ABORT,'injected failure'); END;",
+            )
+            .unwrap();
+        let result = deletion::request_deletion(
+            &mut connection,
+            &uuid::Uuid::new_v4().to_string(),
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        );
+        assert_eq!(result.unwrap_err().code, "store.database");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state,revision FROM session_catalog WHERE session_id=?1",
+                    [&run.session_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .unwrap(),
+            ("billing-not-configured".into(), 1)
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM session_deletion_ops", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT revision FROM session_catalog_meta WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2
         );
     }
 
