@@ -1,7 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { expect, it, vi } from "vitest";
 import type { RunPage, RunState, RunSummary } from "../../../src-web/api/runs";
-import { bindRunProfile, listRuns, scanLegacyRuns } from "../../../src-web/api/runs";
+import {
+  bindRunProfile,
+  listRuns,
+  reconcileRunBilling,
+  scanLegacyRuns,
+} from "../../../src-web/api/runs";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -64,5 +69,34 @@ it("forwards profile binding with the catalog revision used for confirmation", a
     sessionId: "00000000-0000-4000-8000-000000000001",
     expectedRevision: 2,
     profileId: "deepseek-default",
+  });
+});
+
+it("sends legacy budget reconciliation arguments in the Rust request's top-level shape", async () => {
+  const response = {
+    revision: 5,
+    merge: {
+      movedRequests: 2,
+      movedWarnings: 1,
+      settings: {
+        runId: "00000000-0000-4000-8000-000000000001",
+        cnyLimit: "20",
+        usdLimit: "5",
+        revision: 3,
+      },
+    },
+  };
+  vi.mocked(invoke).mockResolvedValue(response);
+
+  expect(
+    await reconcileRunBilling("00000000-0000-4000-8000-000000000001", 4, {
+      cnyLimit: "20",
+      usdLimit: "5",
+    }),
+  ).toBe(response);
+  expect(invoke).toHaveBeenCalledWith("run_reconcile_billing", {
+    sessionId: "00000000-0000-4000-8000-000000000001",
+    expectedRevision: 4,
+    selectedLimits: { cnyLimit: "20", usdLimit: "5" },
   });
 });

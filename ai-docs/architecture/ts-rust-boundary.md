@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-21。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 已将 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；060 正通过共享应用服务接入周目目录和 profile 绑定，未完范围以[任务 060](../task/060-run-management-impl.md)为准。工程纪律参考 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-21。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 已将 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；060 正通过共享应用服务接入周目目录、profile 绑定与账务迁移，未完范围以[任务 060](../task/060-run-management-impl.md)为准。工程纪律参考 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -80,7 +80,7 @@ Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoi
 
 `aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
 
-060 的周目目录 schema 与查询事务由 `aoidos-engine::Storage` 持有；`aoidos-app::RunLifecycleService` 对 Tauri 与 CLI/TUI 暴露分页、玩家显式推进旧 transcript 扫描和 profile 绑定用例，profile 快照从共享 `ProfileFactory` 读取且不包含凭据。扫描使用深度有界目录栈，仅读取有界 header；文件读取在 SQLite 锁外执行，Tauri 入口通过 engine blocking 执行器调度。错误项以相对路径摘要哈希记录并受固定容量限制，不调用 session open / repair。Tauri 只转发 app DTO，Web API 在 `src-web/api/runs.ts` 声明对应类型。扫描展示、选择 / 恢复、删除及两端界面尚未完成；不得由入口直接读写目录文件或 SQLite。
+060 的周目目录 schema 与查询事务由 `aoidos-engine::Storage` 持有；`aoidos-app::RunLifecycleService` 对 Tauri 与 CLI/TUI 暴露分页、玩家显式推进旧 transcript 扫描、profile 绑定和 legacy 账务迁移用例，profile 快照从共享 `ProfileFactory` 读取且不包含凭据。扫描使用深度有界目录栈，仅读取有界 header；文件读取在 SQLite 锁外执行，Tauri 入口通过 engine blocking 执行器调度。账务迁移在同一 SQLite 事务内核验 session / memory / script 身份并更新账本及目录状态；冲突上限作为玩家明确选择的十进制字符串传递。错误项以相对路径摘要哈希记录并受固定容量限制，不调用 session open / repair。Tauri 只转发 app DTO，Web API 在 `src-web/api/runs.ts` 声明对应类型。扫描展示、选择 / 恢复、迁移操作 UI、删除及两端界面尚未完成；不得由入口直接读写目录文件或 SQLite。
 
 计价与预算用例由 `aoidos-app::BillingService` 共用，账本事务由 engine 中的唯一 `BillingLedger` 持有；engine 依赖纯领域 crate `aoidos-billing` 并实现 llm 定义的 `BudgetPort`。唯一内置价目目录在 `aoidos-billing`，app 暴露只读查询并处理确认 / 选择；GUI / TUI 不复制价格表或账本规则。Tauri 仍直接依赖 billing 以复用 IPC 金额 / 价格类型，并为报表、结算恢复和历史补录等桌面能力转发 engine 查询；不复制账本规则。前端只传递同型 DTO。store 不依赖计费、engine 或 llm，llm 也不依赖 engine / 计费实现。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 

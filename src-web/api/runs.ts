@@ -44,6 +44,27 @@ export interface LegacyScanResult {
   scanIssueCount: number;
 }
 
+export interface SelectedRunBudgetLimits {
+  cnyLimit: string;
+  usdLimit: string;
+}
+
+export interface RunBudgetSettings {
+  runId: string;
+  cnyLimit: string;
+  usdLimit: string;
+  revision: number;
+}
+
+export interface LegacyBillingReconciliation {
+  revision: number;
+  merge: {
+    movedRequests: number;
+    movedWarnings: number;
+    settings: RunBudgetSettings | null;
+  };
+}
+
 /** 读取本地 SQLite 周目目录摘要，不打开记录、不修复文件或发送请求。 */
 export function listRuns(cursor?: RunCursor, pageSize = 50): Promise<RunPage> {
   return invoke("run_catalog_page", { cursor: cursor ?? null, pageSize });
@@ -64,5 +85,18 @@ export function bindRunProfile(
     sessionId,
     expectedRevision,
     profileId,
+  });
+}
+
+/** 合并经目录身份核验的历史账务；仅预算冲突时提交玩家选定的最终上限。 */
+export function reconcileRunBilling(
+  sessionId: string,
+  expectedRevision: number,
+  selectedLimits?: SelectedRunBudgetLimits,
+): Promise<LegacyBillingReconciliation> {
+  return invoke("run_reconcile_billing", {
+    sessionId,
+    expectedRevision,
+    selectedLimits: selectedLimits ?? null,
   });
 }

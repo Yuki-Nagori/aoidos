@@ -2,6 +2,7 @@
 
 use crate::ipc::CmdError;
 use aoidos_app::runs::RunLifecycleService;
+use aoidos_billing::money::NanoMoney;
 use aoidos_engine::run_catalog::{RunCursor, RunPage};
 
 #[derive(serde::Deserialize)]
@@ -19,6 +20,22 @@ struct BindProfileArgs {
     session_id: String,
     expected_revision: u64,
     profile_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SelectedLimits {
+    cny_limit: NanoMoney,
+    usd_limit: NanoMoney,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReconcileBillingArgs {
+    session_id: String,
+    expected_revision: u64,
+    #[serde(default)]
+    selected_limits: Option<SelectedLimits>,
 }
 
 fn default_page_size() -> usize {
@@ -60,4 +77,49 @@ pub fn bind_profile(
     service
         .bind_profile(&args.session_id, args.expected_revision, &args.profile_id)
         .map_err(CmdError::from)
+}
+
+/// 显式迁移历史账务 scope；预算冲突时由玩家提交最终双币种额度。
+/// # Errors
+/// revision、身份映射或账务冲突不满足迁移条件时返回稳定错误。
+pub fn reconcile_billing(
+    service: &RunLifecycleService,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::run_catalog::RunBillingReconciliation, CmdError> {
+    let args: ReconcileBillingArgs =
+        crate::ipc::decode_request(&request, "历史费用迁移参数不合法")?;
+    let selected = args
+        .selected_limits
+        .map(|limits| (limits.cny_limit, limits.usd_limit));
+    service
+        .reconcile_billing(&args.session_id, args.expected_revision, selected)
+        .map_err(CmdError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_limits_use_decimal_strings_and_named_currencies() {
+        let args: ReconcileBillingArgs = serde_json::from_value(serde_json::json!({
+            "sessionId": "00000000-0000-4000-8000-000000000001",
+            "expectedRevision": 4,
+            "selectedLimits": { "cnyLimit": "12.5", "usdLimit": "3" }
+        }))
+        .unwrap();
+
+        assert_eq!(args.session_id, "00000000-0000-4000-8000-000000000001");
+        let limits = args.selected_limits.unwrap();
+        assert_eq!(limits.cny_limit.to_decimal_string(), "12.5");
+        assert_eq!(limits.usd_limit.to_decimal_string(), "3");
+        assert!(
+            serde_json::from_value::<ReconcileBillingArgs>(serde_json::json!({
+                "sessionId": "00000000-0000-4000-8000-000000000001",
+                "expectedRevision": 4,
+                "selectedLimits": { "cnyLimit": 12.5, "usdLimit": "3" }
+            }))
+            .is_err()
+        );
+    }
 }

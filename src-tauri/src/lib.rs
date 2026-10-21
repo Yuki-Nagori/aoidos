@@ -238,11 +238,18 @@ pub mod run_ipc {
     ) -> Result<u64, CmdError> {
         run_commands::bind_profile(&service, request)
     }
+    #[tauri::command]
+    pub fn run_reconcile_billing(
+        service: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<aoidos_engine::run_catalog::RunBillingReconciliation, CmdError> {
+        run_commands::reconcile_billing(&service, request)
+    }
 }
 
 macro_rules! command_handler {
     ($($extra:path),* $(,)?) => { tauri::generate_handler![
-        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_get_scene_presence, game_ipc::engine_claim_scene_hint, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase, run_ipc::run_catalog_page, run_ipc::run_scan_legacy, run_ipc::run_bind_profile,
+        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_get_scene_presence, game_ipc::engine_claim_scene_hint, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase, run_ipc::run_catalog_page, run_ipc::run_scan_legacy, run_ipc::run_bind_profile, run_ipc::run_reconcile_billing,
         commands::store_list_backups, store_ipc::store_get_migration,
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
