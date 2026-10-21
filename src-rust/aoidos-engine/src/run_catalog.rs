@@ -63,6 +63,8 @@ const MAX_PROFILE_SNAPSHOT_BYTES: usize = 65_536;
 
 pub(crate) mod legacy_scan;
 pub use legacy_scan::LegacyScanResult;
+mod deletion;
+pub use deletion::{RunDeletionCheck, deletion_check};
 
 /// 目录行的可执行状态；只反映恢复与配置能力，不是游戏事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -928,6 +930,15 @@ mod tests {
             .execute_batch(aoidos_billing::schema::SCHEMA)
             .unwrap();
         connection
+            .execute_batch(aoidos_billing::schema::CACHE_WRITE_MIGRATION)
+            .unwrap();
+        connection
+            .execute_batch(aoidos_billing::schema::SETTLEMENT_RECOVERY_MIGRATION)
+            .unwrap();
+        connection
+            .execute_batch(aoidos_billing::schema::SETTLEMENT_DIAGNOSTICS_MIGRATION)
+            .unwrap();
+        connection
             .execute_batch(aoidos_memory::schema::SCHEMA)
             .unwrap();
         connection.execute_batch(SCHEMA).unwrap();
@@ -1013,6 +1024,107 @@ mod tests {
             .unwrap();
         assert_eq!(
             open_target(&connection, &run.session_id, 1)
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+    }
+
+    #[test]
+    fn deletion_check_counts_canonical_and_verified_legacy_obligations() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        connection
+            .execute(
+                "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('price','deepseek','deepseek-v4.1-flash','default','USD',1000000,'1','1','1','v1','manual','2026-10-21','2026-10-21','2026-10-21')",
+                [],
+            )
+            .unwrap();
+        for scope in [&run.session_id, &run.memory_run_id] {
+            connection
+                .execute(
+                    "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,0,0,1,'2026-10-21')",
+                    [scope],
+                )
+                .unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,updated_at) VALUES('legacy-request',?1,'turn','test-profile',1,'deepseek','deepseek-v4.1-flash','default','price','USD','2026-10-21','unconfirmed',1,'2026-10-21')",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,updated_at) VALUES('canonical-request',?1,'turn','test-profile',1,'deepseek','deepseek-v4.1-flash','default','price','USD','2026-10-21','settled',1,'2026-10-21')",
+                [&run.session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_pending_settlements(request_id,input_total,output_total,result_digest,created_at,updated_at) VALUES('canonical-request',1,1,?1,'2026-10-21','2026-10-21')",
+                [format!("sha256:{}", "0".repeat(64))],
+            )
+            .unwrap();
+
+        let check = deletion_check(&connection, &run.session_id, 1).unwrap();
+        assert!(check.active);
+        assert_eq!(check.unresolved_request_count, 1);
+        assert_eq!(check.pending_settlement_count, 1);
+        assert!(!check.billing_clear());
+    }
+
+    #[test]
+    fn deletion_check_rejects_stale_revision_and_broken_identity() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        assert_eq!(
+            deletion_check(&connection, &run.session_id, 2)
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+
+        connection
+            .execute(
+                "UPDATE memory_runs SET script_id='other' WHERE run_id=?1",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+        assert_eq!(
+            deletion_check(&connection, &run.session_id, 1)
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+
+        connection
+            .execute(
+                "UPDATE memory_runs SET script_id='mistbell' WHERE run_id=?1",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE session_catalog SET memory_run_id=NULL WHERE session_id=?1",
+                [&run.session_id],
+            )
+            .unwrap();
+        assert_eq!(
+            deletion_check(&connection, &run.session_id, 1)
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+        connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        connection
+            .execute(
+                "DELETE FROM memory_runs WHERE run_id=?1",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+        assert_eq!(
+            deletion_check(&connection, &run.session_id, 1)
                 .unwrap_err()
                 .code,
             "app.conflict"

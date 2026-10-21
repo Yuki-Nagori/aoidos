@@ -130,7 +130,7 @@ src-cli
 
 058 将游戏运行链路迁入 `aoidos-app`。该 crate 负责 profile / 凭据服务、回合协调器、诊断状态、代理快照、`Product` / runtime 装配及共享计价 / 预算服务；061 使 Tauri 与 CLI/TUI 共用计价、价格选择和单局额度用例，价目模板唯一维护在 billing crate；Tauri 和 `src-cli/` 中的 `aoidos-cli` 在进程内复用它，不启动彼此子进程。入口为实现 engine 事件端口、共享数据根锁和受控展示类型保留少量直接依赖；这些 adapter 不复制业务状态机。engine 和领域 crate 不依赖 app，两个入口也不互相依赖。细节见[分层规范](../standards/layering.md)和[TS / Rust 边界](ts-rust-boundary.md)。
 
-周目历史目录与选择 / 删除不属于 058 的设置面板。059 定稿 `sessionId`、独立 `memoryRunId` 与 `billingRunId` 的映射、profile 快照、旧数据发现和跨存储删除 journal；060 由 Tauri 与 CLI/TUI 共用 `aoidos-app` 生命周期 API。当前已登记新局目录、只读分页、旧局 profile 绑定 CAS 和显式有界 transcript header 扫描入口；扫描通过深度有界目录栈运行，header 读取位于 SQLite 锁外，异常诊断每轮重置且最多保留 256 项。无法核验 memory 身份的旧记录进入 repair 状态。TUI 已接入分页、扫描和恢复，普通重开与目录恢复均使用该局冻结 profile；Web 选择界面、安全删除及启动前向恢复仍未完成。相关持久化与不可逆边界见[存储架构](storage.md#周目目录与生命周期059-已定稿060-实施中)。
+周目历史目录与选择 / 删除不属于 058 的设置面板。059 定稿 `sessionId`、独立 `memoryRunId` 与 `billingRunId` 的映射、profile 快照、旧数据发现和跨存储删除 journal；060 由 Tauri 与 CLI/TUI 共用 `aoidos-app` 生命周期 API。当前已登记新局目录、只读分页、旧局 profile 绑定 CAS 和显式有界 transcript header 扫描入口；扫描通过深度有界目录栈运行，header 读取位于 SQLite 锁外，异常诊断每轮重置且最多保留 256 项。无法核验 memory 身份的旧记录进入 repair 状态。TUI 已接入分页、扫描和恢复，普通重开与目录恢复均使用该局冻结 profile；共享服务新增只读删除计费检查，完整删除、Web 选择界面及启动前向恢复仍未完成。相关持久化与不可逆边界见[存储架构](storage.md#周目目录与生命周期059-已定稿060-实施中)。
 
 前端 IPC 调用放在 `src-web/api/`；功能私有逻辑留在 `features/<feature>/`，跨功能共用逻辑放在 `shared/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
 

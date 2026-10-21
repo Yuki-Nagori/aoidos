@@ -44,6 +44,21 @@ impl RunLifecycleService {
         self.storage.run_catalog_page(cursor, page_size)
     }
 
+    /// 读取删除确认所需的只读计费门禁；不打开周目或启动删除流程。
+    /// # Errors
+    /// 目录 revision 过期、身份映射不一致或存储损坏时失败关闭。
+    pub async fn deletion_check(
+        &self,
+        session_id: String,
+        expected_revision: u64,
+    ) -> Result<run_catalog::RunDeletionCheck, Fault> {
+        let storage = self.storage.clone();
+        aoidos_engine::blocking::run(move || {
+            storage.run_deletion_check(&session_id, expected_revision)
+        })
+        .await
+    }
+
     /// 通过共享应用服务恢复玩家指定的周目，并返回冻结配置供调用方使用。
     /// # Errors
     /// 目录 revision、身份映射、恢复状态或活动选择提交不合法时返回稳定 Fault。

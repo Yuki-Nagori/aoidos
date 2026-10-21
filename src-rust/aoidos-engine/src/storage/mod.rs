@@ -805,6 +805,19 @@ impl Storage {
         self.with_database(|connection| crate::run_catalog::page(connection, cursor, page_size))
     }
 
+    /// 只读检查周目的身份与未结计费义务；不关闭 owner 或写入删除日志。
+    /// # Errors
+    /// 目录 revision 过期、身份映射不一致或存储损坏时失败关闭。
+    pub fn run_deletion_check(
+        &self,
+        session_id: &str,
+        expected_revision: u64,
+    ) -> Result<crate::run_catalog::RunDeletionCheck, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::deletion_check(connection, session_id, expected_revision)
+        })
+    }
+
     /// 显式推进一批旧 transcript 发现；只读取 header，不打开或修复会话。
     /// # Errors
     /// 数据库不可用或批次无法原子登记时返回稳定错误，未提交批次会重新排队。

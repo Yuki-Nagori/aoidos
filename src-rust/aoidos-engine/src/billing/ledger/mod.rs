@@ -191,6 +191,13 @@ pub struct SuggestedLimits {
     pub reference_output_tokens: u64,
 }
 
+/// 删除本地周目前必须解决的账本记录数量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeletionObligations {
+    pub unresolved_request_count: u64,
+    pub pending_settlement_count: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BillingError {
     Invalid,
@@ -280,6 +287,46 @@ type ExistingSettlement = (
 );
 
 impl BillingLedger {
+    /// 汇总一组已由调用方核验的账本范围；重复 scope 只检查一次。
+    ///
+    /// # Errors
+    /// 范围数量或标识不合法、计数溢出或 SQLite 查询失败时返回错误。
+    pub fn deletion_obligations(
+        connection: &Connection,
+        run_ids: &[&str],
+    ) -> Result<DeletionObligations, BillingError> {
+        if run_ids.is_empty() || run_ids.len() > 2 {
+            return Err(BillingError::Invalid);
+        }
+        let scopes = run_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut result = DeletionObligations {
+            unresolved_request_count: 0,
+            pending_settlement_count: 0,
+        };
+        for scope in scopes {
+            validate_text(scope, 128)?;
+            let (unresolved, pending): (i64, i64) = connection
+                .query_row(
+                    "SELECT (SELECT count(*) FROM billing_physical_requests WHERE run_id=?1 AND state<>'settled'),(SELECT count(*) FROM billing_pending_settlements p JOIN billing_physical_requests r USING(request_id) WHERE r.run_id=?1)",
+                    [scope],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(storage)?;
+            result.unresolved_request_count = result
+                .unresolved_request_count
+                .checked_add(u64::try_from(unresolved).map_err(|_| BillingError::Storage)?)
+                .ok_or(BillingError::Storage)?;
+            result.pending_settlement_count = result
+                .pending_settlement_count
+                .checked_add(u64::try_from(pending).map_err(|_| BillingError::Storage)?)
+                .ok_or(BillingError::Storage)?;
+        }
+        Ok(result)
+    }
+
     /// 预览完整保存了用量且仍能验证原冻结价格的历史未决请求。
     /// 不会使用当前价格目录替换请求原先绑定的价格。
     ///
