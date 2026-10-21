@@ -611,6 +611,7 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
                     &aoidos_engine::billing::Reservation {
                         request_id: request_id.into(),
                         run_id: "run-1".into(),
+                        legacy_scope_id: None,
                         turn_id: "turn-1".into(),
                         profile_id: "profile".into(),
                         attempt: 1,
@@ -642,6 +643,7 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
                 &aoidos_engine::billing::Reservation {
                     request_id: "request-3".into(),
                     run_id: "run-1".into(),
+                    legacy_scope_id: None,
                     turn_id: "turn-1".into(),
                     profile_id: "profile".into(),
                     attempt: 2,
@@ -791,6 +793,10 @@ async fn billing_error_helpers_keep_stable_public_codes_and_storage_job_errors()
         (BillingError::SettlementBacklog, "budget.settlement-backlog"),
         (BillingError::NotFound, "app.not-found"),
         (BillingError::Conflict, "budget.conflict"),
+        (
+            BillingError::ReconciliationRequired,
+            "budget.reconciliation-required",
+        ),
         (BillingError::Storage, "store.database"),
     ] {
         assert_eq!(app_billing_fault(error).code, code);

@@ -26,6 +26,7 @@ fn reservation(request_id: &str, currency: Currency, amount: &str) -> Reservatio
     Reservation {
         request_id: request_id.into(),
         run_id: "run-1".into(),
+        legacy_scope_id: None,
         turn_id: "turn-1".into(),
         profile_id: "profile-1".into(),
         attempt: 1,

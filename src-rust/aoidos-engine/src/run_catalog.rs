@@ -508,13 +508,8 @@ fn has_ledger_data_for_scope(
     connection: &rusqlite::Connection,
     run_id: &str,
 ) -> Result<bool, Fault> {
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_physical_requests WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_audit WHERE target_id=?1 AND operation_kind='run-budget-update')",
-            [run_id],
-            |row| row.get(0),
-        )
-        .map_err(database)
+    crate::billing::BillingLedger::has_run_scope_data(connection, run_id)
+        .map_err(|_| Fault::new("store.database", "费用账本读取失败"))
 }
 
 fn stale_revision() -> Fault {

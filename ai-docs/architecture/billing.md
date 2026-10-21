@@ -96,7 +96,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price / budget_retry_settlement / budget_preview_backfill / budget_commit_backfill / budget_get_provider_balance`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。余额命令只允许 DeepSeek profile，不能改变本地预算门禁或账本。
 
-错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.settlement-backlog（恢复队列达到 256 条上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），计费命令的数据库存储失败映射为 `store.database`（由命令层构造，不是 `StoreError` 的通用映射）。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
+错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.reconciliation-required（旧账务 scope 尚未迁移，拒绝新收费请求）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.settlement-backlog（恢复队列达到 256 条上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），计费命令的数据库存储失败映射为 `store.database`（由命令层构造，不是 `StoreError` 的通用映射）。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
 
 ## 可选供应商余额
 
@@ -127,6 +127,6 @@ DeepSeek 以外的供应商余额尚未接入；这不表示供应商永久不�
 
 ## 周目删除与账务义务
 
-[059 周目管理设计](../task/059-run-management-design.md)确认，canonical `billingRunId` 为 `sessionId`，不对应独立生成的 `memoryRunId`。当前新会话及私有记忆请求均使用 `sessionId` 作为账本范围；060 的历史 scope 迁移尚未完成，目录会将经 `memory_run_sessions` 精确核实的 `memoryRunId` legacy 预算 / 请求标记为待 reconciliation，不误报为未配置。迁移须保留 requestId / pending settlement、合并 warnings；预算冲突将停止收费，直到玩家明确保存 canonical 上限。目录显式保存并核验 canonical `billingRunId`；清理还须覆盖迁移前的已验证 legacy scope，不依赖外键级联或猜测 UUID 映射。没有预算和请求的周目属于尚未配置，不是账本损坏。
+[059 周目管理设计](../task/059-run-management-design.md)确认，canonical `billingRunId` 为 `sessionId`，不对应独立生成的 `memoryRunId`。当前新会话及私有记忆请求均使用 `sessionId` 作为账本范围；060 的历史 scope 迁移尚未完成，目录会将经 `memory_run_sessions` 精确核实的 `memoryRunId` legacy 预算 / 请求标记为待 reconciliation，不误报为未配置。预留事务再次检查该 legacy scope；只要仍存在预算、物理请求或预算变更审计，就以 `budget.reconciliation-required` 拒绝新请求。迁移须保留 requestId / pending settlement、合并 warnings；预算冲突将停止收费，直到玩家明确保存 canonical 上限。目录显式保存并核验 canonical `billingRunId`；清理还须覆盖迁移前的已验证 legacy scope，不依赖外键级联或猜测 UUID 映射。没有预算和请求属于尚未配置，不是账本损坏。
 
 本局存在 `reserved` / `unconfirmed` 物理请求或 `billing_pending_settlements` outbox 时拒绝删除，须先解决费用义务。已有完整持久 usage 的请求可走本地结算恢复；当前没有任意费用核销入口，`unconfirmed` 若缺完整 usage 且无供应商回执等可核验证据，只能保留，不能手动改为 settled 或删除。删除不能把未知用量当零或从月报隐去未确认请求。所有请求已结算后，玩家显式确认才一并清除本局预算、预警、请求明细与可精确归属的本地账单审计：仅清理 target 明确关联到已核验周目 scope 的预算 / warning 操作，以及其已核验物理请求的结算审计；价格登记、模型选择和归属不明记录保留。共享价格版本、profile 价格选择及供应商侧账单不受影响。该清除不保证从全库 SQLite 备份物理擦除字节。

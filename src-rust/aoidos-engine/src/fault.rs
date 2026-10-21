@@ -67,6 +67,7 @@ impl Fault {
                 let code = match reason.as_str() {
                     "token-estimation-needs-calibration" => "engine.invalid-phase",
                     "budget.run-limit-missing" => "budget.run-limit-missing",
+                    "budget.reconciliation-required" => "budget.reconciliation-required",
                     "budget.price-missing" => "budget.price-missing",
                     "budget.settlement-backlog" => "budget.settlement-backlog",
                     "budget.exceeded" => "budget.exceeded",
@@ -87,6 +88,7 @@ impl Fault {
             "llm.aborted" => "生成中断，已提交正文保留",
             "budget.exceeded" => "费用额度不足",
             "budget.run-limit-missing" => "本局费用上限尚未设置",
+            "budget.reconciliation-required" => "历史费用范围尚未核对，暂不能发送请求",
             "budget.price-missing" => "当前模型价格尚未登记",
             "budget.settlement-backlog" => "待恢复的费用结算过多，暂不能发送请求",
             "engine.invalid-phase" => "自动请求已暂停，请重新标定 Token 估算",
@@ -139,6 +141,10 @@ mod tests {
     fn generation_preserves_known_budget_denial_reasons() {
         for (reason, expected_code) in [
             ("budget.run-limit-missing", "budget.run-limit-missing"),
+            (
+                "budget.reconciliation-required",
+                "budget.reconciliation-required",
+            ),
             ("budget.price-missing", "budget.price-missing"),
             ("budget.settlement-backlog", "budget.settlement-backlog"),
             ("budget.exceeded", "budget.exceeded"),

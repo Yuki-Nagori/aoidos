@@ -166,17 +166,6 @@ async fn durable_game_and_private_requests_use_the_canonical_session_budget() {
                 now,
             )
             .map_err(|_| Fault::bad_request())?;
-            // 旧版本曾错误地把 memoryRunId 当作账本范围；即使旧范围仍有设置，
-            // 新请求也必须严格使用目录中的 canonical billingRunId=sessionId。
-            BillingLedger::set_settings(
-                connection,
-                &opened.memory_run_id,
-                NanoMoney::ZERO,
-                NanoMoney::ZERO,
-                None,
-                now,
-            )
-            .map_err(|_| Fault::bad_request())?;
             Ok(())
         })
         .unwrap();
@@ -209,7 +198,7 @@ async fn durable_game_and_private_requests_use_the_canonical_session_budget() {
         prompt: "验证私有记忆请求使用 canonical 账务范围。".into(),
     });
     let private_prepared = factory
-        .prepare_private_for_session("default", &opened.session_id, |_| {
+        .prepare_private_for_session("default", &opened.session_id, None, |_| {
             Ok((private_input.clone(), GuardSpec::default()))
         })
         .unwrap();
@@ -245,6 +234,69 @@ async fn durable_game_and_private_requests_use_the_canonical_session_budget() {
         })
         .unwrap();
     assert_eq!(counts, (0, 2));
+
+    // 旧账务数据出现后，既有请求仍可幂等重放，但两个请求入口都拒绝新收费。
+    fixture
+        .storage
+        .with_database(|connection| {
+            BillingLedger::set_settings(
+                connection,
+                &opened.memory_run_id,
+                NanoMoney::ZERO,
+                NanoMoney::ZERO,
+                None,
+                now,
+            )
+            .map_err(|_| Fault::bad_request())?;
+            Ok(())
+        })
+        .unwrap();
+    prepared
+        .budget
+        .reserve_with_input_upper_bound(&attempt, input_upper_bound)
+        .unwrap();
+    let new_attempt = AttemptIdentity {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        turn_id: "new-game-request".into(),
+        ..attempt
+    };
+    assert_eq!(
+        prepared
+            .budget
+            .reserve_with_input_upper_bound(&new_attempt, input_upper_bound)
+            .unwrap_err()
+            .reason,
+        "budget.reconciliation-required"
+    );
+
+    let private_with_legacy_scope = factory
+        .prepare_private_for_session(
+            "default",
+            &opened.session_id,
+            Some(&opened.memory_run_id),
+            |_| Ok((private_input.clone(), GuardSpec::default())),
+        )
+        .unwrap();
+    private_with_legacy_scope
+        .budget
+        .reserve_with_input_upper_bound(&private_attempt, private_input.token_upper_bound())
+        .unwrap();
+    let new_private_attempt = AttemptIdentity {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        turn_id: "new-private-request".into(),
+        ..private_attempt
+    };
+    assert_eq!(
+        private_with_legacy_scope
+            .budget
+            .reserve_with_input_upper_bound(
+                &new_private_attempt,
+                private_input.token_upper_bound(),
+            )
+            .unwrap_err()
+            .reason,
+        "budget.reconciliation-required"
+    );
     service.shutdown().await;
     fixture.close().await;
 }
@@ -1620,7 +1672,7 @@ async fn invalid_input_and_configuration_leave_selection_and_records_untouched()
     assert_eq!(
         fixture
             .factory
-            .for_profile("default", None, None)
+            .for_profile("default", None, None, None)
             .err()
             .unwrap()
             .code,
@@ -1831,7 +1883,7 @@ fn factory_validates_identity_and_propagates_provider_build_failures() {
     assert_eq!(
         fixture
             .factory
-            .for_profile("", None, None)
+            .for_profile("", None, None, None)
             .err()
             .unwrap()
             .code,
@@ -1860,7 +1912,7 @@ fn factory_validates_identity_and_propagates_provider_build_failures() {
     );
     assert_eq!(
         factory
-            .for_profile("default", None, None)
+            .for_profile("default", None, None, None)
             .err()
             .unwrap()
             .code,

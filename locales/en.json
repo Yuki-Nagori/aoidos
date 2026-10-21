@@ -409,6 +409,7 @@
       "priceHistoryLimit": "This model has reached the maximum number of saved price versions.",
       "priceMissing": "Register a price for this provider, route and model before sending a paid request.",
       "runLimitMissing": "Set a limit for the provider's billing currency before sending a paid request.",
+      "reconciliationRequired": "This run's legacy billing scope has not been reconciled; paid requests are temporarily blocked.",
       "settlementBacklog": "Pending settlement recovery reached its safety limit. Retry existing settlements before sending new requests."
     }
   },

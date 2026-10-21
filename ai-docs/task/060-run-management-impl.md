@@ -87,7 +87,8 @@
 - 2026-10-21：重复扫描现有目录行时重新核对 `memory_run_sessions`、`memory_runs.script_id` 与目录中的三身份关联；映射缺失或损坏会持续保持 `needs-repair`，并在每轮诊断重置后重新报告。新增缺失映射重扫和已登记映射被破坏的回归测试；旧数据扫描相关 8 项测试通过。
 - 2026-10-21：独立复审发现 profile 绑定仍信任扫描时缓存的 memoryRunId，以及 header 元数据变化可能覆盖 `deleting` 状态。绑定事务现重新核验 session→memory→script、canonical billing 身份；映射异常会先持久化 `needs-repair` 再拒绝绑定。扫描器在比较 header 前保护删除状态。新增两项回归测试，目录与扫描定向测试 21 项通过。
 - 2026-10-21：legacy scope reconciliation 现同时检查预算、物理请求与 target 精确匹配的 `run-budget-update` 审计行；即使预算已不存在，残留审计仍会阻止绑定后进入可收费状态。按 operation kind 收窄查询，避免把 profile / price 审计误认成本局账务。新增 audit-only 历史 scope 回归测试。
-- 2026-10-21：核对并修复新请求仍以 `memoryRunId` 计费的问题。普通周目冻结和私有记忆请求现在都使用 `sessionId` / canonical `billingRunId`；回归测试同时配置 session 预算与零额度 legacy memory scope，确认预留只落入 session 账本。历史 scope 迁移仍待实现。
+- 2026-10-21：核对并修复新请求仍以 `memoryRunId` 计费的问题。普通周目冻结和私有记忆请求现在都使用 `sessionId` / canonical `billingRunId`；回归测试分别确认两条新请求都落入 session 账本，以及旧 scope 有预算时必须先完成核对。历史 scope 迁移仍待实现。
+- 2026-10-21：在账本预留事务加入 legacy scope 门禁。仅依据已核验的 `sessionId → memoryRunId` 映射检查旧范围；预算、物理请求或预算变更审计尚存时拒绝新的收费尝试并返回本地化错误码。既有 requestId 的幂等重放先于门禁检查；新增回归确认旧 scope 有零额度预算时不会创建 canonical 预留。历史 scope 的 request / settlement / warning 迁移仍待实现。
 
 ## 完成摘要
 

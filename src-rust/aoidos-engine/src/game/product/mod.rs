@@ -119,6 +119,7 @@ impl ProfileFactory {
         id: &str,
         provider_session_id: Option<&str>,
         billing_run_id: Option<&str>,
+        legacy_billing_run_id: Option<&str>,
     ) -> Result<FrozenRound, Fault> {
         aoidos_llm::config::validate_identifier("profileId", id).map_err(invalid_profile)?;
         self.storage.ready()?;
@@ -141,15 +142,18 @@ impl ProfileFactory {
                     aoidos_llm::provider::RequestMode::from(profile.mode),
                 );
                 let max_input_tokens = u64::from(capabilities.context_limit.unwrap_or(0));
-                Arc::new(crate::billing::LedgerBudgetPort::new(
-                    self.storage.clone(),
-                    run_id.to_owned(),
-                    profile.profile_id.clone(),
-                    profile.provider_id.clone(),
-                    profile.model.clone(),
-                    route.to_owned(),
-                    max_input_tokens,
-                ))
+                Arc::new(
+                    crate::billing::LedgerBudgetPort::new(
+                        self.storage.clone(),
+                        run_id.to_owned(),
+                        profile.profile_id.clone(),
+                        profile.provider_id.clone(),
+                        profile.model.clone(),
+                        route.to_owned(),
+                        max_input_tokens,
+                    )
+                    .with_legacy_scope(legacy_billing_run_id.map(str::to_owned)),
+                )
             }
             _ => self.budget.clone(),
         };
@@ -184,6 +188,7 @@ impl ProfileFactory {
         &self,
         profile_id: &str,
         session_id: &str,
+        legacy_billing_run_id: Option<&str>,
         build_input: impl FnOnce(
             aoidos_llm::provider::RequestMode,
         ) -> Result<
@@ -194,7 +199,12 @@ impl ProfileFactory {
             Fault,
         >,
     ) -> Result<crate::request::PreparedGeneration, Fault> {
-        let frozen = self.for_profile(profile_id, Some(session_id), Some(session_id))?;
+        let frozen = self.for_profile(
+            profile_id,
+            Some(session_id),
+            Some(session_id),
+            legacy_billing_run_id,
+        )?;
         let mode = frozen.generation.request_mode();
         let (input, guard) = build_input(mode)?;
         frozen.generation.prepare(input, guard, false)
@@ -220,7 +230,7 @@ impl RoundFactory for ProfileFactory {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or_else(no_selection)?;
-        self.for_profile(&id, None, None)
+        self.for_profile(&id, None, None, None)
     }
     fn freeze_for_session(&self, session_id: &str) -> Result<FrozenRound, Fault> {
         let id = self
@@ -230,7 +240,8 @@ impl RoundFactory for ProfileFactory {
             .clone()
             .ok_or_else(no_selection)?;
         if self.durable_billing {
-            self.storage
+            let memory_run = self
+                .storage
                 .memory_run_for_session(session_id)
                 .map_err(|error| {
                     if error.code == "app.bad-request" {
@@ -239,9 +250,11 @@ impl RoundFactory for ProfileFactory {
                         error
                     }
                 })?;
-            self.for_profile(&id, Some(session_id), Some(session_id))
+            let legacy_scope =
+                (memory_run.run_id != session_id).then_some(memory_run.run_id.as_str());
+            self.for_profile(&id, Some(session_id), Some(session_id), legacy_scope)
         } else {
-            self.for_profile(&id, Some(session_id), None)
+            self.for_profile(&id, Some(session_id), None, None)
         }
     }
 }

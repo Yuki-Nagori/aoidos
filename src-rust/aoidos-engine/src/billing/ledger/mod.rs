@@ -48,6 +48,8 @@ pub struct BudgetSettings {
 pub struct Reservation {
     pub request_id: String,
     pub run_id: String,
+    /// 经显式映射验证的旧账本范围；仍有数据时阻止新请求绕过迁移。
+    pub legacy_scope_id: Option<String>,
     pub turn_id: String,
     pub profile_id: String,
     pub attempt: u32,
@@ -190,6 +192,7 @@ pub enum BillingError {
     SettlementBacklog,
     NotFound,
     Conflict,
+    ReconciliationRequired,
     StaleRevision,
     Storage,
 }
@@ -205,6 +208,7 @@ impl fmt::Display for BillingError {
             Self::SettlementBacklog => "pending settlement recovery reached its safety limit",
             Self::NotFound => "billing request not found",
             Self::Conflict => "billing request conflicts with a previous operation",
+            Self::ReconciliationRequired => "legacy run billing scope requires reconciliation",
             Self::StaleRevision => "billing settings revision is stale",
             Self::Storage => "billing storage operation failed",
         })
@@ -426,6 +430,21 @@ impl BillingLedger {
                 |row| row.get(0),
             )
             .optional()
+            .map_err(storage)
+    }
+
+    /// 检查账本范围是否存在预算、物理请求或本局预算修改审计。
+    ///
+    /// # Errors
+    /// 范围标识无效或 SQLite 查询失败时返回错误。
+    pub fn has_run_scope_data(connection: &Connection, run_id: &str) -> Result<bool, BillingError> {
+        validate_text(run_id, 128)?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_physical_requests WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_audit WHERE target_id=?1 AND operation_kind='run-budget-update')",
+                [run_id],
+                |row| row.get(0),
+            )
             .map_err(storage)
     }
 
@@ -1606,6 +1625,15 @@ impl BillingLedger {
                 return Ok(());
             }
             return Err(BillingError::Conflict);
+        }
+
+        if let Some(scope) = request
+            .legacy_scope_id
+            .as_deref()
+            .filter(|scope| *scope != request.run_id)
+            && Self::has_run_scope_data(&transaction, scope)?
+        {
+            return Err(BillingError::ReconciliationRequired);
         }
 
         let price = Self::price_by_id(&transaction, &request.price_version_id)?
