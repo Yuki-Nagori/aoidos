@@ -806,6 +806,99 @@ impl Product {
         result.selection_mirror_pending = selection_mirror_pending;
         Ok(result)
     }
+
+    /// 串行关闭指定周目并冻结删除清单；不会移动或清除任何周目文件。
+    ///
+    /// 操作复用打开互斥门和回合 lease，先将目录标记为删除中，再停止 runtime owner、
+    /// 同步并释放记录 writer、清除活动选择及兼容镜像，最后由 Storage 冻结文件身份。
+    /// 若中途失败，删除 journal 保持可见且周目不可重新打开，调用方可用相同 operationId 重试。
+    /// # Errors
+    /// revision / 身份 / 计费门禁失效、周目仍有活动写者、关闭或文件清单冻结失败时拒绝推进。
+    pub async fn close_and_freeze_run_deletion(
+        &self,
+        service: &Service,
+        operation_id: String,
+        session_id: String,
+        expected_revision: u64,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        if !crate::record::format::valid_uuid(&operation_id)
+            || !crate::record::format::valid_uuid(&session_id)
+            || expected_revision == 0
+        {
+            return Err(Fault::bad_request());
+        }
+        let _opening = self.opening.try_lock().map_err(open_busy)?;
+        self.storage.ready()?;
+        let _lease = self.coordinator.acquire()?;
+
+        let updated_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| Fault::new("store.database", "读取周目删除时间失败"))?;
+        let storage = self.storage.clone();
+        let request_operation = operation_id.clone();
+        let request_session = session_id.clone();
+        let updated_for_request = updated_at.clone();
+        let operation = crate::blocking::run(move || {
+            storage.request_run_deletion(
+                &request_operation,
+                &request_session,
+                expected_revision,
+                &updated_for_request,
+            )
+        })
+        .await?;
+        if operation.state != "requested" {
+            return Ok(operation);
+        }
+
+        match service.get_phase(&session_id) {
+            Ok(_) => service.close_session(&session_id).await?,
+            Err(error) if error.code == "app.not-found" => {}
+            Err(error) => return Err(error),
+        }
+        let records = self.storage.records.clone();
+        let close_session = session_id.clone();
+        match crate::blocking::run(move || records.close(&close_session)).await {
+            Ok(()) => {}
+            Err(error) if error.code == "app.not-found" => {}
+            Err(error) => return Err(error),
+        }
+
+        let storage = self.storage.clone();
+        let clear_operation = operation_id.clone();
+        let clear_session = session_id.clone();
+        let updated_for_clear = updated_at.clone();
+        crate::blocking::run(move || {
+            storage.clear_run_active_selection_for_deletion(
+                &clear_operation,
+                &clear_session,
+                &updated_for_clear,
+            )
+        })
+        .await?;
+        let storage = self.storage.clone();
+        let active_state =
+            crate::blocking::run(move || storage.active_run_selection_state()).await?;
+        let root = self.root.clone();
+        let mirror_session = session_id.clone();
+        crate::blocking::run(move || {
+            clear_selection_mirror(
+                &root,
+                &mirror_session,
+                active_state.initialized && active_state.selection.is_none(),
+            )
+        })
+        .await?;
+
+        let storage = self.storage.clone();
+        let freeze_operation = operation_id;
+        let freeze_session = session_id;
+        crate::blocking::run(move || {
+            storage.freeze_run_deletion_manifest(&freeze_operation, &freeze_session, &updated_at)
+        })
+        .await
+    }
+
     async fn close_record(&self, id: &str) {
         let records = self.storage.records.clone();
         let id = id.to_owned();
@@ -856,7 +949,8 @@ fn read_authoritative_selection_with_status(
     storage: &Storage,
     root: &Path,
 ) -> Result<(Option<Selection>, bool), Fault> {
-    if let Some(selection) = storage.active_run_selection()? {
+    let state = storage.active_run_selection_state()?;
+    if let Some(selection) = state.selection {
         let selection = Selection {
             version: 1,
             session_id: selection.session_id,
@@ -871,12 +965,27 @@ fn read_authoritative_selection_with_status(
         };
         return Ok((Some(selection), mirror_pending));
     }
+    if state.initialized {
+        return Ok((None, false));
+    }
     Ok((read_selection(root)?, false))
 }
 fn write_selection(root: &Path, selection: &Selection) -> Result<(), Fault> {
     let text = aoidos_json::to_string(selection).map_err(corrupt_selection)?;
     aoidos_store::atomic::write_text_atomic(&root.join("active-session.json"), &text)
         .map_err(Fault::from)
+}
+fn clear_selection_mirror(
+    root: &Path,
+    session_id: &str,
+    authoritative_target: bool,
+) -> Result<(), Fault> {
+    if authoritative_target
+        || read_selection(root)?.is_some_and(|selection| selection.session_id == session_id)
+    {
+        aoidos_store::journal::remove(&root.join("active-session.json")).map_err(Fault::from)?;
+    }
+    Ok(())
 }
 fn corrupt_selection(_: aoidos_json::Error) -> Fault {
     Fault::new("store.corrupt", "活动会话选择记录不可用")

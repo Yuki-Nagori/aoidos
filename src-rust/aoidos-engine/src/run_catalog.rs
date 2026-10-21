@@ -168,6 +168,13 @@ pub struct ActiveSelection {
     pub script_id: String,
 }
 
+/// 区分尚未迁移的旧库与已初始化但没有活动周目的目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveSelectionState {
+    pub initialized: bool,
+    pub selection: Option<ActiveSelection>,
+}
+
 /// 经目录身份与 revision 核验、可由玩家显式恢复的周目目标。
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenTarget {
@@ -531,17 +538,32 @@ pub fn page(
 pub fn active_selection(
     connection: &rusqlite::Connection,
 ) -> Result<Option<ActiveSelection>, Fault> {
-    let session_id: Option<String> = connection
+    Ok(active_selection_state(connection)?.selection)
+}
+
+/// 读取活动选择行的迁移状态；初始化后的空值也是权威状态。
+pub fn active_selection_state(
+    connection: &rusqlite::Connection,
+) -> Result<ActiveSelectionState, Fault> {
+    let row: Option<Option<String>> = connection
         .query_row(
             "SELECT session_id FROM active_session WHERE id=1",
             [],
             |row| row.get(0),
         )
         .optional()
-        .map_err(database)?
-        .flatten();
+        .map_err(database)?;
+    let Some(session_id) = row else {
+        return Ok(ActiveSelectionState {
+            initialized: false,
+            selection: None,
+        });
+    };
     let Some(session_id) = session_id else {
-        return Ok(None);
+        return Ok(ActiveSelectionState {
+            initialized: true,
+            selection: None,
+        });
     };
     let selection = connection
         .query_row(
@@ -564,7 +586,10 @@ pub fn active_selection(
     {
         return Err(corrupt());
     }
-    Ok(Some(selection))
+    Ok(ActiveSelectionState {
+        initialized: true,
+        selection: Some(selection),
+    })
 }
 
 /// 比较已冻结的公开 profile；未登记或仍待绑定的旧局返回 `None`。

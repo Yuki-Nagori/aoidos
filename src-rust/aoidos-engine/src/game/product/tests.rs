@@ -49,6 +49,42 @@ fn selection_preserves_script_identity_and_rejects_unsafe_metadata() {
 }
 
 #[tokio::test]
+async fn legacy_selection_mirror_is_used_only_before_sqlite_selection_is_initialized() {
+    let fixture = Fixture::new();
+    let legacy = Selection {
+        version: 1,
+        session_id: uuid::Uuid::new_v4().to_string(),
+        profile_id: "default".into(),
+        script_id: "mistbell".into(),
+    };
+    write_selection(&fixture.root, &legacy).unwrap();
+    assert_eq!(
+        read_authoritative_selection(&fixture.storage, &fixture.root)
+            .unwrap()
+            .unwrap(),
+        legacy
+    );
+    fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO active_session(id,session_id,revision,updated_at) VALUES(1,NULL,1,'2026-10-21T00:00:00Z')",
+                    [],
+                )
+                .map_err(|_| Fault::new("store.database", "初始化活动选择失败"))?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        read_authoritative_selection(&fixture.storage, &fixture.root)
+            .unwrap()
+            .is_none()
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn sqlite_active_selection_wins_over_a_stale_compatibility_file() {
     let fixture = Fixture::new();
     let active = Selection {
@@ -2031,6 +2067,192 @@ async fn a_closed_phase_service_refuses_reopen_and_switch_without_erasing_select
     );
     assert!(fixture.storage.records.get(&first.session_id).is_ok());
     fixture.storage.close().unwrap();
+}
+
+#[tokio::test]
+async fn deletion_freeze_closes_the_active_owner_and_removes_its_selection_mirror() {
+    let fixture = Fixture::new();
+    let opened = fixture.open(true).await.unwrap();
+    let summary = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|entry| entry.session_id == opened.session_id)
+        .unwrap();
+    let stale_mirror = Selection {
+        version: 1,
+        session_id: uuid::Uuid::new_v4().to_string(),
+        profile_id: "default".into(),
+        script_id: "mistbell".into(),
+    };
+    write_selection(&fixture.root, &stale_mirror).unwrap();
+    assert!(fixture.storage.records.get(&opened.session_id).is_ok());
+    assert!(fixture.service.get_phase(&opened.session_id).is_ok());
+
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let operation = fixture
+        .product
+        .close_and_freeze_run_deletion(
+            &fixture.service,
+            operation_id.clone(),
+            opened.session_id.clone(),
+            summary.revision,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(operation.operation_id, operation_id);
+    assert_eq!(operation.state, "owner-closed");
+    assert!(fixture.storage.active_run_selection().unwrap().is_none());
+    assert!(!fixture.root.join("active-session.json").exists());
+    assert!(
+        read_authoritative_selection(&fixture.storage, &fixture.root)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        fixture
+            .storage
+            .records
+            .get(&opened.session_id)
+            .err()
+            .unwrap()
+            .code,
+        "app.not-found"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .get_phase(&opened.session_id)
+            .unwrap_err()
+            .code,
+        "app.not-found"
+    );
+    let manifest: Option<Vec<u8>> = fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .query_row(
+                    "SELECT manifest FROM session_deletion_ops WHERE operation_id=?1",
+                    [&operation_id],
+                    |row| row.get(0),
+                )
+                .map(Some)
+                .or_else(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    _ => Err(Fault::new("store.database", "读取删除清单失败")),
+                })
+        })
+        .unwrap();
+    let manifest = manifest.unwrap();
+    assert!(
+        String::from_utf8(manifest)
+            .unwrap()
+            .contains("identityHash")
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn deletion_freeze_rejects_an_active_turn_before_recording_intent() {
+    let fixture = Fixture::new();
+    let opened = fixture.open(true).await.unwrap();
+    let summary = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|entry| entry.session_id == opened.session_id)
+        .unwrap();
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let _lease = fixture.coordinator.acquire().unwrap();
+
+    let error = fixture
+        .product
+        .close_and_freeze_run_deletion(
+            &fixture.service,
+            operation_id.clone(),
+            opened.session_id.clone(),
+            summary.revision,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "app.busy");
+    let exists: bool = fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM session_deletion_ops WHERE operation_id=?1)",
+                    [&operation_id],
+                    |row| row.get(0),
+                )
+                .map_err(|_| Fault::new("store.database", "读取删除日志失败"))
+        })
+        .unwrap();
+    assert!(!exists);
+    assert!(fixture.storage.records.get(&opened.session_id).is_ok());
+    drop(_lease);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn deletion_freeze_retries_requested_operation_after_mirror_cleanup_failure() {
+    let fixture = Fixture::new();
+    let opened = fixture.open(true).await.unwrap();
+    let summary = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|entry| entry.session_id == opened.session_id)
+        .unwrap();
+    let mirror = fixture.root.join("active-session.json");
+    std::fs::remove_file(&mirror).unwrap();
+    std::fs::create_dir(&mirror).unwrap();
+    let operation_id = uuid::Uuid::new_v4().to_string();
+
+    let error = fixture
+        .product
+        .close_and_freeze_run_deletion(
+            &fixture.service,
+            operation_id.clone(),
+            opened.session_id.clone(),
+            summary.revision,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.code.starts_with("store."));
+    assert!(fixture.storage.active_run_selection().unwrap().is_none());
+    assert_eq!(
+        fixture
+            .storage
+            .records
+            .get(&opened.session_id)
+            .err()
+            .unwrap()
+            .code,
+        "app.not-found"
+    );
+
+    std::fs::remove_dir(&mirror).unwrap();
+    let operation = fixture
+        .product
+        .close_and_freeze_run_deletion(
+            &fixture.service,
+            operation_id,
+            opened.session_id,
+            summary.revision,
+        )
+        .await
+        .unwrap();
+    assert_eq!(operation.state, "owner-closed");
+    fixture.close().await;
 }
 
 #[test]

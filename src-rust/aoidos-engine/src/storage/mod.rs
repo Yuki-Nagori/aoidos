@@ -938,6 +938,15 @@ impl Storage {
         self.with_database(|connection| crate::run_catalog::active_selection(connection))
     }
 
+    /// 读取 SQLite 活动选择是否已迁移；已初始化的空选择不得回退到旧文件。
+    /// # Errors
+    /// 数据库不可用时返回稳定 Fault。
+    pub fn active_run_selection_state(
+        &self,
+    ) -> Result<crate::run_catalog::ActiveSelectionState, Fault> {
+        self.with_database(|connection| crate::run_catalog::active_selection_state(connection))
+    }
+
     /// 读取通过目录身份与 revision 校验的周目恢复目标。
     /// # Errors
     /// 目标不存在、身份映射不一致、快照损坏或 revision 过期时拒绝恢复。
