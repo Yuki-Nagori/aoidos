@@ -71,12 +71,13 @@
 
 ## 验证计划与结果
 
-| 日期       | 环境 / 命令                                                    | 预期                                                             | 实际结果                                                                                                                                         |
-| ---------- | -------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 2026-10-21 | `bun run test:affected`、`format:affected`、`lint:affected`    | 生命周期、恢复冻结配置、typed IPC 与消费端契约保持一致           | Rust workspace 通过，aoidos-engine 521 项通过 / 3 项显式忽略，aoidos-cli 27 项通过；466 项 Vitest 通过；格式、分层、i18n、Clippy 与 Web 构建通过 |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_check`   | 只读删除门禁核验 revision、身份映射及所有已知账本范围            | 2 项定向测试通过；确认 canonical 未结账单、legacy 未确认请求和结算 outbox 均被检查；未启动删除或写入 journal                                     |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_request` | 删除意图与目录封锁同事务提交；重复操作幂等且未结账单不写 journal | 3 项定向测试通过；目录更新失败时 journal 与 revision 均回滚；尚未接入 app 入口                                                                   |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine clearing_`        | owner 关闭后只清除目标活动选择；失败回滚且不影响非活动目标       | 3 项定向测试通过；SQLite 选择清除与目录 revision 原子更新，journal 保持 `requested` 直至 manifest/hash 冻结；文件镜像和 app 生命周期接入仍未实现 |
+| 日期       | 环境 / 命令                                                      | 预期                                                             | 实际结果                                                                                                                                                                                |
+| ---------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-21 | `bun run test:affected`、`format:affected`、`lint:affected`      | 生命周期、恢复冻结配置、typed IPC 与消费端契约保持一致           | Rust workspace 通过，aoidos-engine 524 项通过 / 3 项显式忽略，aoidos-cli 27 项通过；466 项 Vitest 通过；格式、分层、i18n、Clippy 与 Web 构建通过                                        |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_check`     | 只读删除门禁核验 revision、身份映射及所有已知账本范围            | 2 项定向测试通过；确认 canonical 未结账单、legacy 未确认请求和结算 outbox 均被检查；未启动删除或写入 journal                                                                            |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_request`   | 删除意图与目录封锁同事务提交；重复操作幂等且未结账单不写 journal | 3 项定向测试通过；目录更新失败时 journal 与 revision 均回滚；尚未接入 app 入口                                                                                                          |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine clearing_`          | owner 关闭后只清除目标活动选择；失败回滚且不影响非活动目标       | 3 项定向测试通过；SQLite 选择清除与目录 revision 原子更新，journal 保持 `requested` 直至 manifest/hash 冻结；文件镜像和 app 生命周期接入仍未实现                                        |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine run_catalog::tests` | 清单路径、身份映射、活动选择、哈希与 journal 阶段原子核验        | 28 项目录测试通过；4 项清单冻结测试覆盖条目上限、非目标活动周目、超范围路径、SHA-256 envelope 持久化和事务失败回滚；aoidos-engine Clippy 通过；尚无可信文件枚举器、镜像清理与前向执行器 |
 
 ## 风险与回退
 
@@ -101,6 +102,7 @@
 - 2026-10-21：新增只读删除计费检查，由共享 app 生命周期服务调用；engine 先按目录 revision 核验 canonical `sessionId`、memory 映射与剧本，再让 billing ledger 统计 canonical 和已核验 legacy scope 的未结请求及 pending settlement。损坏身份、repair / deleting 状态与过期 revision 均失败关闭。此接口不关闭 owner、不生成删除 journal，也不代表删除已可执行；隔离清单、关联数据清理、生命周期串行化和前向恢复仍待完成。
 - 2026-10-21：补齐 engine 内部删除意图事务原语：在 `IMMEDIATE` 事务内重新检查 revision / 三身份 / 账单义务，幂等登记 `requested` journal 并将目录状态置为 `deleting`；操作 ID 重放返回现有状态，其他操作不能并发占用同一周目，未结义务不写入任何状态。该原语暂不暴露给 app，待生命周期互斥、owner 安全关闭、冻结 manifest 与前向执行器接通后再开放。
 - 2026-10-21：新增 owner 关闭后的 SQLite 活动选择清理原语。调用方完成生命周期门与 owner 关闭后，engine 在单个 `IMMEDIATE` 事务中仅当权威活动选择指向目标时清空选择并递增目录 revision；删除 journal 保持 `requested`，直到 manifest 与 hash 冻结后才能进入 `owner-closed`。测试覆盖目标选择清除、失败回滚、幂等重放和删除非活动周目时保留另一周目的活动选择。该原语不能证明 app owner 已关闭，也不清理 `active-session.json` 镜像；共享生命周期接线前必须一并解决这些边界，删除仍未开放。
+- 2026-10-21：新增删除清单冻结原语，清单严格限定在目标剧本 / session / memoryRunId 路径，要求 transcript 与 memory 目录各一项、旁车 UUID 格式正确、来源有序且 quarantine 路径由 operationId 确定；transcript 与 sidecar 合计最多 8,192 项，memory 目录另计一项，完整 envelope 最多 4 MiB。`owner-closed` 阶段将清单及其 SHA-256 摘要 envelope 同事务保存，并复核目录处于 deleting、记忆映射有效且 SQLite 活动选择不再指向目标；哈希覆盖清单规范字节，因此无需为单独哈希列增加数据库迁移。测试覆盖上限边界、保留非目标活动周目、哈希持久化、越界路径和事务失败回滚。实际磁盘枚举和内容身份计算、活动文件镜像清理、隔离 / 清理执行器及 app 生命周期协调仍未接入，删除仍不可用。
 
 ## 完成摘要
 

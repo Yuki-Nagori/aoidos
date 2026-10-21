@@ -65,7 +65,8 @@ pub(crate) mod legacy_scan;
 pub use legacy_scan::LegacyScanResult;
 mod deletion;
 pub use deletion::{
-    DeletionOperation, RunDeletionCheck, clear_active_selection_for_deletion, deletion_check,
+    DeletionManifestEntry, DeletionManifestEntryKind, DeletionOperation, RunDeletionCheck,
+    clear_active_selection_for_deletion, deletion_check, freeze_deletion_manifest,
     request_deletion,
 };
 
@@ -911,6 +912,7 @@ fn schema_mismatch() -> StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     fn profile() -> LlmProfile {
         LlmProfile {
@@ -1496,6 +1498,309 @@ mod tests {
                 .unwrap(),
             "requested"
         );
+    }
+
+    fn deletion_manifest_entries(run: &NewRun, operation_id: &str) -> Vec<DeletionManifestEntry> {
+        let digest = format!("sha256:{}", "0".repeat(64));
+        let mut entries = vec![
+            DeletionManifestEntry {
+                source: format!(
+                    "workspaces/{}/transcript/{}.jsonl",
+                    run.script_id, run.session_id
+                ),
+                quarantine: format!(
+                    "deleting/{operation_id}/transcript/{}.jsonl",
+                    run.session_id
+                ),
+                kind: DeletionManifestEntryKind::Transcript,
+                identity_hash: digest.clone(),
+            },
+            DeletionManifestEntry {
+                source: format!(
+                    "workspaces/{}/transcript/{}.{}.partial.jsonl",
+                    run.script_id, run.session_id, "00000000-0000-4000-8000-000000000031"
+                ),
+                quarantine: format!(
+                    "deleting/{operation_id}/transcript/{}.{}.partial.jsonl",
+                    run.session_id, "00000000-0000-4000-8000-000000000031"
+                ),
+                kind: DeletionManifestEntryKind::Partial,
+                identity_hash: digest.clone(),
+            },
+            DeletionManifestEntry {
+                source: format!(
+                    "workspaces/{}/memory/runs/{}",
+                    run.script_id, run.memory_run_id
+                ),
+                quarantine: format!("deleting/{operation_id}/memory/{}", run.memory_run_id),
+                kind: DeletionManifestEntryKind::MemoryRunDirectory,
+                identity_hash: digest.clone(),
+            },
+            DeletionManifestEntry {
+                source: format!(
+                    "workspaces/{}/transcript/{}.recovery-{}.bak",
+                    run.script_id, run.session_id, "00000000-0000-4000-8000-000000000032"
+                ),
+                quarantine: format!(
+                    "deleting/{operation_id}/transcript/{}.recovery-{}.bak",
+                    run.session_id, "00000000-0000-4000-8000-000000000032"
+                ),
+                kind: DeletionManifestEntryKind::RecoveryBackup,
+                identity_hash: digest,
+            },
+        ];
+        entries.sort_by(|left, right| left.source.cmp(&right.source));
+        entries
+    }
+
+    #[test]
+    fn freezing_manifest_persists_its_digest_with_owner_closed_atomically() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+        deletion::clear_active_selection_for_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            "2026-10-21T00:02:30Z",
+        )
+        .unwrap();
+
+        let frozen = deletion::freeze_deletion_manifest(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            deletion_manifest_entries(&run, &operation_id),
+            "2026-10-21T00:03:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(frozen.state, "owner-closed");
+        let (state, manifest): (String, Vec<u8>) = connection
+            .query_row(
+                "SELECT state,manifest FROM session_deletion_ops WHERE operation_id=?1",
+                [&operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "owner-closed");
+        let parsed: deletion::FrozenDeletionEnvelope = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(parsed.manifest.session_id, run.session_id);
+        assert_eq!(parsed.manifest.entries.len(), 4);
+        assert_eq!(
+            parsed.hash,
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(serde_json::to_vec(&parsed.manifest).unwrap())
+            )
+        );
+        assert_eq!(
+            deletion::freeze_deletion_manifest(
+                &mut connection,
+                &operation_id,
+                &run.session_id,
+                deletion_manifest_entries(&run, &operation_id),
+                "2026-10-21T00:04:00Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
+        );
+    }
+
+    #[test]
+    fn freezing_manifest_keeps_another_active_run_and_accepts_the_transcript_item_limit() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let other_run = NewRun {
+            session_id: "00000000-0000-4000-8000-000000000041".into(),
+            script_id: "mistbell".into(),
+            created_at: "2026-10-21T00:00:01Z".into(),
+            memory_run_id: "00000000-0000-4000-8000-000000000042".into(),
+            profile: profile(),
+        };
+        insert_memory_mapping(
+            &connection,
+            &other_run.session_id,
+            &other_run.memory_run_id,
+            &other_run.script_id,
+        );
+        register_new(&mut connection, &other_run).unwrap();
+        let run_target = open_target(&connection, &run.session_id, 1).unwrap();
+        activate(&mut connection, &run_target, "2026-10-21T00:01:00Z").unwrap();
+        let other_target = open_target(&connection, &other_run.session_id, 1).unwrap();
+        activate(&mut connection, &other_target, "2026-10-21T00:02:00Z").unwrap();
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:03:00Z",
+        )
+        .unwrap();
+        deletion::clear_active_selection_for_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            "2026-10-21T00:04:00Z",
+        )
+        .unwrap();
+        assert_eq!(
+            active_selection(&connection).unwrap().unwrap().session_id,
+            other_run.session_id
+        );
+
+        let mut entries = deletion_manifest_entries(&run, &operation_id);
+        let digest = format!("sha256:{}", "0".repeat(64));
+        for sequence in 1000..9_189 {
+            let turn_id = format!("00000000-0000-4000-8000-{sequence:012x}");
+            let filename = format!("{}.{}.partial.jsonl", run.session_id, turn_id);
+            entries.push(DeletionManifestEntry {
+                source: format!("workspaces/{}/transcript/{filename}", run.script_id),
+                quarantine: format!("deleting/{operation_id}/transcript/{filename}"),
+                kind: DeletionManifestEntryKind::Partial,
+                identity_hash: digest.clone(),
+            });
+        }
+        entries.sort_by(|left, right| left.source.cmp(&right.source));
+        assert_eq!(entries.len(), 8_193);
+
+        let frozen = deletion::freeze_deletion_manifest(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            entries,
+            "2026-10-21T00:05:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(frozen.state, "owner-closed");
+        let (manifest_size, manifest): (i64, Vec<u8>) = connection
+            .query_row(
+                "SELECT length(manifest),manifest FROM session_deletion_ops WHERE operation_id=?1",
+                [&operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(manifest_size <= 4 * 1024 * 1024);
+        let parsed: deletion::FrozenDeletionEnvelope = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(parsed.manifest.entries.len(), 8_193);
+        assert_eq!(
+            parsed
+                .manifest
+                .entries
+                .iter()
+                .filter(|entry| entry.kind != DeletionManifestEntryKind::MemoryRunDirectory)
+                .count(),
+            8_192
+        );
+        assert_eq!(
+            active_selection(&connection).unwrap().unwrap().session_id,
+            other_run.session_id
+        );
+    }
+
+    #[test]
+    fn freezing_manifest_rejects_active_or_unrelated_paths_without_advancing_journal() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let target = open_target(&connection, &run.session_id, 1).unwrap();
+        activate(&mut connection, &target, "2026-10-21T00:01:00Z").unwrap();
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+        let entries = deletion_manifest_entries(&run, &operation_id);
+        assert_eq!(
+            deletion::freeze_deletion_manifest(
+                &mut connection,
+                &operation_id,
+                &run.session_id,
+                entries.clone(),
+                "2026-10-21T00:03:00Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
+        );
+        connection
+            .execute("UPDATE active_session SET session_id=NULL WHERE id=1", [])
+            .unwrap();
+        let mut invalid = entries;
+        invalid[0].source = "workspaces/other/transcript/unrelated.jsonl".into();
+        assert_eq!(
+            deletion::freeze_deletion_manifest(
+                &mut connection,
+                &operation_id,
+                &run.session_id,
+                invalid,
+                "2026-10-21T00:04:00Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.bad-request"
+        );
+        let journal: (String, Option<Vec<u8>>) = connection
+            .query_row(
+                "SELECT state,manifest FROM session_deletion_ops WHERE operation_id=?1",
+                [&operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(journal, ("requested".into(), None));
+    }
+
+    #[test]
+    fn manifest_write_failure_rolls_back_digest_and_state_together() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_owner_closed BEFORE UPDATE ON session_deletion_ops WHEN NEW.state='owner-closed' BEGIN SELECT RAISE(ABORT,'injected manifest failure'); END;",
+            )
+            .unwrap();
+
+        assert!(
+            deletion::freeze_deletion_manifest(
+                &mut connection,
+                &operation_id,
+                &run.session_id,
+                deletion_manifest_entries(&run, &operation_id),
+                "2026-10-21T00:03:00Z",
+            )
+            .is_err()
+        );
+        let journal: (String, Option<Vec<u8>>) = connection
+            .query_row(
+                "SELECT state,manifest FROM session_deletion_ops WHERE operation_id=?1",
+                [&operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(journal, ("requested".into(), None));
     }
 
     #[test]
