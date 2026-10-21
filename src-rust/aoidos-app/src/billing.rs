@@ -427,6 +427,7 @@ mod tests {
         assert_eq!(usd.version_id, selected.version_id);
         assert_ne!(cny.version_id, usd.version_id);
 
+        drop(service);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -456,6 +457,7 @@ mod tests {
             .unwrap();
         assert_eq!(selected.version_id, template.version_id);
 
+        drop(service);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -470,6 +472,7 @@ mod tests {
                 .code,
             "budget.price-missing"
         );
+        drop(service);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
