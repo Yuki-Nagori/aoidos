@@ -899,6 +899,87 @@ impl Storage {
         })
     }
 
+    /// 按冻结身份逐项隔离文件，并在所有 rename 成功后推进 journal。
+    ///
+    /// 每次移动都在 SQLite 锁外执行；中断后重试会根据源路径 / quarantine 路径及对象身份
+    /// 识别已完成项。调用方须持有应用生命周期门并确保 runtime owner 已关闭。
+    /// # Errors
+    /// writer 仍打开、manifest 校验失败、对象身份变化、文件操作失败或阶段冲突时失败关闭。
+    pub fn quarantine_run_deletion_files(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        match self.records.get(session_id) {
+            Ok(_) => return Err(Fault::new("app.conflict", "周目记录尚未关闭")),
+            Err(error) if error.code == "app.not-found" => {}
+            Err(error) => return Err(error),
+        }
+        let operation = self.with_database(|connection| {
+            crate::run_catalog::operation(connection, operation_id, session_id)
+        })?;
+        if operation.state == "files-quarantined" {
+            return Ok(operation);
+        }
+        if operation.state != "owner-closed" {
+            return Err(Fault::new("app.conflict", "删除隔离阶段不匹配"));
+        }
+        let (entries, manifest_hash) = self
+            .with_database(|connection| {
+                crate::run_catalog::manifest_for_quarantine(connection, operation_id, session_id)
+            })?
+            .ok_or_else(|| Fault::new("app.conflict", "删除隔离阶段已变化"))?;
+        for entry in &entries {
+            let kind = match entry.kind {
+                crate::run_catalog::DeletionManifestEntryKind::MemoryRunDirectory => {
+                    aoidos_store::filesystem::QuarantineKind::Directory
+                }
+                _ => aoidos_store::filesystem::QuarantineKind::File,
+            };
+            aoidos_store::filesystem::quarantine_entry(
+                &self.root,
+                std::path::Path::new(&entry.source),
+                std::path::Path::new(&entry.quarantine),
+                kind,
+                entry.identity_hash.as_deref(),
+            )
+            .map_err(Fault::from)?;
+        }
+        for entry in &entries {
+            let kind = match entry.kind {
+                crate::run_catalog::DeletionManifestEntryKind::MemoryRunDirectory => {
+                    aoidos_store::filesystem::QuarantineKind::Directory
+                }
+                _ => aoidos_store::filesystem::QuarantineKind::File,
+            };
+            let result = aoidos_store::filesystem::quarantine_entry(
+                &self.root,
+                std::path::Path::new(&entry.source),
+                std::path::Path::new(&entry.quarantine),
+                kind,
+                entry.identity_hash.as_deref(),
+            )
+            .map_err(Fault::from)?;
+            if !matches!(
+                result,
+                aoidos_store::filesystem::QuarantineResult::AlreadyMoved
+                    | aoidos_store::filesystem::QuarantineResult::SkippedAbsent
+            ) {
+                return Err(Fault::new("app.conflict", "隔离对象状态发生变化"));
+            }
+        }
+        self.with_database(|connection| {
+            crate::run_catalog::mark_files_quarantined(
+                connection,
+                operation_id,
+                session_id,
+                &manifest_hash,
+                updated_at,
+            )
+        })
+    }
+
     /// 显式推进一批旧 transcript 发现；只读取 header，不打开或修复会话。
     /// # Errors
     /// 数据库不可用或批次无法原子登记时返回稳定错误，未提交批次会重新排队。

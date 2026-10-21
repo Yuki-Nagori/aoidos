@@ -14,6 +14,7 @@ const MAX_TRANSCRIPT_DIRECTORY_SCAN_ENTRIES: usize = 65_536;
 
 type CatalogDeletionRow = (String, String, Option<String>, Option<String>, String, i64);
 type FreezeManifestRow = (String, String, String, String, String, Option<Vec<u8>>);
+type QuarantineManifestRow = (String, String, String, String, String, Option<Vec<u8>>);
 
 /// 删除确认前的只读计费门禁结果；不包含账单正文或磁盘路径。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -548,6 +549,185 @@ pub(crate) fn deletion_manifest_target(
         return Err(Fault::new("app.conflict", "活动周目尚未关闭"));
     }
     Ok((script_id, memory_run_id))
+}
+
+/// 读取并校验已冻结的清单；完成隔离的 journal 以 `None` 表示幂等重放。
+pub(crate) fn manifest_for_quarantine(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+) -> Result<Option<(Vec<DeletionManifestEntry>, String)>, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+    {
+        return Err(Fault::bad_request());
+    }
+    let row: Option<QuarantineManifestRow> = connection
+        .query_row(
+            "SELECT op.session_id,op.state,c.script_id,c.memory_run_id,c.state,op.manifest FROM session_deletion_ops op JOIN session_catalog c USING(session_id) WHERE op.operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((target_id, state, script_id, memory_run_id, catalog_state, bytes)) = row else {
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    if catalog_state != "deleting" {
+        return Err(Fault::new("app.conflict", "周目不处于删除状态"));
+    }
+    if state == "files-quarantined" {
+        return Ok(None);
+    }
+    if state != "owner-closed" {
+        return Err(Fault::new("app.conflict", "删除隔离阶段不匹配"));
+    }
+    let bytes = bytes.ok_or_else(corrupt)?;
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        return Err(corrupt());
+    }
+    let envelope: FrozenDeletionEnvelope = serde_json::from_slice(&bytes).map_err(|_| corrupt())?;
+    let manifest_bytes = serde_json::to_vec(&envelope.manifest).map_err(|_| corrupt())?;
+    let expected_hash = format!("sha256:{:x}", Sha256::digest(&manifest_bytes));
+    if envelope.hash != expected_hash
+        || envelope.manifest.version != 1
+        || envelope.manifest.operation_id != operation_id
+        || envelope.manifest.session_id != session_id
+        || envelope.manifest.script_id != script_id
+        || envelope.manifest.memory_run_id != memory_run_id
+    {
+        return Err(corrupt());
+    }
+    let mapping_valid: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_run_sessions s JOIN memory_runs r USING(run_id) WHERE s.session_id=?1 AND s.run_id=?2 AND r.script_id=?3)",
+            rusqlite::params![session_id, memory_run_id, script_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if !mapping_valid {
+        return Err(corrupt());
+    }
+    validate_manifest_entries(
+        &envelope.manifest.entries,
+        operation_id,
+        &script_id,
+        session_id,
+        &memory_run_id,
+    )?;
+    Ok(Some((envelope.manifest.entries, expected_hash)))
+}
+
+/// 查询单个删除 journal 的当前阶段。
+pub fn operation(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+) -> Result<DeletionOperation, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+    {
+        return Err(Fault::bad_request());
+    }
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT session_id,state FROM session_deletion_ops WHERE operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((target_id, state)) = row else {
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    let revision = catalog_revision(connection)?;
+    Ok(DeletionOperation {
+        operation_id: operation_id.to_owned(),
+        session_id: session_id.to_owned(),
+        state,
+        catalog_revision: revision,
+    })
+}
+
+/// 在全部文件已按清单隔离后，原子推进删除阶段。
+pub(crate) fn mark_files_quarantined(
+    connection: &mut rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    manifest_hash: &str,
+    updated_at: &str,
+) -> Result<DeletionOperation, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || !valid_sha256(manifest_hash)
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let row: Option<(String, String, String, Option<Vec<u8>>)> = transaction
+        .query_row(
+            "SELECT op.session_id,op.state,c.state,op.manifest FROM session_deletion_ops op JOIN session_catalog c USING(session_id) WHERE op.operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((target_id, state, catalog_state, bytes)) = row else {
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    if state == "files-quarantined" {
+        let revision = catalog_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Ok(DeletionOperation {
+            operation_id: operation_id.to_owned(),
+            session_id: session_id.to_owned(),
+            state,
+            catalog_revision: revision,
+        });
+    }
+    let bytes = bytes.ok_or_else(corrupt)?;
+    let envelope: FrozenDeletionEnvelope = serde_json::from_slice(&bytes).map_err(|_| corrupt())?;
+    let manifest_bytes = serde_json::to_vec(&envelope.manifest).map_err(|_| corrupt())?;
+    let expected_hash = format!("sha256:{:x}", Sha256::digest(&manifest_bytes));
+    if state != "owner-closed"
+        || catalog_state != "deleting"
+        || envelope.hash != expected_hash
+        || envelope.hash != manifest_hash
+        || envelope.manifest.operation_id != operation_id
+        || envelope.manifest.session_id != session_id
+    {
+        return Err(Fault::new("app.conflict", "删除清单或阶段已变化"));
+    }
+    let changed = transaction
+        .execute(
+            "UPDATE session_deletion_ops SET state='files-quarantined',updated_at=?1 WHERE operation_id=?2 AND session_id=?3 AND state='owner-closed'",
+            rusqlite::params![updated_at, operation_id, session_id],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.conflict", "删除隔离阶段已变化"));
+    }
+    let revision = catalog_revision(&transaction)?;
+    transaction.commit().map_err(database)?;
+    Ok(DeletionOperation {
+        operation_id: operation_id.to_owned(),
+        session_id: session_id.to_owned(),
+        state: "files-quarantined".into(),
+        catalog_revision: revision,
+    })
 }
 
 fn validate_manifest_entries(

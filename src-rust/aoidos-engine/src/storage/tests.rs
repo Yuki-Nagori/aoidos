@@ -147,7 +147,7 @@ fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_director
         .unwrap();
 
     assert_eq!(frozen.state, "owner-closed");
-    let value = storage
+    let (manifest_bytes, value) = storage
         .with_database(|connection| {
             let bytes: Vec<u8> = connection
                 .query_row(
@@ -156,8 +156,9 @@ fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_director
                     |row| row.get(0),
                 )
                 .map_err(aoidos_store::db::sqlite_error)?;
-            serde_json::from_slice::<serde_json::Value>(&bytes)
-                .map_err(|_| Fault::new("store.corrupt", "删除清单无法解析"))
+            let value = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| Fault::new("store.corrupt", "删除清单无法解析"))?;
+            Ok((bytes, value))
         })
         .unwrap();
     let memory_entry = value["manifest"]["entries"]
@@ -167,6 +168,57 @@ fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_director
         .find(|entry| entry["kind"] == "memory-run-directory")
         .unwrap();
     assert!(memory_entry["identityHash"].is_null());
+
+    let transcript = root.join(format!("workspaces/mistbell/transcript/{session_id}.jsonl"));
+    let quarantine = root.join(format!(
+        "deleting/{operation_id}/transcript/{session_id}.jsonl"
+    ));
+    assert!(transcript.exists());
+    let mut tampered = value;
+    tampered["hash"] = serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    let tampered = serde_json::to_vec(&tampered).unwrap();
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE session_deletion_ops SET manifest=?1 WHERE operation_id=?2",
+                    rusqlite::params![tampered, operation_id],
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        storage
+            .quarantine_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:01:30Z",)
+            .unwrap_err()
+            .code,
+        "store.corrupt"
+    );
+    assert!(transcript.exists());
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE session_deletion_ops SET manifest=?1 WHERE operation_id=?2",
+                    rusqlite::params![manifest_bytes, operation_id],
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let quarantined = storage
+        .quarantine_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:02:00Z")
+        .unwrap();
+    assert_eq!(quarantined.state, "files-quarantined");
+    assert!(!transcript.exists());
+    assert!(quarantine.exists());
+    assert_eq!(
+        storage
+            .quarantine_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:02:30Z",)
+            .unwrap(),
+        quarantined
+    );
 
     storage.close().unwrap();
     std::fs::remove_dir_all(root).unwrap();

@@ -32,6 +32,21 @@ pub struct BoundedDirectoryListing {
     pub complete: bool,
 }
 
+/// 可按身份隔离的文件系统对象类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuarantineKind {
+    File,
+    Directory,
+}
+
+/// 单个隔离项的幂等执行结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuarantineResult {
+    Moved,
+    AlreadyMoved,
+    SkippedAbsent,
+}
+
 /// 列出数据根内目录的直接条目名称，不递归，并明确报告是否触及条目上限。
 ///
 /// 返回名称按平台原生形式保留；领域层负责筛选允许的文件名。超出上限时只返回前 `limit`
@@ -108,6 +123,129 @@ pub fn directory_identity_hash(root: &Path, relative_path: &Path) -> Result<Stri
         return Err(StoreError::InvalidPath("expected a directory".into()));
     }
     Ok(encode_identity(identity))
+}
+
+/// 按冻结身份将单个文件或目录移入同一数据根内的隔离目录。
+///
+/// 目标父目录按需逐级创建并拒绝链接；移动前比较源对象身份，移动后再次比较隔离对象身份。
+/// 重试时仅当源缺席且隔离项身份匹配才视为已完成；两边同时存在、身份变化或路径异常均失败关闭。
+/// `expected_identity == None` 只接受“文件与隔离目标均缺席”，用于冻结时不存在的空记忆目录。
+/// 此操作只移动目录项，不递归遍历目录内容；源与目标都位于可信数据根下。
+///
+/// # Errors
+/// 路径越界、对象类型 / 身份变化、目标已占用或重命名 / 目录同步失败时返回存储错误。
+pub fn quarantine_entry(
+    root: &Path,
+    source: &Path,
+    quarantine: &Path,
+    kind: QuarantineKind,
+    expected_identity: Option<&str>,
+) -> Result<QuarantineResult> {
+    validate_relative_path(source)?;
+    validate_relative_path(quarantine)?;
+    if source == quarantine {
+        return Err(StoreError::InvalidPath(
+            "source equals quarantine path".into(),
+        ));
+    }
+
+    ensure_parent_directories(root, quarantine)?;
+    validate_path_chain(
+        root,
+        quarantine
+            .parent()
+            .ok_or_else(|| StoreError::InvalidPath("quarantine parent is missing".into()))?,
+    )?;
+
+    let source_path = root.join(source);
+    let quarantine_path = root.join(quarantine);
+    let source_identity = optional_identity(root, source, kind)?;
+    let quarantine_identity = optional_identity(root, quarantine, kind)?;
+    let Some(expected_identity) = expected_identity else {
+        if kind != QuarantineKind::Directory
+            || source_identity.is_some()
+            || quarantine_identity.is_some()
+        {
+            return Err(StoreError::InvalidPath("expected absent directory".into()));
+        }
+        return Ok(QuarantineResult::SkippedAbsent);
+    };
+
+    match (source_identity.as_deref(), quarantine_identity.as_deref()) {
+        (Some(source_id), None) if source_id == expected_identity => {
+            fs::rename(&source_path, &quarantine_path).map_err(StoreError::from_io)?;
+            crate::atomic::sync_parent(&source_path)?;
+            crate::atomic::sync_parent(&quarantine_path)?;
+            if optional_identity(root, quarantine, kind)?.as_deref() != Some(expected_identity) {
+                return Err(StoreError::InvalidPath(
+                    "quarantine identity changed".into(),
+                ));
+            }
+            Ok(QuarantineResult::Moved)
+        }
+        (None, Some(quarantine_id)) if quarantine_id == expected_identity => {
+            Ok(QuarantineResult::AlreadyMoved)
+        }
+        (Some(_), Some(_)) => Err(StoreError::InvalidPath(
+            "source and quarantine both exist".into(),
+        )),
+        (Some(_), None) | (None, Some(_)) => Err(StoreError::InvalidPath(
+            "filesystem identity changed".into(),
+        )),
+        (None, None) => Err(StoreError::from_io(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        ))),
+    }
+}
+
+fn optional_identity(
+    root: &Path,
+    relative_path: &Path,
+    kind: QuarantineKind,
+) -> Result<Option<String>> {
+    match kind {
+        QuarantineKind::File => file_identity_hash(root, relative_path),
+        QuarantineKind::Directory => directory_identity_hash(root, relative_path),
+    }
+    .map(Some)
+    .or_else(|error| match error {
+        StoreError::Io { ref source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
+        }
+        error => Err(error),
+    })
+}
+
+fn ensure_parent_directories(root: &Path, relative_path: &Path) -> Result<()> {
+    let parent = relative_path
+        .parent()
+        .ok_or_else(|| StoreError::InvalidPath("quarantine parent is missing".into()))?;
+    let mut current = root.to_owned();
+    for component in parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(StoreError::InvalidPath(
+                relative_path.to_string_lossy().into_owned(),
+            ));
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => return Err(StoreError::InvalidPath("invalid quarantine parent".into())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&current).map_err(StoreError::from_io)?;
+                if !fs::symlink_metadata(&current)
+                    .map_err(StoreError::from_io)?
+                    .file_type()
+                    .is_dir()
+                {
+                    return Err(StoreError::InvalidPath("invalid quarantine parent".into()));
+                }
+                crate::atomic::sync_parent(&current)?;
+            }
+            Err(error) => return Err(StoreError::from_io(error)),
+        }
+    }
+    Ok(())
 }
 
 fn verified_identity(root: &Path, relative_path: &Path) -> Result<(ObjectKind, ObjectId)> {
@@ -388,6 +526,137 @@ mod tests {
         assert_eq!(
             directory_identity_hash(&fixture.0, Path::new("quarantined-memory")).unwrap(),
             identity
+        );
+    }
+
+    #[test]
+    fn quarantine_moves_a_file_once_and_recognizes_a_completed_move() {
+        let fixture = Fixture::new();
+        let source = Path::new("workspaces/demo/transcript/run.jsonl");
+        let quarantine = Path::new("deleting/op/transcript/run.jsonl");
+        let source_path = fixture.0.join(source);
+        fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        fs::write(&source_path, b"recorded history").unwrap();
+        let identity = file_identity_hash(&fixture.0, source).unwrap();
+
+        assert_eq!(
+            quarantine_entry(
+                &fixture.0,
+                source,
+                quarantine,
+                QuarantineKind::File,
+                Some(&identity),
+            )
+            .unwrap(),
+            QuarantineResult::Moved
+        );
+        assert!(!source_path.exists());
+        assert_eq!(
+            fs::read(fixture.0.join(quarantine)).unwrap(),
+            b"recorded history"
+        );
+        assert_eq!(
+            quarantine_entry(
+                &fixture.0,
+                source,
+                quarantine,
+                QuarantineKind::File,
+                Some(&identity),
+            )
+            .unwrap(),
+            QuarantineResult::AlreadyMoved
+        );
+    }
+
+    #[test]
+    fn quarantine_moves_a_directory_as_one_entry_without_expanding_its_contents() {
+        let fixture = Fixture::new();
+        let source = Path::new("workspaces/demo/memory/runs/run-id");
+        let quarantine = Path::new("deleting/op/memory/run-id");
+        let source_path = fixture.0.join(source);
+        fs::create_dir_all(source_path.join("nested")).unwrap();
+        fs::write(source_path.join("nested/body.jsonl"), b"memory text").unwrap();
+        let identity = directory_identity_hash(&fixture.0, source).unwrap();
+
+        assert_eq!(
+            quarantine_entry(
+                &fixture.0,
+                source,
+                quarantine,
+                QuarantineKind::Directory,
+                Some(&identity),
+            )
+            .unwrap(),
+            QuarantineResult::Moved
+        );
+        assert!(!source_path.exists());
+        assert_eq!(
+            fs::read(fixture.0.join(quarantine).join("nested/body.jsonl")).unwrap(),
+            b"memory text"
+        );
+        assert_eq!(
+            quarantine_entry(
+                &fixture.0,
+                source,
+                quarantine,
+                QuarantineKind::Directory,
+                Some(&identity),
+            )
+            .unwrap(),
+            QuarantineResult::AlreadyMoved
+        );
+    }
+
+    #[test]
+    fn quarantine_rejects_identity_conflicts_and_skips_only_an_absent_directory() {
+        let fixture = Fixture::new();
+        let source = Path::new("workspaces/demo/transcript/run.jsonl");
+        let quarantine = Path::new("deleting/op/transcript/run.jsonl");
+        fs::create_dir_all(fixture.0.join(source).parent().unwrap()).unwrap();
+        fs::create_dir_all(fixture.0.join(quarantine).parent().unwrap()).unwrap();
+        fs::write(fixture.0.join(source), b"history").unwrap();
+        fs::write(fixture.0.join(quarantine), b"keep this object").unwrap();
+        let source_identity = file_identity_hash(&fixture.0, source).unwrap();
+
+        assert!(
+            quarantine_entry(
+                &fixture.0,
+                source,
+                quarantine,
+                QuarantineKind::File,
+                Some(&source_identity),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(fixture.0.join(quarantine)).unwrap(),
+            b"keep this object"
+        );
+
+        let missing = Path::new("workspaces/demo/memory/runs/empty");
+        let absent_quarantine = Path::new("deleting/op/memory/empty");
+        assert_eq!(
+            quarantine_entry(
+                &fixture.0,
+                missing,
+                absent_quarantine,
+                QuarantineKind::Directory,
+                None,
+            )
+            .unwrap(),
+            QuarantineResult::SkippedAbsent
+        );
+        fs::create_dir_all(fixture.0.join(missing).parent().unwrap()).unwrap();
+        fs::create_dir(fixture.0.join(missing)).unwrap();
+        assert!(
+            quarantine_entry(
+                &fixture.0,
+                missing,
+                absent_quarantine,
+                QuarantineKind::Directory,
+                None,
+            )
+            .is_err()
         );
     }
 
