@@ -71,14 +71,15 @@
 
 ## 验证计划与结果
 
-| 日期       | 环境 / 命令                                                      | 预期                                                             | 实际结果                                                                                                                                                                                |
-| ---------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-10-21 | `bun run test:affected`、`format:affected`、`lint:affected`      | 生命周期、恢复冻结配置、typed IPC 与消费端契约保持一致           | Rust workspace 通过，aoidos-engine 524 项通过 / 3 项显式忽略，aoidos-cli 27 项通过；466 项 Vitest 通过；格式、分层、i18n、Clippy 与 Web 构建通过                                        |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_check`     | 只读删除门禁核验 revision、身份映射及所有已知账本范围            | 2 项定向测试通过；确认 canonical 未结账单、legacy 未确认请求和结算 outbox 均被检查；未启动删除或写入 journal                                                                            |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_request`   | 删除意图与目录封锁同事务提交；重复操作幂等且未结账单不写 journal | 3 项定向测试通过；目录更新失败时 journal 与 revision 均回滚；尚未接入 app 入口                                                                                                          |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine clearing_`          | owner 关闭后只清除目标活动选择；失败回滚且不影响非活动目标       | 3 项定向测试通过；SQLite 选择清除与目录 revision 原子更新，journal 保持 `requested` 直至 manifest/hash 冻结；文件镜像和 app 生命周期接入仍未实现                                        |
-| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine run_catalog::tests` | 清单路径、身份映射、活动选择、哈希与 journal 阶段原子核验        | 28 项目录测试通过；4 项清单冻结测试覆盖条目上限、非目标活动周目、超范围路径、SHA-256 envelope 持久化和事务失败回滚；aoidos-engine Clippy 通过；尚无可信文件枚举器、镜像清理与前向执行器 |
-| 2026-10-21 | `bun run test:affected`                                          | 验证文件系统身份原语及受影响 workspace 行为                      | macOS workspace Rust 测试与 466 项 Vitest 全通过；`bun run lint:affected`、`bun run format:affected` 通过；Windows / Linux 尚待 CI 复验；文件 manifest 枚举与隔离接线仍未实现           |
+| 日期       | 环境 / 命令                                                             | 预期                                                             | 实际结果                                                                                                                                                                                |
+| ---------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-21 | `bun run test:affected`、`format:affected`、`lint:affected`             | 生命周期、恢复冻结配置、typed IPC 与消费端契约保持一致           | Rust workspace 通过，aoidos-engine 524 项通过 / 3 项显式忽略，aoidos-cli 27 项通过；466 项 Vitest 通过；格式、分层、i18n、Clippy 与 Web 构建通过                                        |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_check`            | 只读删除门禁核验 revision、身份映射及所有已知账本范围            | 2 项定向测试通过；确认 canonical 未结账单、legacy 未确认请求和结算 outbox 均被检查；未启动删除或写入 journal                                                                            |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine deletion_request`          | 删除意图与目录封锁同事务提交；重复操作幂等且未结账单不写 journal | 3 项定向测试通过；目录更新失败时 journal 与 revision 均回滚；尚未接入 app 入口                                                                                                          |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine clearing_`                 | owner 关闭后只清除目标活动选择；失败回滚且不影响非活动目标       | 3 项定向测试通过；SQLite 选择清除与目录 revision 原子更新，journal 保持 `requested` 直至 manifest/hash 冻结；文件镜像和 app 生命周期接入仍未实现                                        |
+| 2026-10-21 | `bun scripts/cargo.mts test -p aoidos-engine run_catalog::tests`        | 清单路径、身份映射、活动选择、哈希与 journal 阶段原子核验        | 28 项目录测试通过；4 项清单冻结测试覆盖条目上限、非目标活动周目、超范围路径、SHA-256 envelope 持久化和事务失败回滚；aoidos-engine Clippy 通过；尚无可信文件枚举器、镜像清理与前向执行器 |
+| 2026-10-21 | `bun run test:affected`                                                 | 验证文件系统身份原语及受影响 workspace 行为                      | macOS workspace Rust 测试与 466 项 Vitest 全通过；`bun run lint:affected`、`bun run format:affected` 通过；Windows / Linux 尚待 CI 复验；文件 manifest 枚举与隔离接线仍未实现           |
+| 2026-10-21 | `bun scripts/cargo.mts test --locked -p aoidos-store filesystem::tests` | 有界列举直接普通文件并暴露清单是否完整                           | macOS 5 项文件系统测试及 store Clippy 通过；Windows / Linux 尚待 CI 复验；目录枚举是路径式非原子遍历，需由生命周期锁与移动前身份复核保护                                                |
 
 ## 风险与回退
 
@@ -105,6 +106,7 @@
 - 2026-10-21：新增 owner 关闭后的 SQLite 活动选择清理原语。调用方完成生命周期门与 owner 关闭后，engine 在单个 `IMMEDIATE` 事务中仅当权威活动选择指向目标时清空选择并递增目录 revision；删除 journal 保持 `requested`，直到 manifest 与 hash 冻结后才能进入 `owner-closed`。测试覆盖目标选择清除、失败回滚、幂等重放和删除非活动周目时保留另一周目的活动选择。该原语不能证明 app owner 已关闭，也不清理 `active-session.json` 镜像；共享生命周期接线前必须一并解决这些边界，删除仍未开放。
 - 2026-10-21：新增删除清单冻结原语，清单严格限定在目标剧本 / session / memoryRunId 路径，要求 transcript 与 memory 目录各一项、旁车 UUID 格式正确、来源有序且 quarantine 路径由 operationId 确定；transcript 与 sidecar 合计最多 8,192 项，memory 目录另计一项，完整 envelope 最多 4 MiB。`owner-closed` 阶段将清单及其 SHA-256 摘要 envelope 同事务保存，并复核目录处于 deleting、记忆映射有效且 SQLite 活动选择不再指向目标；哈希覆盖清单规范字节，因此无需为单独哈希列增加数据库迁移。测试覆盖上限边界、保留非目标活动周目、哈希持久化、越界路径和事务失败回滚。实际磁盘枚举和内容身份计算、活动文件镜像清理、隔离 / 清理执行器及 app 生命周期协调仍未接入，删除仍不可用。
 - 2026-10-21：在 `aoidos-store` 增加跨平台文件系统对象身份摘要：Unix 使用 `dev` / `ino`，Windows 通过打开末级时启用 `OPEN_REPARSE_POINT` 读取 volume / file ID；公共接口校验数据根内的相对组件，平台分支留在 store。文件或目录改名后摘要保持稳定，便于恢复时确认 quarantine 项仍是冻结对象；摘要不是内容校验，对象删除后 ID 可能复用，因此不跨删除周期复用。路径检查与调用不是原子操作，实际生命周期接线须持锁并在 rename 后复核。定向测试覆盖普通文件和目录改名稳定、同内容不同文件身份不同及链接组件拒绝。该原语尚未接入 engine 枚举、冻结或 rename 恢复，不能据此启用删除。
+- 2026-10-21：在同一 store 文件系统模块增加有界的直接文件列举，保留原生文件名，并用 `complete` 明确表示目录是否完整；链接、子目录、特殊项和 I/O 错误都失败关闭。它只提供路径式遍历，不提供原子目录句柄快照，使用方须持生命周期锁并在移动前复核对象身份。测试覆盖刚好到达上限、超过上限及链接拒绝；此列举器尚未由 engine 按周目路径筛选并接入冻结 manifest。
 
 ## 完成摘要
 

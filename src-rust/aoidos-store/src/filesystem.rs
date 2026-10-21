@@ -1,6 +1,6 @@
-//! 周目隔离与恢复共用的文件系统身份原语。
+//! 周目隔离与恢复共用的有界文件枚举与身份原语。
 
-use std::{fs, path::Path};
+use std::{ffi::OsString, fs, path::Path};
 
 #[cfg(any(windows, not(any(unix, windows))))]
 use std::io;
@@ -23,6 +23,66 @@ enum ObjectId {
     WindowsLow { volume: u32, index: u64 },
     #[cfg(windows)]
     WindowsHigh { volume: u64, id: u128 },
+}
+
+/// 有界读取的目录快照；`complete == false` 表示还有条目未返回，调用方不得据此执行删除。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedDirectoryListing {
+    pub entries: Vec<OsString>,
+    pub complete: bool,
+}
+
+/// 列出数据根内目录的直接普通文件，不递归，并明确报告是否触及条目上限。
+///
+/// 返回名称按平台原生形式保留；领域层负责筛选允许的文件名。超出上限时只返回前 `limit`
+/// 项并设 `complete` 为 `false`，调用方必须停止删除或要求更大的明确预算，不能把部分结果当完整清单。
+/// 这是路径式有界遍历，不是原子目录快照；组件检查与目录读取之间仍有竞态窗口。调用方须在应用
+/// 生命周期锁内使用可信数据根，并在后续移动前重新核验每个对象的身份。
+///
+/// # Errors
+/// 目录路径越界、目录项包含链接 / 子目录 / 特殊文件，或读取失败时返回存储错误。
+pub fn list_regular_files(
+    root: &Path,
+    relative_directory: &Path,
+    limit: usize,
+) -> Result<BoundedDirectoryListing> {
+    validate_relative_path(relative_directory)?;
+    validate_path_chain(root, relative_directory)?;
+    let directory = root.join(relative_directory);
+    if !fs::symlink_metadata(&directory)
+        .map_err(StoreError::from_io)?
+        .is_dir()
+    {
+        return Err(StoreError::InvalidPath("expected a directory".into()));
+    }
+
+    let mut entries = Vec::with_capacity(limit.min(1024));
+    let mut complete = true;
+    for item in fs::read_dir(&directory).map_err(StoreError::from_io)? {
+        let item = item.map_err(StoreError::from_io)?;
+        if entries.len() == limit {
+            complete = false;
+            break;
+        }
+        if !fs::symlink_metadata(item.path())
+            .map_err(StoreError::from_io)?
+            .file_type()
+            .is_file()
+        {
+            return Err(StoreError::InvalidPath(
+                "directory contains a non-regular entry".into(),
+            ));
+        }
+        if platform_identity(&item.path())?.0 != ObjectKind::File {
+            return Err(StoreError::InvalidPath(
+                "directory contains a non-regular entry".into(),
+            ));
+        }
+        entries.push(item.file_name());
+    }
+    validate_path_chain(root, relative_directory)?;
+    entries.sort_unstable();
+    Ok(BoundedDirectoryListing { entries, complete })
 }
 
 /// 返回数据根目录下普通文件或目录的本机文件系统身份摘要。
@@ -293,6 +353,40 @@ mod tests {
             identity_hash(&fixture.0, Path::new("quarantined-memory")).unwrap(),
             identity
         );
+    }
+
+    #[test]
+    fn directory_listing_reports_when_its_bound_truncates_results() {
+        let fixture = Fixture::new();
+        let nested = fixture.0.join("files");
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("first"), b"1").unwrap();
+        fs::write(nested.join("second"), b"2").unwrap();
+
+        let exact = list_regular_files(&fixture.0, Path::new("files"), 2).unwrap();
+        assert_eq!(exact.entries.len(), 2);
+        assert!(exact.complete);
+
+        let listing = list_regular_files(&fixture.0, Path::new("files"), 1).unwrap();
+        assert_eq!(listing.entries.len(), 1);
+        assert!(!listing.complete);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_listing_rejects_symlink_entries() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let directory = fixture.0.join("files");
+        fs::create_dir(&directory).unwrap();
+        fs::write(fixture.0.join("target"), b"content").unwrap();
+        symlink(fixture.0.join("target"), directory.join("link")).unwrap();
+
+        assert!(matches!(
+            list_regular_files(&fixture.0, Path::new("files"), 16),
+            Err(StoreError::InvalidPath(_))
+        ));
     }
 
     #[cfg(unix)]
