@@ -57,7 +57,11 @@ CREATE INDEX session_deletion_pending ON session_deletion_ops(state, updated_at,
 
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 pub const MAX_PAGE_SIZE: usize = 200;
+pub(crate) const MAX_SCAN_ISSUES: i64 = 256;
 const MAX_PROFILE_SNAPSHOT_BYTES: usize = 65_536;
+
+pub(crate) mod legacy_scan;
+pub use legacy_scan::LegacyScanResult;
 
 /// 目录行的可执行状态；只反映恢复与配置能力，不是游戏事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +141,7 @@ pub struct RunPage {
     pub next_cursor: Option<RunCursor>,
     pub catalog_revision: u64,
     pub scan_incomplete: bool,
+    pub scan_issue_count: u64,
 }
 
 /// 从 SQLite 权威选择行读取的活动周目元数据。
@@ -241,6 +246,13 @@ pub fn page(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(database)?;
+    let scan_issue_count = connection
+        .query_row(
+            "SELECT min(count(*), ?1) FROM session_scan_issues",
+            [MAX_SCAN_ISSUES],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(database)?;
     let revision = u64::try_from(revision).map_err(|_| corrupt())?;
     if cursor.is_some_and(|cursor| cursor.catalog_revision != revision) {
         return Err(stale_revision());
@@ -317,6 +329,7 @@ pub fn page(
         next_cursor,
         catalog_revision: revision,
         scan_incomplete: incomplete != 0,
+        scan_issue_count: u64::try_from(scan_issue_count).map_err(|_| corrupt())?,
     })
 }
 
@@ -410,11 +423,17 @@ pub fn bind_profile(
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database)?;
-    let (memory_run_id, state, revision): (Option<String>, String, i64) = transaction
+    let (memory_run_id, billing_run_id, script_id, state, revision): (
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        i64,
+    ) = transaction
         .query_row(
-            "SELECT memory_run_id, state, revision FROM session_catalog WHERE session_id=?1",
+            "SELECT memory_run_id, billing_run_id, script_id, state, revision FROM session_catalog WHERE session_id=?1",
             [session_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .optional()
         .map_err(database)?
@@ -425,6 +444,39 @@ pub fn bind_profile(
     }
     if state != RunState::NeedsProfileBinding.as_str() {
         return Err(Fault::new("app.conflict", "该周目不需要绑定模型配置"));
+    }
+
+    let mapped_identity: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT sessions.run_id,runs.script_id FROM memory_run_sessions sessions JOIN memory_runs runs ON runs.run_id=sessions.run_id WHERE sessions.session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let identity_matches = memory_run_id
+        .as_deref()
+        .is_some_and(crate::record::format::valid_uuid)
+        && billing_run_id.as_deref() == Some(session_id)
+        && mapped_identity
+            .as_ref()
+            .is_some_and(|(mapped_run, mapped_script)| {
+                Some(mapped_run.as_str()) == memory_run_id.as_deref() && mapped_script == &script_id
+            });
+    if !identity_matches {
+        let next_revision = revision.checked_add(1).ok_or_else(corrupt)?;
+        transaction
+            .execute(
+                "UPDATE session_catalog SET state='needs-repair',revision=?1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE session_id=?2 AND revision=?3 AND state='needs-profile-binding'",
+                rusqlite::params![next_revision, session_id, revision],
+            )
+            .map_err(database)?;
+        bump_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Err(Fault::new(
+            "app.conflict",
+            "周目的身份关联已变化，需要修复后才能绑定模型配置",
+        ));
     }
 
     let has_legacy_ledger_data = memory_run_id
@@ -570,8 +622,32 @@ mod tests {
         connection
             .execute_batch(aoidos_billing::schema::SCHEMA)
             .unwrap();
-        connection.execute_batch(SCHEMA).unwrap();
         connection
+            .execute_batch(aoidos_memory::schema::SCHEMA)
+            .unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection.execute_batch(legacy_scan::MIGRATION).unwrap();
+        connection
+    }
+
+    fn insert_memory_mapping(
+        connection: &rusqlite::Connection,
+        session_id: &str,
+        memory_run_id: &str,
+        script_id: &str,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO memory_runs(run_id,script_id,policy_json,policy_hash) VALUES(?1,?2,'{}',zeroblob(32))",
+                rusqlite::params![memory_run_id, script_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO memory_run_sessions(run_id,session_id) VALUES(?1,?2)",
+                rusqlite::params![memory_run_id, session_id],
+            )
+            .unwrap();
     }
 
     #[test]
@@ -801,10 +877,11 @@ mod tests {
         let memory_run_id = "00000000-0000-4000-8000-000000000012";
         connection
             .execute(
-                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,?1,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
                 rusqlite::params![session_id, memory_run_id],
             )
             .unwrap();
+        insert_memory_mapping(&connection, session_id, memory_run_id, "mistbell");
 
         let revision = bind_profile(&mut connection, session_id, 1, &profile()).unwrap();
         assert_eq!(revision, 2);
@@ -848,10 +925,11 @@ mod tests {
         let memory_run_id = "00000000-0000-4000-8000-000000000022";
         connection
             .execute(
-                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,?1,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
                 rusqlite::params![session_id, memory_run_id],
             )
             .unwrap();
+        insert_memory_mapping(&connection, session_id, memory_run_id, "mistbell");
         connection
             .execute(
                 "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-20T00:00:00Z')",
@@ -874,12 +952,14 @@ mod tests {
     fn profile_binding_keeps_a_canonical_budget_ready() {
         let mut connection = connection();
         let session_id = "00000000-0000-4000-8000-000000000031";
+        let memory_run_id = "00000000-0000-4000-8000-000000000032";
         connection
             .execute(
-                "INSERT INTO session_catalog(session_id,script_id,created_at,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z','needs-profile-binding',1,'2026-10-20T00:00:00Z')",
-                [session_id],
+                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,?1,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                rusqlite::params![session_id, memory_run_id],
             )
             .unwrap();
+        insert_memory_mapping(&connection, session_id, memory_run_id, "mistbell");
         connection
             .execute(
                 "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-20T00:00:00Z')",
@@ -896,5 +976,39 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state, RunState::Ready.as_str());
+    }
+
+    #[test]
+    fn profile_binding_quarantines_a_mapping_that_changed_after_scan() {
+        let mut connection = connection();
+        let session_id = "00000000-0000-4000-8000-000000000051";
+        let memory_run_id = "00000000-0000-4000-8000-000000000052";
+        connection
+            .execute(
+                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,?1,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                rusqlite::params![session_id, memory_run_id],
+            )
+            .unwrap();
+        insert_memory_mapping(&connection, session_id, memory_run_id, "mistbell");
+        connection
+            .execute(
+                "DELETE FROM memory_run_sessions WHERE session_id=?1",
+                [session_id],
+            )
+            .unwrap();
+
+        let error = bind_profile(&mut connection, session_id, 1, &profile()).unwrap_err();
+        let (state, revision, profile_snapshot): (String, i64, Option<Vec<u8>>) = connection
+            .query_row(
+                "SELECT state,revision,profile_snapshot FROM session_catalog WHERE session_id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(error.code, "app.conflict");
+        assert_eq!(state, RunState::NeedsRepair.as_str());
+        assert_eq!(revision, 2);
+        assert!(profile_snapshot.is_none());
     }
 }

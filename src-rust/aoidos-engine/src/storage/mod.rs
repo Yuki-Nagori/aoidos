@@ -94,6 +94,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     aoidos_memory::schema::EFFECT_EVIDENCE_PROGRESS_MIGRATION,
     aoidos_memory::schema::MATERIAL_POSITION_MIGRATION,
     crate::run_catalog::SCHEMA,
+    crate::run_catalog::legacy_scan::MIGRATION,
 ];
 
 pub struct Storage {
@@ -102,6 +103,7 @@ pub struct Storage {
     pub preferences: Arc<Preferences>,
     database: Mutex<Option<rusqlite::Connection>>,
     memory: aoidos_memory::repository::Repository,
+    legacy_scan: Mutex<crate::run_catalog::legacy_scan::LegacyScanner>,
 }
 impl Storage {
     /// 共享迁移编号只有一个来源；失败保留诊断但拒绝业务入口。
@@ -121,6 +123,7 @@ impl Storage {
                     aoidos_memory::schema::verify(connection)?;
                     crate::game::catalog::verify_entity_registry_schema(connection)?;
                     crate::run_catalog::verify(connection)?;
+                    crate::run_catalog::legacy_scan::verify(connection)?;
                     aoidos_theme::schema::verify(connection)?;
                     aoidos_locale::schema::verify(connection)?;
                     aoidos_billing::schema::verify(connection)
@@ -135,6 +138,7 @@ impl Storage {
             preferences: Arc::new(Preferences::new(root)),
             database: Mutex::new(database),
             memory: aoidos_memory::repository::Repository::new(root),
+            legacy_scan: Mutex::new(crate::run_catalog::legacy_scan::LegacyScanner::new(root)),
         }
     }
     /// 在会话锁 → 数据库锁内绑定活动场景目录和当前实体快照，再借用记忆仓储。
@@ -799,6 +803,36 @@ impl Storage {
         page_size: usize,
     ) -> Result<crate::run_catalog::RunPage, Fault> {
         self.with_database(|connection| crate::run_catalog::page(connection, cursor, page_size))
+    }
+
+    /// 显式推进一批旧 transcript 发现；只读取 header，不打开或修复会话。
+    /// # Errors
+    /// 数据库不可用或批次无法原子登记时返回稳定错误，未提交批次会重新排队。
+    pub fn scan_legacy_runs(&self) -> Result<crate::run_catalog::LegacyScanResult, Fault> {
+        let mut scanner = self
+            .legacy_scan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if scanner.needs_start() {
+            self.with_database(crate::run_catalog::legacy_scan::begin_scan)?;
+            scanner.mark_started();
+        }
+        let batch = scanner.next_batch();
+        let complete = scanner.finished();
+        let prepared = crate::run_catalog::legacy_scan::prepare_batch(&batch);
+        let result = self.with_database(|connection| {
+            crate::run_catalog::legacy_scan::apply_prepared_batch(connection, prepared, complete)
+        });
+        match result {
+            Ok((result, deferred)) => {
+                scanner.requeue(deferred);
+                Ok(result)
+            }
+            Err(error) => {
+                scanner.requeue(batch);
+                Err(error)
+            }
+        }
     }
 
     /// 返回 SQLite 权威活动周目；尚未迁移的安装可由兼容文件回退。

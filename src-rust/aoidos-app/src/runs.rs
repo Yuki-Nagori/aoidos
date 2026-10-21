@@ -4,6 +4,7 @@ use aoidos_engine::{fault::Fault, game::product::ProfileFactory, run_catalog, st
 use std::sync::Arc;
 
 /// GUI 与 CLI/TUI 共用的目录查询服务。
+#[derive(Clone)]
 pub struct RunLifecycleService {
     storage: Arc<Storage>,
     profiles: Arc<ProfileFactory>,
@@ -24,6 +25,13 @@ impl RunLifecycleService {
         page_size: usize,
     ) -> Result<run_catalog::RunPage, Fault> {
         self.storage.run_catalog_page(cursor, page_size)
+    }
+
+    /// 玩家主动继续发现旧周目；列表刷新本身不会触发磁盘扫描。
+    /// # Errors
+    /// 存储不可用或扫描批次无法登记时返回稳定 Fault。
+    pub fn scan_legacy(&self) -> Result<run_catalog::LegacyScanResult, Fault> {
+        self.storage.scan_legacy_runs()
     }
 
     /// 玩家明确选择 profile 后，为旧周目保存不含密钥的配置快照。

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { expect, it, vi } from "vitest";
 import type { RunPage, RunState, RunSummary } from "../../../src-web/api/runs";
-import { bindRunProfile, listRuns } from "../../../src-web/api/runs";
+import { bindRunProfile, listRuns, scanLegacyRuns } from "../../../src-web/api/runs";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -23,6 +23,7 @@ it("forwards the revision-bound run catalog cursor without rewriting it", async 
     catalogRevision: 4,
     nextCursor: null,
     scanIncomplete: true,
+    scanIssueCount: 2,
   };
   const cursor = {
     catalogRevision: 4,
@@ -38,6 +39,19 @@ it("forwards the revision-bound run catalog cursor without rewriting it", async 
     cursor: null,
     pageSize: 50,
   });
+});
+
+it("advances legacy discovery only through the explicit scan action", async () => {
+  const result = {
+    discovered: 3,
+    diagnosed: 1,
+    scanIncomplete: true,
+    scanIssueCount: 1,
+  };
+  vi.mocked(invoke).mockResolvedValue(result);
+
+  expect(await scanLegacyRuns()).toBe(result);
+  expect(invoke).toHaveBeenCalledWith("run_scan_legacy");
 });
 
 it("forwards profile binding with the catalog revision used for confirmation", async () => {

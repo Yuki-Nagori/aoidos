@@ -38,6 +38,17 @@ pub fn list_page(
         .map_err(CmdError::from)
 }
 
+/// 玩家主动推进一个受 I/O 预算限制的旧周目发现批次。
+/// # Errors
+/// 存储不可用或扫描批次无法登记时返回稳定错误。
+pub async fn scan_legacy(
+    service: RunLifecycleService,
+) -> Result<aoidos_engine::run_catalog::LegacyScanResult, CmdError> {
+    aoidos_engine::blocking::run(move || service.scan_legacy())
+        .await
+        .map_err(CmdError::from)
+}
+
 /// 以 CAS 方式绑定旧周目的公开 profile 快照，不读取密钥。
 /// # Errors
 /// 参数无效、周目 revision 已变化或配置不可用时返回稳定错误。
