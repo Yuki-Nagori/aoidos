@@ -163,8 +163,8 @@ pub fn native_message(locale: Locale, key: &str) -> String {
         .to_owned()
 }
 
-pub fn native_prompt_text(locale: Locale) -> aoidos_llm::platform::NativePromptText {
-    aoidos_llm::platform::NativePromptText {
+pub fn native_prompt_text(locale: Locale) -> crate::native_prompt::NativePromptText {
+    crate::native_prompt::NativePromptText {
         title: native_message(locale, "credentialTitle"),
         message: native_message(locale, "credentialPrompt"),
         save: native_message(locale, "credentialSave"),

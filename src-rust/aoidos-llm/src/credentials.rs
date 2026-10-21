@@ -1,7 +1,6 @@
 //! 凭据存储：OS 凭据库优先（keyring crate v4 默认特性：Windows Credential
 //! Manager / macOS Keychain / Linux Secret Service），不可用时降级为仅当前
-//! 用户可读的私有文件（Unix 0600；Windows 用只含当前用户的受保护 DACL，
-//! 不把 0600 当 Windows 权限）。
+//! 用户可读的私有文件；文件权限策略由 aoidos-store 按平台统一执行。
 //!
 //! 契约（ipc-contract.md 密钥隔离）：IPC 只暴露 `{ set, hint }`；hint 是密钥末尾
 //! 4 个字符，短于 4 个字符时为空；明文不进前端状态、日志、错误 detail、Debug。
@@ -170,8 +169,7 @@ fn err_credentials_serialize(_: aoidos_json::Error) -> StoreError {
 }
 
 /// 降级文件：`<dir>/credentials.json`，键为 providerId。整文件经
-/// [`write_atomic_private`] 覆写；空临时文件先收紧为仅当前用户（Unix 0600 /
-/// Windows 仅当前用户的受保护 DACL），已存在的宽松文件也会被重新收紧。
+/// [`write_atomic_private`] 覆写；store 先收紧临时文件权限，再写正文并原子发布。
 pub struct CredentialFile {
     path: PathBuf,
 }
@@ -210,11 +208,7 @@ impl CredentialFile {
         if text.len() > 524_288 {
             return Err(StoreError::Corrupt("credentials file too large".into()));
         }
-        write_atomic_private(
-            &self.path,
-            text.as_bytes(),
-            crate::platform::restrict_to_current_user,
-        )
+        write_atomic_private(&self.path, text.as_bytes())
     }
 
     fn mark(&self, provider_id: &str, entry: CredentialEntry) -> Result<()> {
@@ -683,35 +677,6 @@ mod tests {
         assert!(!dir.join("credentials.json").exists());
         // 未设置路径不创建目录外的任何东西。
         assert!(!store.status("deepseek").unwrap().set);
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn fallback_file_permissions_are_owner_only() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = temp_test_dir("perm-unix");
-        let store = CredentialFile::new(&dir);
-        store
-            .set_key("deepseek", SecretString::from(String::from("sk-x")))
-            .unwrap();
-        let mode = std::fs::metadata(dir.join("credentials.json"))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600, "降级文件必须仅当前用户可读写");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn fallback_file_acl_is_current_user_only() {
-        let dir = temp_test_dir("perm-win");
-        let store = CredentialFile::new(&dir);
-        store
-            .set_key("deepseek", SecretString::from(String::from("sk-x")))
-            .unwrap();
-        crate::platform::windows::assert_owner_only(&dir.join("credentials.json"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -3,7 +3,7 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use aoidos_llm::credentials::{CredentialStore, OsKeyring};
     use secrecy::{ExposeSecret, SecretString};
-    aoidos_llm::platform::verify_native_input()?;
+    aoidos_lib::native_prompt::verify_native_input()?;
     let store = OsKeyring::new();
     let id = format!("native-fixture-{}", std::process::id());
     store.set_key(&id, SecretString::from("aoidos-os-fixture".to_owned()))?;

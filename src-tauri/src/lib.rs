@@ -6,6 +6,7 @@ pub mod ipc;
 pub mod llm_commands;
 pub mod locale_commands;
 pub mod memory_commands;
+pub mod native_prompt;
 pub mod run_commands;
 pub mod store_commands;
 pub mod theme_commands;
@@ -28,7 +29,7 @@ async fn llm_set_key(
     llm_commands::set_key_with_text_and_dispatch(
         provider_id,
         action,
-        aoidos_llm::platform::platform_prompt(),
+        native_prompt::platform_prompt(),
         prompt_text,
         &move |job| app.run_on_main_thread(job),
     )

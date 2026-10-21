@@ -46,25 +46,14 @@ uuid = { version = "1", features = ["v4"] }
 keyring = "4"
 keyring-core = "1"
 url = "2"
-# 原生密码输入：各目标仅链接自身 UI 库。
+# Tauri 原生密码输入：各目标仅链接自身 UI 库，入口实现位于 src-tauri。
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSSecureTextField", "NSTextField", "NSControl", "NSResponder", "NSView", "NSButton", "NSWindow"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSRunLoop", "NSTimer", "block2"] }
 block2 = "0.6"
 gtk = "0.18"
-# Windows 原生能力（019）：CredUI 凭据输入 + 降级文件 DACL。虚拟 manifest 不允许
-# target 段，按 crate 形态放各成员（见 src-rust/aoidos-llm）。
-windows-sys = { version = "0.60", features = [
-  "Win32_Foundation",
-  "Win32_Security",
-  "Win32_Security_Authorization",
-  "Win32_Storage_FileSystem",
-  "Win32_System_Memory",
-  "Win32_System_Threading",
-  "Win32_Security_Credentials",
-  "Win32_Graphics_Gdi",
-  "Win32_UI_WindowsAndMessaging",
-] }
+# Windows 原生能力：CredUI 输入由 Tauri 入口使用，降级文件 DACL 由 aoidos-store 使用。
+windows-sys = "0.60"
 # rustls-tls 显式关闭默认特性：不要 native-tls / 自动解压；TLS backend 锁定 rustls(ring) 便于错误链分类。
 # reqwest 0.13 的 rustls feature 绑定 aws-lc-rs（Windows 需 CMake+NASM），改用 no-provider + 显式安装 ring。
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider", "socks"] }

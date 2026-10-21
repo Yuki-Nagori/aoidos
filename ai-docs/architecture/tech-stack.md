@@ -35,7 +35,7 @@
 
 TypeScript 主版本升级前，先核对 Vue 类型检查、Vite、Bun 脚本与测试工具的兼容性，并在完整 `verify` 通过后再更新锁定版本。npm 镜像可能缺失部分包的 `latest` dist-tag，`bun update --latest` 报 tag not found 时按 `bun outdated` 的具体版本号手动写入 `package.json`。
 
-原生密钥输入使用 Windows CredUI、macOS AppKit（objc2）和 Linux GTK 3（gtk-rs）；依赖按目标平台声明，使用点经同型接口调用。平台验证记录归 [019 配置与凭据](../task/019-llm-profile-credentials-impl.md)，不把原生输入可用等同于安装包已验证。
+Tauri 原生密钥输入使用 Windows CredUI、macOS AppKit（objc2）和 Linux GTK 3（gtk-rs）；目标平台依赖只由 `src-tauri` 声明，并经同型接口调用，因此 CLI 不引入 GUI 库。平台验证记录归 [019 配置与凭据](../task/019-llm-profile-credentials-impl.md)，不把原生输入可用等同于安装包已验证。
 
 ## IPC 通道
 

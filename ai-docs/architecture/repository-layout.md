@@ -30,7 +30,8 @@
 │   ├── src/locale_commands/   # 语言偏好 IPC；native.rs 单独封装真实 Wry 菜单 / 托盘适配
 │   ├── src/billing_commands/  # 预算、计价、账本与供应商余额命令适配
 │   ├── src/memory_commands/   # 记忆配置、查询、确认与批次命令适配
-│   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；平台原生输入经 aoidos-llm 分发
+│   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；调用统一原生输入接口
+│   ├── src/native_prompt/     # GTK / AppKit / CredUI 原生输入；仅桌面入口依赖平台 UI 库
 │   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
 │   ├── src/events.rs          # 每流序号与事件信封，窗口投递由 turn_commands 适配
 │   ├── tauri.conf.json        # 窗口 / 打包 / 开发服务器
@@ -53,7 +54,7 @@
 │   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
 │   └── aoidos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
 │       ├── src/providers/    # deepseek/、opencode/、models/ 的 mod.rs 与 tests.rs 并列
-│       └── src/platform/     # 三平台原生输入；Unix 权限共用
+│       └── src/credentials.rs # keyring、Vault 与降级凭据文件；权限策略复用 aoidos-store
 ├── resources/scripts/        # 已发布剧本原文与署名 / 许可，编译期内嵌
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
 ├── tests/web/                 # Vitest 行为测试（目录镜像 src-web）
@@ -79,7 +80,7 @@
 
 组件只做编排与渲染，跨功能共享的纯逻辑进 `shared/utils/` 并配单测，功能私有逻辑留在对应 feature；`commands.rs` 只做解参数、调逻辑、回包，业务长大后在 `src-rust/` 下拆独立 crate（加入 `members`，依赖方向与工程纪律见[职责边界](ts-rust-boundary.md)），命令层只做转发。全局状态、路由、UI 组件库在需求真实出现前不引入，也不建占位目录。
 
-标准库类型与调用不按 import 集中封装：各模块可直接使用 `Path`、`Duration`、`io::Error` 等。带有项目统一存储规则的能力（原子写、私有权限发布、有界读取、缺失路径判断、实例锁）归 `aoidos-store`；共用 JSON 编解码 / 重复键校验 / 规范化归 `aoidos-json`，领域 JSON schema / 版本校验归消费 crate，原生输入和权限适配归 `aoidos-llm::platform`，请求超时归 LLM 调度。只提取真实共用的规则，不为统一调用外观增加转发层。
+标准库类型与调用不按 import 集中封装：各模块可直接使用 `Path`、`Duration`、`io::Error` 等。带有项目统一存储规则的能力（原子写、私有权限发布、有界读取、缺失路径判断、实例锁）归 `aoidos-store`；共用 JSON 编解码 / 重复键校验 / 规范化归 `aoidos-json`，领域 JSON schema / 版本校验归消费 crate。桌面原生输入适配归 `src-tauri`，CLI 输入留在 CLI；文件权限实现归 `aoidos-store`，凭据业务和 keyring 归 `aoidos-llm`。请求超时归 LLM 调度。只提取真实共用的规则，不为统一调用外观增加转发层。
 
 Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../standards/rust.md#rust-模块目录)。
 

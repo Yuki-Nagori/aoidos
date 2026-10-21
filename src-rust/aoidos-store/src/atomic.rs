@@ -60,17 +60,17 @@ fn finish_new_publish(published: io::Result<()>, tmp: &Path, path: &Path) -> Res
     Ok(created)
 }
 
-/// 私有文件原子写：空临时文件先由调用方收紧权限，再写入正文与发布。
+/// 私有文件原子写：空临时文件先由本 crate 按当前平台收紧权限，再写入正文与发布。
 /// 权限失败不写明文，也不替换原文件。
 ///
 /// # Errors
 /// 与 [`write_atomic`] 相同，另包含权限准备失败。
-pub fn write_atomic_private(
-    path: &Path,
-    bytes: &[u8],
-    restrict: fn(&Path) -> Result<()>,
-) -> Result<()> {
-    write_atomic_prepared(path, bytes, Some(restrict))
+pub fn write_atomic_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_prepared(
+        path,
+        bytes,
+        Some(crate::private_permissions::restrict_to_current_user),
+    )
 }
 
 fn write_atomic_prepared(
@@ -426,10 +426,10 @@ mod tests {
         let dir = tdir("private-write");
         let target = dir.join("private.json");
         write_atomic(&target, b"old").unwrap();
-        assert!(write_atomic_private(&target, b"secret", fail).is_err());
+        assert!(write_atomic_prepared(&target, b"secret", Some(fail)).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"old");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
-        write_atomic_private(&target, b"new", ready).unwrap();
+        write_atomic_prepared(&target, b"new", Some(ready)).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"new");
         fs::remove_dir_all(dir).unwrap();
     }
