@@ -1,6 +1,7 @@
 //! 计费命令只解码类型化 IPC，并转交给引擎账本。
 
 use crate::{ipc::CmdError, store_commands::StorageService};
+use aoidos_app::billing::{BillingService, billing_fault as app_billing_fault};
 use aoidos_billing::money::Currency;
 use aoidos_billing::{money::NanoMoney, price::PriceVersion};
 use aoidos_engine::{
@@ -57,6 +58,14 @@ pub(crate) struct SetSettingsArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PriceArgs {
     price: PriceVersion,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ConfirmDeepSeekPriceArgs {
+    profile_id: String,
+    model_id: String,
+    currency: Currency,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -172,10 +181,11 @@ pub(crate) async fn budget_get_monthly(
     storage_job(move || {
         let time_zone = storage.with_database(|connection| {
             BillingLedger::report_time_zone(connection, &args.detected_time_zone)
-                .map_err(billing_fault)
+                .map_err(app_billing_fault)
         })?;
         let items = storage.with_database(|connection| {
-            BillingLedger::month_summary(connection, &args.month, &time_zone).map_err(billing_fault)
+            BillingLedger::month_summary(connection, &args.month, &time_zone)
+                .map_err(app_billing_fault)
         })?;
         Ok(MonthlyPeriod {
             month: args.month,
@@ -196,10 +206,10 @@ pub(crate) async fn budget_get_period(
     let storage = state.storage.clone();
     storage_job(move || {
         let items = storage.with_database(|connection| {
-            BillingLedger::run_summary(connection, &args.run_id).map_err(billing_fault)
+            BillingLedger::run_summary(connection, &args.run_id).map_err(app_billing_fault)
         })?;
         let warnings = storage.with_database(|connection| {
-            BillingLedger::warnings(connection, &args.run_id).map_err(billing_fault)
+            BillingLedger::warnings(connection, &args.run_id).map_err(app_billing_fault)
         })?;
         Ok(RunPeriod {
             run_id: args.run_id,
@@ -231,7 +241,7 @@ pub(crate) async fn budget_list_requests(
                     Fault::new("app.bad-request", "费用账本已更新，请重新读取")
                         .with_detail(serde_json::json!({ "reason": "staleRevision" }))
                 } else {
-                    billing_fault(error)
+                    app_billing_fault(error)
                 }
             })
         })
@@ -250,7 +260,7 @@ pub(crate) async fn budget_retry_settlement(
     storage_job(move || {
         let owner = storage.with_database(|connection| {
             BillingLedger::request_run_id(connection, &args.request_id)
-                .map_err(billing_fault)?
+                .map_err(app_billing_fault)?
                 .ok_or_else(|| Fault::new("app.not-found", "费用记录不存在"))
         })?;
         if owner != args.run_id {
@@ -272,7 +282,7 @@ pub(crate) async fn budget_preview_backfill(
     storage_job(move || {
         storage.with_database(|connection| {
             let Some(preview) = BillingLedger::preview_backfill(connection, &args.request_id)
-                .map_err(billing_fault)?
+                .map_err(app_billing_fault)?
             else {
                 return Ok(None);
             };
@@ -296,7 +306,7 @@ pub(crate) async fn budget_commit_backfill(
     storage_job(move || {
         let owner = storage.with_database(|connection| {
             BillingLedger::request_run_id(connection, &args.request_id)
-                .map_err(billing_fault)?
+                .map_err(app_billing_fault)?
                 .ok_or_else(|| Fault::new("app.not-found", "费用记录不存在"))
         })?;
         if owner != args.run_id {
@@ -311,7 +321,7 @@ pub(crate) async fn budget_commit_backfill(
                 args.expected_revision,
                 &now(),
             )
-            .map_err(billing_fault)?
+            .map_err(app_billing_fault)?
             {
                 aoidos_engine::billing::BackfillResult::Pending(_) => Ok(true),
                 aoidos_engine::billing::BackfillResult::AlreadySettled => Ok(false),
@@ -518,19 +528,9 @@ pub(crate) async fn budget_get_suggested_limits(
     state: tauri::State<'_, StorageService>,
     BillingArgs(args): BillingArgs<RouteArgs>,
 ) -> Result<SuggestedLimits, CmdError> {
-    state.ready()?;
-    let storage = state.storage.clone();
+    let service = BillingService::new(state.storage.clone());
     storage_job(move || {
-        storage.with_database(|connection| {
-            BillingLedger::suggested_limits(
-                connection,
-                &args.provider_id,
-                &args.model_id,
-                &args.route_policy,
-                &now(),
-            )
-            .map_err(billing_fault)
-        })
+        service.suggested_limits(&args.provider_id, &args.model_id, &args.route_policy)
     })
     .await
 }
@@ -541,22 +541,16 @@ pub(crate) async fn budget_get_selected_price(
     state: tauri::State<'_, StorageService>,
     BillingArgs(args): BillingArgs<ProfileRouteArgs>,
 ) -> Result<PriceLookup, CmdError> {
-    state.ready()?;
-    let storage = state.storage.clone();
+    let service = BillingService::new(state.storage.clone());
     storage_job(move || {
-        let dispatch_at = now();
-        let price = storage.with_database(|connection| {
-            BillingLedger::profile_price(
-                connection,
+        service
+            .selected_price(
                 &args.profile_id,
                 &args.provider_id,
                 &args.model_id,
                 &args.route_policy,
-                &dispatch_at,
             )
-            .map_err(billing_fault)
-        })?;
-        Ok(PriceLookup { price })
+            .map(|price| PriceLookup { price })
     })
     .await
 }
@@ -567,21 +561,15 @@ pub(crate) async fn budget_select_price(
     state: tauri::State<'_, StorageService>,
     BillingArgs(args): BillingArgs<SelectPriceArgs>,
 ) -> Result<PriceVersion, CmdError> {
-    state.ready()?;
-    let storage = state.storage.clone();
+    let service = BillingService::new(state.storage.clone());
     storage_job(move || {
-        storage.with_database(|connection| {
-            BillingLedger::select_profile_price(
-                connection,
-                &args.profile_id,
-                &args.provider_id,
-                &args.model_id,
-                &args.route_policy,
-                args.currency,
-                &now(),
-            )
-            .map_err(billing_fault)
-        })
+        service.select_profile_price(
+            &args.profile_id,
+            &args.provider_id,
+            &args.model_id,
+            &args.route_policy,
+            args.currency,
+        )
     })
     .await
 }
@@ -592,18 +580,8 @@ pub(crate) async fn budget_get_settings(
     state: tauri::State<'_, StorageService>,
     BillingArgs(args): BillingArgs<RunArgs>,
 ) -> Result<Option<BudgetSettings>, CmdError> {
-    state.ready()?;
-    let storage = state.storage.clone();
-    storage_job(move || {
-        match storage.with_database(|connection| {
-            BillingLedger::get_settings(connection, &args.run_id).map_err(billing_fault)
-        }) {
-            Ok(settings) => Ok(Some(settings)),
-            Err(error) if error.code == "budget.run-limit-missing" => Ok(None),
-            Err(error) => Err(error),
-        }
-    })
-    .await
+    let service = BillingService::new(state.storage.clone());
+    storage_job(move || service.run_limits(&args.run_id)).await
 }
 
 /// 通过乐观修订校验同时设置两种原币上限。
@@ -614,22 +592,9 @@ pub(crate) async fn budget_set_settings(
 ) -> Result<BudgetSettings, CmdError> {
     let cny = NanoMoney::parse(&args.cny_limit).map_err(|_| bad_amount())?;
     let usd = NanoMoney::parse(&args.usd_limit).map_err(|_| bad_amount())?;
-    state.ready()?;
-    let storage = state.storage.clone();
-    storage_job(move || {
-        storage.with_database(|connection| {
-            BillingLedger::set_settings(
-                connection,
-                &args.run_id,
-                cny,
-                usd,
-                args.expected_revision,
-                &now(),
-            )
-            .map_err(billing_fault)
-        })
-    })
-    .await
+    let service = BillingService::new(state.storage.clone());
+    storage_job(move || service.set_run_limits(&args.run_id, cny, usd, args.expected_revision))
+        .await
 }
 
 /// 查询指定服务商路由当前生效的价格版本。
@@ -638,22 +603,16 @@ pub(crate) async fn budget_get_price(
     state: tauri::State<'_, StorageService>,
     BillingArgs(args): BillingArgs<PriceLookupArgs>,
 ) -> Result<PriceLookup, CmdError> {
-    state.ready()?;
-    let storage = state.storage.clone();
+    let service = BillingService::new(state.storage.clone());
     storage_job(move || {
-        let dispatch_at = now();
-        let price = storage.with_database(|connection| {
-            BillingLedger::active_price_for_currency(
-                connection,
+        service
+            .active_price(
                 &args.provider_id,
                 &args.model_id,
                 &args.route_policy,
-                &dispatch_at,
                 args.currency,
             )
-            .map_err(billing_fault)
-        })?;
-        Ok(PriceLookup { price })
+            .map(|price| PriceLookup { price })
     })
     .await
 }
@@ -664,16 +623,28 @@ pub(crate) async fn budget_register_price(
     state: tauri::State<'_, StorageService>,
     BillingArgs(args): BillingArgs<PriceArgs>,
 ) -> Result<PriceVersion, CmdError> {
-    args.price.validate().map_err(|_| bad_amount())?;
+    let service = BillingService::new(state.storage.clone());
+    storage_job(move || service.register_price(args.price)).await
+}
+
+/// 登记用户确认的 DeepSeek 参考价，并将该币种绑定到 profile。
+#[tauri::command]
+pub(crate) async fn budget_confirm_deepseek_price(
+    state: tauri::State<'_, StorageService>,
+    BillingArgs(args): BillingArgs<ConfirmDeepSeekPriceArgs>,
+) -> Result<PriceVersion, CmdError> {
     state.ready()?;
-    let storage = state.storage.clone();
+    let service = BillingService::new(state.storage.clone());
     storage_job(move || {
-        storage.with_database(|connection| {
-            BillingLedger::register_price(connection, &args.price, &now()).map_err(billing_fault)
-        })?;
-        Ok(args.price)
+        service.confirm_deepseek_price(&args.profile_id, &args.model_id, args.currency)
     })
     .await
+}
+
+/// 返回应用随版本发布的 DeepSeek 参考价目，不访问数据库或密钥库。
+#[tauri::command]
+pub(crate) async fn budget_get_deepseek_price_templates() -> Vec<PriceVersion> {
+    BillingService::builtin_price_templates()
 }
 
 /// 解码 IPC 的完整对象，使 Tauri 参数拒绝走可达的统一错误路径。
@@ -697,27 +668,6 @@ async fn storage_job<T: Send + 'static>(
     aoidos_engine::blocking::run(job)
         .await
         .map_err(CmdError::from)
-}
-
-fn billing_fault(error: BillingError) -> Fault {
-    match error {
-        BillingError::Invalid => Fault::new("app.bad-request", "费用参数不合法"),
-        BillingError::StaleRevision => Fault::new("app.bad-request", "费用账本已更新，请重新读取")
-            .with_detail(serde_json::json!({ "reason": "staleRevision" })),
-        BillingError::LimitMissing => Fault::new("budget.run-limit-missing", "本局尚未设置预算"),
-        BillingError::Exceeded => Fault::new("budget.exceeded", "本局对应币种额度不足"),
-        BillingError::PriceMissing => Fault::new("budget.price-missing", "模型价格尚未登记"),
-        BillingError::PriceHistoryLimit => {
-            Fault::new("budget.price-history-limit", "该模型价格版本已达到安全上限")
-        }
-        BillingError::SettlementBacklog => Fault::new(
-            "budget.settlement-backlog",
-            "待恢复费用达到安全上限，请先重试已有结算",
-        ),
-        BillingError::NotFound => Fault::new("app.not-found", "费用信息不存在"),
-        BillingError::Conflict => Fault::new("budget.conflict", "费用记录发生冲突"),
-        BillingError::Storage => Fault::new("store.database", "费用存储不可用"),
-    }
 }
 
 fn bad_amount() -> CmdError {

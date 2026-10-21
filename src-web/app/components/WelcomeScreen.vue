@@ -54,7 +54,7 @@ const canStart = computed(
   () =>
     !props.product.busy.value &&
     !props.product.keyStatusLoading.value &&
-    props.product.keyStatus.value?.set === true &&
+    props.product.keyStatus.value?.set !== false &&
     scenario.value !== undefined,
 );
 </script>

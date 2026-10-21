@@ -231,6 +231,8 @@ macro_rules! command_handler {
         billing_commands::budget_get_suggested_limits, billing_commands::budget_get_price,
         billing_commands::budget_get_selected_price, billing_commands::budget_select_price,
         billing_commands::budget_get_monthly, billing_commands::budget_register_price,
+        billing_commands::budget_confirm_deepseek_price,
+        billing_commands::budget_get_deepseek_price_templates,
         memory_commands::memory_get_app_config, memory_commands::memory_save_app_config,
         memory_commands::memory_get_script_config, memory_commands::memory_save_script_config,
         memory_commands::memory_list_questions, memory_commands::memory_resolve_question,

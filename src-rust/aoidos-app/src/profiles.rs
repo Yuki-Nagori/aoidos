@@ -83,6 +83,26 @@ impl Profiles {
         Ok(profile)
     }
 
+    /// 验证 profile 是否存在且结构有效，不访问 OS 密钥库。
+    ///
+    /// # Errors
+    /// profile 缺失或配置文件不可读、结构无效时返回 Fault。
+    pub fn validate_profile(&self, profile_id: &str) -> Result<(), Fault> {
+        config::validate_identifier("profileId", profile_id).map_err(invalid_profile)?;
+        let _guard = self
+            .profile_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let profile = self
+            .store()
+            .load()
+            .map_err(store_fault)?
+            .into_iter()
+            .find(|profile| profile.profile_id == profile_id)
+            .ok_or_else(profile_missing)?;
+        profile.validate().map_err(invalid_profile)
+    }
+
     /// 删除 profile；不存在时也成功，保持幂等。
     ///
     /// # Errors
@@ -199,6 +219,10 @@ impl Profiles {
 }
 
 impl aoidos_engine::game::product::ProfileSource for Profiles {
+    fn validate_profile(&self, profile_id: &str) -> Result<(), Fault> {
+        Profiles::validate_profile(self, profile_id)
+    }
+
     fn freeze(&self, profile_id: &str) -> Result<ResolvedProfile, Fault> {
         Profiles::freeze(self, profile_id)
     }
@@ -267,7 +291,10 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct MemoryCredentials(Mutex<BTreeMap<String, String>>);
+    struct MemoryCredentials(
+        Mutex<BTreeMap<String, String>>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    );
 
     impl CredentialStore for MemoryCredentials {
         fn set_key(
@@ -286,6 +313,7 @@ mod tests {
             &self,
             provider_id: &str,
         ) -> aoidos_store::error::Result<Option<secrecy::SecretString>> {
+            self.1.fetch_add(1, Ordering::Relaxed);
             Ok(self
                 .0
                 .lock()
@@ -363,6 +391,26 @@ mod tests {
             service.freeze("narration").err().unwrap().code,
             "app.not-found"
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn profile_validation_does_not_read_credentials() {
+        let directory = temp_dir();
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let credentials = Box::new(MemoryCredentials(
+            Mutex::new(BTreeMap::new()),
+            reads.clone(),
+        ));
+        let service = Profiles::with_credentials(&directory, credentials);
+        service.save(profile()).unwrap();
+
+        service.validate_profile("narration").unwrap();
+        assert_eq!(
+            service.validate_profile("missing").unwrap_err().code,
+            "app.not-found"
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

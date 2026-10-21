@@ -25,6 +25,19 @@ pub struct ResolvedProfile {
 }
 /// 保存配置 / 凭据的读取锁由实际所有者提供；不读取 Webview 的密钥或端点。
 pub trait ProfileSource: Send + Sync {
+    /// 验证配置结构但不读取密钥；入口会在真正生成回合时再冻结凭据。
+    ///
+    /// 默认实现保留旧 adapter 语义；使用独立 profile 存储的应用层应覆盖此方法。
+    /// # Errors
+    /// 未知配置或结构非法时返回稳定 Fault。
+    fn validate_profile(&self, id: &str) -> Result<(), Fault> {
+        let resolved = self.freeze(id)?;
+        if resolved.frozen.profile.profile_id != id {
+            return Err(Fault::bad_request());
+        }
+        Ok(())
+    }
+
     /// # Errors
     /// 未知配置、存储 / 凭据 / 代理读取失败按稳定错误返回。
     fn freeze(&self, id: &str) -> Result<ResolvedProfile, Fault>;
@@ -124,6 +137,11 @@ impl ProfileFactory {
             self.diagnostics.clone(),
             run_id.map(str::to_owned),
         )
+    }
+
+    fn validate_profile(&self, id: &str) -> Result<(), Fault> {
+        aoidos_llm::config::validate_identifier("profileId", id).map_err(invalid_profile)?;
+        self.source.validate_profile(id)
     }
 
     /// 按已冻结周目 profile 准备一个受统一账本约束的私有请求。
@@ -286,9 +304,11 @@ impl Product {
             }
         }
         let _lease = self.coordinator.acquire()?;
+        let preferences = self.storage.preferences.clone();
+        crate::blocking::run(move || preferences.get()).await?;
         let factory = self.factory.clone();
         let check_id = profile_id.clone();
-        crate::blocking::run(move || factory.for_profile(&check_id, None).map(|_| ())).await?;
+        crate::blocking::run(move || factory.validate_profile(&check_id)).await?;
         if let Some(previous) = &previous {
             match service.get_phase(&previous.session_id) {
                 Ok(_) => {

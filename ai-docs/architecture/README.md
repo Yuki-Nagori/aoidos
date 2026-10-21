@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-20。
+更新日期：2026-10-21。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -89,6 +89,7 @@ src-cli/（CLI / TUI 二进制入口，直接调用共享应用服务；fake Pro
 ```text
 src-tauri
   ├─→ aoidos-app（profile / 凭据服务与 GUI / CLI 共用运行时）
+  │     ├─→ aoidos-billing
   │     ├─→ aoidos-engine
   │     ├─→ aoidos-llm
   │     └─→ aoidos-store
@@ -127,7 +128,7 @@ src-cli
 
 原生测试 crate 是测试入口，通过 dev-dependencies 消费被测 crate，不被生产 crate 反向依赖。033 已接入记忆产品处理链路，真实样本与生产参数验收仍在进行；计费运行时由 engine 持有账本并实现 LLM 的预算端口。端口定义与实现归属见[职责边界](ts-rust-boundary.md#回合协调与端口依赖)，不能靠反向依赖解决类型复用。
 
-058 正在将游戏运行链路迁入 `aoidos-app`。该 crate 负责 profile / 凭据服务、回合协调器、诊断状态、代理快照、`Product` / runtime 装配及当前周目只读计费摘要；Tauri 和 `src-cli/` 中的 `aoidos-cli` 在进程内复用它，不启动彼此子进程。入口为实现 engine 事件端口、共享数据根锁和受控展示类型保留少量直接依赖；这些 adapter 不复制业务状态机。engine 和领域 crate 不依赖 app，两个入口也不互相依赖。细节见[分层规范](../standards/layering.md)和[TS / Rust 边界](ts-rust-boundary.md)。
+058 将游戏运行链路迁入 `aoidos-app`。该 crate 负责 profile / 凭据服务、回合协调器、诊断状态、代理快照、`Product` / runtime 装配及共享计价 / 预算服务；061 使 Tauri 与 CLI/TUI 共用计价、价格选择和单局额度用例，价目模板唯一维护在 billing crate；Tauri 和 `src-cli/` 中的 `aoidos-cli` 在进程内复用它，不启动彼此子进程。入口为实现 engine 事件端口、共享数据根锁和受控展示类型保留少量直接依赖；这些 adapter 不复制业务状态机。engine 和领域 crate 不依赖 app，两个入口也不互相依赖。细节见[分层规范](../standards/layering.md)和[TS / Rust 边界](ts-rust-boundary.md)。
 
 周目历史目录与选择 / 删除不属于 058 的设置面板。059 定稿 `sessionId`、独立 `memoryRunId` 与 `billingRunId` 的映射、profile 快照、旧数据发现和跨存储删除 journal；060 将通过共享 `aoidos-app` 生命周期 API 接入 Tauri 与 CLI/TUI。相关持久化与不可逆边界见[存储架构](storage.md#周目目录与生命周期059-已定稿060-待实现)。
 

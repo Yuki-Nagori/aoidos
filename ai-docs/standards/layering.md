@@ -1,6 +1,6 @@
 # 依赖分层规范
 
-更新日期：2026-10-20。本文规定 Aoidos 的 Rust crate、Tauri 壳、Vue 层及测试代码的依赖方向。实现边界见[架构总览](../architecture/README.md)与[TS / Rust 边界](../architecture/ts-rust-boundary.md)；CI 检查不得替代架构评审。
+更新日期：2026-10-21。本文规定 Aoidos 的 Rust crate、Tauri 壳、Vue 层及测试代码的依赖方向。实现边界见[架构总览](../architecture/README.md)与[TS / Rust 边界](../architecture/ts-rust-boundary.md)；CI 检查不得替代架构评审。
 
 ## Rust crate
 
@@ -13,7 +13,7 @@
 | L2：领域服务        | `aoidos-memory`                                                  | `aoidos-json`、`aoidos-store`                                                          | 记忆派生数据、schema 与恢复                                         |
 | L2：模型服务        | `aoidos-llm`                                                     | `aoidos-json`、`aoidos-store`                                                          | Provider、请求策略、配置与凭据                                      |
 | L3：应用引擎        | `aoidos-engine`                                                  | L1 与 L2 的全部 crate                                                                  | 回合、记录和游戏规则的编排；不得依赖 Tauri、Vue 或桌面壳            |
-| L4：共享应用服务    | `aoidos-app`（058 实施中）                                       | `aoidos-engine`、`aoidos-llm`、`aoidos-store`                                          | profile / 凭据、共享运行装配及只读本局费用；不依赖入口 adapter      |
+| L4：共享应用服务    | `aoidos-app`                                                     | `aoidos-billing`、`aoidos-engine`、`aoidos-llm`、`aoidos-store`                        | profile / 凭据、共享运行装配及计费设置；不依赖入口 adapter          |
 | L5：桌面与 CLI 入口 | `aoidos`（`src-tauri`）、`aoidos-cli`（`src-cli`）               | 均依赖 `aoidos-app`；入口 adapter 可依赖实现 engine 事件端口及共享数据根锁所需 crate   | Tauri IPC / 平台事件或 CLI 参数 / 终端输入及展示；入口相互独立      |
 | 验证消费者          | `aoidos-native-tests`                                            | `aoidos`、`aoidos-app`、`aoidos-engine`、`aoidos-llm`、`aoidos-locale`、`aoidos-store` | 跨入口、共享应用层与桌面会话验证；生产 crate 不得反向依赖测试 crate |
 
@@ -42,7 +42,7 @@ aoidos-native-tests → { aoidos, aoidos-app, 被测领域 crate }
 
 应用层构造接收宿主解析的数据根，保持 Tauri 现有数据位置兼容；CLI 默认使用同一产品数据根。应用层统一执行 profile 文件锁、密钥库访问、配置冻结与运行时装配，不复制各入口的 profile 冻结逻辑。操作系统凭据后端继续由 `aoidos-llm` 提供；Tauri 的原生对话框与 CLI 的终端输入分别留在入口，不让应用层等待 UI 输入。
 
-依赖边只允许入口 `L5 → aoidos-app → aoidos-engine / aoidos-llm / aoidos-store`，以及 engine 依赖已登记的 L1/L2；L1/L2/L3 不得反向引用 `aoidos-app`，Tauri 与 CLI 之间不得存在边。应用层若需要入口能力，必须通过窄小的平台无关端口由入口注入；不得由 engine 或 app 反向依赖 adapter。拆分时先登记 Cargo 依赖边并扩展 `lint:layers`，再迁移装配；未迁移的 Tauri 功能可以保留已有直连，不得以此把游戏运行逻辑留在命令层。
+依赖边只允许入口 `L5 → aoidos-app → aoidos-billing / aoidos-engine / aoidos-llm / aoidos-store`，以及 engine 依赖已登记的 L1/L2；L1/L2/L3 不得反向引用 `aoidos-app`，Tauri 与 CLI 之间不得存在边。应用层对 billing 的直接依赖仅用于共用计价类型、默认价目与应用用例，事务账本仍由 engine 持有；不得在 app 重复实现账本规则。应用层若需要入口能力，必须通过窄小的平台无关端口由入口注入；不得由 engine 或 app 反向依赖 adapter。拆分时先登记 Cargo 依赖边并扩展 `lint:layers`，再迁移装配；未迁移的 Tauri 功能可以保留已有直连，不得以此把游戏运行逻辑留在命令层。
 
 ## Web 层
 

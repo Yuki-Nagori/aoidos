@@ -1315,6 +1315,35 @@ impl BillingLedger {
             currency,
         )?
         .ok_or(BillingError::NotFound)?;
+        Self::pin_profile_price(connection, profile_id, price, selected_at)
+    }
+
+    /// Pins a specific immutable price version to a profile without resolving by currency.
+    pub fn select_profile_price_version(
+        connection: &mut Connection,
+        profile_id: &str,
+        version_id: &str,
+        selected_at: &str,
+    ) -> Result<PriceVersion, BillingError> {
+        validate_text(profile_id, 128)?;
+        validate_text(version_id, 128)?;
+        validate_text(selected_at, 64)?;
+        let price = Self::price_by_id(connection, version_id)?.ok_or(BillingError::NotFound)?;
+        if !price
+            .is_effective_at(selected_at)
+            .map_err(|_| BillingError::Invalid)?
+        {
+            return Err(BillingError::NotFound);
+        }
+        Self::pin_profile_price(connection, profile_id, price, selected_at)
+    }
+
+    fn pin_profile_price(
+        connection: &mut Connection,
+        profile_id: &str,
+        price: PriceVersion,
+        selected_at: &str,
+    ) -> Result<PriceVersion, BillingError> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
@@ -1333,14 +1362,14 @@ impl BillingLedger {
         transaction
             .execute(
                 "INSERT INTO billing_active_profile_prices(profile_id,provider_id,model_id,route_policy,currency,price_version_id,selected_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(profile_id) DO UPDATE SET provider_id=excluded.provider_id,model_id=excluded.model_id,route_policy=excluded.route_policy,currency=excluded.currency,price_version_id=excluded.price_version_id,selected_at=excluded.selected_at",
-                params![profile_id,provider_id,model_id,route_policy,currency.code(),price.version_id,selected_at],
+                params![profile_id,price.provider_id,price.model_id,price.route_policy,price.currency.code(),price.version_id,selected_at],
             )
             .map_err(storage)?;
         let operation_id = format!("profile-price:{}:{}", profile_id, price.version_id);
         let details = serde_json::json!({
             "profileId": profile_id,
             "priceVersionId": price.version_id,
-            "currency": currency.code(),
+            "currency": price.currency.code(),
         });
         transaction
             .execute(

@@ -1,7 +1,7 @@
 //! 终端视图只把键盘 / 鼠标转换成操作；游戏状态仍由共享 app 与 engine 所有。
 
 use crate::{CliApp, events::RuntimeEvent};
-use aoidos_app::billing::{RequestBillingPreflight, RunBillingSummary};
+use aoidos_app::billing::{Currency, NanoMoney, RequestBillingPreflight, RunBillingSummary};
 use aoidos_engine::{
     game::{assets::ScriptInfo, product::OpenedSession, state::PhaseSnapshot},
     ports::TurnEvent,
@@ -61,6 +61,7 @@ enum SettingsSection {
 
 struct ViewState {
     profiles: Vec<LlmProfile>,
+    price_templates: Vec<aoidos_app::billing::PriceVersion>,
     scripts: Vec<ScriptInfo>,
     profile_index: usize,
     script_index: usize,
@@ -82,6 +83,12 @@ struct ViewState {
     billing_scroll: usize,
     settings_open: bool,
     settings_section: SettingsSection,
+    budget_editing: bool,
+    budget_edit_field: usize,
+    budget_edit_run_id: Option<String>,
+    budget_edit_revision: Option<u64>,
+    budget_cny_draft: String,
+    budget_usd_draft: String,
     pending_action: Option<PendingAction>,
     locale: &'static str,
 }
@@ -103,6 +110,7 @@ impl ViewState {
     fn new(profiles: Vec<LlmProfile>, scripts: Vec<ScriptInfo>) -> Self {
         Self {
             profiles,
+            price_templates: Vec::new(),
             scripts,
             profile_index: 0,
             script_index: 0,
@@ -124,6 +132,12 @@ impl ViewState {
             billing_scroll: 0,
             settings_open: false,
             settings_section: SettingsSection::Model,
+            budget_editing: false,
+            budget_edit_field: 0,
+            budget_edit_run_id: None,
+            budget_edit_revision: None,
+            budget_cny_draft: String::new(),
+            budget_usd_draft: String::new(),
             pending_action: None,
             locale: terminal_locale(),
         }
@@ -154,6 +168,7 @@ pub async fn run(app: &mut CliApp) -> Result<(), Box<dyn std::error::Error>> {
         return Err("尚无模型配置。请先在 Aoidos 设置中添加 profile，再运行 aoidos。".into());
     }
     let mut state = ViewState::new(profiles, scripts);
+    state.price_templates = app.services.billing.price_templates();
     let terminal_session = TerminalSession::start()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let result = event_loop(app, &mut state, &mut terminal).await;
@@ -285,24 +300,37 @@ async fn handle_settings_key(
     state: &mut ViewState,
     key: KeyEvent,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match key.code {
-        KeyCode::F(2) | KeyCode::Esc | KeyCode::Char('s' | 'S') => {
-            state.settings_open = false;
-            if state.session.is_some() {
-                state.focus = Focus::Input;
+    if state.settings_section == SettingsSection::Billing && state.budget_editing {
+        match key.code {
+            KeyCode::Esc => cancel_budget_edit(state),
+            KeyCode::Tab | KeyCode::Right | KeyCode::BackTab | KeyCode::Left => {
+                state.budget_edit_field ^= 1;
             }
+            KeyCode::Backspace => {
+                active_budget_draft(state).pop();
+            }
+            KeyCode::Char(character) if character.is_ascii_digit() || character == '.' => {
+                let draft = active_budget_draft(state);
+                if draft.len() < 24 {
+                    draft.push(character);
+                }
+            }
+            KeyCode::Enter => save_run_budget(app, state),
+            _ => {}
         }
+        return Ok(());
+    }
+    match key.code {
+        KeyCode::F(2) | KeyCode::Esc | KeyCode::Char('s' | 'S') => close_settings(state),
         KeyCode::Tab | KeyCode::Right => {
-            state.settings_section = next_settings_section(state.settings_section, true);
-            state.billing_scroll = 0;
+            switch_settings_section(state, next_settings_section(state.settings_section, true))
         }
         KeyCode::BackTab | KeyCode::Left => {
-            state.settings_section = next_settings_section(state.settings_section, false);
-            state.billing_scroll = 0;
+            switch_settings_section(state, next_settings_section(state.settings_section, false))
         }
-        KeyCode::Char('1') => state.settings_section = SettingsSection::Model,
-        KeyCode::Char('2') => state.settings_section = SettingsSection::Script,
-        KeyCode::Char('3') => state.settings_section = SettingsSection::Billing,
+        KeyCode::Char('1') => switch_settings_section(state, SettingsSection::Model),
+        KeyCode::Char('2') => switch_settings_section(state, SettingsSection::Script),
+        KeyCode::Char('3') => switch_settings_section(state, SettingsSection::Billing),
         KeyCode::Up | KeyCode::Down => match state.settings_section {
             SettingsSection::Model => {
                 state.profile_index =
@@ -323,6 +351,16 @@ async fn handle_settings_key(
                 scroll_billing(state, true);
             }
         }
+        KeyCode::Char('c' | 'C' | 'u' | 'U')
+            if state.settings_section == SettingsSection::Model =>
+        {
+            if let Some(currency) = billing_currency_shortcut(key.code) {
+                confirm_profile_currency(app, state, currency);
+            }
+        }
+        KeyCode::Char('e' | 'E') if state.settings_section == SettingsSection::Billing => {
+            begin_budget_edit(app, state);
+        }
         KeyCode::Enter if state.settings_section != SettingsSection::Billing => {
             state.status = "选择已保存到本次 TUI；新周目开始时生效。".into();
         }
@@ -339,6 +377,164 @@ async fn handle_settings_key(
     Ok(())
 }
 
+fn confirm_profile_currency(app: &CliApp, state: &mut ViewState, currency: Currency) {
+    let Some(profile) = state.profiles.get(state.profile_index) else {
+        state.status = "请先选择模型配置。".into();
+        return;
+    };
+    if profile.provider_id != "deepseek" {
+        state.status = "当前只有 DeepSeek 提供内置 CNY / USD 价格。".into();
+        return;
+    }
+    if profile.model != "deepseek-flash" {
+        state.status = "当前只有 DeepSeek Flash 提供内置价格。".into();
+        return;
+    }
+    match app
+        .services
+        .billing
+        .confirm_deepseek_price(&profile.profile_id, &profile.model, currency)
+    {
+        Ok(_) => {
+            state.status = format!(
+                "已将 {} 的 DeepSeek 计价设置为 {}。",
+                profile.profile_id,
+                currency.code()
+            );
+            if state.session.is_some() {
+                refresh_billing_for_active_session(app, state);
+            }
+        }
+        Err(error) => state.status = display_fault(error).to_string(),
+    }
+}
+
+fn active_budget_draft(state: &mut ViewState) -> &mut String {
+    if state.budget_edit_field == 0 {
+        &mut state.budget_cny_draft
+    } else {
+        &mut state.budget_usd_draft
+    }
+}
+
+fn begin_budget_edit(app: &CliApp, state: &mut ViewState) {
+    let Some(session) = state.session.as_ref() else {
+        state.status = "请先打开或新建周目，再设置本局预算。".into();
+        return;
+    };
+    let existing = state
+        .billing_preflight
+        .as_ref()
+        .and_then(|preflight| preflight.budget.as_ref());
+    if let Some(budget) = existing {
+        state.budget_cny_draft = budget.cny_limit.to_string();
+        state.budget_usd_draft = budget.usd_limit.to_string();
+    } else {
+        let profile = state.session_profile.as_ref();
+        let suggested = profile.and_then(|profile| {
+            app.services
+                .billing
+                .suggested_limits(&profile.provider_id, &profile.model, "direct")
+                .ok()
+        });
+        state.budget_cny_draft = suggested
+            .as_ref()
+            .and_then(|limits| limits.cny)
+            .map_or_else(|| "0".into(), |limit| limit.to_string());
+        state.budget_usd_draft = suggested
+            .as_ref()
+            .and_then(|limits| limits.usd)
+            .map_or_else(|| "0".into(), |limit| limit.to_string());
+    }
+    state.budget_edit_field = 0;
+    state.budget_edit_run_id = Some(session.memory_run_id.clone());
+    state.budget_edit_revision = existing.map(|budget| budget.revision);
+    state.budget_editing = true;
+    state.status = format!("编辑周目 {} 的 CNY / USD 上限。", session.memory_run_id);
+}
+
+fn switch_settings_section(state: &mut ViewState, section: SettingsSection) {
+    if state.settings_section != section {
+        if state.budget_editing {
+            cancel_budget_edit(state);
+        }
+        state.billing_scroll = 0;
+    }
+    state.settings_section = section;
+}
+
+fn close_settings(state: &mut ViewState) {
+    if state.budget_editing {
+        cancel_budget_edit(state);
+    }
+    state.settings_open = false;
+    if state.session.is_some() {
+        state.focus = Focus::Input;
+    }
+}
+
+fn cancel_budget_edit(state: &mut ViewState) {
+    state.budget_editing = false;
+    state.budget_edit_run_id = None;
+    state.budget_edit_revision = None;
+    state.status = "已取消预算编辑。".into();
+}
+
+fn save_run_budget(app: &CliApp, state: &mut ViewState) {
+    let Some(run_id) = state
+        .session
+        .as_ref()
+        .map(|session| session.memory_run_id.clone())
+    else {
+        state.status = "请先打开或新建周目，再设置本局预算。".into();
+        return;
+    };
+    if state.budget_edit_run_id.as_deref() != Some(run_id.as_str()) {
+        cancel_budget_edit(state);
+        state.status = "周目已切换，已取消旧周目的预算编辑。".into();
+        return;
+    }
+    let cny = match NanoMoney::parse(&state.budget_cny_draft) {
+        Ok(value) => value,
+        Err(_) => {
+            state.status = "CNY 上限格式无效；请输入非负十进制金额。".into();
+            return;
+        }
+    };
+    let usd = match NanoMoney::parse(&state.budget_usd_draft) {
+        Ok(value) => value,
+        Err(_) => {
+            state.status = "USD 上限格式无效；请输入非负十进制金额。".into();
+            return;
+        }
+    };
+    let revision = state.budget_edit_revision;
+    match app
+        .services
+        .billing
+        .set_run_limits(&run_id, cny, usd, revision)
+    {
+        Ok(_) => {
+            state.budget_editing = false;
+            state.budget_edit_run_id = None;
+            state.budget_edit_revision = None;
+            state.status = "本局 CNY / USD 上限已保存。".into();
+            refresh_billing(app, state, &run_id);
+        }
+        Err(error) => {
+            state.status = friendly_error(&error.code, &error.message, state.locale);
+        }
+    }
+}
+
+fn billing_currency_shortcut(code: KeyCode) -> Option<Currency> {
+    match code {
+        KeyCode::Char('c' | 'C') => Some(Currency::Cny),
+        KeyCode::Char('u' | 'U') => Some(Currency::Usd),
+        _ => None,
+    }
+}
+
 async fn handle_settings_click(
     app: &mut CliApp,
     state: &mut ViewState,
@@ -347,10 +543,7 @@ async fn handle_settings_click(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let layout = settings_layout(app_screen_area());
     if contains(layout.close, x, y) {
-        state.settings_open = false;
-        if state.session.is_some() {
-            state.focus = Focus::Input;
-        }
+        close_settings(state);
         return Ok(());
     }
     for (section, area) in [
@@ -359,25 +552,40 @@ async fn handle_settings_click(
         (SettingsSection::Billing, layout.billing_tab),
     ] {
         if contains(area, x, y) {
-            if state.settings_section != section {
-                state.billing_scroll = 0;
-            }
-            state.settings_section = section;
+            switch_settings_section(state, section);
             return Ok(());
         }
     }
     if contains(layout.body, x, y) {
         match state.settings_section {
             SettingsSection::Model if !state.profiles.is_empty() => {
-                let intro_rows = wrap_visual_lines(
-                    "所选模型只用于新周目；当前周目继续使用开局时冻结的配置。",
-                    usize::from(layout.body.width).max(1),
-                )
-                .len();
+                let width = usize::from(layout.body.width).max(1);
+                let current_id = state
+                    .session_profile
+                    .as_ref()
+                    .map(|profile| profile.profile_id.as_str());
+                let intro_rows = model_intro_lines(width, &state.price_templates).len();
+                let profile_heights = state
+                    .profiles
+                    .iter()
+                    .enumerate()
+                    .map(|(index, profile)| {
+                        wrap_visual_lines(
+                            &model_profile_text(
+                                profile,
+                                current_id == Some(profile.profile_id.as_str()),
+                                index == state.profile_index,
+                            ),
+                            width,
+                        )
+                        .len()
+                    })
+                    .collect::<Vec<_>>();
                 let row = usize::from(y.saturating_sub(layout.body.y));
-                if row >= intro_rows {
-                    state.profile_index =
-                        (row - intro_rows).min(state.profiles.len().saturating_sub(1));
+                if let Some(index) =
+                    settings_profile_index_at_row(row, intro_rows, &profile_heights)
+                {
+                    state.profile_index = index;
                 }
             }
             SettingsSection::Script if !state.scripts.is_empty() => {
@@ -396,6 +604,9 @@ async fn handle_settings_click(
             _ => {}
         }
     } else if contains(layout.new_run, x, y) {
+        if state.budget_editing {
+            cancel_budget_edit(state);
+        }
         if state.busy || state.pending_action.is_some() {
             state.status = "当前回合尚未结束，暂不能开始新周目。".into();
         } else {
@@ -543,6 +754,9 @@ async fn open_session(
             state.billing_preflight = None;
             state.billing_error = None;
             state.billing_scroll = 0;
+            state.budget_editing = false;
+            state.budget_edit_run_id = None;
+            state.budget_edit_revision = None;
             state.phase = app.services.runtime.get_phase(&session.session_id).ok();
             load_history(app, state, &session.session_id);
             let run_id = session.memory_run_id.clone();
@@ -653,7 +867,8 @@ fn scroll_billing(state: &mut ViewState, down: bool) {
     };
     let visible_rows = if state.settings_open {
         let info_rows =
-            settings_billing_info_lines(usize::from(area.width.saturating_sub(1)).max(1)).len();
+            settings_billing_info_lines(state, usize::from(area.width.saturating_sub(1)).max(1))
+                .len();
         usize::from(area.height).saturating_sub(info_rows) as u16
     } else {
         area.height.saturating_sub(2)
@@ -1755,10 +1970,11 @@ fn draw_settings(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
                 .session_profile
                 .as_ref()
                 .map(|profile| profile.profile_id.as_str());
-            let mut lines = vec![Line::styled(
-                "所选模型只用于新周目；当前周目继续使用开局时冻结的配置。",
-                Style::default().fg(COLOR_MUTED),
-            )];
+            let width = usize::from(layout.body.width).max(1);
+            let mut lines = model_intro_lines(width, &state.price_templates)
+                .into_iter()
+                .map(|line| Line::styled(line, Style::default().fg(COLOR_MUTED)))
+                .collect::<Vec<_>>();
             if state.profiles.is_empty() {
                 lines.push(Line::styled(
                     "没有可用模型配置。",
@@ -1768,17 +1984,8 @@ fn draw_settings(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
                 lines.extend(state.profiles.iter().enumerate().map(|(index, profile)| {
                     let selected = index == state.profile_index;
                     let current = current_id == Some(profile.profile_id.as_str());
-                    let marker = if selected { "› " } else { "  " };
-                    let suffix = if current { "  · 当前周目" } else { "" };
                     Line::styled(
-                        format!(
-                            "{marker}{} · {}/{} · max {}{}",
-                            profile.profile_id,
-                            profile.provider_id,
-                            profile.model,
-                            profile.sampling.max_tokens,
-                            suffix,
-                        ),
+                        model_profile_text(profile, current, selected),
                         row_style(selected, true),
                     )
                 }));
@@ -1823,7 +2030,7 @@ fn draw_settings(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         }
         SettingsSection::Billing => {
             let width = usize::from(layout.body.width.saturating_sub(1)).max(1);
-            let mut lines = settings_billing_info_lines(width);
+            let mut lines = settings_billing_info_lines(state, width);
             let available = usize::from(layout.body.height).saturating_sub(lines.len());
             lines.extend(billing_lines(state, available, width));
             lines
@@ -1894,6 +2101,75 @@ fn draft_cursor_column(draft: &str, area: Rect) -> usize {
 #[cfg(test)]
 fn draft_cursor_row(draft: &str, area: Rect) -> usize {
     draft_cursor_position(draft, usize::from(area.width.saturating_sub(4)).max(1)).1
+}
+
+fn settings_profile_index_at_row(
+    row: usize,
+    intro_rows: usize,
+    profile_heights: &[usize],
+) -> Option<usize> {
+    let mut first_row = intro_rows;
+    for (index, height) in profile_heights.iter().copied().enumerate() {
+        let last_row = first_row.saturating_add(height.max(1));
+        if (first_row..last_row).contains(&row) {
+            return Some(index);
+        }
+        first_row = last_row;
+    }
+    None
+}
+
+fn model_intro_lines(width: usize, prices: &[aoidos_app::billing::PriceVersion]) -> Vec<String> {
+    let mut content = vec![
+        "所选模型只用于新周目；当前周目继续使用开局时冻结的配置。",
+        "DeepSeek Flash 内置参考价格（每百万 Token）：",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    for price in prices {
+        let peak = price.schedule.as_ref().map(|schedule| &schedule.peak);
+        content.push(format!(
+            "{}：未缓存输入 {} / 缓存命中 {} / 缓存写入 {} / 输出 {}{}",
+            price.currency.code(),
+            price.input_uncached.to_decimal_string(),
+            price.input_cached.to_decimal_string(),
+            price
+                .input_cached_write
+                .as_ref()
+                .unwrap_or(&price.input_uncached)
+                .to_decimal_string(),
+            price.output.to_decimal_string(),
+            peak.map(|peak| format!(
+                "；峰时输入 {}/{}、输出 {}",
+                peak.input_uncached.to_decimal_string(),
+                peak.input_cached.to_decimal_string(),
+                peak.output.to_decimal_string()
+            ))
+            .unwrap_or_default(),
+        ));
+        content.push(format!(
+            "来源：{} · 核验 {} · 按 C 登记 CNY，按 U 登记 USD",
+            price.source_url.as_deref().unwrap_or("DeepSeek 官方价格页"),
+            price.checked_at.get(..10).unwrap_or(&price.checked_at),
+        ));
+    }
+    content
+        .iter()
+        .flat_map(|text| wrap_visual_lines(text, width))
+        .collect()
+}
+
+fn model_profile_text(profile: &LlmProfile, current: bool, selected: bool) -> String {
+    format!(
+        "{}{} · {}/{} · max {}{}",
+        if selected { "› " } else { "  " },
+        profile.profile_id,
+        profile.provider_id,
+        profile.model,
+        profile.sampling.max_tokens,
+        if current { "  · 当前周目" } else { "" },
+    )
 }
 
 fn wrap_visual_lines(text: &str, width: usize) -> Vec<String> {
@@ -2233,8 +2509,18 @@ fn billing_title(state: &ViewState) -> String {
     "本局费用 · PgUp/PgDn 滚动".into()
 }
 
-fn settings_billing_info_lines(width: usize) -> Vec<Line<'static>> {
-    wrap_display_lines("账单只读；编辑预算和价格请使用桌面端设置。", width)
+fn settings_billing_info_lines(state: &ViewState, width: usize) -> Vec<Line<'static>> {
+    let text = if state.budget_editing {
+        format!(
+            "编辑本局上限：{} CNY  |  {} USD。Tab 切换币种，输入非负金额，Enter 保存，Esc 取消。未登记价格的币种保持 0，不换算。",
+            state.budget_cny_draft, state.budget_usd_draft
+        )
+    } else if state.session.is_some() {
+        "按 E 编辑本局 CNY / USD 上限；建议值只使用已登记价格，不做币种换算。模型页按 C / U 确认 DeepSeek Flash 人民币 / 美元价格。".into()
+    } else {
+        "按 C / U 为 DeepSeek Flash 确认人民币 / 美元价格。打开或新建周目后，按 E 编辑本局 CNY / USD 上限。".into()
+    };
+    wrap_display_lines(&text, width)
 }
 
 fn wrap_display_lines(text: &str, width: usize) -> Vec<Line<'static>> {

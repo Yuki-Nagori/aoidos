@@ -23,7 +23,7 @@ const ALLOWED_DEPENDENCIES: Record<string, readonly string[]> = {
     "aoidos-store",
     "aoidos-theme",
   ],
-  "aoidos-app": ["aoidos-engine", "aoidos-llm", "aoidos-store"],
+  "aoidos-app": ["aoidos-billing", "aoidos-engine", "aoidos-llm", "aoidos-store"],
   "aoidos-cli": ["aoidos-app", "aoidos-engine", "aoidos-llm", "aoidos-store"],
   aoidos: [
     "aoidos-billing",

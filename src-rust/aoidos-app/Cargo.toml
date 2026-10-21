@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+aoidos-billing.workspace = true
 aoidos-engine.workspace = true
 aoidos-llm.workspace = true
 aoidos-store.workspace = true

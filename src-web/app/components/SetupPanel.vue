@@ -24,6 +24,9 @@ const { open, initialSection, product, theme, locale, billing, preferences, erro
   preferences: ReturnType<typeof useUiPreferences>;
   errorMessage?: string;
 }>();
+const selectedPriceTemplate = computed(() =>
+  product.priceTemplates.value.find((price) => price.currency === product.billingCurrency.value),
+);
 const emit = defineEmits<{ reconnect: []; close: [] }>();
 const panel = ref<HTMLElement>();
 const activeSection = ref("appearance");
@@ -369,14 +372,92 @@ function themeName(id: string, fallback: string): string {
               </div>
             </div>
             <div
+              v-if="product.providerId.value === 'deepseek' && product.model.value === 'deepseek-flash'"
+              class="settings-currency-card card"
+            >
+              <span class="settings-skin-copy">
+                <strong>{{ t("settings.billingCurrency") }}</strong>
+                <span class="text-sm text-muted">{{ t("settings.billingCurrencyHint") }}</span>
+              </span>
+              <SelectMenu
+                :model-value="product.billingCurrency.value"
+                :options="[
+                  { value: 'CNY', label: t('settings.billingCurrencyCny') },
+                  { value: 'USD', label: t('settings.billingCurrencyUsd') },
+                ]"
+                :label="t('settings.billingCurrency')"
+                :disabled="product.busy.value"
+                @update:model-value="product.setBillingCurrency($event)"
+              />
+              <fieldset v-if="selectedPriceTemplate" class="settings-price-preview">
+                <legend>{{ t("settings.pricePreviewTitle") }}</legend>
+                <dl>
+                  <div>
+                    <dt>{{ t("settings.priceInputUncached") }}</dt>
+                    <dd>{{ selectedPriceTemplate.inputUncached }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("settings.priceInputCached") }}</dt>
+                    <dd>{{ selectedPriceTemplate.inputCached }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("settings.priceInputCachedWrite") }}</dt>
+                    <dd>{{ selectedPriceTemplate.inputCachedWrite ?? "—" }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("settings.priceOutput") }}</dt>
+                    <dd>{{ selectedPriceTemplate.output }}</dd>
+                  </div>
+                  <template v-if="selectedPriceTemplate.schedule">
+                    <div>
+                      <dt>{{ t("settings.pricePeakInputUncached") }}</dt>
+                      <dd>{{ selectedPriceTemplate.schedule.peak.inputUncached }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("settings.pricePeakInputCached") }}</dt>
+                      <dd>{{ selectedPriceTemplate.schedule.peak.inputCached }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("settings.pricePeakInputCachedWrite") }}</dt>
+                      <dd>{{ selectedPriceTemplate.schedule.peak.inputCachedWrite ?? "—" }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("settings.pricePeakOutput") }}</dt>
+                      <dd>{{ selectedPriceTemplate.schedule.peak.output }}</dd>
+                    </div>
+                  </template>
+                </dl>
+                <p class="text-sm text-muted">
+                  {{
+                    t("settings.priceCheckedAt", { date: selectedPriceTemplate.checkedAt.slice(0, 10) })
+                  }}
+                  ·
+                  <a :href="selectedPriceTemplate.sourceUrl" target="_blank" rel="noreferrer">
+                    {{ t("settings.priceSource") }}
+                  </a>
+                </p>
+              </fieldset>
+              <p v-else class="text-sm text-muted" role="status">
+                {{ t("settings.priceTemplateUnavailable") }}
+              </p>
+              <button
+                type="button"
+                class="btn ghost"
+                :disabled="product.busy.value || !selectedPriceTemplate"
+                @click="product.confirmBillingPrice"
+              >
+                {{ t("settings.confirmBillingPrice") }}
+              </button>
+            </div>
+            <div
               class="settings-key-card card"
-              :class="{ 'is-missing': !product.keyStatusLoading.value && product.keyStatus.value?.set !== true }"
+              :class="{ 'is-missing': !product.keyStatusLoading.value && product.keyStatus.value?.set === false }"
             >
               <span
                 class="led"
                 :class="{
                   accent: product.keyStatus.value?.set === true,
-                  warn: !product.keyStatusLoading.value && product.keyStatus.value?.set !== true,
+                  warn: !product.keyStatusLoading.value && product.keyStatus.value?.set === false,
                 }"
                 aria-hidden="true"
               />
@@ -471,14 +552,14 @@ function themeName(id: string, fallback: string): string {
             <div class="settings-actions">
               <button
                 type="button"
-                :disabled="product.busy.value || product.keyStatus.value?.set !== true"
+                :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
                 @click="product.open(false)"
               >
                 {{ t("game.restart") }}
               </button>
               <button
                 type="button"
-                :disabled="product.busy.value || product.keyStatus.value?.set !== true"
+                :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
                 @click="product.open(true)"
               >
                 {{ t("game.newCycle") }}
