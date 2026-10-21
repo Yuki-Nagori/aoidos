@@ -1,5 +1,6 @@
 //! 已开周目的 SQLite 权威目录与生命周期操作记录。
 
+use aoidos_billing::money::NanoMoney;
 use aoidos_llm::config::LlmProfile;
 use aoidos_store::error::StoreError;
 use rusqlite::OptionalExtension;
@@ -142,6 +143,14 @@ pub struct RunPage {
     pub catalog_revision: u64,
     pub scan_incomplete: bool,
     pub scan_issue_count: u64,
+}
+
+/// 迁移历史账务后的目录 revision 与账本合并摘要。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunBillingReconciliation {
+    pub revision: u64,
+    pub merge: crate::billing::LegacyScopeMerge,
 }
 
 /// 从 SQLite 权威选择行读取的活动周目元数据。
@@ -504,6 +513,129 @@ pub fn bind_profile(
     Ok(next_revision)
 }
 
+/// 在一个 SQLite 事务内核验身份、合并旧账务 scope 并解除目录计费门禁。
+///
+/// `selected_limits` 仅用于玩家明确解决 canonical 与 legacy 预算冲突；没有冲突时
+/// 可省略。账本和目录状态同事务提交；普通失败会回滚，身份映射不匹配时会提交
+/// `needs-repair` 诊断状态后返回错误，避免继续使用已失真的关联。
+///
+/// # Errors
+/// 目录 revision、三身份映射或账本预算冲突不满足迁移条件时拒绝变更。
+pub fn reconcile_legacy_billing(
+    connection: &mut rusqlite::Connection,
+    session_id: &str,
+    expected_revision: u64,
+    selected_limits: Option<(NanoMoney, NanoMoney)>,
+    updated_at: &str,
+) -> Result<RunBillingReconciliation, Fault> {
+    if !crate::record::format::valid_uuid(session_id)
+        || expected_revision == 0
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let (memory_run_id, billing_run_id, script_id, state, revision): (
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        i64,
+    ) = transaction
+        .query_row(
+            "SELECT memory_run_id,billing_run_id,script_id,state,revision FROM session_catalog WHERE session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
+        )
+        .optional()
+        .map_err(database)?
+        .ok_or_else(|| Fault::new("app.not-found", "周目不存在"))?;
+    let revision = u64::try_from(revision).map_err(|_| corrupt())?;
+    if revision != expected_revision {
+        return Err(stale_revision());
+    }
+    if state != RunState::BillingReconciliationRequired.as_str() {
+        return Err(Fault::new("app.conflict", "该周目不需要迁移历史费用"));
+    }
+
+    let mapped_identity: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT sessions.run_id,runs.script_id FROM memory_run_sessions sessions JOIN memory_runs runs ON runs.run_id=sessions.run_id WHERE sessions.session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let identity_matches = memory_run_id
+        .as_deref()
+        .is_some_and(crate::record::format::valid_uuid)
+        && billing_run_id.as_deref() == Some(session_id)
+        && mapped_identity
+            .as_ref()
+            .is_some_and(|(mapped_run, mapped_script)| {
+                Some(mapped_run.as_str()) == memory_run_id.as_deref() && mapped_script == &script_id
+            });
+    if !identity_matches {
+        let next_revision = revision.checked_add(1).ok_or_else(corrupt)?;
+        transaction
+            .execute(
+                "UPDATE session_catalog SET state='needs-repair',revision=?1,updated_at=?2 WHERE session_id=?3 AND revision=?4 AND state='billing-reconciliation-required'",
+                rusqlite::params![next_revision, updated_at, session_id, revision],
+            )
+            .map_err(database)?;
+        bump_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Err(Fault::new(
+            "app.conflict",
+            "周目的身份关联已变化，需要修复后才能迁移费用",
+        ));
+    }
+    let legacy_run_id = memory_run_id.as_deref().ok_or_else(corrupt)?;
+    if legacy_run_id == session_id {
+        return Err(corrupt());
+    }
+
+    let merge = crate::billing::BillingLedger::reconcile_legacy_scope_in_transaction(
+        &transaction,
+        session_id,
+        legacy_run_id,
+        selected_limits,
+        updated_at,
+    )
+    .map_err(|error| match error {
+        crate::billing::BillingError::Invalid => Fault::bad_request(),
+        crate::billing::BillingError::ReconciliationRequired => Fault::new(
+            "budget.reconciliation-required",
+            "历史费用上限不同，请明确选择本局最终上限",
+        ),
+        _ => Fault::new("store.database", "历史费用迁移失败"),
+    })?;
+    let next_state = if billing_configured(&transaction, session_id)? {
+        RunState::Ready
+    } else {
+        RunState::BillingNotConfigured
+    };
+    let next_revision = revision.checked_add(1).ok_or_else(corrupt)?;
+    let changed = transaction
+        .execute(
+            "UPDATE session_catalog SET state=?1,revision=?2,updated_at=?3 WHERE session_id=?4 AND revision=?5 AND state='billing-reconciliation-required'",
+            rusqlite::params![next_state.as_str(), next_revision, updated_at, session_id, revision],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(stale_revision());
+    }
+    bump_revision(&transaction)?;
+    transaction.commit().map_err(database)?;
+    Ok(RunBillingReconciliation {
+        revision: next_revision,
+        merge,
+    })
+}
+
 fn has_ledger_data_for_scope(
     connection: &rusqlite::Connection,
     run_id: &str,
@@ -763,6 +895,81 @@ mod tests {
         assert_eq!(
             page.entries[0].billing_run_id.as_deref(),
             Some(run.session_id.as_str())
+        );
+    }
+
+    #[test]
+    fn legacy_billing_reconciliation_is_explicit_atomic_and_updates_catalog_state() {
+        use crate::billing::BillingLedger;
+        use aoidos_billing::money::NanoMoney;
+
+        let mut connection = connection();
+        let run = NewRun {
+            session_id: "00000000-0000-4000-8000-000000000021".into(),
+            script_id: "mistbell".into(),
+            created_at: "2026-10-21T00:00:00Z".into(),
+            memory_run_id: "00000000-0000-4000-8000-000000000022".into(),
+            profile: profile(),
+        };
+        insert_memory_mapping(
+            &connection,
+            &run.session_id,
+            &run.memory_run_id,
+            &run.script_id,
+        );
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-21T00:00:00Z')",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,200,0,1,'2026-10-21T00:00:00Z')",
+                [&run.session_id],
+            )
+            .unwrap();
+        register_new(&mut connection, &run).unwrap();
+        let catalog_revision = page(&connection, None, 1).unwrap().entries[0].revision;
+
+        assert_eq!(
+            reconcile_legacy_billing(
+                &mut connection,
+                &run.session_id,
+                catalog_revision,
+                None,
+                "2026-10-21T00:01:00Z",
+            )
+            .unwrap_err()
+            .code,
+            "budget.reconciliation-required"
+        );
+        assert_eq!(
+            page(&connection, None, 1).unwrap().entries[0].state,
+            RunState::BillingReconciliationRequired
+        );
+        assert!(BillingLedger::has_run_scope_data(&connection, &run.memory_run_id).unwrap());
+
+        let result = reconcile_legacy_billing(
+            &mut connection,
+            &run.session_id,
+            catalog_revision,
+            Some((
+                NanoMoney::parse("3").unwrap(),
+                NanoMoney::parse("2").unwrap(),
+            )),
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+        assert_eq!(result.revision, catalog_revision + 1);
+        assert_eq!(
+            result.merge.settings.unwrap().cny_limit,
+            NanoMoney::parse("3").unwrap()
+        );
+        assert!(!BillingLedger::has_run_scope_data(&connection, &run.memory_run_id).unwrap());
+        assert_eq!(
+            page(&connection, None, 1).unwrap().entries[0].state,
+            RunState::Ready
         );
     }
 

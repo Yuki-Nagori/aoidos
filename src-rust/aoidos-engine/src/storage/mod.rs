@@ -877,6 +877,31 @@ impl Storage {
             crate::run_catalog::bind_profile(connection, session_id, expected_revision, profile)
         })
     }
+
+    /// 原子合并已核验的 legacy 账务 scope，并更新目录的可收费状态。
+    /// # Errors
+    /// 目录版本过期、身份映射变化或预算冲突未获玩家选择时拒绝迁移。
+    pub fn reconcile_run_billing(
+        &self,
+        session_id: &str,
+        expected_revision: u64,
+        selected_limits: Option<(
+            aoidos_billing::money::NanoMoney,
+            aoidos_billing::money::NanoMoney,
+        )>,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::RunBillingReconciliation, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::reconcile_legacy_billing(
+                connection,
+                session_id,
+                expected_revision,
+                selected_limits,
+                updated_at,
+            )
+        })
+    }
+
     /// 登记解释器借用唯一连接；领域条件、投影与 applied 标记在回调内同事务提交。
     /// 回调不递归获取本存储锁；阻塞调用由引擎 blocking 边界调度，不在持锁期间 await。
     /// # Errors

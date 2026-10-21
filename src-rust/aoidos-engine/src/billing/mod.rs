@@ -4,7 +4,7 @@ mod ledger;
 mod port;
 pub use ledger::{
     BackfillPreview, BackfillResult, BillingError, BillingLedger, BudgetSettings, BudgetWarning,
-    ModelUsageSummary, PendingSettlement, RequestItem, RequestPage, Reservation, Settlement,
-    SettlementResult, SuggestedLimits,
+    LegacyScopeMerge, ModelUsageSummary, PendingSettlement, RequestItem, RequestPage, Reservation,
+    Settlement, SettlementResult, SuggestedLimits,
 };
 pub use port::LedgerBudgetPort;

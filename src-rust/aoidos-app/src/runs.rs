@@ -47,6 +47,29 @@ impl RunLifecycleService {
         self.storage
             .bind_run_profile(session_id, expected_revision, &profile)
     }
+
+    /// 玩家确认冲突上限后，在共享生命周期服务中原子迁移历史计费身份。
+    /// # Errors
+    /// revision / 身份映射已变化、冲突上限未选择或存储失败时拒绝迁移。
+    pub fn reconcile_billing(
+        &self,
+        session_id: &str,
+        expected_revision: u64,
+        selected_limits: Option<(
+            aoidos_billing::money::NanoMoney,
+            aoidos_billing::money::NanoMoney,
+        )>,
+    ) -> Result<run_catalog::RunBillingReconciliation, Fault> {
+        let updated_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| Fault::new("store.database", "读取迁移时间失败"))?;
+        self.storage.reconcile_run_billing(
+            session_id,
+            expected_revision,
+            selected_limits,
+            &updated_at,
+        )
+    }
 }
 
 #[cfg(test)]
