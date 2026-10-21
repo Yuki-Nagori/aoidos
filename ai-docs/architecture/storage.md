@@ -91,7 +91,7 @@ CREATE TABLE point_allocations (
 
 `sessionId` 是周目 / transcript 主身份；记忆 `memoryRunId` 是经 `memory_run_sessions` 读取的独立身份；费用账本 canonical `billingRunId` 统一为 `sessionId`。当前剧情请求已按 `sessionId` 记账，但现有 030 私有记忆请求曾以 `memoryRunId` 记账；060 必须核验映射并迁移 legacy request / reservation / settlement scope，预算冲突时停止新收费，不能漏掉另一范围的未结账务。没有任何预算 / 请求行是合法的“尚未配置”，不是目录损坏。新目录显式保存并交叉核验三项身份，不能按 UUID 字面值猜测关联。`active-session.json` 仅是最后选择的兼容镜像；SQLite 会话目录负责有界分页和生命周期状态，并新增 SQLite 活动选择权威行；transcript header 仍是会话事实源。
 
-目录 schema 已包含 SQLite 会话摘要、权威活动选择、revision 和删除 journal；新创建周目登记 `sessionId`、独立 `memoryRunId`、canonical `billingRunId=sessionId` 与公开 profile 快照。公开快照通过 profile 文件读取，不访问密钥库。分页使用固定排序和 revision 绑定的 keyset 游标，响应不含 transcript 与路径；旧周目的 profile 绑定使用目录 revision 做 CAS，并将任何已存在的账本数据保守标为待核对。当前目录仍明确报告 `scanIncomplete`，因为旧 JSONL 分批发现、只读 header 核验和完整状态交叉核对尚未完成。
+目录 schema 已包含 SQLite 会话摘要、权威活动选择、revision 和删除 journal；启动时逐项比对注册的表 / 索引定义。新创建周目登记 `sessionId`、独立 `memoryRunId`、canonical `billingRunId=sessionId` 与公开 profile 快照。公开快照通过 profile 文件读取，不访问密钥库。分页使用固定排序和 revision 绑定的 keyset 游标，响应不含 transcript 与路径；旧周目的 profile 绑定使用目录 revision 做 CAS，并将 legacy 账本 scope 保守标为待核对。当前目录仍明确报告 `scanIncomplete`，因为旧 JSONL 分批发现、只读 header 核验和完整状态交叉核对尚未完成。
 
 目录分页和预览不得调用 `Session::open`（其恢复可修复文件）或 `builtin::open`（会初始化记忆）。旧局缺 profile 时须标记需绑定，不使用当前新局选择代替。切换、账本 scope 迁移、删除及启动恢复仍按[059](../task/059-run-management-design.md)实施，当前实现尚未提供这些操作。
 

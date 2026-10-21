@@ -80,7 +80,7 @@
 ## 决策与工作记录
 
 - 2026-10-20：作为 058 TUI 设置缺口审查发现的独立生命周期功能创建；先由 059 定稿数据源、profile 绑定与安全删除协议。
-- 2026-10-21：实现 SQLite 周目目录 schema、活动选择行、删除 journal 基础结构和 revision 绑定 keyset 页面；新局目录记录独立的 session / memory 身份、canonical session 账本身份与不含凭据的公开 profile 快照。补充旧局 profile 绑定 CAS：只有玩家显式指定 profile 且目录 revision 匹配时才保存公开快照；发现关联账本数据时保持计费 reconciliation 门关闭。旧数据发现、恢复 / 切换、费用迁移、删除执行器及两端界面仍未实现。
+- 2026-10-21：实现 SQLite 周目目录 schema、活动选择行、删除 journal 基础结构和 revision 绑定 keyset 页面；启动校验逐项比对表与索引定义。新局目录记录独立的 session / memory 身份、canonical session 账本身份与不含凭据的公开 profile 快照。补充旧局 profile 绑定 CAS：只有玩家显式指定 profile 且目录 revision 匹配时才保存公开快照；发现关联的 legacy 账本数据时保持计费 reconciliation 门关闭。旧数据发现、恢复 / 切换、费用迁移、删除执行器及两端界面仍未实现。
 
 ## 完成摘要
 

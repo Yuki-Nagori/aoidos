@@ -428,21 +428,46 @@ fn corrupt() -> Fault {
     Fault::new("store.corrupt", "周目目录数据损坏")
 }
 
-/// 确认目录迁移结构完整，避免部分 schema 被当作可用目录。
+/// 对照迁移定义逐项检查表与索引，拒绝缺失或被削弱的目录 schema。
 pub fn verify(connection: &rusqlite::Connection) -> Result<(), StoreError> {
-    let valid: i64 = connection
-        .query_row(
-            "SELECT count(*) = 4 FROM sqlite_master WHERE type='table' AND name IN ('session_catalog_meta','session_catalog','active_session','session_deletion_ops')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(aoidos_store::db::sqlite_error)?;
-    if valid != 1 {
-        return Err(StoreError::Corrupt(
-            "session catalog schema mismatch".into(),
-        ));
+    for statement in SCHEMA
+        .split(';')
+        .map(str::trim)
+        .filter(|sql| sql.starts_with("CREATE "))
+    {
+        let Some(name) = schema_object_name(statement) else {
+            return Err(schema_mismatch());
+        };
+        let actual: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(aoidos_store::db::sqlite_error)?;
+        if actual.as_deref().map(normalize_sql) != Some(normalize_sql(statement)) {
+            return Err(schema_mismatch());
+        }
     }
     Ok(())
+}
+
+fn schema_object_name(statement: &str) -> Option<&str> {
+    let mut words = statement.split_whitespace();
+    match (words.next()?, words.next()?) {
+        ("CREATE", "TABLE") => words.next(),
+        ("CREATE", "INDEX") => words.next(),
+        _ => None,
+    }
+}
+
+fn normalize_sql(statement: &str) -> String {
+    statement.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn schema_mismatch() -> StoreError {
+    StoreError::Corrupt("session catalog schema mismatch".into())
 }
 
 #[cfg(test)]
@@ -486,6 +511,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(revision, 1);
+    }
+
+    #[test]
+    fn schema_verification_rejects_missing_or_weakened_objects() {
+        let connection = connection();
+        connection
+            .execute("DROP INDEX session_catalog_order", [])
+            .unwrap();
+        assert!(matches!(verify(&connection), Err(StoreError::Corrupt(_))));
+
+        let weakened = rusqlite::Connection::open_in_memory().unwrap();
+        weakened
+            .execute_batch(&SCHEMA.replace("CHECK(revision > 0)", "CHECK(revision >= 0)"))
+            .unwrap();
+        assert!(matches!(verify(&weakened), Err(StoreError::Corrupt(_))));
     }
 
     #[test]
