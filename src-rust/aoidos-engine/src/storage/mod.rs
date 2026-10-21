@@ -9,7 +9,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -102,6 +102,7 @@ pub struct Storage {
     pub migration: Arc<Migration>,
     pub preferences: Arc<Preferences>,
     database: Mutex<Option<rusqlite::Connection>>,
+    root: PathBuf,
     memory: aoidos_memory::repository::Repository,
     legacy_scan: Mutex<crate::run_catalog::legacy_scan::LegacyScanner>,
 }
@@ -137,6 +138,7 @@ impl Storage {
             migration,
             preferences: Arc::new(Preferences::new(root)),
             database: Mutex::new(database),
+            root: root.to_owned(),
             memory: aoidos_memory::repository::Repository::new(root),
             legacy_scan: Mutex::new(crate::run_catalog::legacy_scan::LegacyScanner::new(root)),
         }
@@ -853,6 +855,45 @@ impl Storage {
                 connection,
                 operation_id,
                 session_id,
+                updated_at,
+            )
+        })
+    }
+
+    /// 扫描并冻结目标周目的文件清单；调用方必须已持生命周期锁并关闭 owner。
+    ///
+    /// 目标身份先从 SQLite 读取，随后在不持数据库锁时扫描文件系统，最后在事务内重新核验身份和阶段。
+    /// 两次数据库访问之间若目标状态变化，冻结事务会拒绝提交。
+    ///
+    /// # Errors
+    /// 目录不完整、目标文件异常、身份映射变化或 journal 阶段不匹配时失败关闭。
+    pub fn freeze_run_deletion_manifest(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        match self.records.get(session_id) {
+            Ok(_) => return Err(Fault::new("app.conflict", "周目记录尚未关闭")),
+            Err(error) if error.code == "app.not-found" => {}
+            Err(error) => return Err(error),
+        }
+        let (script_id, memory_run_id) = self.with_database(|connection| {
+            crate::run_catalog::deletion_manifest_target(connection, operation_id, session_id)
+        })?;
+        let entries = crate::run_catalog::enumerate_deletion_manifest_entries(
+            &self.root,
+            operation_id,
+            &script_id,
+            session_id,
+            &memory_run_id,
+        )?;
+        self.with_database(|connection| {
+            crate::run_catalog::freeze_deletion_manifest(
+                connection,
+                operation_id,
+                session_id,
+                entries,
                 updated_at,
             )
         })

@@ -81,6 +81,98 @@ fn memory_batch_diagnostics_expose_only_registered_codes() {
 }
 
 #[test]
+fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_directory() {
+    let root = std::env::temp_dir().join(format!("aoidos-run-delete-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header.clone()).unwrap();
+    let catalog = scene_catalog();
+    let memory_run = storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            repository.create_run(connection, port, policy())
+        })
+        .unwrap();
+    assert!(
+        !root
+            .join(format!(
+                "workspaces/mistbell/memory/runs/{}",
+                memory_run.run_id
+            ))
+            .exists()
+    );
+    storage
+        .register_new_run(&crate::run_catalog::NewRun {
+            session_id: session_id.clone(),
+            script_id: header.script_id,
+            created_at: header.created_at,
+            memory_run_id: memory_run.run_id.clone(),
+            profile: aoidos_llm::config::LlmProfile {
+                profile_id: "test-profile".into(),
+                provider_id: "deepseek".into(),
+                model: "deepseek-v4.1-flash".into(),
+                mode: aoidos_llm::config::ProfileMode::Completion,
+                thinking: false,
+                sampling: aoidos_llm::sampling::Sampling {
+                    temperature: 1.0,
+                    max_tokens: 1024,
+                },
+                proxy: aoidos_llm::config::ProxyConfig::System,
+            },
+        })
+        .unwrap();
+
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    storage
+        .request_run_deletion(&operation_id, &session_id, 1, "2026-10-21T00:00:00Z")
+        .unwrap();
+    assert_eq!(
+        storage
+            .freeze_run_deletion_manifest(&operation_id, &session_id, "2026-10-21T00:00:15Z",)
+            .unwrap_err()
+            .code,
+        "app.conflict"
+    );
+    storage.records.close(&session_id).unwrap();
+    storage
+        .clear_run_active_selection_for_deletion(&operation_id, &session_id, "2026-10-21T00:00:30Z")
+        .unwrap();
+    let frozen = storage
+        .freeze_run_deletion_manifest(&operation_id, &session_id, "2026-10-21T00:01:00Z")
+        .unwrap();
+
+    assert_eq!(frozen.state, "owner-closed");
+    let value = storage
+        .with_database(|connection| {
+            let bytes: Vec<u8> = connection
+                .query_row(
+                    "SELECT manifest FROM session_deletion_ops WHERE operation_id=?1",
+                    [&operation_id],
+                    |row| row.get(0),
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| Fault::new("store.corrupt", "删除清单无法解析"))
+        })
+        .unwrap();
+    let memory_entry = value["manifest"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["kind"] == "memory-run-directory")
+        .unwrap();
+    assert!(memory_entry["identityHash"].is_null());
+
+    storage.close().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn memory_borrows_registered_session_and_shared_migrated_connection() {
     let root = std::env::temp_dir().join(format!("aoidos-memory-storage-{}", uuid::Uuid::new_v4()));
     let storage = Storage::new(

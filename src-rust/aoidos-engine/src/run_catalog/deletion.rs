@@ -394,7 +394,7 @@ pub fn clear_active_selection_for_deletion(
 ///
 /// # Errors
 /// 操作阶段、身份、文件清单或存储状态不一致时拒绝冻结；失败不会推进 journal。
-pub fn freeze_deletion_manifest(
+pub(crate) fn freeze_deletion_manifest(
     connection: &mut rusqlite::Connection,
     operation_id: &str,
     session_id: &str,
@@ -492,6 +492,62 @@ pub fn freeze_deletion_manifest(
         state: "owner-closed".into(),
         catalog_revision: revision,
     })
+}
+
+/// 读取冻结前可信的剧本和 memory run 身份；文件系统扫描期间不持有 SQLite 锁。
+pub(crate) fn deletion_manifest_target(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+) -> Result<(String, String), Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+    {
+        return Err(Fault::bad_request());
+    }
+    let row: Option<FreezeManifestRow> = connection
+        .query_row(
+            "SELECT op.session_id,op.state,c.script_id,c.memory_run_id,c.state,op.manifest FROM session_deletion_ops op JOIN session_catalog c USING(session_id) WHERE op.operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((target_id, state, script_id, memory_run_id, catalog_state, existing_manifest)) = row
+    else {
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id
+        || state != "requested"
+        || catalog_state != "deleting"
+        || existing_manifest.is_some()
+    {
+        return Err(Fault::new("app.conflict", "删除清单冻结阶段不匹配"));
+    }
+    if !crate::record::format::valid_uuid(&memory_run_id) || !aoidos_script::valid_id(&script_id) {
+        return Err(corrupt());
+    }
+    let mapping_valid: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_run_sessions s JOIN memory_runs r USING(run_id) WHERE s.session_id=?1 AND s.run_id=?2 AND r.script_id=?3)",
+            rusqlite::params![session_id, memory_run_id, script_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if !mapping_valid {
+        return Err(corrupt());
+    }
+    let active: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM active_session WHERE id=1 AND session_id=?1)",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if active {
+        return Err(Fault::new("app.conflict", "活动周目尚未关闭"));
+    }
+    Ok((script_id, memory_run_id))
 }
 
 fn validate_manifest_entries(

@@ -67,8 +67,9 @@ mod deletion;
 pub use deletion::{
     DeletionManifestEntry, DeletionManifestEntryKind, DeletionOperation, RunDeletionCheck,
     clear_active_selection_for_deletion, deletion_check, enumerate_deletion_manifest_entries,
-    freeze_deletion_manifest, request_deletion,
+    request_deletion,
 };
+pub(crate) use deletion::{deletion_manifest_target, freeze_deletion_manifest};
 
 /// 目录行的可执行状态；只反映恢复与配置能力，不是游戏事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
