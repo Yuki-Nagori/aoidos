@@ -2683,3 +2683,210 @@
     opacity: 0.35;
   }
 }
+
+@layer components {
+  .welcome-runs-button {
+    align-self: center;
+    color: var(--accent);
+  }
+
+  .run-catalog-backdrop {
+    position: fixed;
+    z-index: 80;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--overlay-scrim) 78%, transparent);
+    padding: 1rem;
+  }
+
+  .run-catalog-dialog,
+  .run-delete-confirm {
+    position: relative;
+    width: min(52rem, 100%);
+    max-height: min(46rem, 100%);
+    overflow: auto;
+    border: 1px solid var(--hairline);
+    border-radius: 1rem;
+    background: var(--overlay-solid);
+    box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.35);
+    color: var(--ink);
+    padding: 1.25rem;
+  }
+
+  .run-catalog-header,
+  .run-catalog-footer,
+  .run-catalog-row,
+  .run-catalog-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+  }
+
+  .run-catalog-header,
+  .run-catalog-footer,
+  .run-catalog-row {
+    justify-content: space-between;
+  }
+
+  .run-catalog-header h2,
+  .run-delete-confirm h3 {
+    margin: 0;
+    font-size: 1.125rem;
+  }
+
+  .run-catalog-header p,
+  .run-delete-confirm p {
+    margin: 0.375rem 0 0;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .run-catalog-list {
+    display: grid;
+    gap: 0.5rem;
+    margin: 1rem 0;
+  }
+
+  .run-catalog-pending {
+    display: grid;
+    gap: 0.5rem;
+    margin: 1rem 0;
+    border: 1px solid var(--warning, #b98b43);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .run-catalog-pending h3 {
+    margin: 0;
+    font-size: 0.875rem;
+  }
+
+  .run-catalog-pending-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  .run-catalog-row {
+    flex-wrap: wrap;
+    border: 1px solid var(--hairline);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--ink) 4%, transparent);
+    padding: 0.75rem;
+  }
+
+  .run-catalog-copy {
+    display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+
+  .run-catalog-copy strong {
+    color: var(--ink);
+    font-size: 0.9375rem;
+  }
+
+  .run-catalog-actions {
+    flex-wrap: wrap;
+  }
+
+  .run-catalog-actions select {
+    max-width: 17rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.5rem;
+    background: var(--panel);
+    color: var(--ink);
+    padding: 0.5rem;
+  }
+
+  .run-catalog-limit-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 1rem 0;
+  }
+
+  .run-catalog-limit-fields label {
+    display: grid;
+    gap: 0.375rem;
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  .run-catalog-limit-fields input {
+    min-width: 0;
+    border: 1px solid var(--hairline);
+    border-radius: 0.5rem;
+    background: var(--panel);
+    color: var(--ink);
+    padding: 0.625rem;
+  }
+
+  .run-catalog-empty,
+  .run-catalog-note,
+  .run-catalog-error {
+    margin: 1rem 0;
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  .run-catalog-error {
+    color: var(--danger, #b94d4d);
+  }
+
+  .run-catalog-footer {
+    flex-wrap: wrap;
+    border-top: 1px solid var(--hairline);
+    padding-top: 0.75rem;
+  }
+
+  .run-delete-backdrop {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--overlay-scrim) 80%, transparent);
+    padding: 1rem;
+  }
+
+  .run-delete-confirm {
+    width: min(30rem, 100%);
+    max-height: 100%;
+  }
+
+  @media (max-width: 36rem) {
+    .run-catalog-limit-fields {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .run-delete-confirm .run-catalog-actions {
+    justify-content: flex-end;
+    margin-top: 1.25rem;
+  }
+
+  .run-catalog-actions .danger {
+    border-color: color-mix(in srgb, var(--danger, #b94d4d) 45%, var(--hairline));
+    color: var(--danger, #b94d4d);
+  }
+
+  @media (max-width: 640px) {
+    .run-catalog-backdrop {
+      padding: 0.375rem;
+    }
+
+    .run-catalog-dialog {
+      max-height: 100%;
+      padding: 0.875rem;
+    }
+  }
+}

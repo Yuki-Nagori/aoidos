@@ -6,7 +6,7 @@ use aoidos_engine::{
     game::{assets::ScriptInfo, product::OpenedSession, state::PhaseSnapshot},
     ports::TurnEvent,
     record::view::View,
-    run_catalog::{DEFAULT_PAGE_SIZE, RunCursor, RunState, RunSummary},
+    run_catalog::{DEFAULT_PAGE_SIZE, DeletionOperation, RunCursor, RunState, RunSummary},
 };
 use aoidos_llm::config::LlmProfile;
 use crossterm::{
@@ -68,6 +68,18 @@ struct ViewState {
     existing_runs: Vec<RunSummary>,
     existing_run_index: usize,
     existing_runs_open: bool,
+    delete_confirmation: bool,
+    delete_confirmation_target: Option<RunSummary>,
+    deletion_in_progress: Option<DeletionOperation>,
+    pending_deletions: Vec<DeletionOperation>,
+    pending_deletions_truncated: bool,
+    pending_deletion_index: usize,
+    pending_deletion_selected: bool,
+    billing_reconciliation_editing: bool,
+    billing_reconciliation_target: Option<(String, u64)>,
+    reconciliation_edit_field: usize,
+    reconciliation_cny_draft: String,
+    reconciliation_usd_draft: String,
     run_cursor: Option<RunCursor>,
     run_next_cursor: Option<RunCursor>,
     run_previous: Vec<Option<RunCursor>>,
@@ -123,6 +135,18 @@ impl ViewState {
             existing_runs: Vec::new(),
             existing_run_index: 0,
             existing_runs_open: false,
+            delete_confirmation: false,
+            delete_confirmation_target: None,
+            deletion_in_progress: None,
+            pending_deletions: Vec::new(),
+            pending_deletions_truncated: false,
+            pending_deletion_index: 0,
+            pending_deletion_selected: false,
+            billing_reconciliation_editing: false,
+            billing_reconciliation_target: None,
+            reconciliation_edit_field: 0,
+            reconciliation_cny_draft: String::new(),
+            reconciliation_usd_draft: String::new(),
             run_cursor: None,
             run_next_cursor: None,
             run_previous: Vec::new(),
@@ -639,6 +663,43 @@ async fn handle_selection_key(
     key: KeyEvent,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if state.existing_runs_open {
+        if state.billing_reconciliation_editing {
+            match key.code {
+                KeyCode::Esc => cancel_billing_reconciliation(state),
+                KeyCode::Tab | KeyCode::Right | KeyCode::BackTab | KeyCode::Left => {
+                    state.reconciliation_edit_field ^= 1;
+                }
+                KeyCode::Backspace => {
+                    active_reconciliation_draft(state).pop();
+                }
+                KeyCode::Char(character) if character.is_ascii_digit() || character == '.' => {
+                    let draft = active_reconciliation_draft(state);
+                    if draft.len() < 24 {
+                        draft.push(character);
+                    }
+                }
+                KeyCode::Enter => submit_billing_reconciliation(app, state).await,
+                _ => {}
+            }
+            return Ok(false);
+        }
+        if state.delete_confirmation {
+            match key.code {
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                    state.delete_confirmation = false;
+                    if let Some(run) = state.delete_confirmation_target.take() {
+                        delete_run(app, state, run).await;
+                    }
+                }
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                    state.delete_confirmation = false;
+                    state.delete_confirmation_target = None;
+                    state.status = "已取消删除；周目数据未修改。".into();
+                }
+                _ => {}
+            }
+            return Ok(false);
+        }
         match key.code {
             KeyCode::F(2) => {
                 state.settings_open = true;
@@ -656,6 +717,48 @@ async fn handle_selection_key(
             }
             KeyCode::Char('l' | 'L') => scan_legacy_runs(app, state).await,
             KeyCode::Char('p' | 'P') => bind_selected_run(app, state).await,
+            KeyCode::Char('m' | 'M') => reconcile_selected_run_billing(app, state).await,
+            KeyCode::Char('x' | 'X') if !state.pending_deletions.is_empty() => {
+                if state.pending_deletion_selected {
+                    state.pending_deletion_index =
+                        (state.pending_deletion_index + 1) % state.pending_deletions.len();
+                }
+                state.pending_deletion_selected = true;
+                let operation = &state.pending_deletions[state.pending_deletion_index];
+                state.status = format!(
+                    "选择待恢复删除 {}/{} · {} · {}",
+                    state.pending_deletion_index + 1,
+                    state.pending_deletions.len(),
+                    operation.session_id,
+                    operation.state
+                );
+            }
+            KeyCode::Char('d' | 'D') if state.deletion_in_progress.is_some() => {
+                if let Some(operation) = state.deletion_in_progress.clone() {
+                    continue_deletion(app, state, operation).await;
+                }
+            }
+            KeyCode::Char('d' | 'D') if state.pending_deletion_selected => {
+                if let Some(operation) = state
+                    .pending_deletions
+                    .get(state.pending_deletion_index)
+                    .cloned()
+                {
+                    state.deletion_in_progress = Some(operation.clone());
+                    continue_deletion(app, state, operation).await;
+                }
+            }
+            KeyCode::Char('d' | 'D') => {
+                if let Some(run) = state.existing_runs.get(state.existing_run_index) {
+                    if run.state == RunState::Deleting && run.deletion_operation_id.is_some() {
+                        delete_run(app, state, run.clone()).await;
+                    } else {
+                        state.delete_confirmation = true;
+                        state.delete_confirmation_target = Some(run.clone());
+                        state.status = deletion_confirmation_text(run);
+                    }
+                }
+            }
             KeyCode::Char('[') => previous_runs_page(app, state),
             KeyCode::Char(']') => next_runs_page(app, state),
             KeyCode::Up | KeyCode::Down => {
@@ -722,6 +825,88 @@ async fn handle_selection_key(
     Ok(false)
 }
 
+fn active_reconciliation_draft(state: &mut ViewState) -> &mut String {
+    if state.reconciliation_edit_field == 0 {
+        &mut state.reconciliation_cny_draft
+    } else {
+        &mut state.reconciliation_usd_draft
+    }
+}
+
+fn cancel_billing_reconciliation(state: &mut ViewState) {
+    state.billing_reconciliation_editing = false;
+    state.billing_reconciliation_target = None;
+    state.status = "已取消额度输入，历史账务未迁移。".into();
+}
+
+async fn reconcile_selected_run_billing(app: &CliApp, state: &mut ViewState) {
+    let Some(run) = state.existing_runs.get(state.existing_run_index).cloned() else {
+        state.status = "当前页没有可核对的周目。".into();
+        return;
+    };
+    if run.state != RunState::BillingReconciliationRequired {
+        state.status = "所选周目不需要历史费用迁移。".into();
+        return;
+    }
+    let service = app.services.runs.clone();
+    let session_id = run.session_id.clone();
+    match aoidos_engine::blocking::run(move || {
+        service.reconcile_billing(&session_id, run.revision, None)
+    })
+    .await
+    {
+        Ok(_) => {
+            refresh_runs(app, state, None);
+            state.status = "历史费用已核验并迁移；没有发送模型请求。".into();
+        }
+        Err(error) if error.code == "budget.reconciliation-required" => {
+            state.billing_reconciliation_target = Some((run.session_id, run.revision));
+            state.reconciliation_cny_draft.clear();
+            state.reconciliation_usd_draft.clear();
+            state.reconciliation_edit_field = 0;
+            state.billing_reconciliation_editing = true;
+            state.status =
+                "历史额度冲突。输入最终 CNY / USD 上限，Tab 切换，Enter 确认，Esc 取消。".into();
+        }
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
+    }
+}
+
+async fn submit_billing_reconciliation(app: &CliApp, state: &mut ViewState) {
+    let Some((session_id, revision)) = state.billing_reconciliation_target.clone() else {
+        cancel_billing_reconciliation(state);
+        return;
+    };
+    let cny = match NanoMoney::parse(&state.reconciliation_cny_draft) {
+        Ok(value) => value,
+        Err(_) => {
+            state.status = "CNY 上限格式无效；请输入非负十进制金额。".into();
+            return;
+        }
+    };
+    let usd = match NanoMoney::parse(&state.reconciliation_usd_draft) {
+        Ok(value) => value,
+        Err(_) => {
+            state.status = "USD 上限格式无效；请输入非负十进制金额。".into();
+            return;
+        }
+    };
+    let service = app.services.runs.clone();
+    match aoidos_engine::blocking::run(move || {
+        service.reconcile_billing(&session_id, revision, Some((cny, usd)))
+    })
+    .await
+    {
+        Ok(_) => {
+            state.billing_reconciliation_editing = false;
+            state.billing_reconciliation_target = None;
+            refresh_runs(app, state, None);
+            state.status = "历史费用已按最终双币额度迁移；没有发送模型请求。".into();
+        }
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
+    }
+}
+
 async fn handle_selection_click(
     app: &mut CliApp,
     state: &mut ViewState,
@@ -731,6 +916,9 @@ async fn handle_selection_click(
     let area = app_screen_area();
     let chunks = selection_layout(area);
     if state.existing_runs_open {
+        if state.delete_confirmation {
+            return Ok(());
+        }
         let rows = usize::from(chunks[1].height.saturating_sub(2));
         if contains(chunks[1], x, y) {
             let offset = state
@@ -745,9 +933,10 @@ async fn handle_selection_click(
             let actions = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(34),
-                    Constraint::Percentage(33),
-                    Constraint::Percentage(33),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
                 ])
                 .split(chunks[2]);
             if contains(actions[0], x, y) {
@@ -759,6 +948,19 @@ async fn handle_selection_click(
             } else if contains(actions[1], x, y) {
                 scan_legacy_runs(app, state).await;
             } else if contains(actions[2], x, y) {
+                if let Some(operation) = state.deletion_in_progress.clone() {
+                    continue_deletion(app, state, operation).await;
+                } else if let Some(run) = state.existing_runs.get(state.existing_run_index).cloned()
+                {
+                    if run.state == RunState::Deleting && run.deletion_operation_id.is_some() {
+                        delete_run(app, state, run).await;
+                    } else {
+                        state.delete_confirmation = true;
+                        state.delete_confirmation_target = Some(run.clone());
+                        state.status = deletion_confirmation_text(&run);
+                    }
+                }
+            } else if contains(actions[3], x, y) {
                 state.existing_runs_open = false;
                 state.focus = Focus::Profile;
             }
@@ -902,6 +1104,80 @@ async fn open_selected_run(
     Ok(())
 }
 
+async fn delete_run(app: &mut CliApp, state: &mut ViewState, run: RunSummary) {
+    let operation = if let Some(operation) = state
+        .deletion_in_progress
+        .as_ref()
+        .filter(|operation| operation.session_id == run.session_id)
+        .cloned()
+    {
+        operation
+    } else if let Some(operation_id) = run.deletion_operation_id.clone() {
+        let operation = DeletionOperation {
+            operation_id,
+            session_id: run.session_id.clone(),
+            state: "requested".into(),
+            catalog_revision: run.revision,
+            diagnostic_code: None,
+        };
+        state.deletion_in_progress = Some(operation.clone());
+        operation
+    } else {
+        let operation = DeletionOperation {
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            session_id: run.session_id.clone(),
+            state: "requested".into(),
+            catalog_revision: run.revision,
+            diagnostic_code: None,
+        };
+        state.deletion_in_progress = Some(operation.clone());
+        operation
+    };
+    state.deletion_in_progress = Some(operation.clone());
+    continue_deletion(app, state, operation).await;
+}
+
+async fn continue_deletion(app: &mut CliApp, state: &mut ViewState, operation: DeletionOperation) {
+    match app
+        .services
+        .runs
+        .delete_run(
+            &app.services.product,
+            &app.services.runtime,
+            operation.operation_id.clone(),
+            operation.session_id.clone(),
+            operation.catalog_revision,
+        )
+        .await
+    {
+        Ok(updated) if updated.state == "completed" => {
+            state.deletion_in_progress = None;
+            state.pending_deletion_selected = false;
+            if refresh_runs(app, state, None) {
+                state.run_previous.clear();
+            }
+            state.status = "周目及其本地数据已删除；全库备份仍保留。".into();
+        }
+        Ok(updated) => {
+            state.status = format!(
+                "删除已推进至 {}；按 D 继续，退出后下次启动也会恢复。",
+                updated.state
+            );
+            state.deletion_in_progress = Some(updated);
+            if refresh_runs(app, state, None) {
+                state.run_previous.clear();
+            }
+        }
+        Err(error) => {
+            state.deletion_in_progress = Some(operation);
+            state.status = format!(
+                "删除未完成；按 D 用同一操作编号重试。{}",
+                friendly_error(&error.code, &error.message, state.locale)
+            );
+        }
+    }
+}
+
 async fn scan_legacy_runs(app: &CliApp, state: &mut ViewState) {
     let service = app.services.runs.clone();
     let result = aoidos_engine::blocking::run(move || service.scan_legacy()).await;
@@ -964,6 +1240,16 @@ fn selected_run_needs_profile(state: &ViewState) -> bool {
         .is_some_and(|run| run.state == RunState::NeedsProfileBinding)
 }
 
+fn deletion_confirmation_text(run: &RunSummary) -> String {
+    let title = aoidos_engine::game::assets::scenario(&run.script_id)
+        .map(|scenario| scenario.title)
+        .unwrap_or_else(|_| run.script_id.clone());
+    format!(
+        "确认删除「{title}」({})？将删除该局记录、旁车、记忆和账目；全库备份保留。按 Y 确认，N / Esc 取消。",
+        run.created_at
+    )
+}
+
 fn activate_session(
     app: &CliApp,
     state: &mut ViewState,
@@ -1008,6 +1294,12 @@ fn refresh_runs(app: &CliApp, state: &mut ViewState, cursor: Option<RunCursor>) 
     match app.services.runs.page(cursor.as_ref(), DEFAULT_PAGE_SIZE) {
         Ok(page) => {
             state.existing_runs = page.entries;
+            state.pending_deletions = page.pending_deletions;
+            state.pending_deletions_truncated = page.pending_deletions_truncated;
+            state.pending_deletion_index = state
+                .pending_deletion_index
+                .min(state.pending_deletions.len().saturating_sub(1));
+            state.pending_deletion_selected &= !state.pending_deletions.is_empty();
             state.existing_run_index = state
                 .existing_run_index
                 .min(state.existing_runs.len().saturating_sub(1));
@@ -1781,7 +2073,7 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         chunks[0],
     );
     if state.existing_runs_open {
-        let lines = if state.existing_runs.is_empty() {
+        let mut lines = if state.existing_runs.is_empty() {
             vec![Line::styled(
                 "没有已登记周目。按 L 扫描旧存档；列表刷新不会读取 transcript。",
                 Style::default().fg(COLOR_MUTED),
@@ -1813,6 +2105,30 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
                 })
                 .collect::<Vec<_>>()
         };
+        if !state.pending_deletions.is_empty() {
+            lines.push(Line::styled(
+                format!(
+                    "待恢复删除：{} 项{} · 按 X 选择后用 D 续跑",
+                    state.pending_deletions.len(),
+                    if state.pending_deletions_truncated {
+                        "（列表已截断）"
+                    } else {
+                        ""
+                    }
+                ),
+                Style::default().fg(COLOR_WARNING),
+            ));
+            if let Some(code) = state
+                .pending_deletions
+                .get(state.pending_deletion_index)
+                .and_then(|operation| operation.diagnostic_code.as_deref())
+            {
+                lines.push(Line::styled(
+                    format!("上次恢复错误：{code}"),
+                    Style::default().fg(COLOR_WARNING),
+                ));
+            }
+        }
         let visible_rows = usize::from(chunks[1].height.saturating_sub(2));
         let scroll_offset = state
             .existing_run_index
@@ -1837,9 +2153,10 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
         let actions = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
             ])
             .split(chunks[2]);
         frame.render_widget(
@@ -1869,17 +2186,47 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
             actions[1],
         );
         frame.render_widget(
-            Paragraph::new("  B 返回新周目选择  ").block(panel_block("返回", false)),
+            Paragraph::new(if state.deletion_in_progress.is_some() {
+                "  D 继续删除  "
+            } else {
+                "  D 删除  "
+            })
+            .block(panel_block("删除", false)),
             actions[2],
+        );
+        frame.render_widget(
+            Paragraph::new("  B 返回新周目选择  ").block(panel_block("返回", false)),
+            actions[3],
         );
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(
-                    state.status.clone(),
+                    if state.billing_reconciliation_editing {
+                        format!(
+                            "{} CNY {}{} · USD {}{}",
+                            state.status,
+                            if state.reconciliation_edit_field == 0 { "›" } else { "" },
+                            state.reconciliation_cny_draft,
+                            if state.reconciliation_edit_field == 1 { "›" } else { "" },
+                            state.reconciliation_usd_draft
+                        )
+                    } else {
+                        state.status.clone()
+                    },
                     Style::default().fg(COLOR_TEXT),
                 )),
                 Line::from(Span::styled(
-                    "↑↓ 选择 · Enter 恢复 · P 绑定当前模型 · [ / ] 翻页 · R 刷新 · L 扫描 · B 返回",
+                    if state.billing_reconciliation_editing {
+                        "Tab 切换 CNY / USD · Enter 确认额度并迁移 · Esc 取消"
+                    } else if state.delete_confirmation {
+                        "删除确认：Y 确认 · N / Esc 取消"
+                    } else if !state.pending_deletions.is_empty() {
+                        "↑↓ 选择周目 · X 选择待恢复删除 · D 删除 / 续跑 · Enter 恢复 · M 核对费用 · [ / ] 翻页 · R 刷新 · L 扫描 · B 返回"
+                    } else if state.deletion_in_progress.is_some() {
+                        "↑↓ 选择 · Enter 恢复 · M 核对费用 · D 继续删除 · [ / ] 翻页 · R 刷新 · L 扫描 · B 返回"
+                    } else {
+                        "↑↓ 选择 · Enter 恢复 · P 绑定 · M 核对费用 · D 删除 · [ / ] 翻页 · R 刷新 · L 扫描 · B 返回"
+                    },
                     Style::default().fg(COLOR_MUTED),
                 )),
             ])

@@ -152,6 +152,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "tokio",
 ]
 
 [[package]]
@@ -183,6 +184,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "unicode-width",
+ "uuid",
 ]
 
 [[package]]

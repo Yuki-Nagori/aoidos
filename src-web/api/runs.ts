@@ -29,6 +29,7 @@ export interface RunSummary {
   revision: number;
   state: RunState;
   active: boolean;
+  deletionOperationId: string | null;
 }
 
 export interface RunPage {
@@ -37,11 +38,28 @@ export interface RunPage {
   catalogRevision: number;
   scanIncomplete: boolean;
   scanIssueCount: number;
+  pendingDeletions: DeletionOperation[];
+  pendingDeletionsTruncated: boolean;
 }
 
 export interface OpenedRun {
   session: OpenedSession;
   profile: LlmProfile;
+}
+
+export interface DeletionOperation {
+  operationId: string;
+  sessionId: string;
+  state:
+    | "requested"
+    | "owner-closed"
+    | "files-quarantined"
+    | "database-purged"
+    | "files-purged"
+    | "needs-repair"
+    | "completed";
+  catalogRevision: number;
+  diagnosticCode: string | null;
 }
 
 export interface LegacyScanResult {
@@ -56,7 +74,7 @@ export interface SelectedRunBudgetLimits {
   usdLimit: string;
 }
 
-export interface RunBudgetSettings {
+interface RunBudgetSettings {
   runId: string;
   cnyLimit: string;
   usdLimit: string;
@@ -80,6 +98,15 @@ export function listRuns(cursor?: RunCursor, pageSize = 50): Promise<RunPage> {
 /** 按目录 revision 显式恢复既有周目，并返回该周目冻结的公开 profile。 */
 export function openSelectedRun(sessionId: string, expectedRevision: number): Promise<OpenedRun> {
   return invoke("run_open_selected", { sessionId, expectedRevision });
+}
+
+/** 玩家确认后推进删除；同一操作编号可重试，大目录会返回待继续清理阶段。 */
+export function deleteRun(
+  operationId: string,
+  sessionId: string,
+  expectedRevision: number,
+): Promise<DeletionOperation> {
+  return invoke("run_delete", { operationId, sessionId, expectedRevision });
 }
 
 /** 玩家主动推进一个旧周目发现批次；普通列表读取不会触发扫描。 */

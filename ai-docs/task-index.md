@@ -120,7 +120,7 @@ ai-docs/
 
 CLI/TUI 设置页提供模型、剧本、DeepSeek 内置价目确认与本局额度编辑；手工价格编辑仍由 GUI 提供。061 将 GUI 与 TUI 的 DeepSeek profile / API Key 配置流程默认预选 CNY、允许改选 USD，并通过共享 `aoidos-app::BillingService` 保存价目选择与额度设置；币种不从界面语言或凭据推断。已开周目列表、历史周目选择及安全删除另由 059 定协议、060 实现；不能只删除 transcript 文件而遗留 SQLite 记忆 / 实体 / 费用数据，也不能把新局 profile 静默套到旧周目。
 
-059 已将周目目录定为 SQLite 有界索引，并区分 transcript `sessionId`、独立 `memoryRunId` 和账本 `billingRunId`；明确旧局 profile 绑定、只读目录、切换顺序、未决费用删除门禁、跨周目刻痕失效与删除 journal。设计经独立评审并同步相关架构文档。060 已实现目录 schema、新局身份登记、只读分页、旧局扫描、profile 绑定 CAS、账务迁移及共享恢复服务；TUI 已接入周目列表、扫描与恢复，普通重开和目录恢复均使用该局冻结 profile。桌面选择界面、迁移 UI、安全删除和启动恢复仍在推进。
+059 已将周目目录定为 SQLite 有界索引，并区分 transcript `sessionId`、独立 `memoryRunId` 和账本 `billingRunId`；明确旧局 profile 绑定、只读目录、切换顺序、未决费用删除门禁、跨周目刻痕失效与删除 journal。设计经独立评审并同步相关架构文档。060 已实现目录 schema、新局身份登记、只读分页、旧局扫描、profile 绑定 CAS、账务迁移及共享恢复服务；CLI/TUI 与 Web 已接入周目目录、恢复、账务迁移和删除，普通重开与目录恢复均使用该局冻结 profile。完整本地验收和独立评审已通过，跨平台 PR CI 待验收。
 
 ### 文档与基线
 

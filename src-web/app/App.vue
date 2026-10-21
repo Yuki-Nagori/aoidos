@@ -28,9 +28,7 @@ const suggestedAction = computed(() => {
     ?.suggestedActions[locale.resolved.value];
 });
 const sessionId = computed(() => product.session.value?.sessionId);
-const billingProfile = computed(() =>
-  product.profiles.value.find((profile) => profile.profileId === product.profileId.value),
-);
+const billingProfile = computed(() => product.activeProfile.value);
 const billing = useBilling(
   sessionId,
   computed(() => billingProfile.value?.profileId ?? ""),

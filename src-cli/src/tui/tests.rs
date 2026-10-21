@@ -2,10 +2,10 @@ use super::{
     SettingsSection, ViewState, append_bounded, apply_turn_snapshot, billing_currency_shortcut,
     billing_lines, billing_title, cancel_game, confirm_action, continue_game, draft_cursor_column,
     draft_cursor_position, draft_cursor_row, friendly_error, game_layout, handle_game_key,
-    handle_runtime_event, load_request_preflight, model_intro_lines, next_settings_section,
-    open_selected_run, open_session, refresh_billing, refresh_runs, scroll_billing,
-    settings_layout, settings_profile_index_at_row, submit_action, switch_settings_section,
-    wrap_visual_lines,
+    handle_runtime_event, handle_selection_click, handle_selection_key, load_request_preflight,
+    model_intro_lines, next_settings_section, open_selected_run, open_session, refresh_billing,
+    refresh_runs, scroll_billing, settings_layout, settings_profile_index_at_row, submit_action,
+    switch_settings_section, wrap_visual_lines,
 };
 use crate::{CliApp, EVENT_CAPACITY, EventBridge};
 use aoidos_app::{GameServices, TurnRuntime, billing::RunBillingSummary, profiles::Profiles};
@@ -1039,6 +1039,210 @@ async fn catalog_selection_restores_the_frozen_profile_without_sending_a_request
     assert_eq!(state.session.as_ref().unwrap().session_id, session_id);
     assert_eq!(state.session_profile.as_ref().unwrap(), &fake_profile());
     assert!(!state.existing_runs_open);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn catalog_deletion_requires_confirmation_and_removes_only_the_selected_run() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("aoidos-cli-run-delete-{nonce}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut app = fake_app(&root, calls.clone());
+    let mut state = ViewState::new(
+        vec![fake_profile()],
+        aoidos_engine::game::assets::list().unwrap(),
+    );
+
+    open_session(&mut app, &mut state, true).await.unwrap();
+    let session_id = state.session.as_ref().unwrap().session_id.clone();
+    state.session = None;
+    state.phase = None;
+    state.existing_runs_open = true;
+    refresh_runs(&app, &mut state, None);
+    assert_eq!(state.existing_runs[0].session_id, session_id);
+
+    handle_selection_key(
+        &mut app,
+        &mut state,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('d'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(state.delete_confirmation);
+    assert_eq!(state.existing_runs.len(), 1);
+
+    handle_selection_key(
+        &mut app,
+        &mut state,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('y'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert!(!state.delete_confirmation);
+    assert!(state.existing_runs.is_empty(), "{}", state.status);
+    assert!(state.deletion_in_progress.is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn catalog_deletion_confirmation_keeps_its_target_when_another_row_is_clicked() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("aoidos-cli-run-delete-click-{nonce}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut app = fake_app(&root, calls.clone());
+    let mut state = ViewState::new(
+        vec![fake_profile()],
+        aoidos_engine::game::assets::list().unwrap(),
+    );
+
+    open_session(&mut app, &mut state, true).await.unwrap();
+    let first_created_id = state.session.as_ref().unwrap().session_id.clone();
+    state.session = None;
+    state.phase = None;
+    open_session(&mut app, &mut state, true).await.unwrap();
+    let second_created_id = state.session.as_ref().unwrap().session_id.clone();
+    assert_ne!(first_created_id, second_created_id);
+    state.session = None;
+    state.phase = None;
+    state.existing_runs_open = true;
+    refresh_runs(&app, &mut state, None);
+    assert_eq!(state.existing_runs.len(), 2);
+    let first_id = state.existing_runs[0].session_id.clone();
+    let second_id = state.existing_runs[1].session_id.clone();
+
+    state.existing_run_index = 0;
+    handle_selection_key(
+        &mut app,
+        &mut state,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('d'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        state
+            .delete_confirmation_target
+            .as_ref()
+            .unwrap()
+            .session_id,
+        first_id
+    );
+
+    let area = super::app_screen_area();
+    let list = super::selection_layout(area)[1];
+    handle_selection_click(&mut app, &mut state, list.x + 1, list.y + 2)
+        .await
+        .unwrap();
+    assert_eq!(state.existing_run_index, 0);
+
+    handle_selection_key(
+        &mut app,
+        &mut state,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('y'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !state
+            .existing_runs
+            .iter()
+            .any(|run| run.session_id == first_id)
+    );
+    assert!(
+        state
+            .existing_runs
+            .iter()
+            .any(|run| run.session_id == second_id)
+    );
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn startup_recovery_finishes_a_pending_deletion_before_exposing_the_catalog() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("aoidos-cli-run-recovery-{nonce}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut app = fake_app(&root, calls.clone());
+    let mut state = ViewState::new(
+        vec![fake_profile()],
+        aoidos_engine::game::assets::list().unwrap(),
+    );
+
+    open_session(&mut app, &mut state, true).await.unwrap();
+    let session_id = state.session.as_ref().unwrap().session_id.clone();
+    state.session = None;
+    state.phase = None;
+    state.existing_runs_open = true;
+    refresh_runs(&app, &mut state, None);
+    let run = state.existing_runs[0].clone();
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    app.storage
+        .request_run_deletion(
+            &operation_id,
+            &session_id,
+            run.revision,
+            "2026-10-21T00:00:00Z",
+        )
+        .unwrap();
+
+    assert_eq!(
+        app.services
+            .runs
+            .recover_pending_deletions(&app.services.product, &app.services.runtime)
+            .await
+            .unwrap(),
+        aoidos_app::runs::DeletionRecoveryReport {
+            completed: 1,
+            failed: Vec::new(),
+        }
+    );
+    assert!(app.storage.pending_run_deletions(128).unwrap().is_empty());
+    assert!(
+        app.services
+            .runs
+            .page(None, aoidos_engine::run_catalog::DEFAULT_PAGE_SIZE)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
     app.shutdown().await;

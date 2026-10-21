@@ -2,7 +2,7 @@
 
 更新日期：2026-10-21。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。060 已接入共享周目目录服务、Tauri / Web 类型及 CLI/TUI 分页、旧存档扫描和显式恢复；桌面选择 UI、删除和启动前向恢复仍未完成，见 [task 060](../task/060-run-management-impl.md)。053 已定稿记忆检索命令契约，具体命令尚未实现；054 已定稿结局快照与操作接口方向，精确 DTO 随 056 实现设计确认。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。060 已接入共享周目目录、Tauri / Web 与 CLI/TUI 列表 / 扫描 / 恢复 / 删除，以及启动前向恢复；本地验收和独立评审已通过，跨平台 PR CI 待验收，见 [task 060](../task/060-run-management-impl.md)。053 已定稿记忆检索命令契约，具体命令尚未实现；054 已定稿结局快照与操作接口方向，精确 DTO 随 056 实现设计确认。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -164,15 +164,16 @@ interface OpenedSession {
 
 Web API 位于 `src-web/api/runs.ts`。目录命令只操作共享生命周期服务，不返回路径或 transcript；显式恢复不会发送玩家行动。恢复响应除会话摘要外还包含该局冻结的公开 profile，调用方应继续使用它，不得按同 ID 重新载入当前 profile。`selectionMirrorPending` 表示 SQLite 活动选择已提交但兼容文件镜像尚待修复。
 
-| 命令                    | 参数                                               | 返回                                              | 边界                                           |
-| ----------------------- | -------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------- |
-| `run_catalog_page`      | `{ cursor?, pageSize? }`                           | `RunPage`                                         | revision 绑定游标；只读摘要                    |
-| `run_open_selected`     | `{ sessionId, expectedRevision }`                  | `{ session: OpenedSession, profile: LlmProfile }` | 显式恢复并返回冻结公开 profile；不启动模型请求 |
-| `run_scan_legacy`       | 无                                                 | `LegacyScanResult`                                | 仅玩家主动调用；分批扫描旧记录                 |
-| `run_bind_profile`      | `{ sessionId, expectedRevision, profileId }`       | revision                                          | 显式绑定无凭据 profile 快照                    |
-| `run_reconcile_billing` | `{ sessionId, expectedRevision, selectedLimits? }` | 历史账务合并摘要                                  | 只在预算冲突时传入 CNY / USD 十进制字符串上限  |
+| 命令                    | 参数                                               | 返回                                              | 边界                                                       |
+| ----------------------- | -------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| `run_catalog_page`      | `{ cursor?, pageSize? }`                           | `RunPage`                                         | revision 绑定游标；只读摘要                                |
+| `run_open_selected`     | `{ sessionId, expectedRevision }`                  | `{ session: OpenedSession, profile: LlmProfile }` | 显式恢复并返回冻结公开 profile；不启动模型请求             |
+| `run_scan_legacy`       | 无                                                 | `LegacyScanResult`                                | 仅玩家主动调用；分批扫描旧记录                             |
+| `run_bind_profile`      | `{ sessionId, expectedRevision, profileId }`       | revision                                          | 显式绑定无凭据 profile 快照                                |
+| `run_reconcile_billing` | `{ sessionId, expectedRevision, selectedLimits? }` | 历史账务合并摘要                                  | 只在预算冲突时传入 CNY / USD 十进制字符串上限              |
+| `run_delete`            | `{ operationId, sessionId, expectedRevision }`     | `DeletionOperation`                               | 显式确认后推进同一删除 journal；可用相同 operation ID 重试 |
 
-`OpenedRun.profile` 是该局冻结、无凭据的 `LlmProfile`。TUI 的普通重开与目录恢复都读取该快照，并以此执行费用预检和回合请求，因此修改或删除当前 profile 不会改变已开周目的模型参数。删除命令与桌面选择界面仍未接入。
+`OpenedRun.profile` 是该局冻结、无凭据的 `LlmProfile`。TUI 的普通重开与目录恢复都读取该快照，并以此执行费用预检和回合请求，因此修改或删除当前 profile 不会改变已开周目的模型参数。`DeletionOperation` 包含 operationId、sessionId、state、catalogRevision 和 diagnosticCode；Tauri / Web 与 TUI 的删除入口共用生命周期服务，未完成 journal 可用相同 operation ID 续跑，diagnosticCode 暴露最近一次稳定恢复错误。
 
 scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-found；不接受文件路径、正文、endpoint 或密钥。`displayNames` 从该资源目录的 `i18n.json` 读取，只本地化界面展示名，不改变原文 `title` 或存档身份。原文、实体目录、格式或本地化元数据不可用为 app.not-ready；实体目录规则见[剧本格式规范](../standards/scenarios.md)。`scriptRevision` 绑定原文与实体清单版本，重新打开时不接受版本漂移。配置、凭据与存储错误按公开码返回。startNew=true 创建新周目；false 重开同剧本的已保存活动周目，没有活动选择时首次创建。活动 profile 可显式切换，已生成记录不改写。
 

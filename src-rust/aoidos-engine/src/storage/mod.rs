@@ -95,6 +95,9 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     aoidos_memory::schema::MATERIAL_POSITION_MIGRATION,
     crate::run_catalog::SCHEMA,
     crate::run_catalog::legacy_scan::MIGRATION,
+    crate::run_catalog::DELETION_CLEANUP_MIGRATION,
+    crate::run_catalog::DELETION_RECEIPT_MIGRATION,
+    crate::run_catalog::DELETION_CLEANUP_CURSOR_MIGRATION,
 ];
 
 pub struct Storage {
@@ -124,6 +127,9 @@ impl Storage {
                     aoidos_memory::schema::verify(connection)?;
                     crate::game::catalog::verify_entity_registry_schema(connection)?;
                     crate::run_catalog::verify(connection)?;
+                    crate::run_catalog::verify_deletion_cleanup_schema(connection)?;
+                    crate::run_catalog::verify_deletion_receipt_schema(connection)?;
+                    crate::run_catalog::verify_deletion_cleanup_cursor_schema(connection)?;
                     crate::run_catalog::legacy_scan::verify(connection)?;
                     aoidos_theme::schema::verify(connection)?;
                     aoidos_locale::schema::verify(connection)?;
@@ -133,6 +139,11 @@ impl Storage {
                 },
             )
             .ok();
+        let database = database.and_then(|mut connection| {
+            crate::run_catalog::compact_completed_deletion_receipts(&mut connection)
+                .ok()
+                .map(|()| connection)
+        });
         Self {
             records: Arc::new(Records::new(root.to_owned(), record_events)),
             migration,
@@ -820,6 +831,50 @@ impl Storage {
         })
     }
 
+    /// 读取待恢复删除 journal 的固定大小批次。
+    /// # Errors
+    /// journal 损坏或页大小无效时拒绝继续恢复。
+    pub fn pending_run_deletions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<crate::run_catalog::DeletionOperation>, Fault> {
+        self.with_database(|connection| crate::run_catalog::pending_operations(connection, limit))
+    }
+
+    /// 保存或清除单个删除 journal 的最近恢复诊断码。
+    /// # Errors
+    /// 操作身份不匹配、诊断码非法或存储写入失败时返回稳定错误。
+    pub fn set_run_deletion_diagnostic(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        diagnostic_code: Option<&str>,
+        updated_at: &str,
+    ) -> Result<(), Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::set_deletion_diagnostic(
+                connection,
+                operation_id,
+                session_id,
+                diagnostic_code,
+                updated_at,
+            )
+        })
+    }
+
+    /// 查询指定删除操作的当前持久阶段。
+    /// # Errors
+    /// 操作不存在、身份不匹配或 journal 损坏时返回稳定错误。
+    pub fn run_deletion_operation(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::operation(connection, operation_id, session_id)
+        })
+    }
+
     /// 在 SQLite 事务内登记删除意图并封锁目录项；不关闭 owner 或执行文件清理。
     /// # Errors
     /// revision / 身份不匹配、账单仍未结清或写入失败时拒绝登记。
@@ -930,6 +985,7 @@ impl Storage {
                 crate::run_catalog::manifest_for_quarantine(connection, operation_id, session_id)
             })?
             .ok_or_else(|| Fault::new("app.conflict", "删除隔离阶段已变化"))?;
+        // 先逐项执行隔离，再统一复核结果；只有整份冻结清单都达到目标状态才推进 journal。
         for entry in &entries {
             let kind = match entry.kind {
                 crate::run_catalog::DeletionManifestEntryKind::MemoryRunDirectory => {
@@ -977,6 +1033,160 @@ impl Storage {
                 &manifest_hash,
                 updated_at,
             )
+        })
+    }
+
+    /// 清除已隔离周目的 SQLite 业务数据，并保留删除 journal 与剧本代数高水位。
+    ///
+    /// 调用方须持有生命周期锁并确保 runtime owner 已关闭。数据库清理全部在一个事务中完成；
+    /// 文件系统仍留在 quarantine，后续阶段负责有界删除并记录完成墓碑。
+    /// # Errors
+    /// 周目仍有计费义务、journal 阶段错误、身份或 manifest 损坏时不提交任何数据库更改。
+    pub fn purge_run_deletion_database(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        match self.records.get(session_id) {
+            Ok(_) => return Err(Fault::new("app.conflict", "周目记录尚未关闭")),
+            Err(error) if error.code == "app.not-found" => {}
+            Err(error) => return Err(error),
+        }
+        self.with_database(|connection| {
+            crate::run_catalog::purge_run_database(connection, operation_id, session_id, updated_at)
+        })
+    }
+
+    /// 有界清理已隔离文件；每次最多处理 128 个清单项或目录项。
+    ///
+    /// 清理进度按 manifest 前缀和有界原生路径栈持久化，深目录可在后续批次继续；不保存绝对路径。
+    /// 每次最多检查 128 个文件或目录，不跟随符号链接，也不跨越隔离卷边界。只有所有清单项和隔离父目录均清空后才推进阶段。
+    /// # Errors
+    /// journal、清单、对象身份或隔离目录异常时失败关闭，并保留可诊断的 journal 状态。
+    pub fn purge_run_deletion_files(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        const MAX_CLEANUP_ENTRIES: usize = 128;
+
+        let operation = self.with_database(|connection| {
+            crate::run_catalog::operation(connection, operation_id, session_id)
+        })?;
+        if operation.state == "completed" {
+            return Ok(operation);
+        }
+        if operation.state == "files-purged" {
+            return self.with_database(|connection| {
+                crate::run_catalog::complete_deletion(
+                    connection,
+                    operation_id,
+                    session_id,
+                    updated_at,
+                )
+            });
+        }
+        if operation.state != "database-purged" {
+            return Err(Fault::new("app.conflict", "隔离文件清理阶段不匹配"));
+        }
+        let cleanup = self.with_database(|connection| {
+            crate::run_catalog::manifest_for_quarantine_cleanup(
+                connection,
+                operation_id,
+                session_id,
+            )
+        })?;
+        let mut index = cleanup.index;
+        let mut directory_stack = cleanup.directory_stack.clone();
+        let mut visited = 0;
+        while index < cleanup.entries.len() {
+            if visited == MAX_CLEANUP_ENTRIES {
+                break;
+            }
+            let entry = &cleanup.entries[index];
+            let kind = match entry.kind {
+                crate::run_catalog::DeletionManifestEntryKind::MemoryRunDirectory => {
+                    aoidos_store::filesystem::QuarantineKind::Directory
+                }
+                _ => aoidos_store::filesystem::QuarantineKind::File,
+            };
+            let result = aoidos_store::filesystem::purge_quarantined_tree_batch(
+                &self.root,
+                std::path::Path::new(&entry.quarantine),
+                kind,
+                entry.identity_hash.as_deref(),
+                directory_stack.as_deref(),
+                MAX_CLEANUP_ENTRIES - visited,
+            )
+            .map_err(Fault::from)?;
+            visited += result.visited_entries.max(1);
+            if !result.complete {
+                directory_stack = result.continuation;
+                break;
+            }
+            index += 1;
+            directory_stack = None;
+        }
+        if index != cleanup.index || directory_stack != cleanup.directory_stack {
+            self.with_database(|connection| {
+                crate::run_catalog::advance_deletion_cleanup(
+                    connection,
+                    crate::run_catalog::DeletionCleanupProgress {
+                        operation_id,
+                        session_id,
+                        expected_index: cleanup.index,
+                        next_index: index,
+                        expected_stack: cleanup.directory_stack.as_deref(),
+                        next_stack: directory_stack.as_deref(),
+                        updated_at,
+                    },
+                )
+            })?;
+        }
+        if index < cleanup.entries.len() {
+            return Ok(operation);
+        }
+
+        let operation_directory = format!("deleting/{operation_id}");
+        for directory in [
+            format!("{operation_directory}/memory"),
+            format!("{operation_directory}/transcript"),
+            operation_directory,
+        ] {
+            if visited == MAX_CLEANUP_ENTRIES {
+                return Ok(operation);
+            }
+            aoidos_store::filesystem::remove_empty_quarantine_directory(
+                &self.root,
+                std::path::Path::new(&directory),
+            )
+            .map_err(Fault::from)?;
+            visited += 1;
+        }
+
+        self.with_database(|connection| {
+            crate::run_catalog::mark_deletion_files_purged(
+                connection,
+                operation_id,
+                session_id,
+                updated_at,
+            )
+        })
+    }
+
+    /// 将已清理文件的 journal 归档为完成墓碑。
+    /// # Errors
+    /// 操作身份或 journal 阶段不匹配时拒绝推进。
+    pub fn complete_run_deletion(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        updated_at: &str,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::complete_deletion(connection, operation_id, session_id, updated_at)
         })
     }
 

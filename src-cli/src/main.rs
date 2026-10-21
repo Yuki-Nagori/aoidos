@@ -69,7 +69,7 @@ struct CliApp {
 }
 
 impl CliApp {
-    fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
+    async fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         let instance_lock = aoidos_store::lock::acquire(&root)?;
         let (sender, events) = mpsc::channel(EVENT_CAPACITY);
@@ -85,6 +85,11 @@ impl CliApp {
             SystemProxySnapshot::capture(),
         )
         .map_err(fault_error)?;
+        services
+            .runs
+            .recover_pending_deletions(&services.product, &services.runtime)
+            .await
+            .map_err(fault_error)?;
         Ok(Self {
             _instance_lock: instance_lock,
             storage,
@@ -148,7 +153,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Command::Billing { action } => {
-            let mut app = CliApp::open(root)?;
+            let mut app = CliApp::open(root).await?;
             let result = app
                 .storage
                 .ready()
@@ -167,7 +172,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             println!("已从本地用量恢复费用结算；没有重新发送模型请求。");
         }
         Command::Play => {
-            let mut app = CliApp::open(root)?;
+            let mut app = CliApp::open(root).await?;
             let result = match app.storage.ready().map_err(fault_error) {
                 Ok(()) => tui::run(&mut app).await,
                 Err(error) => Err(Box::new(error) as Box<dyn Error>),

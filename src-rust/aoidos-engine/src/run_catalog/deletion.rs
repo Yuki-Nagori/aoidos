@@ -15,6 +15,22 @@ const MAX_TRANSCRIPT_DIRECTORY_SCAN_ENTRIES: usize = 65_536;
 type CatalogDeletionRow = (String, String, Option<String>, Option<String>, String, i64);
 type FreezeManifestRow = (String, String, String, String, String, Option<Vec<u8>>);
 type QuarantineManifestRow = (String, String, String, String, String, Option<Vec<u8>>);
+type CleanupManifestRow = (
+    String,
+    String,
+    Option<Vec<u8>>,
+    Option<i64>,
+    Option<Vec<u8>>,
+);
+type PurgeRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<Vec<u8>>,
+);
 
 /// 删除确认前的只读计费门禁结果；不包含账单正文或磁盘路径。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -45,6 +61,7 @@ pub struct DeletionOperation {
     pub session_id: String,
     pub state: String,
     pub catalog_revision: u64,
+    pub diagnostic_code: Option<String>,
 }
 
 /// 单个冻结文件系统项；身份哈希由 owner 关闭后的文件枚举器计算。
@@ -277,6 +294,29 @@ pub fn request_deletion(
             session_id: session_id.to_owned(),
             state: operation.1,
             catalog_revision: revision,
+            diagnostic_code: None,
+        });
+    }
+    if let Some(target_hash) = transaction
+        .query_row(
+            "SELECT target_identity_hash FROM session_deletion_receipts WHERE operation_id=?1",
+            [operation_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(database)?
+    {
+        if target_hash != target_identity_hash(session_id) {
+            return Err(Fault::new("app.conflict", "删除操作编号已用于其他周目"));
+        }
+        let revision = catalog_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Ok(DeletionOperation {
+            operation_id: operation_id.to_owned(),
+            session_id: session_id.to_owned(),
+            state: "completed".into(),
+            catalog_revision: revision,
+            diagnostic_code: None,
         });
     }
 
@@ -305,6 +345,12 @@ pub fn request_deletion(
             rusqlite::params![operation_id, session_id, updated_at],
         )
         .map_err(database)?;
+    transaction
+        .execute(
+            "INSERT INTO session_deletion_progress(operation_id,manifest_index,updated_at) VALUES(?1,0,?2)",
+            rusqlite::params![operation_id, updated_at],
+        )
+        .map_err(database)?;
     let changed = transaction
         .execute(
             "UPDATE session_catalog SET state='deleting',revision=?1,updated_at=?2 WHERE session_id=?3 AND revision=?4",
@@ -321,6 +367,7 @@ pub fn request_deletion(
         session_id: session_id.to_owned(),
         state: "requested".into(),
         catalog_revision,
+        diagnostic_code: None,
     })
 }
 
@@ -383,6 +430,7 @@ pub fn clear_active_selection_for_deletion(
         session_id: session_id.to_owned(),
         state,
         catalog_revision: revision,
+        diagnostic_code: None,
     })
 }
 
@@ -492,6 +540,7 @@ pub(crate) fn freeze_deletion_manifest(
         session_id: session_id.to_owned(),
         state: "owner-closed".into(),
         catalog_revision: revision,
+        diagnostic_code: None,
     })
 }
 
@@ -641,7 +690,27 @@ pub fn operation(
         .optional()
         .map_err(database)?;
     let Some((target_id, state)) = row else {
-        return Err(Fault::new("app.not-found", "删除操作不存在"));
+        let target_hash: Option<String> = connection
+            .query_row(
+                "SELECT target_identity_hash FROM session_deletion_receipts WHERE operation_id=?1",
+                [operation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(database)?;
+        let Some(target_hash) = target_hash else {
+            return Err(Fault::new("app.not-found", "删除操作不存在"));
+        };
+        if target_hash != target_identity_hash(session_id) {
+            return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+        }
+        return Ok(DeletionOperation {
+            operation_id: operation_id.to_owned(),
+            session_id: session_id.to_owned(),
+            state: "completed".into(),
+            catalog_revision: catalog_revision(connection)?,
+            diagnostic_code: None,
+        });
     };
     if target_id != session_id {
         return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
@@ -652,7 +721,101 @@ pub fn operation(
         session_id: session_id.to_owned(),
         state,
         catalog_revision: revision,
+        diagnostic_code: None,
     })
+}
+
+/// 按创建顺序读取尚未完成的删除操作，供启动恢复器有界前向推进。
+///
+/// 每次最多返回 128 项；调用方完成当前页后重新读取，避免长期保留可变游标。
+/// # Errors
+/// 页大小无效或 journal / SQLite 数据损坏时返回稳定错误。
+pub fn pending_operations(
+    connection: &rusqlite::Connection,
+    limit: usize,
+) -> Result<Vec<DeletionOperation>, Fault> {
+    if limit == 0 || limit > 128 {
+        return Err(Fault::bad_request());
+    }
+    let revision = catalog_revision(connection)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT operation_id,session_id,state,result_code FROM session_deletion_ops WHERE state<>'completed' ORDER BY created_at,operation_id LIMIT ?1",
+        )
+        .map_err(database)?;
+    let rows = statement
+        .query_map(
+            [i64::try_from(limit).map_err(|_| Fault::bad_request())?],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .map_err(database)?;
+    let mut operations = Vec::new();
+    for row in rows {
+        let (operation_id, session_id, state, diagnostic_code) = row.map_err(database)?;
+        if !crate::record::format::valid_uuid(&operation_id)
+            || !crate::record::format::valid_uuid(&session_id)
+            || !matches!(
+                state.as_str(),
+                "requested"
+                    | "owner-closed"
+                    | "files-quarantined"
+                    | "database-purged"
+                    | "files-purged"
+                    | "needs-repair"
+            )
+        {
+            return Err(corrupt());
+        }
+        operations.push(DeletionOperation {
+            operation_id,
+            session_id,
+            state,
+            catalog_revision: revision,
+            diagnostic_code,
+        });
+    }
+    Ok(operations)
+}
+
+/// 保留启动恢复失败码；成功推进后可清除旧诊断。
+pub(crate) fn set_deletion_diagnostic(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    diagnostic_code: Option<&str>,
+    updated_at: &str,
+) -> Result<(), Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+        || diagnostic_code.is_some_and(|code| {
+            code.is_empty()
+                || code.len() > 64
+                || !code.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte)
+                })
+        })
+    {
+        return Err(Fault::bad_request());
+    }
+    let changed = connection
+        .execute(
+            "UPDATE session_deletion_ops SET result_code=?1,updated_at=?2 WHERE operation_id=?3 AND session_id=?4 AND state<>'completed'",
+            rusqlite::params![diagnostic_code, updated_at, operation_id, session_id],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.not-found", "待恢复删除操作不存在"));
+    }
+    Ok(())
 }
 
 /// 在全部文件已按清单隔离后，原子推进删除阶段。
@@ -696,6 +859,7 @@ pub(crate) fn mark_files_quarantined(
             session_id: session_id.to_owned(),
             state,
             catalog_revision: revision,
+            diagnostic_code: None,
         });
     }
     let bytes = bytes.ok_or_else(corrupt)?;
@@ -727,7 +891,771 @@ pub(crate) fn mark_files_quarantined(
         session_id: session_id.to_owned(),
         state: "files-quarantined".into(),
         catalog_revision: revision,
+        diagnostic_code: None,
     })
+}
+
+/// 在单个 SQLite 事务中清理已隔离周目的数据库记录，并保留删除墓碑与剧本代数高水位。
+///
+/// 文件必须已经全部按冻结清单移动到隔离目录；事务再次核对账务义务和三身份映射，
+/// 再按显式外键顺序删除周目数据。任何一步失败都会回滚数据库更改，journal 保持原阶段。
+/// # Errors
+/// journal 阶段、manifest、周目身份或费用义务不满足删除条件时失败关闭。
+pub(crate) fn purge_run_database(
+    connection: &mut rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    updated_at: &str,
+) -> Result<DeletionOperation, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let row: Option<PurgeRow> =
+        transaction
+            .query_row(
+                "SELECT op.session_id,op.state,c.state,c.script_id,c.memory_run_id,c.billing_run_id,op.manifest FROM session_deletion_ops op LEFT JOIN session_catalog c USING(session_id) WHERE op.operation_id=?1",
+                [operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+            )
+            .optional()
+            .map_err(database)?;
+    let Some((
+        target_id,
+        state,
+        catalog_state,
+        script_id,
+        memory_run_id,
+        billing_run_id,
+        manifest_bytes,
+    )) = row
+    else {
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    if matches!(
+        state.as_str(),
+        "database-purged" | "files-purged" | "completed"
+    ) {
+        let revision = catalog_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Ok(DeletionOperation {
+            operation_id: operation_id.to_owned(),
+            session_id: session_id.to_owned(),
+            state,
+            catalog_revision: revision,
+            diagnostic_code: None,
+        });
+    }
+    if state != "files-quarantined" || catalog_state.as_deref() != Some("deleting") {
+        return Err(Fault::new("app.conflict", "周目数据库清理阶段不匹配"));
+    }
+    let script_id = script_id.ok_or_else(corrupt)?;
+    let memory_run_id = memory_run_id.ok_or_else(corrupt)?;
+    if !aoidos_script::valid_id(&script_id)
+        || !crate::record::format::valid_uuid(&memory_run_id)
+        || !crate::record::format::valid_uuid(session_id)
+    {
+        return Err(corrupt());
+    }
+    if billing_run_id.as_deref() != Some(session_id) {
+        return Err(Fault::new("app.conflict", "本局账单身份需要修复"));
+    }
+    let manifest_bytes = manifest_bytes.ok_or_else(corrupt)?;
+    validate_frozen_manifest(
+        &manifest_bytes,
+        operation_id,
+        session_id,
+        &script_id,
+        &memory_run_id,
+    )?;
+
+    let active: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM active_session WHERE id=1 AND session_id=?1)",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if active {
+        return Err(Fault::new("app.conflict", "活动周目尚未关闭"));
+    }
+    let mapping_valid: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_run_sessions s JOIN memory_runs r USING(run_id) WHERE s.session_id=?1 AND s.run_id=?2 AND r.script_id=?3)",
+            rusqlite::params![session_id, memory_run_id, script_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if !mapping_valid {
+        return Err(Fault::new("app.conflict", "周目的身份关联需要修复"));
+    }
+    let scopes = [session_id, memory_run_id.as_str()];
+    let obligations = crate::billing::BillingLedger::deletion_obligations(&transaction, &scopes)
+        .map_err(|_| Fault::new("store.database", "费用账本检查失败"))?;
+    if obligations.unresolved_request_count != 0 || obligations.pending_settlement_count != 0 {
+        return Err(Fault::new(
+            "billing.settlement-pending",
+            "该周目仍有未完成的费用结算",
+        ));
+    }
+
+    purge_scoped_data(&transaction, session_id, &memory_run_id, &script_id)?;
+    delete_catalog_row(&transaction, session_id)?;
+    let changed = transaction
+        .execute(
+            "UPDATE session_deletion_ops SET state='database-purged',updated_at=?1 WHERE operation_id=?2 AND session_id=?3 AND state='files-quarantined'",
+            rusqlite::params![updated_at, operation_id, session_id],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.conflict", "周目数据库清理阶段已变化"));
+    }
+    let revision = u64::try_from(bump_revision(&transaction)?).map_err(|_| corrupt())?;
+    transaction.commit().map_err(database)?;
+    Ok(DeletionOperation {
+        operation_id: operation_id.to_owned(),
+        session_id: session_id.to_owned(),
+        state: "database-purged".into(),
+        catalog_revision: revision,
+        diagnostic_code: None,
+    })
+}
+
+/// 读取数据库清理后的冻结隔离清单；该阶段不再依赖已删除的目录行。
+pub(crate) struct QuarantineCleanupManifest {
+    pub entries: Vec<DeletionManifestEntry>,
+    pub index: usize,
+    pub directory_stack: Option<Vec<u8>>,
+}
+
+pub(crate) fn manifest_for_quarantine_cleanup(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+) -> Result<QuarantineCleanupManifest, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+    {
+        return Err(Fault::bad_request());
+    }
+    let row: Option<CleanupManifestRow> = connection
+        .query_row(
+            "SELECT op.session_id,op.state,op.manifest,p.manifest_index,p.directory_stack FROM session_deletion_ops op LEFT JOIN session_deletion_progress p USING(operation_id) WHERE op.operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((target_id, state, bytes, cleanup_index, directory_stack)) = row else {
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    if state != "database-purged" {
+        return Err(Fault::new("app.conflict", "隔离文件清理阶段不匹配"));
+    }
+    let bytes = bytes.ok_or_else(corrupt)?;
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        return Err(corrupt());
+    }
+    let envelope: FrozenDeletionEnvelope = serde_json::from_slice(&bytes).map_err(|_| corrupt())?;
+    validate_frozen_manifest(
+        &bytes,
+        operation_id,
+        session_id,
+        &envelope.manifest.script_id,
+        &envelope.manifest.memory_run_id,
+    )?;
+    validate_manifest_entries(
+        &envelope.manifest.entries,
+        operation_id,
+        &envelope.manifest.script_id,
+        session_id,
+        &envelope.manifest.memory_run_id,
+    )?;
+    let cleanup_index =
+        usize::try_from(cleanup_index.ok_or_else(corrupt)?).map_err(|_| corrupt())?;
+    if cleanup_index > envelope.manifest.entries.len() {
+        return Err(corrupt());
+    }
+    if directory_stack
+        .as_ref()
+        .is_some_and(|cursor| cursor.len() > 262_144)
+    {
+        return Err(corrupt());
+    }
+    Ok(QuarantineCleanupManifest {
+        entries: envelope.manifest.entries,
+        index: cleanup_index,
+        directory_stack,
+    })
+}
+
+pub(crate) struct DeletionCleanupProgress<'a> {
+    pub operation_id: &'a str,
+    pub session_id: &'a str,
+    pub expected_index: usize,
+    pub next_index: usize,
+    pub expected_stack: Option<&'a [u8]>,
+    pub next_stack: Option<&'a [u8]>,
+    pub updated_at: &'a str,
+}
+
+/// 以 compare-and-set 持久化已清理的 manifest 前缀。
+pub(crate) fn advance_deletion_cleanup(
+    connection: &mut rusqlite::Connection,
+    progress: DeletionCleanupProgress<'_>,
+) -> Result<(), Fault> {
+    if !crate::record::format::valid_uuid(progress.operation_id)
+        || !crate::record::format::valid_uuid(progress.session_id)
+        || progress.updated_at.is_empty()
+        || progress.updated_at.len() > 64
+        || (progress.next_index < progress.expected_index)
+        || (progress.next_index == progress.expected_index
+            && progress.expected_stack == progress.next_stack)
+    {
+        return Err(Fault::bad_request());
+    }
+    let expected_index =
+        i64::try_from(progress.expected_index).map_err(|_| Fault::bad_request())?;
+    let next_index = i64::try_from(progress.next_index).map_err(|_| Fault::bad_request())?;
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let changed = transaction
+        .execute(
+            "UPDATE session_deletion_progress SET manifest_index=?1,directory_stack=?2,updated_at=?3 WHERE operation_id=?4 AND EXISTS(SELECT 1 FROM session_deletion_ops WHERE operation_id=?4 AND session_id=?5 AND state='database-purged') AND manifest_index=?6 AND directory_stack IS ?7",
+            rusqlite::params![next_index, progress.next_stack, progress.updated_at, progress.operation_id, progress.session_id, expected_index, progress.expected_stack],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.conflict", "隔离文件清理游标已变化"));
+    }
+    let changed = transaction
+        .execute(
+            "UPDATE session_deletion_ops SET updated_at=?1 WHERE operation_id=?2 AND session_id=?3 AND state='database-purged'",
+            rusqlite::params![progress.updated_at, progress.operation_id, progress.session_id],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.conflict", "删除阶段已变化"));
+    }
+    transaction.commit().map_err(database)?;
+    Ok(())
+}
+
+/// 记录隔离树已清空；随后可单独提交完成墓碑。
+pub(crate) fn mark_deletion_files_purged(
+    connection: &mut rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    updated_at: &str,
+) -> Result<DeletionOperation, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let state: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT session_id,state FROM session_deletion_ops WHERE operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((target_id, state)) = state else {
+        let target_hash: Option<String> = transaction
+            .query_row(
+                "SELECT target_identity_hash FROM session_deletion_receipts WHERE operation_id=?1",
+                [operation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(database)?;
+        if target_hash.as_deref() == Some(target_identity_hash(session_id).as_str()) {
+            let revision = catalog_revision(&transaction)?;
+            transaction.commit().map_err(database)?;
+            return Ok(DeletionOperation {
+                operation_id: operation_id.to_owned(),
+                session_id: session_id.to_owned(),
+                state: "completed".into(),
+                catalog_revision: revision,
+                diagnostic_code: None,
+            });
+        }
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    if state == "files-purged" {
+        let revision = catalog_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Ok(DeletionOperation {
+            operation_id: operation_id.to_owned(),
+            session_id: session_id.to_owned(),
+            state,
+            catalog_revision: revision,
+            diagnostic_code: None,
+        });
+    }
+    if state != "database-purged" {
+        return Err(Fault::new("app.conflict", "隔离文件清理阶段不匹配"));
+    }
+    let cleanup = manifest_for_quarantine_cleanup(&transaction, operation_id, session_id)?;
+    if cleanup.index != cleanup.entries.len() {
+        return Err(Fault::new("app.conflict", "隔离文件仍未清理完成"));
+    }
+    let changed = transaction
+        .execute(
+            "UPDATE session_deletion_ops SET state='files-purged',updated_at=?1 WHERE operation_id=?2 AND session_id=?3 AND state='database-purged'",
+            rusqlite::params![updated_at, operation_id, session_id],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.conflict", "隔离文件清理阶段已变化"));
+    }
+    let revision = catalog_revision(&transaction)?;
+    transaction.commit().map_err(database)?;
+    Ok(DeletionOperation {
+        operation_id: operation_id.to_owned(),
+        session_id: session_id.to_owned(),
+        state: "files-purged".into(),
+        catalog_revision: revision,
+        diagnostic_code: None,
+    })
+}
+
+/// 在文件清理完成后保留不可见的幂等完成墓碑。
+pub(crate) fn complete_deletion(
+    connection: &mut rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    updated_at: &str,
+) -> Result<DeletionOperation, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let state: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT session_id,state FROM session_deletion_ops WHERE operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((target_id, state)) = state else {
+        let target_hash: Option<String> = transaction
+            .query_row(
+                "SELECT target_identity_hash FROM session_deletion_receipts WHERE operation_id=?1",
+                [operation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(database)?;
+        if target_hash.as_deref() == Some(target_identity_hash(session_id).as_str()) {
+            let revision = catalog_revision(&transaction)?;
+            transaction.commit().map_err(database)?;
+            return Ok(DeletionOperation {
+                operation_id: operation_id.to_owned(),
+                session_id: session_id.to_owned(),
+                state: "completed".into(),
+                catalog_revision: revision,
+                diagnostic_code: None,
+            });
+        }
+        return Err(Fault::new("app.not-found", "删除操作不存在"));
+    };
+    if target_id != session_id {
+        return Err(Fault::new("app.conflict", "删除操作与周目不匹配"));
+    }
+    if state == "completed" {
+        let revision = catalog_revision(&transaction)?;
+        transaction.commit().map_err(database)?;
+        return Ok(DeletionOperation {
+            operation_id: operation_id.to_owned(),
+            session_id: session_id.to_owned(),
+            state,
+            catalog_revision: revision,
+            diagnostic_code: None,
+        });
+    }
+    if state != "files-purged" {
+        return Err(Fault::new("app.conflict", "删除完成阶段不匹配"));
+    }
+    transaction
+        .execute(
+            "INSERT INTO session_deletion_receipts(operation_id,target_identity_hash,completed_at,result_code) VALUES(?1,?2,?3,'completed')",
+            rusqlite::params![operation_id, target_identity_hash(session_id), updated_at],
+        )
+        .map_err(database)?;
+    transaction
+        .execute(
+            "DELETE FROM session_deletion_progress WHERE operation_id=?1",
+            [operation_id],
+        )
+        .map_err(database)?;
+    let changed = transaction
+        .execute(
+            "DELETE FROM session_deletion_ops WHERE operation_id=?1 AND session_id=?2 AND state='files-purged'",
+            rusqlite::params![operation_id, session_id],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.conflict", "删除完成阶段已变化"));
+    }
+    let revision = catalog_revision(&transaction)?;
+    transaction.commit().map_err(database)?;
+    Ok(DeletionOperation {
+        operation_id: operation_id.to_owned(),
+        session_id: session_id.to_owned(),
+        state: "completed".into(),
+        catalog_revision: revision,
+        diagnostic_code: None,
+    })
+}
+
+/// 将旧版完整完成记录迁移为仅含幂等身份哈希的墓碑。
+pub(crate) fn compact_completed_receipts(
+    connection: &mut rusqlite::Connection,
+) -> Result<(), Fault> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let legacy = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT operation_id,session_id,updated_at FROM session_deletion_ops WHERE state='completed'",
+            )
+            .map_err(database)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(database)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(database)?
+    };
+    for (operation_id, session_id, completed_at) in legacy {
+        let expected_hash = target_identity_hash(&session_id);
+        let existing_hash: Option<String> = transaction
+            .query_row(
+                "SELECT target_identity_hash FROM session_deletion_receipts WHERE operation_id=?1",
+                [&operation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(database)?;
+        if existing_hash
+            .as_ref()
+            .is_some_and(|value| value != &expected_hash)
+        {
+            return Err(corrupt());
+        }
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO session_deletion_receipts(operation_id,target_identity_hash,completed_at,result_code) VALUES(?1,?2,?3,'completed')",
+                rusqlite::params![operation_id, expected_hash, completed_at],
+            )
+            .map_err(database)?;
+        transaction
+            .execute(
+                "DELETE FROM session_deletion_progress WHERE operation_id=?1",
+                [&operation_id],
+            )
+            .map_err(database)?;
+        transaction
+            .execute(
+                "DELETE FROM session_deletion_ops WHERE operation_id=?1 AND state='completed'",
+                [&operation_id],
+            )
+            .map_err(database)?;
+    }
+    transaction.commit().map_err(database)
+}
+
+fn target_identity_hash(session_id: &str) -> String {
+    format!("{:x}", Sha256::digest(session_id.as_bytes()))
+}
+
+fn validate_frozen_manifest(
+    bytes: &[u8],
+    operation_id: &str,
+    session_id: &str,
+    script_id: &str,
+    memory_run_id: &str,
+) -> Result<(), Fault> {
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        return Err(corrupt());
+    }
+    let envelope: FrozenDeletionEnvelope = serde_json::from_slice(bytes).map_err(|_| corrupt())?;
+    let manifest_bytes = serde_json::to_vec(&envelope.manifest).map_err(|_| corrupt())?;
+    let expected_hash = format!("sha256:{:x}", Sha256::digest(&manifest_bytes));
+    if envelope.hash != expected_hash
+        || envelope.manifest.version != 1
+        || envelope.manifest.operation_id != operation_id
+        || envelope.manifest.session_id != session_id
+        || envelope.manifest.script_id != script_id
+        || envelope.manifest.memory_run_id != memory_run_id
+    {
+        return Err(corrupt());
+    }
+    validate_manifest_entries(
+        &envelope.manifest.entries,
+        operation_id,
+        script_id,
+        session_id,
+        memory_run_id,
+    )
+}
+
+fn purge_scoped_data(
+    connection: &rusqlite::Connection,
+    session_id: &str,
+    memory_run_id: &str,
+    script_id: &str,
+) -> Result<(), Fault> {
+    let scopes = [session_id, memory_run_id];
+    let entity_ids = collect_strings(
+        connection,
+        "SELECT entity_id FROM entity_registry_entries WHERE session_id=?1 ORDER BY entity_id",
+        &[session_id],
+    )?;
+    let mutation_ids = collect_strings(
+        connection,
+        "SELECT mutation_id FROM entity_registry_entries WHERE session_id=?1 ORDER BY mutation_id",
+        &[session_id],
+    )?;
+    let cycle_mark_ids = direct_cycle_mark_ids(connection, script_id, memory_run_id, &entity_ids)?;
+
+    // 账单审计只按已核验 scope 或属于本局的物理 requestId 清理。
+    connection
+        .execute(
+            "DELETE FROM billing_pending_settlements WHERE request_id IN (SELECT request_id FROM billing_physical_requests WHERE run_id IN (?1,?2))",
+            rusqlite::params![scopes[0], scopes[1]],
+        )
+        .map_err(database)?;
+    connection
+        .execute(
+            "DELETE FROM billing_audit WHERE (operation_kind IN ('run-budget-update','legacy-budget-resolution','legacy-scope-reconcile') AND target_id IN (?1,?2)) OR (operation_kind='settlement-backfill' AND target_id IN (SELECT request_id FROM billing_physical_requests WHERE run_id IN (?1,?2)))",
+            rusqlite::params![scopes[0], scopes[1]],
+        )
+        .map_err(database)?;
+    connection
+        .execute(
+            "DELETE FROM billing_budget_warnings WHERE run_id IN (?1,?2)",
+            rusqlite::params![scopes[0], scopes[1]],
+        )
+        .map_err(database)?;
+    connection
+        .execute(
+            "DELETE FROM billing_physical_requests WHERE run_id IN (?1,?2)",
+            rusqlite::params![scopes[0], scopes[1]],
+        )
+        .map_err(database)?;
+    connection
+        .execute(
+            "DELETE FROM billing_run_budgets WHERE run_id IN (?1,?2)",
+            rusqlite::params![scopes[0], scopes[1]],
+        )
+        .map_err(database)?;
+
+    // 先删除实体行解除外键，再清除可由实体目录精确归属的 mutation 回执。
+    connection
+        .execute(
+            "DELETE FROM entity_registry_entries WHERE session_id=?1",
+            [session_id],
+        )
+        .map_err(database)?;
+    for mutation_id in &mutation_ids {
+        connection
+            .execute("DELETE FROM store_applied WHERE id=?1", [mutation_id])
+            .map_err(database)?;
+    }
+    connection
+        .execute(
+            "DELETE FROM entity_registry_runs WHERE session_id=?1",
+            [session_id],
+        )
+        .map_err(database)?;
+
+    delete_cycle_marks(connection, &cycle_mark_ids)?;
+    connection
+        .execute(
+            "DELETE FROM memory_run_sessions WHERE run_id=?1 AND session_id=?2",
+            rusqlite::params![memory_run_id, session_id],
+        )
+        .map_err(database)?;
+    delete_memory_run(connection, memory_run_id)?;
+    Ok(())
+}
+
+fn collect_strings(
+    connection: &rusqlite::Connection,
+    sql: &str,
+    values: &[&str],
+) -> Result<Vec<String>, Fault> {
+    let mut statement = connection.prepare(sql).map_err(database)?;
+    let mut rows = statement
+        .query(rusqlite::params_from_iter(values.iter().copied()))
+        .map_err(database)?;
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().map_err(database)? {
+        result.push(row.get(0).map_err(database)?);
+    }
+    Ok(result)
+}
+
+fn direct_cycle_mark_ids(
+    connection: &rusqlite::Connection,
+    script_id: &str,
+    memory_run_id: &str,
+    entity_ids: &[String],
+) -> Result<Vec<String>, Fault> {
+    let malformed_source: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_cycle_sources s JOIN memory_cycle_marks m USING(mark_id) WHERE m.script_id=?1 AND json_valid(CAST(s.source_json AS TEXT))=0)",
+            [script_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    let malformed_subjects: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_cycle_marks WHERE script_id=?1 AND json_valid(CAST(subject_ids_json AS TEXT))=0)",
+            [script_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if malformed_source || malformed_subjects {
+        return Err(corrupt());
+    }
+    let invalid_source_shape: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_cycle_sources s JOIN memory_cycle_marks m USING(mark_id) WHERE m.script_id=?1 AND (COALESCE(json_type(CAST(s.source_json AS TEXT)),'')<>'object' OR COALESCE(json_type(CAST(s.source_json AS TEXT),'$.source'),'')<>'object' OR COALESCE(json_type(CAST(s.source_json AS TEXT),'$.source.runId'),'')<>'text' OR COALESCE(json_type(CAST(s.source_json AS TEXT),'$.source.scriptId'),'')<>'text'))",
+            [script_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    let invalid_subject_shape: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_cycle_marks m WHERE m.script_id=?1 AND (COALESCE(json_type(CAST(m.subject_ids_json AS TEXT)),'')<>'array' OR EXISTS(SELECT 1 FROM json_each(CAST(m.subject_ids_json AS TEXT)) WHERE type<>'text'))) ",
+            [script_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if invalid_source_shape || invalid_subject_shape {
+        return Err(corrupt());
+    }
+    let mut mark_ids = collect_strings(
+        connection,
+        "SELECT DISTINCT s.mark_id FROM memory_cycle_sources s JOIN memory_cycle_marks m USING(mark_id) WHERE m.script_id=?1 AND json_extract(CAST(s.source_json AS TEXT),'$.source.runId')=?2 ORDER BY s.mark_id",
+        &[script_id, memory_run_id],
+    )?;
+    for entity_id in entity_ids {
+        mark_ids.extend(collect_strings(
+            connection,
+            "SELECT mark_id FROM memory_cycle_marks WHERE script_id=?1 AND EXISTS (SELECT 1 FROM json_each(CAST(subject_ids_json AS TEXT)) WHERE value=?2)",
+            &[script_id, entity_id],
+        )?);
+    }
+    mark_ids.sort();
+    mark_ids.dedup();
+    Ok(mark_ids)
+}
+
+fn delete_cycle_marks(connection: &rusqlite::Connection, mark_ids: &[String]) -> Result<(), Fault> {
+    for mark_id in mark_ids {
+        connection
+            .execute(
+                "DELETE FROM memory_cycle_sources WHERE mark_id=?1",
+                [mark_id],
+            )
+            .map_err(database)?;
+        connection
+            .execute("DELETE FROM memory_cycle_marks WHERE mark_id=?1", [mark_id])
+            .map_err(database)?;
+    }
+    Ok(())
+}
+
+fn delete_memory_run(connection: &rusqlite::Connection, run_id: &str) -> Result<(), Fault> {
+    let run_ids = [run_id];
+    for sql in [
+        "DELETE FROM memory_alias_events WHERE alias_id IN (SELECT alias_id FROM memory_aliases WHERE run_id=?1)",
+        "DELETE FROM memory_alias_sources WHERE alias_id IN (SELECT alias_id FROM memory_aliases WHERE run_id=?1)",
+        "DELETE FROM memory_aliases WHERE run_id=?1",
+        "DELETE FROM memory_batch_candidate_operations WHERE batch_id IN (SELECT batch_id FROM memory_batches WHERE run_id=?1) OR operation_id IN (SELECT operation_id FROM memory_operations WHERE run_id=?1)",
+        "DELETE FROM memory_batch_legacy_completions WHERE batch_id IN (SELECT batch_id FROM memory_batches WHERE run_id=?1)",
+        "DELETE FROM memory_batch_receipts WHERE batch_id IN (SELECT batch_id FROM memory_batches WHERE run_id=?1)",
+        "DELETE FROM memory_spans WHERE batch_id IN (SELECT batch_id FROM memory_batches WHERE run_id=?1) OR material_id IN (SELECT material_id FROM memory_materials WHERE run_id=?1)",
+        "DELETE FROM memory_operation_targets WHERE operation_id IN (SELECT operation_id FROM memory_operations WHERE run_id=?1)",
+        "DELETE FROM memory_effects WHERE run_id=?1 OR operation_id IN (SELECT operation_id FROM memory_operations WHERE run_id=?1)",
+        "DELETE FROM memory_processed WHERE material_id IN (SELECT material_id FROM memory_materials WHERE run_id=?1) OR operation_id IN (SELECT operation_id FROM memory_operations WHERE run_id=?1)",
+        "DELETE FROM memory_effect_evidence_progress WHERE entry_id IN (SELECT entry_id FROM memory_entries WHERE run_id=?1)",
+        "DELETE FROM memory_material_positions WHERE material_id IN (SELECT material_id FROM memory_materials WHERE run_id=?1)",
+        "DELETE FROM memory_cleanup WHERE run_id=?1",
+        "DELETE FROM memory_clock_receipts WHERE run_id=?1",
+        "DELETE FROM memory_cycle_scene_evidence WHERE run_id=?1",
+        "DELETE FROM memory_cycle_scene_hints WHERE run_id=?1",
+        "DELETE FROM memory_cycle_scene_progress WHERE run_id=?1",
+        "DELETE FROM memory_cycle_events WHERE run_id=?1",
+        "DELETE FROM memory_questions WHERE run_id=?1",
+        "DELETE FROM memory_materials WHERE run_id=?1",
+        "DELETE FROM memory_batches WHERE run_id=?1",
+        "DELETE FROM memory_operations WHERE run_id=?1",
+        "DELETE FROM memory_version_sources WHERE version_id IN (SELECT version_id FROM memory_versions WHERE entry_id IN (SELECT entry_id FROM memory_entries WHERE run_id=?1))",
+        "DELETE FROM memory_version_evidence WHERE version_id IN (SELECT version_id FROM memory_versions WHERE entry_id IN (SELECT entry_id FROM memory_entries WHERE run_id=?1))",
+        "DELETE FROM memory_versions WHERE entry_id IN (SELECT entry_id FROM memory_entries WHERE run_id=?1)",
+        "DELETE FROM memory_entries WHERE run_id=?1",
+        "DELETE FROM memory_run_faults WHERE run_id=?1",
+        "DELETE FROM memory_run_cycle_generations WHERE run_id=?1",
+    ] {
+        connection.execute(sql, run_ids).map_err(database)?;
+    }
+    connection
+        .execute("DELETE FROM memory_runs WHERE run_id=?1", run_ids)
+        .map_err(database)?;
+    Ok(())
+}
+
+fn delete_catalog_row(connection: &rusqlite::Connection, session_id: &str) -> Result<(), Fault> {
+    let changed = connection
+        .execute(
+            "DELETE FROM session_catalog WHERE session_id=?1 AND state='deleting'",
+            [session_id],
+        )
+        .map_err(database)?;
+    if changed != 1 {
+        return Err(Fault::new("app.conflict", "待删除周目目录状态已变化"));
+    }
+    Ok(())
 }
 
 fn validate_manifest_entries(

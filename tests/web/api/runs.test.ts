@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { RunPage, RunState, RunSummary } from "../../../src-web/api/runs";
 import {
   bindRunProfile,
+  deleteRun,
   listRuns,
   openSelectedRun,
   reconcileRunBilling,
@@ -23,6 +24,7 @@ it("forwards the revision-bound run catalog cursor without rewriting it", async 
     revision: 1,
     state,
     active: false,
+    deletionOperationId: null,
   };
   const response: RunPage = {
     entries: [summary],
@@ -30,6 +32,8 @@ it("forwards the revision-bound run catalog cursor without rewriting it", async 
     nextCursor: null,
     scanIncomplete: true,
     scanIssueCount: 2,
+    pendingDeletions: [],
+    pendingDeletionsTruncated: false,
   };
   const cursor = {
     catalogRevision: 4,
@@ -73,6 +77,26 @@ it("opens only the explicitly selected run revision", async () => {
   expect(invoke).toHaveBeenCalledWith("run_open_selected", {
     sessionId: response.session.sessionId,
     expectedRevision: 7,
+  });
+});
+
+it("forwards explicit deletion confirmation identity and revision", async () => {
+  const operation = {
+    operationId: "00000000-0000-4000-8000-000000000003",
+    sessionId: "00000000-0000-4000-8000-000000000001",
+    state: "database-purged" as const,
+    catalogRevision: 9,
+    diagnosticCode: null,
+  };
+  vi.mocked(invoke).mockResolvedValue(operation);
+
+  expect(
+    await deleteRun(operation.operationId, operation.sessionId, operation.catalogRevision),
+  ).toBe(operation);
+  expect(invoke).toHaveBeenCalledWith("run_delete", {
+    operationId: operation.operationId,
+    sessionId: operation.sessionId,
+    expectedRevision: operation.catalogRevision,
   });
 });
 

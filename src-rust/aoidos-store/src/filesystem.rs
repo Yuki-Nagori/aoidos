@@ -1,6 +1,15 @@
 //! 周目隔离与恢复共用的有界文件枚举与身份原语。
 
-use std::{ffi::OsString, fs, path::Path};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(windows)]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
 #[cfg(any(windows, not(any(unix, windows))))]
 use std::io;
@@ -30,6 +39,15 @@ enum ObjectId {
 pub struct BoundedDirectoryListing {
     pub entries: Vec<OsString>,
     pub complete: bool,
+}
+
+/// 单次隔离树清理结果；`complete == false` 表示仍有条目待后续批次处理。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupBatch {
+    pub visited_entries: usize,
+    pub complete: bool,
+    /// 深度优先遍历栈，供调用方持久化后在下一批继续。
+    pub continuation: Option<Vec<u8>>,
 }
 
 /// 可按身份隔离的文件系统对象类型。
@@ -196,6 +214,360 @@ pub fn quarantine_entry(
             std::io::ErrorKind::NotFound,
         ))),
     }
+}
+
+/// 有界清除一个已隔离的文件或目录树，不跟随符号链接。
+///
+/// 目录按深度优先逐项处理，每次只读取一个直接子项；预算耗尽时返回编码后的路径栈，调用方
+/// 必须持久化并在下批传回，否则深目录可能无法取得进展。顶层对象若仍存在，必须与冻结身份
+/// 一致；缺席表示先前批次已完成。`expected_identity == None` 只接受原本不存在且仍不存在的目录。
+///
+/// # Errors
+/// 身份变化、链接或特殊文件、路径越界、非空目录竞争及文件系统操作失败时返回错误。
+pub fn purge_quarantined_tree_batch(
+    root: &Path,
+    quarantine: &Path,
+    kind: QuarantineKind,
+    expected_identity: Option<&str>,
+    continuation: Option<&[u8]>,
+    limit: usize,
+) -> Result<CleanupBatch> {
+    validate_relative_path(quarantine)?;
+    if limit == 0 {
+        return Err(StoreError::InvalidPath(
+            "cleanup limit must be positive".into(),
+        ));
+    }
+    if kind == QuarantineKind::File && continuation.is_some() {
+        return Err(StoreError::InvalidPath(
+            "file cleanup cannot carry a directory cursor".into(),
+        ));
+    }
+
+    let top_identity = optional_identity(root, quarantine, kind)?;
+    let Some(expected_identity) = expected_identity else {
+        if kind != QuarantineKind::Directory || top_identity.is_some() {
+            return Err(StoreError::InvalidPath(
+                "unexpected quarantine object".into(),
+            ));
+        }
+        return Ok(CleanupBatch {
+            visited_entries: 0,
+            complete: true,
+            continuation: None,
+        });
+    };
+    let Some(top_identity) = top_identity else {
+        return Ok(CleanupBatch {
+            visited_entries: 0,
+            complete: true,
+            continuation: None,
+        });
+    };
+    if top_identity != expected_identity {
+        return Err(StoreError::InvalidPath(
+            "quarantine identity changed".into(),
+        ));
+    }
+
+    if kind == QuarantineKind::File {
+        remove_quarantined_file(root, quarantine)?;
+        return Ok(CleanupBatch {
+            visited_entries: 1,
+            complete: true,
+            continuation: None,
+        });
+    }
+
+    let (_, root_identity) = platform_identity(&root.join(quarantine))?;
+    let mut stack = match continuation {
+        Some(bytes) => decode_cleanup_stack(quarantine, bytes)?,
+        None => vec![quarantine.to_owned()],
+    };
+    let mut visited_entries = 0;
+    while let Some(current) = stack.last() {
+        if visited_entries >= limit {
+            return Ok(CleanupBatch {
+                visited_entries,
+                complete: false,
+                continuation: Some(encode_cleanup_stack(&stack)?),
+            });
+        }
+        let metadata = match metadata_without_links(root, current) {
+            Ok(metadata) => metadata,
+            Err(StoreError::Io { ref source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                stack.pop();
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        visited_entries += 1;
+        let (_, identity) = platform_identity(&root.join(current))?;
+        if !same_filesystem(root_identity, identity) {
+            return Err(StoreError::InvalidPath(
+                "quarantine tree crosses a filesystem boundary".into(),
+            ));
+        }
+        let file_type = metadata.file_type();
+        if file_type.is_file() {
+            remove_quarantined_file(root, current)?;
+            stack.pop();
+            continue;
+        }
+        if !file_type.is_dir() {
+            return Err(StoreError::InvalidPath("special file in quarantine".into()));
+        }
+
+        let listing = list_directory_entries(root, current, 1)?;
+        if let Some(name) = listing.entries.into_iter().next() {
+            let mut child = current.clone();
+            child.push(name);
+            stack.push(child);
+            continue;
+        }
+
+        validate_path_chain(root, current)?;
+        fs::remove_dir(root.join(current)).map_err(StoreError::from_io)?;
+        crate::atomic::sync_parent(&root.join(current))?;
+        stack.pop();
+    }
+
+    Ok(CleanupBatch {
+        visited_entries,
+        complete: true,
+        continuation: None,
+    })
+}
+
+#[cfg(unix)]
+const CLEANUP_STACK_MAGIC: &[u8; 6] = b"AOCS\x01U";
+#[cfg(windows)]
+const CLEANUP_STACK_MAGIC: &[u8; 6] = b"AOCS\x01W";
+#[cfg(not(any(unix, windows)))]
+const CLEANUP_STACK_MAGIC: &[u8; 6] = b"AOCS\x01X";
+const MAX_CLEANUP_STACK_DEPTH: usize = 4096;
+const MAX_CLEANUP_STACK_BYTES: usize = 262_144;
+
+fn encode_cleanup_stack(stack: &[PathBuf]) -> Result<Vec<u8>> {
+    if stack.is_empty() || stack.len() > MAX_CLEANUP_STACK_DEPTH {
+        return Err(StoreError::InvalidPath(
+            "cleanup stack depth is invalid".into(),
+        ));
+    }
+    let mut bytes = CLEANUP_STACK_MAGIC.to_vec();
+    bytes.extend_from_slice(
+        &u32::try_from(stack.len())
+            .map_err(|_| StoreError::InvalidPath("cleanup stack is too deep".into()))?
+            .to_le_bytes(),
+    );
+    for path in stack {
+        validate_relative_path(path)?;
+        let encoded = encode_os_str(path.as_os_str());
+        bytes.extend_from_slice(
+            &u32::try_from(encoded.len())
+                .map_err(|_| StoreError::InvalidPath("cleanup path is too long".into()))?
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(&encoded);
+        if bytes.len() > MAX_CLEANUP_STACK_BYTES {
+            return Err(StoreError::InvalidPath(
+                "cleanup stack exceeds its size limit".into(),
+            ));
+        }
+    }
+    Ok(bytes)
+}
+
+fn decode_cleanup_stack(quarantine: &Path, bytes: &[u8]) -> Result<Vec<PathBuf>> {
+    if bytes.len() > MAX_CLEANUP_STACK_BYTES || !bytes.starts_with(CLEANUP_STACK_MAGIC) {
+        return Err(StoreError::InvalidPath("cleanup stack is malformed".into()));
+    }
+    let mut cursor = CLEANUP_STACK_MAGIC.len();
+    let count = read_cleanup_u32(bytes, &mut cursor)? as usize;
+    if count == 0 || count > MAX_CLEANUP_STACK_DEPTH {
+        return Err(StoreError::InvalidPath(
+            "cleanup stack depth is invalid".into(),
+        ));
+    }
+    let mut stack = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length = read_cleanup_u32(bytes, &mut cursor)? as usize;
+        let end = cursor
+            .checked_add(length)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| StoreError::InvalidPath("cleanup stack is truncated".into()))?;
+        let path = PathBuf::from(decode_os_str(&bytes[cursor..end])?);
+        validate_relative_path(&path)?;
+        if !path.starts_with(quarantine)
+            || stack
+                .last()
+                .is_some_and(|parent: &PathBuf| path.parent() != Some(parent.as_path()))
+        {
+            return Err(StoreError::InvalidPath(
+                "cleanup stack escaped its quarantine".into(),
+            ));
+        }
+        stack.push(path);
+        cursor = end;
+    }
+    if cursor != bytes.len() || stack.first().is_none_or(|path| path != quarantine) {
+        return Err(StoreError::InvalidPath("cleanup stack is malformed".into()));
+    }
+    Ok(stack)
+}
+
+fn read_cleanup_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
+    let end = cursor
+        .checked_add(4)
+        .filter(|end| *end <= bytes.len())
+        .ok_or_else(|| StoreError::InvalidPath("cleanup stack is truncated".into()))?;
+    let value = u32::from_le_bytes(
+        bytes[*cursor..end]
+            .try_into()
+            .map_err(|_| StoreError::InvalidPath("cleanup stack is malformed".into()))?,
+    );
+    *cursor = end;
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn encode_os_str(value: &std::ffi::OsStr) -> Vec<u8> {
+    value.as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn encode_os_str(value: &std::ffi::OsStr) -> Vec<u8> {
+    value.encode_wide().flat_map(u16::to_le_bytes).collect()
+}
+
+#[cfg(unix)]
+fn decode_os_str(bytes: &[u8]) -> Result<OsString> {
+    Ok(OsString::from_vec(bytes.to_vec()))
+}
+
+#[cfg(windows)]
+fn decode_os_str(bytes: &[u8]) -> Result<OsString> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err(StoreError::InvalidPath(
+            "cleanup path encoding is malformed".into(),
+        ));
+    }
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+    Ok(OsString::from_wide(units))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn encode_os_str(_value: &std::ffi::OsStr) -> Vec<u8> {
+    Vec::new()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn decode_os_str(_bytes: &[u8]) -> Result<OsString> {
+    Err(StoreError::InvalidPath(
+        "cleanup path encoding is unsupported".into(),
+    ))
+}
+
+fn same_filesystem(left: ObjectId, right: ObjectId) -> bool {
+    #[cfg(unix)]
+    {
+        let (ObjectId::Unix { device: left, .. }, ObjectId::Unix { device: right, .. }) =
+            (left, right);
+        left == right
+    }
+
+    #[cfg(windows)]
+    {
+        let volume = |identity| match identity {
+            ObjectId::WindowsLow { volume, .. } => u64::from(volume),
+            ObjectId::WindowsHigh { volume, .. } => volume,
+        };
+        volume(left) == volume(right)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (left, right);
+        false
+    }
+}
+
+/// 只删除空隔离目录；非空时由调用方保留 journal 并停止推进。
+///
+/// # Errors
+/// 符号链接、路径异常或目录操作失败时返回错误。
+pub fn remove_empty_quarantine_directory(root: &Path, relative_path: &Path) -> Result<()> {
+    validate_relative_path(relative_path)?;
+    match metadata_without_links(root, relative_path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            validate_path_chain(root, relative_path)?;
+            fs::remove_dir(root.join(relative_path)).map_err(StoreError::from_io)?;
+            crate::atomic::sync_parent(&root.join(relative_path))
+        }
+        Ok(_) => Err(StoreError::InvalidPath(
+            "expected an empty quarantine directory".into(),
+        )),
+        Err(StoreError::Io { ref source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_quarantined_file(root: &Path, relative_path: &Path) -> Result<()> {
+    validate_path_chain(root, relative_path)?;
+    let metadata = fs::symlink_metadata(root.join(relative_path)).map_err(StoreError::from_io)?;
+    if !metadata.file_type().is_file() {
+        return Err(StoreError::InvalidPath("expected a regular file".into()));
+    }
+    fs::remove_file(root.join(relative_path)).map_err(StoreError::from_io)?;
+    crate::atomic::sync_parent(&root.join(relative_path))
+}
+
+fn metadata_without_links(root: &Path, relative_path: &Path) -> Result<fs::Metadata> {
+    validate_relative_path(relative_path)?;
+    if !validate_existing_parent_chain(root, relative_path)? {
+        return Err(StoreError::from_io(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )));
+    }
+    let target = root.join(relative_path);
+    let metadata = fs::symlink_metadata(&target).map_err(StoreError::from_io)?;
+    if metadata.file_type().is_symlink() {
+        return Err(StoreError::InvalidPath(
+            "symbolic link in quarantine".into(),
+        ));
+    }
+    validate_path_chain(root, relative_path)?;
+    Ok(metadata)
+}
+
+fn validate_existing_parent_chain(root: &Path, relative_path: &Path) -> Result<bool> {
+    let mut current = root.to_owned();
+    let Some(parent) = relative_path.parent() else {
+        return Ok(true);
+    };
+    for component in parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(StoreError::InvalidPath(
+                relative_path.to_string_lossy().into_owned(),
+            ));
+        };
+        current.push(name);
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(StoreError::from_io(error)),
+        };
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            return Err(StoreError::InvalidPath("invalid quarantine parent".into()));
+        }
+    }
+    Ok(true)
 }
 
 fn optional_identity(
@@ -658,6 +1030,116 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn quarantine_tree_cleanup_resumes_with_a_fixed_entry_budget() {
+        let fixture = Fixture::new();
+        let quarantine = Path::new("deleting/op/memory/run-id");
+        let directory = fixture.0.join(quarantine);
+        fs::create_dir_all(directory.join("nested/deeper")).unwrap();
+        for index in 0..7 {
+            fs::write(
+                directory.join(format!("nested/deeper/{index}.jsonl")),
+                b"memory",
+            )
+            .unwrap();
+        }
+        let identity = directory_identity_hash(&fixture.0, quarantine).unwrap();
+        let mut total_visited = 0;
+        let mut continuation = None;
+
+        for _ in 0..8 {
+            let batch = purge_quarantined_tree_batch(
+                &fixture.0,
+                quarantine,
+                QuarantineKind::Directory,
+                Some(&identity),
+                continuation.as_deref(),
+                3,
+            )
+            .unwrap();
+            if total_visited == 0 {
+                assert_eq!(batch.visited_entries, 3);
+                assert!(!batch.complete, "目录访问也占用本批预算");
+            }
+            assert!(batch.visited_entries <= 3);
+            total_visited += batch.visited_entries;
+            continuation = batch.continuation.clone();
+            if batch.complete {
+                assert!(!directory.exists());
+                assert!(total_visited >= 10);
+                return;
+            }
+        }
+
+        panic!("bounded cleanup did not finish within expected batches");
+    }
+
+    #[test]
+    fn quarantine_tree_cleanup_is_idempotent_for_missing_roots_and_rejects_identity_changes() {
+        let fixture = Fixture::new();
+        let quarantine = Path::new("deleting/op/transcript/run.jsonl");
+        fs::create_dir_all(fixture.0.join(quarantine).parent().unwrap()).unwrap();
+        fs::write(fixture.0.join(quarantine), b"history").unwrap();
+        let identity = file_identity_hash(&fixture.0, quarantine).unwrap();
+        fs::remove_file(fixture.0.join(quarantine)).unwrap();
+
+        let missing = purge_quarantined_tree_batch(
+            &fixture.0,
+            quarantine,
+            QuarantineKind::File,
+            Some(&identity),
+            None,
+            1,
+        )
+        .unwrap();
+        assert!(missing.complete);
+        assert_eq!(missing.visited_entries, 0);
+
+        fs::write(fixture.0.join(quarantine), b"replacement").unwrap();
+        assert!(
+            purge_quarantined_tree_batch(
+                &fixture.0,
+                quarantine,
+                QuarantineKind::File,
+                Some(&identity),
+                None,
+                1,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(fixture.0.join(quarantine)).unwrap(),
+            b"replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quarantine_tree_cleanup_refuses_to_follow_or_remove_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let quarantine = Path::new("deleting/op/memory/run-id");
+        let directory = fixture.0.join(quarantine);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(fixture.0.join("outside"), b"preserve").unwrap();
+        symlink(fixture.0.join("outside"), directory.join("link")).unwrap();
+        let identity = directory_identity_hash(&fixture.0, quarantine).unwrap();
+
+        assert!(
+            purge_quarantined_tree_batch(
+                &fixture.0,
+                quarantine,
+                QuarantineKind::Directory,
+                Some(&identity),
+                None,
+                8,
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(fixture.0.join("outside")).unwrap(), b"preserve");
     }
 
     #[test]

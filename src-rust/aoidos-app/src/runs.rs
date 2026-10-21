@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub struct RunLifecycleService {
     storage: Arc<Storage>,
     profiles: Arc<ProfileFactory>,
+    deletion_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// 显式恢复结果携带该周目冻结的公开 profile，供入口展示准确的模型与计价信息。
@@ -27,10 +28,29 @@ pub struct OpenedRun {
     pub profile: LlmProfile,
 }
 
+/// 启动恢复只隔离失败的删除目标，其余操作仍可完成，应用也可进入只读目录界面。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeletionRecoveryReport {
+    pub completed: usize,
+    pub failed: Vec<DeletionRecoveryFailure>,
+}
+
+/// 未能安全继续的单个删除操作；详细错误保留在调用者的稳定诊断中。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletionRecoveryFailure {
+    pub operation_id: String,
+    pub session_id: String,
+    pub code: String,
+}
+
 impl RunLifecycleService {
     #[must_use]
     pub fn new(storage: Arc<Storage>, profiles: Arc<ProfileFactory>) -> Self {
-        Self { storage, profiles }
+        Self {
+            storage,
+            profiles,
+            deletion_gate: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
 
     /// 读取一页 SQLite 周目目录摘要，不访问 transcript 文件。
@@ -57,6 +77,229 @@ impl RunLifecycleService {
             storage.run_deletion_check(&session_id, expected_revision)
         })
         .await
+    }
+
+    /// 显式确认并前向推进一个周目删除操作；同一 operation ID 可安全重试。
+    ///
+    /// 每次最多递归清理 128 个文件系统节点。较大的记忆目录会返回仍待清理的阶段，
+    /// 调用方可再次调用或交由下次启动恢复；数据库目录项已移除，不会重新显示为可打开周目。
+    /// # Errors
+    /// 计费门禁、身份校验、阶段恢复或文件系统清理失败时保留 journal 并返回错误。
+    pub async fn delete_run(
+        &self,
+        product: &Product,
+        runtime: &Service,
+        operation_id: String,
+        session_id: String,
+        expected_revision: u64,
+    ) -> Result<run_catalog::DeletionOperation, Fault> {
+        let _gate = self.deletion_gate.lock().await;
+        let result = self
+            .advance_deletion(
+                product,
+                runtime,
+                operation_id.clone(),
+                session_id.clone(),
+                expected_revision,
+            )
+            .await;
+        match result {
+            Ok(operation) => {
+                if operation.state != "completed" {
+                    let _ = self
+                        .set_deletion_diagnostic(&operation_id, &session_id, None)
+                        .await;
+                }
+                Ok(operation)
+            }
+            Err(error) => {
+                let _ = self
+                    .set_deletion_diagnostic(&operation_id, &session_id, Some(error.code.clone()))
+                    .await;
+                Err(error)
+            }
+        }
+    }
+
+    /// 启动时读取固定批次的未完成 journal，并只向前推进删除状态。
+    ///
+    /// 每次文件系统清理仍受 128 项上限约束；启动器逐批推进直至本地 journal 全部完成。
+    /// 单个操作无法安全恢复时保留 journal 并隔离该目标，不阻止其他周目使用。
+    /// # Errors
+    /// journal 查询失败时返回错误；单项恢复失败收录在返回报告中。
+    pub async fn recover_pending_deletions(
+        &self,
+        product: &Product,
+        runtime: &Service,
+    ) -> Result<DeletionRecoveryReport, Fault> {
+        let _gate = self.deletion_gate.lock().await;
+        let mut report = DeletionRecoveryReport::default();
+        loop {
+            let storage = self.storage.clone();
+            let operations =
+                aoidos_engine::blocking::run(move || storage.pending_run_deletions(128)).await?;
+            if operations.is_empty() {
+                return Ok(report);
+            }
+            let mut batch_failed = false;
+            for operation in operations {
+                let operation_id = operation.operation_id;
+                let session_id = operation.session_id;
+                let mut revision = operation.catalog_revision.max(1);
+                loop {
+                    let result = self
+                        .advance_deletion(
+                            product,
+                            runtime,
+                            operation_id.clone(),
+                            session_id.clone(),
+                            revision,
+                        )
+                        .await;
+                    let updated = match result {
+                        Ok(updated) => {
+                            if updated.state != "completed" {
+                                let _ = self
+                                    .set_deletion_diagnostic(&operation_id, &session_id, None)
+                                    .await;
+                            }
+                            updated
+                        }
+                        Err(error) => {
+                            let _ = self
+                                .set_deletion_diagnostic(
+                                    &operation_id,
+                                    &session_id,
+                                    Some(error.code.clone()),
+                                )
+                                .await;
+                            report.failed.push(DeletionRecoveryFailure {
+                                operation_id: operation_id.clone(),
+                                session_id: session_id.clone(),
+                                code: error.code,
+                            });
+                            batch_failed = true;
+                            break;
+                        }
+                    };
+                    revision = updated.catalog_revision.max(1);
+                    if updated.state == "completed" {
+                        report.completed += 1;
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }
+            // 失败项仍会排在下一页首部；先返回诊断与重试入口，避免对同一项空转。
+            if batch_failed {
+                return Ok(report);
+            }
+        }
+    }
+
+    async fn set_deletion_diagnostic(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        diagnostic_code: Option<String>,
+    ) -> Result<(), Fault> {
+        let storage = self.storage.clone();
+        let operation_id = operation_id.to_owned();
+        let session_id = session_id.to_owned();
+        let updated_at = deletion_timestamp()?;
+        aoidos_engine::blocking::run(move || {
+            storage.set_run_deletion_diagnostic(
+                &operation_id,
+                &session_id,
+                diagnostic_code.as_deref(),
+                &updated_at,
+            )
+        })
+        .await
+    }
+
+    async fn advance_deletion(
+        &self,
+        product: &Product,
+        runtime: &Service,
+        operation_id: String,
+        session_id: String,
+        expected_revision: u64,
+    ) -> Result<run_catalog::DeletionOperation, Fault> {
+        let storage = self.storage.clone();
+        let op = operation_id.clone();
+        let session = session_id.clone();
+        let existing =
+            aoidos_engine::blocking::run(move || storage.run_deletion_operation(&op, &session))
+                .await;
+        let mut operation = match existing {
+            Ok(operation) if operation.state != "requested" => operation,
+            Ok(_) => {
+                product
+                    .close_and_freeze_run_deletion(
+                        runtime,
+                        operation_id.clone(),
+                        session_id.clone(),
+                        expected_revision,
+                    )
+                    .await?
+            }
+            Err(error) if error.code == "app.not-found" => {
+                product
+                    .close_and_freeze_run_deletion(
+                        runtime,
+                        operation_id.clone(),
+                        session_id.clone(),
+                        expected_revision,
+                    )
+                    .await?
+            }
+            Err(error) => return Err(error),
+        };
+        if operation.state == "needs-repair" {
+            return Err(Fault::new("app.conflict", "删除操作需要修复后才能继续"));
+        }
+        if operation.state == "owner-closed" {
+            let storage = self.storage.clone();
+            let op = operation_id.clone();
+            let session = session_id.clone();
+            let updated_at = deletion_timestamp()?;
+            operation = aoidos_engine::blocking::run(move || {
+                storage.quarantine_run_deletion_files(&op, &session, &updated_at)
+            })
+            .await?;
+        }
+        if operation.state == "files-quarantined" {
+            let storage = self.storage.clone();
+            let op = operation_id.clone();
+            let session = session_id.clone();
+            let updated_at = deletion_timestamp()?;
+            operation = aoidos_engine::blocking::run(move || {
+                storage.purge_run_deletion_database(&op, &session, &updated_at)
+            })
+            .await?;
+        }
+        if operation.state == "database-purged" {
+            let storage = self.storage.clone();
+            let op = operation_id.clone();
+            let session = session_id.clone();
+            let updated_at = deletion_timestamp()?;
+            operation = aoidos_engine::blocking::run(move || {
+                storage.purge_run_deletion_files(&op, &session, &updated_at)
+            })
+            .await?;
+        }
+        if operation.state == "files-purged" {
+            let storage = self.storage.clone();
+            let op = operation_id;
+            let session = session_id;
+            let updated_at = deletion_timestamp()?;
+            operation = aoidos_engine::blocking::run(move || {
+                storage.complete_run_deletion(&op, &session, &updated_at)
+            })
+            .await?;
+        }
+        Ok(operation)
     }
 
     /// 通过共享应用服务恢复玩家指定的周目，并返回冻结配置供调用方使用。
@@ -137,6 +380,12 @@ impl RunLifecycleService {
             &updated_at,
         )
     }
+}
+
+fn deletion_timestamp() -> Result<String, Fault> {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|_| Fault::new("store.database", "读取周目删除时间失败"))
 }
 
 #[cfg(test)]

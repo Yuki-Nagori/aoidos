@@ -15,6 +15,14 @@ struct OpenSelectedArgs {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteRunArgs {
+    operation_id: String,
+    session_id: String,
+    expected_revision: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PageArgs {
     #[serde(default)]
     cursor: Option<RunCursor>,
@@ -62,6 +70,28 @@ pub async fn open_selected(
     let args: OpenSelectedArgs = crate::ipc::decode_request(&request, "周目恢复参数不合法")?;
     lifecycle
         .open_selected(product, runtime, args.session_id, args.expected_revision)
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 玩家确认后通过共享生命周期服务推进删除；同一 operation ID 可用于安全重试。
+/// # Errors
+/// 计费门禁、revision、身份或 journal 阶段不匹配时返回稳定错误。
+pub async fn delete_run(
+    lifecycle: &RunLifecycleService,
+    product: &Product,
+    runtime: &Service,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::run_catalog::DeletionOperation, CmdError> {
+    let args: DeleteRunArgs = crate::ipc::decode_request(&request, "周目删除参数不合法")?;
+    lifecycle
+        .delete_run(
+            product,
+            runtime,
+            args.operation_id,
+            args.session_id,
+            args.expected_revision,
+        )
         .await
         .map_err(CmdError::from)
 }

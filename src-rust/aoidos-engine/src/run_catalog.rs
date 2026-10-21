@@ -56,6 +56,45 @@ CREATE INDEX session_deletion_pending ON session_deletion_ops(state, updated_at,
   WHERE state <> 'completed';
 "#;
 
+/// 删除文件清理游标独立存放，不改写目录表的历史 schema。
+const DELETION_CLEANUP_SCHEMA: &str = r#"
+CREATE TABLE session_deletion_progress (
+  operation_id TEXT PRIMARY KEY REFERENCES session_deletion_ops(operation_id),
+  manifest_index INTEGER NOT NULL DEFAULT 0 CHECK(manifest_index >= 0),
+  updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
+);
+"#;
+
+/// 创建删除清理进度表并为已有操作补齐初始游标。
+pub const DELETION_CLEANUP_MIGRATION: &str = r#"
+CREATE TABLE session_deletion_progress (
+  operation_id TEXT PRIMARY KEY REFERENCES session_deletion_ops(operation_id),
+  manifest_index INTEGER NOT NULL DEFAULT 0 CHECK(manifest_index >= 0),
+  updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
+);
+INSERT INTO session_deletion_progress(operation_id,manifest_index,updated_at)
+SELECT operation_id,0,updated_at FROM session_deletion_ops;
+"#;
+
+/// 已完成删除仅保留幂等所需的目标摘要与结果码。
+const DELETION_RECEIPT_SCHEMA: &str = r#"
+CREATE TABLE session_deletion_receipts (
+  operation_id TEXT PRIMARY KEY CHECK(length(operation_id) = 36),
+  target_identity_hash TEXT NOT NULL CHECK(length(target_identity_hash) = 64),
+  completed_at TEXT NOT NULL CHECK(length(completed_at) BETWEEN 1 AND 64),
+  result_code TEXT NOT NULL CHECK(length(result_code) BETWEEN 1 AND 64)
+);
+"#;
+
+/// 为递归清理追加可跨批恢复的原生路径栈。
+pub const DELETION_CLEANUP_CURSOR_MIGRATION: &str = r#"
+ALTER TABLE session_deletion_progress ADD COLUMN directory_stack BLOB
+  CHECK(directory_stack IS NULL OR length(directory_stack) <= 262144);
+"#;
+
+/// 为已完成操作建立精简墓碑表；旧墓碑在存储打开后按 session 身份哈希压缩。
+pub const DELETION_RECEIPT_MIGRATION: &str = DELETION_RECEIPT_SCHEMA;
+
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 pub const MAX_PAGE_SIZE: usize = 200;
 pub(crate) const MAX_SCAN_ISSUES: i64 = 256;
@@ -64,10 +103,16 @@ const MAX_PROFILE_SNAPSHOT_BYTES: usize = 65_536;
 pub(crate) mod legacy_scan;
 pub use legacy_scan::LegacyScanResult;
 mod deletion;
+pub(crate) use deletion::{
+    DeletionCleanupProgress, advance_deletion_cleanup,
+    compact_completed_receipts as compact_completed_deletion_receipts, complete_deletion,
+    manifest_for_quarantine_cleanup, mark_deletion_files_purged, purge_run_database,
+    set_deletion_diagnostic,
+};
 pub use deletion::{
     DeletionManifestEntry, DeletionManifestEntryKind, DeletionOperation, RunDeletionCheck,
     clear_active_selection_for_deletion, deletion_check, enumerate_deletion_manifest_entries,
-    operation, request_deletion,
+    operation, pending_operations, request_deletion,
 };
 pub(crate) use deletion::{deletion_manifest_target, freeze_deletion_manifest};
 pub(crate) use deletion::{manifest_for_quarantine, mark_files_quarantined};
@@ -140,6 +185,8 @@ pub struct RunSummary {
     pub revision: u64,
     pub state: RunState,
     pub active: bool,
+    /// 未完成删除 journal 的身份；重启后用于展示同一操作的续跑入口。
+    pub deletion_operation_id: Option<String>,
 }
 
 /// 有界目录页及旧数据发现进度。
@@ -151,6 +198,9 @@ pub struct RunPage {
     pub catalog_revision: u64,
     pub scan_incomplete: bool,
     pub scan_issue_count: u64,
+    /// 独立于目录页返回，确保数据库清理后仍能找到失败的文件清理操作。
+    pub pending_deletions: Vec<DeletionOperation>,
+    pub pending_deletions_truncated: bool,
 }
 
 /// 迁移历史账务后的目录 revision 与账本合并摘要。
@@ -478,7 +528,7 @@ pub fn page(
     let fetch_limit = i64::try_from(page_size + 1).map_err(|_| Fault::bad_request())?;
     let mut statement = connection
         .prepare(
-            "SELECT session_id, script_id, created_at, memory_run_id, billing_run_id, profile_id, state, revision FROM session_catalog WHERE (?1 IS NULL OR created_at < ?1 OR (created_at = ?1 AND session_id < ?2)) ORDER BY created_at DESC, session_id DESC LIMIT ?3",
+            "SELECT c.session_id,c.script_id,c.created_at,c.memory_run_id,c.billing_run_id,c.profile_id,c.state,c.revision,(SELECT operation_id FROM session_deletion_ops WHERE session_id=c.session_id AND state<>'completed' ORDER BY created_at DESC LIMIT 1) FROM session_catalog c WHERE (?1 IS NULL OR c.created_at < ?1 OR (c.created_at = ?1 AND c.session_id < ?2)) ORDER BY c.created_at DESC,c.session_id DESC LIMIT ?3",
         )
         .map_err(database)?;
     let mut rows = statement
@@ -507,6 +557,7 @@ pub fn page(
             profile_id: row.get(5).map_err(database)?,
             revision: row_revision,
             state: RunState::parse(&state)?,
+            deletion_operation_id: row.get(8).map_err(database)?,
         });
     }
     let next_cursor = if entries.len() == page_size {
@@ -526,12 +577,22 @@ pub fn page(
     } else {
         None
     };
+    let pending_deletions = pending_operations(connection, 128)?;
+    let pending_deletion_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM session_deletion_ops WHERE state<>'completed'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
     Ok(RunPage {
         entries,
         next_cursor,
         catalog_revision: revision,
         scan_incomplete: incomplete != 0,
         scan_issue_count: u64::try_from(scan_issue_count).map_err(|_| corrupt())?,
+        pending_deletions_truncated: pending_deletion_count > 128,
+        pending_deletions,
     })
 }
 
@@ -919,6 +980,61 @@ pub fn verify(connection: &rusqlite::Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// 检查删除清理进度表与迁移定义完全一致。
+pub fn verify_deletion_cleanup_schema(connection: &rusqlite::Connection) -> Result<(), StoreError> {
+    let actual: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='session_deletion_progress'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(aoidos_store::db::sqlite_error)?;
+    let expected = normalize_sql(DELETION_CLEANUP_SCHEMA.trim().trim_end_matches(';'));
+    let expected = format!(
+        "{}, directory_stack BLOB CHECK(directory_stack IS NULL OR length(directory_stack) <= 262144))",
+        expected.trim_end_matches(')')
+    );
+    if actual.as_deref().map(normalize_sql).as_deref() != Some(expected.as_str()) {
+        return Err(schema_mismatch());
+    }
+    Ok(())
+}
+
+/// 检查完成墓碑表与其迁移定义完全一致。
+pub fn verify_deletion_receipt_schema(connection: &rusqlite::Connection) -> Result<(), StoreError> {
+    let actual: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='session_deletion_receipts'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(aoidos_store::db::sqlite_error)?;
+    let expected = DELETION_RECEIPT_SCHEMA.trim().trim_end_matches(';');
+    if actual.as_deref().map(normalize_sql) != Some(normalize_sql(expected)) {
+        return Err(schema_mismatch());
+    }
+    Ok(())
+}
+
+/// 核验递归清理的持久化路径栈列。
+pub fn verify_deletion_cleanup_cursor_schema(
+    connection: &rusqlite::Connection,
+) -> Result<(), StoreError> {
+    let valid: i64 = connection
+        .query_row(
+            "SELECT count(*)=1 FROM pragma_table_info('session_deletion_progress') WHERE name='directory_stack' AND type='BLOB'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(aoidos_store::db::sqlite_error)?;
+    if valid != 1 {
+        return Err(StoreError::Corrupt(
+            "deletion cleanup cursor schema mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn schema_object_name(statement: &str) -> Option<&str> {
     let mut words = statement.split_whitespace();
     match (words.next()?, words.next()?) {
@@ -974,6 +1090,15 @@ mod tests {
             .execute_batch(aoidos_memory::schema::SCHEMA)
             .unwrap();
         connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .execute_batch(DELETION_CLEANUP_MIGRATION)
+            .unwrap();
+        connection
+            .execute_batch(DELETION_RECEIPT_MIGRATION)
+            .unwrap();
+        connection
+            .execute_batch(DELETION_CLEANUP_CURSOR_MIGRATION)
+            .unwrap();
         connection.execute_batch(legacy_scan::MIGRATION).unwrap();
         connection
     }
@@ -1233,6 +1358,129 @@ mod tests {
             .unwrap_err()
             .code,
             "app.conflict"
+        );
+    }
+
+    #[test]
+    fn pending_deletion_reader_returns_only_valid_incomplete_operations() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let requested = deletion::request_deletion(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:02:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(
+            deletion::pending_operations(&connection, 1).unwrap(),
+            vec![requested]
+        );
+        assert_eq!(
+            deletion::pending_operations(&connection, 0)
+                .unwrap_err()
+                .code,
+            "app.bad-request"
+        );
+        assert_eq!(
+            deletion::pending_operations(&connection, 129)
+                .unwrap_err()
+                .code,
+            "app.bad-request"
+        );
+    }
+
+    #[test]
+    fn completed_deletion_compacts_manifest_to_an_idempotent_hash_receipt() {
+        let mut connection = connection();
+        let operation_id = "00000000-0000-4000-8000-000000000061";
+        let session_id = "00000000-0000-4000-8000-000000000062";
+        connection
+            .execute(
+                "INSERT INTO session_deletion_ops(operation_id,session_id,state,manifest,created_at,updated_at) VALUES(?1,?2,'completed',?3,'created','finished')",
+                rusqlite::params![operation_id, session_id, vec![1_u8; 128]],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO session_deletion_progress(operation_id,manifest_index,updated_at) VALUES(?1,4,'finished')",
+                [operation_id],
+            )
+            .unwrap();
+
+        deletion::compact_completed_receipts(&mut connection).unwrap();
+
+        let (journal_count, progress_count, receipt): (i64, i64, (String, String, String)) =
+            connection
+                .query_row(
+                    "SELECT (SELECT count(*) FROM session_deletion_ops),(SELECT count(*) FROM session_deletion_progress),target_identity_hash,completed_at,result_code FROM session_deletion_receipts WHERE operation_id=?1",
+                    [operation_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, (row.get(2)?, row.get(3)?, row.get(4)?))),
+                )
+                .unwrap();
+        assert_eq!((journal_count, progress_count), (0, 0));
+        assert_eq!(receipt.0.len(), 64);
+        assert_eq!(receipt.1, "finished");
+        assert_eq!(receipt.2, "completed");
+        assert_eq!(
+            deletion::operation(&connection, operation_id, session_id)
+                .unwrap()
+                .state,
+            "completed"
+        );
+        assert_eq!(
+            deletion::request_deletion(&mut connection, operation_id, session_id, 1, "retry",)
+                .unwrap()
+                .state,
+            "completed"
+        );
+        assert_eq!(
+            deletion::operation(
+                &connection,
+                operation_id,
+                "00000000-0000-4000-8000-000000000063"
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
+        );
+    }
+
+    #[test]
+    fn pending_deletion_retains_and_clears_recovery_diagnostics() {
+        let connection = connection();
+        let operation_id = "00000000-0000-4000-8000-000000000071";
+        let session_id = "00000000-0000-4000-8000-000000000072";
+        connection
+            .execute(
+                "INSERT INTO session_deletion_ops(operation_id,session_id,state,created_at,updated_at) VALUES(?1,?2,'database-purged','created','created')",
+                rusqlite::params![operation_id, session_id],
+            )
+            .unwrap();
+
+        deletion::set_deletion_diagnostic(
+            &connection,
+            operation_id,
+            session_id,
+            Some("store.invalid-path"),
+            "failed",
+        )
+        .unwrap();
+        assert_eq!(
+            deletion::pending_operations(&connection, 1).unwrap()[0]
+                .diagnostic_code
+                .as_deref(),
+            Some("store.invalid-path")
+        );
+
+        deletion::set_deletion_diagnostic(&connection, operation_id, session_id, None, "retried")
+            .unwrap();
+        assert_eq!(
+            deletion::pending_operations(&connection, 1).unwrap()[0].diagnostic_code,
+            None
         );
     }
 
