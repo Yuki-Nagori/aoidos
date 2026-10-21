@@ -3,8 +3,9 @@ use super::{
     billing_lines, billing_title, cancel_game, confirm_action, continue_game, draft_cursor_column,
     draft_cursor_position, draft_cursor_row, friendly_error, game_layout, handle_game_key,
     handle_runtime_event, load_request_preflight, model_intro_lines, next_settings_section,
-    open_session, refresh_billing, scroll_billing, settings_layout, settings_profile_index_at_row,
-    submit_action, switch_settings_section, wrap_visual_lines,
+    open_selected_run, open_session, refresh_billing, refresh_runs, scroll_billing,
+    settings_layout, settings_profile_index_at_row, submit_action, switch_settings_section,
+    wrap_visual_lines,
 };
 use crate::{CliApp, EVENT_CAPACITY, EventBridge};
 use aoidos_app::{GameServices, TurnRuntime, billing::RunBillingSummary, profiles::Profiles};
@@ -498,7 +499,7 @@ async fn tui_missing_selected_price_stops_before_confirmation() {
     );
     let mut state = new_state();
     open_session(&mut app, &mut state, false).await.unwrap();
-    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    let run_id = state.session.as_ref().unwrap().session_id.clone();
     configure_test_budget(&app.storage, &run_id, "100");
     let draft = state.draft.clone();
 
@@ -537,7 +538,7 @@ async fn tui_rechecks_run_limits_before_confirmed_dispatch() {
     assert!(state.pending_action.is_some());
     update_test_limit(
         &app.storage,
-        &state.session.as_ref().unwrap().memory_run_id,
+        &state.session.as_ref().unwrap().session_id,
         "99",
         1,
     );
@@ -555,7 +556,7 @@ async fn tui_rechecks_run_limits_before_confirmed_dispatch() {
 }
 
 #[tokio::test]
-async fn tui_rejects_profile_changes_after_opening_a_session() {
+async fn tui_uses_the_frozen_profile_after_saved_profile_changes_or_deletion() {
     let root = test_root("preflight-profile-change");
     std::fs::create_dir_all(&root).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -570,18 +571,38 @@ async fn tui_rejects_profile_changes_after_opening_a_session() {
     let mut state = new_state();
     open_session(&mut app, &mut state, false).await.unwrap();
     configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
+    let frozen_profile = state.session_profile.clone().unwrap();
 
-    submit_action(&mut app, &mut state).await;
-    assert!(state.pending_action.is_some());
     let mut changed_profile = fake_profile();
     changed_profile.sampling.max_tokens += 1;
     app.profiles.save(changed_profile).unwrap();
+    open_session(&mut app, &mut state, false).await.unwrap();
+    assert_eq!(
+        state.session_profile.as_ref(),
+        Some(&frozen_profile),
+        "普通重开也恢复该周目的冻结快照"
+    );
+    submit_action(&mut app, &mut state).await;
+    assert!(state.pending_action.is_some());
     confirm_action(&mut app, &mut state).await;
+    wait_for_turn(&mut app, &mut state).await;
 
     assert!(state.pending_action.is_none());
-    assert!(!state.draft.is_empty(), "配置变化时保留尚未派发的草稿");
-    assert!(state.status.contains("配置已变化"));
-    assert_eq!(calls.load(Ordering::SeqCst), 0, "旧确认不能派发请求");
+    let calls_after_profile_edit = calls.load(Ordering::SeqCst);
+    assert!(calls_after_profile_edit > 0, "本局继续使用冻结配置");
+    assert_eq!(state.session_profile.as_ref(), Some(&frozen_profile));
+
+    app.profiles.delete("fake").unwrap();
+    state.draft = "继续探索".into();
+    submit_action(&mut app, &mut state).await;
+    confirm_action(&mut app, &mut state).await;
+    wait_for_turn(&mut app, &mut state).await;
+
+    assert!(
+        calls.load(Ordering::SeqCst) > calls_after_profile_edit,
+        "删除新局配置不影响已开周目"
+    );
+    assert_eq!(state.session_profile.as_ref(), Some(&frozen_profile));
 
     app.shutdown().await;
     drop(state);
@@ -781,7 +802,7 @@ async fn tui_billing_panel_refreshes_after_fake_provider_reservation_and_settlem
     );
     let mut state = new_state();
     open_session(&mut app, &mut state, false).await.unwrap();
-    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    let run_id = state.session.as_ref().unwrap().session_id.clone();
     configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "100");
 
     submit_action(&mut app, &mut state).await;
@@ -851,7 +872,7 @@ async fn tui_budget_rejection_does_not_dispatch_fake_provider_request() {
     let mut state = new_state();
     state.locale = "zh-Hans";
     open_session(&mut app, &mut state, false).await.unwrap();
-    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    let run_id = state.session.as_ref().unwrap().session_id.clone();
     configure_tui_test_billing(&mut app, &mut state, &ledger_budget, "0");
 
     submit_action(&mut app, &mut state).await;
@@ -987,6 +1008,43 @@ fn fake_profile() -> LlmProfile {
         },
         proxy: ProxyConfig::None,
     }
+}
+
+#[tokio::test]
+async fn catalog_selection_restores_the_frozen_profile_without_sending_a_request() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("aoidos-cli-run-picker-{nonce}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut app = fake_app(&root, calls.clone());
+    let mut state = ViewState::new(
+        vec![fake_profile()],
+        aoidos_engine::game::assets::list().unwrap(),
+    );
+
+    open_session(&mut app, &mut state, true).await.unwrap();
+    let session_id = state.session.as_ref().unwrap().session_id.clone();
+    state.session = None;
+    state.phase = None;
+    state.existing_runs_open = true;
+    refresh_runs(&app, &mut state, None);
+
+    assert_eq!(state.existing_runs.len(), 1);
+    assert_eq!(state.existing_runs[0].session_id, session_id);
+    open_selected_run(&mut app, &mut state).await.unwrap();
+
+    assert_eq!(state.session.as_ref().unwrap().session_id, session_id);
+    assert_eq!(state.session_profile.as_ref().unwrap(), &fake_profile());
+    assert!(!state.existing_runs_open);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    app.shutdown().await;
+    drop(state);
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 struct FakeProfileSource;
@@ -1196,7 +1254,7 @@ fn configure_tui_test_billing(
     budget: &RunLedgerBudget,
     cny_limit: &str,
 ) {
-    let run_id = state.session.as_ref().unwrap().memory_run_id.clone();
+    let run_id = state.session.as_ref().unwrap().session_id.clone();
     configure_test_ledger(&app.storage, &run_id, cny_limit);
     budget.configure(app.storage.clone(), run_id.clone());
     refresh_billing(app, state, &run_id);

@@ -3,7 +3,15 @@
 use crate::ipc::CmdError;
 use aoidos_app::runs::RunLifecycleService;
 use aoidos_billing::money::NanoMoney;
+use aoidos_engine::game::{product::Product, runtime::Service};
 use aoidos_engine::run_catalog::{RunCursor, RunPage};
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenSelectedArgs {
+    session_id: String,
+    expected_revision: u64,
+}
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,6 +48,22 @@ struct ReconcileBillingArgs {
 
 fn default_page_size() -> usize {
     aoidos_engine::run_catalog::DEFAULT_PAGE_SIZE
+}
+
+/// 显式恢复所选周目，并返回其冻结的公开 profile；不会自动发送行动。
+/// # Errors
+/// revision 过期、身份不一致、配置损坏或 owner 恢复失败时返回稳定错误。
+pub async fn open_selected(
+    lifecycle: &RunLifecycleService,
+    product: &Product,
+    runtime: &Service,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_app::runs::OpenedRun, CmdError> {
+    let args: OpenSelectedArgs = crate::ipc::decode_request(&request, "周目恢复参数不合法")?;
+    lifecycle
+        .open_selected(product, runtime, args.session_id, args.expected_revision)
+        .await
+        .map_err(CmdError::from)
 }
 
 /// 按固定游标读取本地周目摘要，不访问 transcript 或恢复游戏状态。

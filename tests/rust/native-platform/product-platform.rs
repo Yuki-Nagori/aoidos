@@ -317,6 +317,10 @@ fn run(dir: PathBuf, restarting: bool) -> Result<(), Box<dyn std::error::Error>>
                 events,
                 factory.clone(),
             ));
+            app.manage(aoidos_app::runs::RunLifecycleService::new(
+                storage.storage.clone(),
+                factory.clone(),
+            ));
             app.manage(aoidos_engine::game::runtime::Service::new(
                 turns.coordinator.clone(),
                 factory,
@@ -341,7 +345,7 @@ fn run(dir: PathBuf, restarting: bool) -> Result<(), Box<dyn std::error::Error>>
         .invoke_handler(tauri::generate_handler![
             aoidos_lib::game_ipc::engine_list_scripts,
             aoidos_lib::game_ipc::engine_open_session,
-            aoidos_lib::game_ipc::engine_open_selected_run,
+            aoidos_lib::run_ipc::run_open_selected,
             aoidos_lib::game_ipc::engine_submit_input,
             aoidos_lib::game_ipc::engine_get_scene_presence,
             aoidos_lib::game_ipc::engine_get_phase,

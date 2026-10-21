@@ -1,10 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { expect, it, vi } from "vitest";
-import { openSelectedRun } from "../../../src-web/api/engine";
 import type { RunPage, RunState, RunSummary } from "../../../src-web/api/runs";
 import {
   bindRunProfile,
   listRuns,
+  openSelectedRun,
   reconcileRunBilling,
   scanLegacyRuns,
 } from "../../../src-web/api/runs";
@@ -49,17 +49,29 @@ it("forwards the revision-bound run catalog cursor without rewriting it", async 
 
 it("opens only the explicitly selected run revision", async () => {
   const response = {
-    sessionId: "00000000-0000-4000-8000-000000000001",
-    memoryRunId: "00000000-0000-4000-8000-000000000002",
-    profileId: "saved-profile",
-    scriptId: "mistbell",
-    title: "雾钟地窖",
+    session: {
+      sessionId: "00000000-0000-4000-8000-000000000001",
+      memoryRunId: "00000000-0000-4000-8000-000000000002",
+      profileId: "saved-profile",
+      scriptId: "mistbell",
+      title: "雾钟地窖",
+      selectionMirrorPending: false,
+    },
+    profile: {
+      profileId: "saved-profile",
+      providerId: "deepseek",
+      model: "deepseek-v4-flash",
+      mode: "completion" as const,
+      thinking: false,
+      sampling: { temperature: 1, maxTokens: 4096 },
+      proxy: { mode: "none" as const },
+    },
   };
   vi.mocked(invoke).mockResolvedValue(response);
 
-  expect(await openSelectedRun(response.sessionId, 7)).toBe(response);
-  expect(invoke).toHaveBeenCalledWith("engine_open_selected_run", {
-    sessionId: response.sessionId,
+  expect(await openSelectedRun(response.session.sessionId, 7)).toBe(response);
+  expect(invoke).toHaveBeenCalledWith("run_open_selected", {
+    sessionId: response.session.sessionId,
     expectedRevision: 7,
   });
 });

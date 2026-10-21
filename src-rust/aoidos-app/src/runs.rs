@@ -1,6 +1,15 @@
 //! 已开周目的共享应用查询与生命周期入口。
 
-use aoidos_engine::{fault::Fault, game::product::ProfileFactory, run_catalog, storage::Storage};
+use aoidos_engine::{
+    fault::Fault,
+    game::{
+        product::{OpenedSession, Product, ProfileFactory},
+        runtime::Service,
+    },
+    run_catalog,
+    storage::Storage,
+};
+use aoidos_llm::config::LlmProfile;
 use std::sync::Arc;
 
 /// GUI 与 CLI/TUI 共用的目录查询服务。
@@ -8,6 +17,14 @@ use std::sync::Arc;
 pub struct RunLifecycleService {
     storage: Arc<Storage>,
     profiles: Arc<ProfileFactory>,
+}
+
+/// 显式恢复结果携带该周目冻结的公开 profile，供入口展示准确的模型与计价信息。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedRun {
+    pub session: OpenedSession,
+    pub profile: LlmProfile,
 }
 
 impl RunLifecycleService {
@@ -25,6 +42,41 @@ impl RunLifecycleService {
         page_size: usize,
     ) -> Result<run_catalog::RunPage, Fault> {
         self.storage.run_catalog_page(cursor, page_size)
+    }
+
+    /// 通过共享应用服务恢复玩家指定的周目，并返回冻结配置供调用方使用。
+    /// # Errors
+    /// 目录 revision、身份映射、恢复状态或活动选择提交不合法时返回稳定 Fault。
+    pub async fn open_selected(
+        &self,
+        product: &Product,
+        runtime: &Service,
+        session_id: String,
+        expected_revision: u64,
+    ) -> Result<OpenedRun, Fault> {
+        let storage = self.storage.clone();
+        let requested_id = session_id.clone();
+        let target = aoidos_engine::blocking::run(move || {
+            storage.run_open_target(&requested_id, expected_revision)
+        })
+        .await?;
+        let session = product
+            .open_selected(runtime, session_id, expected_revision)
+            .await?;
+        Ok(OpenedRun {
+            session,
+            profile: target.profile,
+        })
+    }
+
+    /// 读取已打开周目的冻结公开 profile，供普通重开入口同步展示和计费预检。
+    /// # Errors
+    /// 周目目录、身份映射或冻结快照损坏时返回稳定 Fault。
+    pub async fn profile_snapshot(&self, session_id: String) -> Result<LlmProfile, Fault> {
+        let storage = self.storage.clone();
+        aoidos_engine::blocking::run(move || storage.current_run_open_target(&session_id))
+            .await
+            .map(|target| target.profile)
     }
 
     /// 玩家主动继续发现旧周目；列表刷新本身不会触发磁盘扫描。

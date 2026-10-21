@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { OpenedSession } from "./engine";
+import type { LlmProfile } from "./llm";
 
 export type RunState =
   | "ready"
@@ -37,6 +39,11 @@ export interface RunPage {
   scanIssueCount: number;
 }
 
+export interface OpenedRun {
+  session: OpenedSession;
+  profile: LlmProfile;
+}
+
 export interface LegacyScanResult {
   discovered: number;
   diagnosed: number;
@@ -68,6 +75,11 @@ export interface LegacyBillingReconciliation {
 /** 读取本地 SQLite 周目目录摘要，不打开记录、不修复文件或发送请求。 */
 export function listRuns(cursor?: RunCursor, pageSize = 50): Promise<RunPage> {
   return invoke("run_catalog_page", { cursor: cursor ?? null, pageSize });
+}
+
+/** 按目录 revision 显式恢复既有周目，并返回该周目冻结的公开 profile。 */
+export function openSelectedRun(sessionId: string, expectedRevision: number): Promise<OpenedRun> {
+  return invoke("run_open_selected", { sessionId, expectedRevision });
 }
 
 /** 玩家主动推进一个旧周目发现批次；普通列表读取不会触发扫描。 */

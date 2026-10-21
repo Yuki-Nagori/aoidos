@@ -6,6 +6,7 @@ use aoidos_engine::{
     game::{assets::ScriptInfo, product::OpenedSession, state::PhaseSnapshot},
     ports::TurnEvent,
     record::view::View,
+    run_catalog::{DEFAULT_PAGE_SIZE, RunCursor, RunState, RunSummary},
 };
 use aoidos_llm::config::LlmProfile;
 use crossterm::{
@@ -46,6 +47,7 @@ const COLOR_WARNING: Color = Color::Rgb(237, 188, 119);
 enum Focus {
     Profile,
     Script,
+    Run,
     Input,
     Submit,
     Continue,
@@ -63,6 +65,12 @@ struct ViewState {
     profiles: Vec<LlmProfile>,
     price_templates: Vec<aoidos_app::billing::PriceVersion>,
     scripts: Vec<ScriptInfo>,
+    existing_runs: Vec<RunSummary>,
+    existing_run_index: usize,
+    existing_runs_open: bool,
+    run_cursor: Option<RunCursor>,
+    run_next_cursor: Option<RunCursor>,
+    run_previous: Vec<Option<RunCursor>>,
     profile_index: usize,
     script_index: usize,
     session: Option<OpenedSession>,
@@ -112,6 +120,12 @@ impl ViewState {
             profiles,
             price_templates: Vec::new(),
             scripts,
+            existing_runs: Vec::new(),
+            existing_run_index: 0,
+            existing_runs_open: false,
+            run_cursor: None,
+            run_next_cursor: None,
+            run_previous: Vec::new(),
             profile_index: 0,
             script_index: 0,
             session: None,
@@ -164,10 +178,12 @@ impl ViewState {
 pub async fn run(app: &mut CliApp) -> Result<(), Box<dyn std::error::Error>> {
     let profiles = app.profiles.list().map_err(display_fault)?;
     let scripts = aoidos_engine::game::assets::list().map_err(display_fault)?;
-    if profiles.is_empty() {
-        return Err("尚无模型配置。请先在 Aoidos 设置中添加 profile，再运行 aoidos。".into());
-    }
     let mut state = ViewState::new(profiles, scripts);
+    if state.profiles.is_empty() {
+        state.status =
+            "尚无模型配置；仍可浏览和扫描旧周目。请先在 Aoidos 设置中添加 profile。".into();
+    }
+    refresh_runs(app, &mut state, None);
     state.price_templates = app.services.billing.price_templates();
     let terminal_session = TerminalSession::start()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
@@ -447,10 +463,10 @@ fn begin_budget_edit(app: &CliApp, state: &mut ViewState) {
             .map_or_else(|| "0".into(), |limit| limit.to_string());
     }
     state.budget_edit_field = 0;
-    state.budget_edit_run_id = Some(session.memory_run_id.clone());
+    state.budget_edit_run_id = Some(session.session_id.clone());
     state.budget_edit_revision = existing.map(|budget| budget.revision);
     state.budget_editing = true;
-    state.status = format!("编辑周目 {} 的 CNY / USD 上限。", session.memory_run_id);
+    state.status = format!("编辑周目 {} 的 CNY / USD 上限。", session.session_id);
 }
 
 fn switch_settings_section(state: &mut ViewState, section: SettingsSection) {
@@ -484,7 +500,7 @@ fn save_run_budget(app: &CliApp, state: &mut ViewState) {
     let Some(run_id) = state
         .session
         .as_ref()
-        .map(|session| session.memory_run_id.clone())
+        .map(|session| session.session_id.clone())
     else {
         state.status = "请先打开或新建周目，再设置本局预算。".into();
         return;
@@ -622,6 +638,43 @@ async fn handle_selection_key(
     state: &mut ViewState,
     key: KeyEvent,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    if state.existing_runs_open {
+        match key.code {
+            KeyCode::F(2) => {
+                state.settings_open = true;
+                state.settings_section = SettingsSection::Model;
+            }
+            KeyCode::Esc => return Ok(true),
+            KeyCode::Char('b' | 'B') => {
+                state.existing_runs_open = false;
+                state.focus = Focus::Profile;
+            }
+            KeyCode::Char('r' | 'R') => {
+                if refresh_runs(app, state, None) {
+                    state.run_previous.clear();
+                }
+            }
+            KeyCode::Char('l' | 'L') => scan_legacy_runs(app, state).await,
+            KeyCode::Char('p' | 'P') => bind_selected_run(app, state).await,
+            KeyCode::Char('[') => previous_runs_page(app, state),
+            KeyCode::Char(']') => next_runs_page(app, state),
+            KeyCode::Up | KeyCode::Down => {
+                state.existing_run_index = move_index(
+                    state.existing_run_index,
+                    state.existing_runs.len(),
+                    key.code,
+                );
+            }
+            KeyCode::Enter => open_selected_run(app, state).await?,
+            KeyCode::Char('s' | 'S') => {
+                state.settings_open = true;
+                state.settings_section = SettingsSection::Model;
+            }
+            KeyCode::Char('q') => return Ok(true),
+            _ => {}
+        }
+        return Ok(false);
+    }
     match key.code {
         KeyCode::F(2) => {
             state.settings_open = true;
@@ -633,10 +686,19 @@ async fn handle_selection_key(
             state.settings_section = SettingsSection::Model;
         }
         KeyCode::Char('q') if state.focus != Focus::Input => return Ok(true),
+        KeyCode::Char('r' | 'R') => {
+            state.existing_runs_open = true;
+            state.focus = Focus::Run;
+            if refresh_runs(app, state, None) {
+                state.run_previous.clear();
+            }
+        }
         KeyCode::Tab | KeyCode::BackTab => {
             state.focus = match state.focus {
                 Focus::Profile => Focus::Script,
-                Focus::Script | Focus::Submit | Focus::Continue | Focus::Billing => Focus::Profile,
+                Focus::Script | Focus::Run | Focus::Submit | Focus::Continue | Focus::Billing => {
+                    Focus::Profile
+                }
                 Focus::Input => Focus::Profile,
             };
         }
@@ -668,6 +730,41 @@ async fn handle_selection_click(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let area = app_screen_area();
     let chunks = selection_layout(area);
+    if state.existing_runs_open {
+        let rows = usize::from(chunks[1].height.saturating_sub(2));
+        if contains(chunks[1], x, y) {
+            let offset = state
+                .existing_run_index
+                .saturating_sub(rows.saturating_sub(1));
+            let row = offset + usize::from(y.saturating_sub(chunks[1].y + 1));
+            if row < state.existing_runs.len() && rows > 0 {
+                state.existing_run_index = row;
+                state.focus = Focus::Run;
+            }
+        } else if contains(chunks[2], x, y) {
+            let actions = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(chunks[2]);
+            if contains(actions[0], x, y) {
+                if selected_run_needs_profile(state) {
+                    bind_selected_run(app, state).await;
+                } else {
+                    open_selected_run(app, state).await?;
+                }
+            } else if contains(actions[1], x, y) {
+                scan_legacy_runs(app, state).await;
+            } else if contains(actions[2], x, y) {
+                state.existing_runs_open = false;
+                state.focus = Focus::Profile;
+            }
+        }
+        return Ok(());
+    }
     let lists = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -738,41 +835,220 @@ async fn open_session(
         .await
     {
         Ok(session) => {
-            state.status = if start_new {
-                "已创建新周目。"
+            let profile = if start_new {
+                profile
             } else {
-                "已打开当前周目。"
-            }
-            .into();
-            state.history.clear();
-            state.stream.clear();
-            state.active_turn_id = None;
-            state.stream_finalized = false;
-            state.history_scroll = 0;
-            state.pending_action = None;
-            state.billing = None;
-            state.billing_preflight = None;
-            state.billing_error = None;
-            state.billing_scroll = 0;
-            state.budget_editing = false;
-            state.budget_edit_run_id = None;
-            state.budget_edit_revision = None;
-            state.phase = app.services.runtime.get_phase(&session.session_id).ok();
-            load_history(app, state, &session.session_id);
-            let run_id = session.memory_run_id.clone();
-            state.session = Some(session);
-            state.session_profile = Some(profile);
-            refresh_billing(app, state, &run_id);
-            state.focus = Focus::Input;
-            if state.draft.is_empty()
-                && let Some(suggestion) = state.suggested_action().map(str::to_owned)
-            {
-                state.draft = suggestion;
-            }
+                match app
+                    .services
+                    .runs
+                    .profile_snapshot(session.session_id.clone())
+                    .await
+                {
+                    Ok(profile) => profile,
+                    Err(error) => {
+                        state.status = friendly_error(&error.code, &error.message, state.locale);
+                        return Ok(());
+                    }
+                }
+            };
+            activate_session(
+                app,
+                state,
+                session,
+                profile,
+                if start_new {
+                    "已创建新周目。"
+                } else {
+                    "已打开当前周目。"
+                },
+            );
         }
         Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
     }
     Ok(())
+}
+
+async fn open_selected_run(
+    app: &mut CliApp,
+    state: &mut ViewState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(run) = state.existing_runs.get(state.existing_run_index).cloned() else {
+        state.status = "当前页没有可恢复的周目。".into();
+        return Ok(());
+    };
+    match app
+        .services
+        .runs
+        .open_selected(
+            &app.services.product,
+            &app.services.runtime,
+            run.session_id,
+            run.revision,
+        )
+        .await
+    {
+        Ok(opened) => {
+            state.existing_runs_open = false;
+            activate_session(
+                app,
+                state,
+                opened.session,
+                opened.profile,
+                "已恢复所选周目。",
+            );
+        }
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
+    }
+    Ok(())
+}
+
+async fn scan_legacy_runs(app: &CliApp, state: &mut ViewState) {
+    let service = app.services.runs.clone();
+    let result = aoidos_engine::blocking::run(move || service.scan_legacy()).await;
+    match result {
+        Ok(result) => {
+            if refresh_runs(app, state, None) {
+                state.run_previous.clear();
+            }
+            state.status = format!(
+                "旧周目扫描新增 {} 项，记录 {} 项诊断；{}。",
+                result.discovered,
+                result.scan_issue_count,
+                if result.scan_incomplete {
+                    "仍有后续批次"
+                } else {
+                    "扫描完成"
+                }
+            );
+        }
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
+    }
+}
+
+async fn bind_selected_run(app: &CliApp, state: &mut ViewState) {
+    let Some(run) = state.existing_runs.get(state.existing_run_index).cloned() else {
+        state.status = "当前页没有可绑定的周目。".into();
+        return;
+    };
+    if run.state != RunState::NeedsProfileBinding {
+        state.status = "只有缺少冻结模型配置的旧周目需要绑定。".into();
+        return;
+    }
+    let Some(profile) = state.profiles.get(state.profile_index) else {
+        state.status = "没有可绑定的模型配置，请先在 Aoidos 设置中添加 profile。".into();
+        return;
+    };
+    let profile_id = profile.profile_id.clone();
+    let session_id = run.session_id;
+    let revision = run.revision;
+    let service = app.services.runs.clone();
+    match aoidos_engine::blocking::run(move || {
+        service.bind_profile(&session_id, revision, &profile_id)
+    })
+    .await
+    {
+        Ok(_) => {
+            if refresh_runs(app, state, None) {
+                state.run_previous.clear();
+            }
+            state.status = "已将所选模型配置冻结到该周目。".into();
+        }
+        Err(error) => state.status = friendly_error(&error.code, &error.message, state.locale),
+    }
+}
+
+fn selected_run_needs_profile(state: &ViewState) -> bool {
+    state
+        .existing_runs
+        .get(state.existing_run_index)
+        .is_some_and(|run| run.state == RunState::NeedsProfileBinding)
+}
+
+fn activate_session(
+    app: &CliApp,
+    state: &mut ViewState,
+    session: OpenedSession,
+    profile: LlmProfile,
+    message: &str,
+) {
+    state.status = if session.selection_mirror_pending {
+        "周目已打开，但兼容选择文件待修复。"
+    } else {
+        message
+    }
+    .into();
+    state.history.clear();
+    state.stream.clear();
+    state.active_turn_id = None;
+    state.stream_finalized = false;
+    state.history_scroll = 0;
+    state.pending_action = None;
+    state.billing = None;
+    state.billing_preflight = None;
+    state.billing_error = None;
+    state.billing_scroll = 0;
+    state.budget_editing = false;
+    state.budget_edit_run_id = None;
+    state.budget_edit_revision = None;
+    state.phase = app.services.runtime.get_phase(&session.session_id).ok();
+    load_history(app, state, &session.session_id);
+    let run_id = session.session_id.clone();
+    state.session = Some(session);
+    state.session_profile = Some(profile);
+    refresh_billing(app, state, &run_id);
+    state.focus = Focus::Input;
+    if state.draft.is_empty()
+        && let Some(suggestion) = state.suggested_action().map(str::to_owned)
+    {
+        state.draft = suggestion;
+    }
+}
+
+fn refresh_runs(app: &CliApp, state: &mut ViewState, cursor: Option<RunCursor>) -> bool {
+    match app.services.runs.page(cursor.as_ref(), DEFAULT_PAGE_SIZE) {
+        Ok(page) => {
+            state.existing_runs = page.entries;
+            state.existing_run_index = state
+                .existing_run_index
+                .min(state.existing_runs.len().saturating_sub(1));
+            state.run_cursor = cursor;
+            state.run_next_cursor = page.next_cursor;
+            if page.scan_incomplete {
+                state.status = format!(
+                    "历史周目发现仍未完成，已记录 {} 项；按 R 刷新列表。",
+                    page.scan_issue_count
+                );
+            } else {
+                state.status = format!("已读取 {} 个周目。", state.existing_runs.len());
+            }
+            true
+        }
+        Err(error) => {
+            state.status = friendly_error(&error.code, &error.message, state.locale);
+            false
+        }
+    }
+}
+
+fn next_runs_page(app: &CliApp, state: &mut ViewState) {
+    let Some(cursor) = state.run_next_cursor.clone() else {
+        state.status = "已经是最后一页。".into();
+        return;
+    };
+    let previous = state.run_cursor.clone();
+    if refresh_runs(app, state, Some(cursor)) {
+        state.run_previous.push(previous);
+    }
+}
+
+fn previous_runs_page(app: &CliApp, state: &mut ViewState) {
+    let Some(cursor) = state.run_previous.last().cloned() else {
+        state.status = "已经是第一页。".into();
+        return;
+    };
+    if refresh_runs(app, state, cursor) {
+        state.run_previous.pop();
+    }
 }
 
 async fn handle_game_key(
@@ -820,7 +1096,7 @@ async fn handle_game_key(
                 Focus::Input => Focus::Submit,
                 Focus::Submit => Focus::Continue,
                 Focus::Continue => Focus::Billing,
-                Focus::Billing | Focus::Profile | Focus::Script => Focus::Input,
+                Focus::Billing | Focus::Profile | Focus::Script | Focus::Run => Focus::Input,
             };
         }
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -1026,41 +1302,9 @@ fn load_request_preflight(
     state: &mut ViewState,
 ) -> Option<(RequestBillingPreflight, aoidos_llm::config::LlmProfile)> {
     let session = state.session.as_ref()?;
-    let frozen_profile = state.session_profile.as_ref()?.clone();
-    let selected_profile_id = state
-        .profiles
-        .get(state.profile_index)
-        .map(|profile| profile.profile_id.clone());
-    let profiles = match app.profiles.list() {
-        Ok(profiles) => profiles,
-        Err(_) => {
-            state.status = "重新读取模型配置失败；未发送请求。".into();
-            return None;
-        }
-    };
-    let Some(profile) = profiles
-        .iter()
-        .find(|profile| profile.profile_id == frozen_profile.profile_id)
-        .cloned()
-    else {
-        state.status = "当前周目使用的模型配置已不存在；未发送请求。".into();
-        return None;
-    };
-    state.profiles = profiles;
-    if let Some(index) = selected_profile_id.and_then(|id| {
-        state
-            .profiles
-            .iter()
-            .position(|profile| profile.profile_id == id)
-    }) {
-        state.profile_index = index;
-    }
-    if frozen_profile != profile {
-        state.status = "当前周目的模型配置已变化；请关闭并重新打开周目后再发送。".into();
-        return None;
-    }
+    let profile = state.session_profile.as_ref()?.clone();
     let preflight = app.services.billing.request_preflight(
-        &session.memory_run_id,
+        &session.session_id,
         &profile.profile_id,
         &profile.provider_id,
         &profile.model,
@@ -1248,7 +1492,7 @@ fn handle_runtime_event(app: &CliApp, state: &mut ViewState, event: RuntimeEvent
                 .session
                 .as_ref()
                 .filter(|session| session.session_id == event.session_id)
-                .map(|session| session.memory_run_id.clone());
+                .map(|session| session.session_id.clone());
             if let Some(run_id) = run_id {
                 load_history(app, state, &event.session_id);
                 refresh_billing(app, state, &run_id);
@@ -1414,7 +1658,7 @@ fn refresh_billing_for_active_session(app: &CliApp, state: &mut ViewState) {
     if let Some(run_id) = state
         .session
         .as_ref()
-        .map(|session| session.memory_run_id.clone())
+        .map(|session| session.session_id.clone())
     {
         refresh_billing(app, state, &run_id);
     }
@@ -1525,13 +1769,125 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
                 ),
             ]),
             Line::from(Span::styled(
-                "选择模型与剧本；打开周目不会自动发送请求。  S 设置",
+                if state.existing_runs_open {
+                    "显式选择已开周目；恢复不会自动发送请求。  S 设置"
+                } else {
+                    "选择模型与剧本；打开周目不会自动发送请求。  S 设置"
+                },
                 Style::default().fg(COLOR_MUTED),
             )),
         ])
         .block(Block::default().style(Style::default().bg(COLOR_BACKGROUND))),
         chunks[0],
     );
+    if state.existing_runs_open {
+        let lines = if state.existing_runs.is_empty() {
+            vec![Line::styled(
+                "没有已登记周目。按 L 扫描旧存档；列表刷新不会读取 transcript。",
+                Style::default().fg(COLOR_MUTED),
+            )]
+        } else {
+            state
+                .existing_runs
+                .iter()
+                .enumerate()
+                .map(|(index, run)| {
+                    let marker = if index == state.existing_run_index {
+                        "› "
+                    } else {
+                        "  "
+                    };
+                    let active = if run.active { " · 当前" } else { "" };
+                    let text = format!(
+                        "{marker}{} · {} · {} · {}{}",
+                        run.script_id,
+                        run.created_at,
+                        run.profile_id.as_deref().unwrap_or("未绑定模型"),
+                        run_state_label(run.state),
+                        active
+                    );
+                    Line::styled(
+                        text,
+                        row_style(index == state.existing_run_index, state.focus == Focus::Run),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let visible_rows = usize::from(chunks[1].height.saturating_sub(2));
+        let scroll_offset = state
+            .existing_run_index
+            .saturating_sub(visible_rows.saturating_sub(1));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(panel_block(
+                    &format!(
+                        "已开周目  {}/{} · 第 {} 页",
+                        state
+                            .existing_run_index
+                            .saturating_add(1)
+                            .min(state.existing_runs.len()),
+                        state.existing_runs.len(),
+                        state.run_previous.len() + 1
+                    ),
+                    state.focus == Focus::Run,
+                ))
+                .scroll((scroll_offset.min(u16::MAX as usize) as u16, 0)),
+            chunks[1],
+        );
+        let actions = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
+            .split(chunks[2]);
+        frame.render_widget(
+            Paragraph::new(if selected_run_needs_profile(state) {
+                format!(
+                    "  P  绑定模型 {}  ",
+                    state
+                        .profiles
+                        .get(state.profile_index)
+                        .map_or("(无)", |profile| profile.profile_id.as_str())
+                )
+            } else {
+                "  Enter  恢复所选周目  ".to_owned()
+            })
+            .block(panel_block(
+                if selected_run_needs_profile(state) {
+                    "绑定"
+                } else {
+                    "恢复"
+                },
+                false,
+            )),
+            actions[0],
+        );
+        frame.render_widget(
+            Paragraph::new("  L 扫描旧存档  ").block(panel_block("扫描", false)),
+            actions[1],
+        );
+        frame.render_widget(
+            Paragraph::new("  B 返回新周目选择  ").block(panel_block("返回", false)),
+            actions[2],
+        );
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    state.status.clone(),
+                    Style::default().fg(COLOR_TEXT),
+                )),
+                Line::from(Span::styled(
+                    "↑↓ 选择 · Enter 恢复 · P 绑定当前模型 · [ / ] 翻页 · R 刷新 · L 扫描 · B 返回",
+                    Style::default().fg(COLOR_MUTED),
+                )),
+            ])
+            .block(panel_block("操作指南", false)),
+            chunks[3],
+        );
+        return;
+    }
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -1650,13 +2006,27 @@ fn draw_selection(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
                 Style::default().fg(COLOR_TEXT),
             )),
             Line::from(Span::styled(
-                "↑↓ 选择 · Tab 切换 · Enter 打开 · N 新建 · Esc 退出",
+                "↑↓ 选择 · Tab 切换 · Enter 打开 · N 新建 · R 已开周目 · Esc 退出",
                 Style::default().fg(COLOR_MUTED),
             )),
         ])
         .block(panel_block("操作指南", false)),
         chunks[3],
     );
+}
+
+fn run_state_label(state: RunState) -> &'static str {
+    match state {
+        RunState::Ready => "可恢复",
+        RunState::NeedsProfileBinding => "需绑定模型",
+        RunState::BillingNotConfigured => "需设置费用",
+        RunState::BillingReconciliationRequired => "需核对账单",
+        RunState::RecoveryRequired => "需恢复",
+        RunState::NeedsRepair => "需修复",
+        RunState::ScriptUnavailable => "剧本不可用",
+        RunState::SettlementPending => "结算待恢复",
+        RunState::Deleting => "正在删除",
+    }
 }
 
 fn draw_game(frame: &mut ratatui::Frame<'_>, state: &ViewState) {
