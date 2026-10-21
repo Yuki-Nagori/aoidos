@@ -801,7 +801,29 @@ impl Storage {
         self.with_database(|connection| crate::run_catalog::page(connection, cursor, page_size))
     }
 
-    /// 登记已成功创建并初始化的周目；账本范围固定为 sessionId。
+    /// 返回 SQLite 权威活动周目；尚未迁移的安装可由兼容文件回退。
+    /// # Errors
+    /// 数据库不可用或活动目录引用损坏时拒绝返回。
+    pub fn active_run_selection(
+        &self,
+    ) -> Result<Option<crate::run_catalog::ActiveSelection>, Fault> {
+        self.with_database(|connection| crate::run_catalog::active_selection(connection))
+    }
+
+    /// 比较指定周目冻结的公开 profile，不读取凭据。
+    /// # Errors
+    /// 周目身份非法或目录 / 数据库损坏时返回稳定 Fault。
+    pub fn run_profile_matches(
+        &self,
+        session_id: &str,
+        profile: &aoidos_llm::config::LlmProfile,
+    ) -> Result<Option<bool>, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::profile_matches(connection, session_id, profile)
+        })
+    }
+
+    /// 登记已成功创建并初始化的周目；目录使用 sessionId 作为 canonical 账本身份。
     /// # Errors
     /// 身份冲突、无效 profile 快照或持久化失败时拒绝登记。
     pub fn register_new_run(&self, run: &crate::run_catalog::NewRun) -> Result<(), Fault> {

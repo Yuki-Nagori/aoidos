@@ -127,6 +127,6 @@ DeepSeek 以外的供应商余额尚未接入；这不表示供应商永久不�
 
 ## 周目删除与账务义务
 
-[059 周目管理设计](../task/059-run-management-design.md)确认，canonical `billingRunId` 为 `sessionId`，不对应独立生成的 `memoryRunId`。现有剧情请求使用 `sessionId`，030 私有记忆请求曾使用 `memoryRunId`；060 将后者修正，并通过 `memory_run_sessions` 的精确关联迁移旧 scope。迁移会保留 requestId / pending settlement，合并 warnings；预算冲突将停止收费，直到玩家明确保存 canonical 上限。目录显式保存并核验 canonical `billingRunId`；清理还须覆盖迁移前的已验证 legacy scope，不依赖外键级联或猜测 UUID 映射。没有预算和请求的周目属于尚未配置，不是账本损坏。
+[059 周目管理设计](../task/059-run-management-design.md)确认，canonical `billingRunId` 为 `sessionId`，不对应独立生成的 `memoryRunId`。当前 runtime 的周目请求仍可能把 `memoryRunId` 传给计费端口；060 完成前，新目录会将该范围的已有预算 / 请求标记为待 reconciliation，不误报为未配置。060 将统一新请求身份，并通过 `memory_run_sessions` 的精确关联迁移旧 scope。迁移会保留 requestId / pending settlement，合并 warnings；预算冲突将停止收费，直到玩家明确保存 canonical 上限。目录显式保存并核验 canonical `billingRunId`；清理还须覆盖迁移前的已验证 legacy scope，不依赖外键级联或猜测 UUID 映射。没有预算和请求的周目属于尚未配置，不是账本损坏。
 
 本局存在 `reserved` / `unconfirmed` 物理请求或 `billing_pending_settlements` outbox 时拒绝删除，须先解决费用义务。已有完整持久 usage 的请求可走本地结算恢复；当前没有任意费用核销入口，`unconfirmed` 若缺完整 usage 且无供应商回执等可核验证据，只能保留，不能手动改为 settled 或删除。删除不能把未知用量当零或从月报隐去未确认请求。所有请求已结算后，玩家显式确认才一并清除本局预算、预警、请求明细与可精确归属的本地账单审计：仅清理 target 明确关联到已核验周目 scope 的预算 / warning 操作，以及其已核验物理请求的结算审计；价格登记、模型选择和归属不明记录保留。共享价格版本、profile 价格选择及供应商侧账单不受影响。该清除不保证从全库 SQLite 备份物理擦除字节。

@@ -107,6 +107,13 @@ impl ProfileFactory {
             durable_billing: false,
         })
     }
+    /// 检查 profile 可用于新周目；由应用 adapter 决定是否需要凭据。
+    /// # Errors
+    /// 配置不存在或结构无效时返回稳定 Fault。
+    pub fn validate_profile(&self, id: &str) -> Result<(), Fault> {
+        aoidos_llm::config::validate_identifier("profileId", id).map_err(invalid_profile)?;
+        self.source.validate_profile(id)
+    }
     fn for_profile(
         &self,
         id: &str,
@@ -261,7 +268,7 @@ fn no_selection() -> Fault {
     Fault::new("app.not-ready", "请先选择模型配置并打开剧本")
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Selection {
     version: u32,
@@ -308,7 +315,8 @@ impl Product {
     /// # Errors
     /// 当前会话缺失或元数据损坏时拒绝，不接受调用方指定其他 profile。
     pub fn active_profile(&self) -> Result<(String, String), Fault> {
-        let selection = read_selection(&self.root)?.ok_or_else(no_selection)?;
+        let selection =
+            read_authoritative_selection(&self.storage, &self.root)?.ok_or_else(no_selection)?;
         Ok((selection.session_id, selection.profile_id))
     }
     /// 明确新建或重开已选择周目；预检不发 HTTP，重开保持暂停并等待显式恢复。
@@ -327,7 +335,41 @@ impl Product {
         self.storage.ready()?;
         super::assets::scenario(&script_id)?;
         let root = self.root.clone();
-        let previous = crate::blocking::run(move || read_selection(&root)).await?;
+        let storage = self.storage.clone();
+        let previous =
+            crate::blocking::run(move || read_authoritative_selection(&storage, &root)).await?;
+        if !start_new
+            && let Some(previous) = &previous
+            && previous.script_id == script_id
+            && previous.profile_id != profile_id
+        {
+            return Err(Fault::new(
+                "app.conflict",
+                "周目的模型配置已冻结；更换配置需要新建周目",
+            ));
+        }
+        let mut frozen_profile = None;
+        if !start_new
+            && let Some(previous) = &previous
+            && previous.script_id == script_id
+        {
+            let factory = self.factory.clone();
+            let profile_id = profile_id.clone();
+            let profile = crate::blocking::run(move || factory.public_profile(&profile_id)).await?;
+            let storage = self.storage.clone();
+            let session_id = previous.session_id.clone();
+            let candidate = profile.clone();
+            if crate::blocking::run(move || storage.run_profile_matches(&session_id, &candidate))
+                .await?
+                == Some(false)
+            {
+                return Err(Fault::new(
+                    "app.conflict",
+                    "周目的模型配置已冻结；更换配置内容需要新建周目",
+                ));
+            }
+            frozen_profile = Some(profile);
+        }
         if !start_new
             && let Some(previous) = &previous
             && previous.profile_id == profile_id
@@ -345,10 +387,18 @@ impl Product {
         let _lease = self.coordinator.acquire()?;
         let preferences = self.storage.preferences.clone();
         crate::blocking::run(move || preferences.get()).await?;
-        let factory = self.factory.clone();
-        let check_id = profile_id.clone();
-        let profile_snapshot =
-            crate::blocking::run(move || factory.public_profile(&check_id)).await?;
+        if start_new {
+            let factory = self.factory.clone();
+            let check_id = profile_id.clone();
+            crate::blocking::run(move || factory.validate_profile(&check_id)).await?;
+        }
+        let profile_snapshot = if let Some(profile) = frozen_profile {
+            profile
+        } else {
+            let factory = self.factory.clone();
+            let check_id = profile_id.clone();
+            crate::blocking::run(move || factory.public_profile(&check_id)).await?
+        };
         if let Some(previous) = &previous {
             match service.get_phase(&previous.session_id) {
                 Ok(_) => {
@@ -470,6 +520,25 @@ fn read_selection(root: &Path) -> Result<Option<Selection>, Fault> {
         return Err(corrupt_selection(aoidos_json::Error::InvalidShape));
     }
     Ok(Some(selection))
+}
+
+fn read_authoritative_selection(
+    storage: &Storage,
+    root: &Path,
+) -> Result<Option<Selection>, Fault> {
+    if let Some(selection) = storage.active_run_selection()? {
+        let selection = Selection {
+            version: 1,
+            session_id: selection.session_id,
+            profile_id: selection.profile_id,
+            script_id: selection.script_id,
+        };
+        if read_selection(root).ok().flatten().as_ref() != Some(&selection) {
+            write_selection(root, &selection)?;
+        }
+        return Ok(Some(selection));
+    }
+    read_selection(root)
 }
 fn write_selection(root: &Path, selection: &Selection) -> Result<(), Fault> {
     let text = aoidos_json::to_string(selection).map_err(corrupt_selection)?;

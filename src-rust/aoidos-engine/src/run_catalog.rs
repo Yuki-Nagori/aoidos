@@ -139,6 +139,14 @@ pub struct RunPage {
     pub scan_incomplete: bool,
 }
 
+/// 从 SQLite 权威选择行读取的活动周目元数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveSelection {
+    pub session_id: String,
+    pub profile_id: String,
+    pub script_id: String,
+}
+
 /// 创建周目时冻结的公开配置与三种独立身份。
 #[derive(Debug, Clone)]
 pub struct NewRun {
@@ -167,14 +175,17 @@ pub fn register_new(connection: &mut rusqlite::Connection, run: &NewRun) -> Resu
     if snapshot.len() > MAX_PROFILE_SNAPSHOT_BYTES {
         return Err(Fault::bad_request());
     }
-    let state = if billing_configured(connection, &run.session_id)? {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let has_legacy_ledger_data = has_ledger_data_for_scope(&transaction, &run.memory_run_id)?;
+    let state = if has_legacy_ledger_data {
+        RunState::BillingReconciliationRequired
+    } else if billing_configured(&transaction, &run.session_id)? {
         RunState::Ready
     } else {
         RunState::BillingNotConfigured
     };
-    let transaction = connection
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(database)?;
     if let Some(existing) = transaction
         .query_row(
             "SELECT script_id, created_at, memory_run_id, billing_run_id, profile_id, profile_snapshot FROM session_catalog WHERE session_id=?1",
@@ -307,6 +318,71 @@ pub fn page(
         catalog_revision: revision,
         scan_incomplete: incomplete != 0,
     })
+}
+
+/// 读取 SQLite 中的活动周目；兼容文件只作为首次迁移前的回退来源。
+pub fn active_selection(
+    connection: &rusqlite::Connection,
+) -> Result<Option<ActiveSelection>, Fault> {
+    let session_id: Option<String> = connection
+        .query_row(
+            "SELECT session_id FROM active_session WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(database)?
+        .flatten();
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    let selection = connection
+        .query_row(
+            "SELECT profile_id, script_id FROM session_catalog WHERE session_id=?1",
+            [&session_id],
+            |row| {
+                Ok(ActiveSelection {
+                    session_id: session_id.clone(),
+                    profile_id: row.get(0)?,
+                    script_id: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(database)?
+        .ok_or_else(corrupt)?;
+    if !crate::record::format::valid_uuid(&selection.session_id)
+        || !aoidos_script::valid_id(&selection.script_id)
+        || aoidos_llm::config::validate_identifier("profileId", &selection.profile_id).is_err()
+    {
+        return Err(corrupt());
+    }
+    Ok(Some(selection))
+}
+
+/// 比较已冻结的公开 profile；未登记或仍待绑定的旧局返回 `None`。
+pub fn profile_matches(
+    connection: &rusqlite::Connection,
+    session_id: &str,
+    profile: &LlmProfile,
+) -> Result<Option<bool>, Fault> {
+    if !crate::record::format::valid_uuid(session_id) {
+        return Err(Fault::bad_request());
+    }
+    let Some(snapshot) = connection
+        .query_row(
+            "SELECT profile_snapshot FROM session_catalog WHERE session_id=?1",
+            [session_id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .map_err(database)?
+        .flatten()
+    else {
+        return Ok(None);
+    };
+    let candidate = aoidos_json::to_vec(profile).map_err(|_| Fault::bad_request())?;
+    Ok(Some(snapshot == candidate))
 }
 
 /// 将玩家明确选择的公开 profile 绑定到尚无快照的旧周目。
@@ -581,6 +657,82 @@ mod tests {
                 .contains("test-profile")
         );
         assert_eq!(page.catalog_revision, 2);
+    }
+
+    #[test]
+    fn new_run_with_legacy_memory_scope_requires_billing_reconciliation() {
+        let mut connection = connection();
+        let run = NewRun {
+            session_id: "00000000-0000-4000-8000-000000000011".into(),
+            script_id: "mistbell".into(),
+            created_at: "2026-10-21T00:00:00Z".into(),
+            memory_run_id: "00000000-0000-4000-8000-000000000012".into(),
+            profile: profile(),
+        };
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-21T00:00:00Z')",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-21T00:00:00Z')",
+                [&run.session_id],
+            )
+            .unwrap();
+
+        register_new(&mut connection, &run).unwrap();
+
+        let page = page(&connection, None, DEFAULT_PAGE_SIZE).unwrap();
+        assert_eq!(
+            page.entries[0].state,
+            RunState::BillingReconciliationRequired
+        );
+        assert_eq!(
+            page.entries[0].billing_run_id.as_deref(),
+            Some(run.session_id.as_str())
+        );
+    }
+
+    #[test]
+    fn active_selection_rejects_a_dangling_catalog_reference() {
+        let connection = connection();
+        connection
+            .execute(
+                "INSERT INTO active_session(id,session_id,revision,updated_at) VALUES(1,'00000000-0000-4000-8000-000000000099',1,'2026-10-21T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            active_selection(&connection).unwrap_err().code,
+            "store.corrupt"
+        );
+    }
+
+    #[test]
+    fn profile_snapshot_comparison_detects_changed_public_configuration() {
+        let mut connection = connection();
+        let run = NewRun {
+            session_id: "00000000-0000-4000-8000-000000000041".into(),
+            script_id: "mistbell".into(),
+            created_at: "2026-10-21T00:00:00Z".into(),
+            memory_run_id: "00000000-0000-4000-8000-000000000042".into(),
+            profile: profile(),
+        };
+        register_new(&mut connection, &run).unwrap();
+        assert_eq!(
+            profile_matches(&connection, &run.session_id, &run.profile).unwrap(),
+            Some(true)
+        );
+
+        let mut changed = run.profile.clone();
+        changed.model.push_str("-changed");
+        assert_eq!(
+            profile_matches(&connection, &run.session_id, &changed).unwrap(),
+            Some(false)
+        );
     }
 
     #[test]
