@@ -4,5 +4,6 @@
 
 pub mod money;
 pub mod price;
+pub mod providers;
 pub mod schema;
 pub mod usage;

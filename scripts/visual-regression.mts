@@ -336,6 +336,27 @@ async function openWelcome(
               };
             case "budget_get_settings":
               return { runId: session.memoryRunId, cnyLimit: "20", usdLimit: "5", revision: 1 };
+            case "budget_get_deepseek_price_templates":
+              return [
+                {
+                  currency: "CNY",
+                  inputUncached: "1",
+                  inputCached: "0.02",
+                  inputCachedWrite: "1",
+                  output: "4",
+                  checkedAt: "2026-10-21T00:00:00Z",
+                  sourceUrl: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+                },
+                {
+                  currency: "USD",
+                  inputUncached: "0.15",
+                  inputCached: "0.003",
+                  inputCachedWrite: "0.15",
+                  output: "0.6",
+                  checkedAt: "2026-10-21T00:00:00Z",
+                  sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing/",
+                },
+              ];
             case "budget_get_selected_price":
             case "budget_get_price":
               return { price: null };
@@ -590,7 +611,33 @@ try {
       warning.y + warning.height <= actions.y || warning.y >= actions.y + actions.height,
       "Inline warnings must not overlap the start actions",
     );
-    if (!fixture.keySet) assert.equal(await page.locator(".welcome-start").isDisabled(), true);
+    assert.equal(
+      await page.evaluate(() =>
+        (window as unknown as BrowserBridge).__VISUAL_CALLS__?.includes("llm_get_key_status"),
+      ),
+      false,
+      "Startup must not probe the OS credential store",
+    );
+    if (!fixture.keySet) {
+      assert.equal(await page.locator(".welcome-start").isDisabled(), false);
+      await page.locator(".model-settings").click();
+      const dialog = page.getByRole("dialog");
+      const pricePreview = dialog.locator(".settings-price-preview");
+      await pricePreview.getByText("Built-in reference price · per million tokens").waitFor();
+      assert.match(await pricePreview.innerText(), /Uncached input\s+1/);
+      assert.match(await pricePreview.innerText(), /Checked: 2026-10-21/);
+      await dialog.getByRole("button", { name: "Retry" }).click();
+      await dialog.getByText("Key is not set").waitFor();
+      await dialog.getByRole("button", { name: "Close" }).click();
+      assert.equal(await page.locator(".welcome-start").isDisabled(), true);
+      assert.equal(
+        await page.evaluate(() =>
+          (window as unknown as BrowserBridge).__VISUAL_CALLS__?.includes("llm_get_key_status"),
+        ),
+        true,
+        "An explicit key-status check must query the credential store",
+      );
+    }
     assert.deepEqual(pageErrors, [], "Expected API failures must remain handled UI state");
     await page.close();
   }

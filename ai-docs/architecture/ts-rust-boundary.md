@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-20。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 正在把 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；已落地边界与未完验收以[任务 058](../task/058-cli-tui-shared-game-runtime.md)为准。工程纪律参考 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-21。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 正在把 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；已落地边界与未完验收以[任务 058](../task/058-cli-tui-shared-game-runtime.md)为准。工程纪律参考 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -20,8 +20,8 @@ src-rust/<crate>/     # 业务 crate，按域拆分（如 aoidos-llm / aoidos-en
 src-rust/aoidos-app/  # 无平台依赖的共享游戏应用服务（058 实施中）
 ```
 
-- 可复用业务 crate 放 `src-rust/` 下，入口 binary 放 `src-tauri/` 或 `src-cli/`；创建即加入根 `Cargo.toml` 的 `members`。`aoidos-app` 已加入 workspace，当前承载 profile / 凭据服务及共用游戏运行装配；Tauri 与 CLI 分别负责解析数据根和平台事件。
-- 游戏运行链路由 Tauri 与 CLI/TUI 两个入口各自调用 `aoidos-app`，后者组合 engine、profile / credential 与存储能力；尚未迁移的桌面命令可保留其领域 crate 直连。业务 crate 之间保持单向依赖、禁止成环；**业务 crate 不得依赖 tauri**（保证可独立 `cargo test`，也方便复用）。
+- 可复用业务 crate 放 `src-rust/` 下，入口 binary 放 `src-tauri/` 或 `src-cli/`；创建即加入根 `Cargo.toml` 的 `members`。`aoidos-app` 已加入 workspace，当前承载 profile / 凭据服务、共用游戏运行装配与计价 / 预算服务；Tauri 与 CLI 分别负责解析数据根和平台事件。
+- 游戏运行链路由 Tauri 与 CLI/TUI 两个入口各自调用 `aoidos-app`，后者组合 billing、engine、profile / credential 与存储能力；尚未迁移的桌面命令可保留其领域 crate 直连。业务 crate 之间保持单向依赖、禁止成环；**业务 crate 不得依赖 tauri**（保证可独立 `cargo test`，也方便复用）。
 - `src-tauri` 的单测只覆盖命令层解参与转发；域逻辑的单测跟随业务 crate。
 
 ### 回合协调与端口依赖
@@ -64,7 +64,8 @@ src-tauri（装配、命令、窗口事件适配）
 
 ```text
 aoidos (src-tauri) ──┐
-                    ├→ aoidos-app ──→ aoidos-engine ──→ 领域 crate
+                    ├→ aoidos-app ──→ aoidos-billing
+                    │               ├→ aoidos-engine ──→ 领域 crate
 aoidos-cli (src-cli) ┘       ├────────→ aoidos-llm
                             └────────→ aoidos-store
 
@@ -75,11 +76,11 @@ aoidos-native-tests → 需要验证的生产 crate / 入口
 
 `aoidos-app` 当前负责 profile 列表 / 保存 / 删除、提交时 profile 与凭据冻结、密钥服务、`TurnRuntime` 以及 engine `Product` / runtime 装配；Tauri 与 CLI 注入同一数据根和各自的事件端口。OS 凭据读写复用 `aoidos-llm`；Tauri 原生密钥对话框、CLI 终端输入、窗口事件与终端绘制分别留在 adapter，应用层不等待或导入 UI 类型。
 
-Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 组合 engine、llm、store；CLI 为实现 engine 事件端口、共享数据根锁和受控记录读取保留直接 adapter 依赖，不承载对局业务编排。engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
+Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 组合 billing、engine、llm、store；CLI 为实现 engine 事件端口、共享数据根锁和受控记录读取保留直接 adapter 依赖，不承载对局业务编排。engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
 
 `aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
 
-计费由 engine 依赖纯领域 crate `aoidos-billing`，并实现 llm 定义的 `BudgetPort`；Tauri 直接依赖 billing 以复用金额 / 价格等领域类型，负责 IPC DTO 与领域类型的薄转换及命令转发，不承载计费规则。前端只传递同型 DTO。store 不依赖计费、engine 或 llm，llm 也不依赖 engine / 计费实现。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
+计价与预算用例由 `aoidos-app::BillingService` 共用，账本事务由 engine 中的唯一 `BillingLedger` 持有；engine 依赖纯领域 crate `aoidos-billing` 并实现 llm 定义的 `BudgetPort`。唯一内置价目目录在 `aoidos-billing`，app 暴露只读查询并处理确认 / 选择；GUI / TUI 不复制价格表或账本规则。Tauri 仍直接依赖 billing 以复用 IPC 金额 / 价格类型，并为报表、结算恢复和历史补录等桌面能力转发 engine 查询；不复制账本规则。前端只传递同型 DTO。store 不依赖计费、engine 或 llm，llm 也不依赖 engine / 计费实现。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 
 034 的语言偏好 crate 只消费 store 的 SQLite 类型与存储错误；engine 负责共享连接和迁移，Tauri 负责命令及窗口 / 菜单 / 托盘应用，前端只消费同型载荷并呈现。`aoidos-locale` 不依赖 engine 或 Tauri，因此不形成反向依赖。
 

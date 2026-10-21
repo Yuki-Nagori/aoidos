@@ -3,6 +3,12 @@ import type { LlmProfile, KeyStatus } from "../../../api/llm";
 import { getKeyStatus, listProfiles, saveProfile, setKey } from "../../../api/llm";
 import type { OpenedSession, ScriptInfo } from "../../../api/engine";
 import { listScripts, openSession } from "../../../api/engine";
+import type { BillingCurrency } from "../../../api/billing";
+import {
+  confirmDeepseekPrice,
+  getDeepseekPriceTemplates,
+  getSelectedPrice,
+} from "../../../api/billing";
 import { safeError } from "../../../shared/utils/error";
 
 interface Transport {
@@ -11,6 +17,9 @@ interface Transport {
   scripts: typeof listScripts;
   save: typeof saveProfile;
   key: typeof setKey;
+  confirmPrice: typeof confirmDeepseekPrice;
+  priceTemplates: typeof getDeepseekPriceTemplates;
+  selectedPrice: typeof getSelectedPrice;
   open: typeof openSession;
 }
 const defaults: Transport = {
@@ -19,6 +28,9 @@ const defaults: Transport = {
   scripts: listScripts,
   save: saveProfile,
   key: setKey,
+  confirmPrice: confirmDeepseekPrice,
+  priceTemplates: getDeepseekPriceTemplates,
+  selectedPrice: getSelectedPrice,
   open: openSession,
 };
 const openCodeZenIds = [
@@ -127,6 +139,7 @@ const openCodeZenModels = openCodeZenIds.map((id) => ({
 export function useProduct(transport: Transport = defaults) {
   const profiles = shallowRef<LlmProfile[]>([]);
   const scripts = shallowRef<ScriptInfo[]>([]);
+  const priceTemplates = shallowRef<Awaited<ReturnType<typeof getDeepseekPriceTemplates>>>([]);
   const profileId = ref("");
   const scriptId = ref("mistbell");
   const providerId = ref("deepseek");
@@ -178,26 +191,68 @@ export function useProduct(transport: Transport = defaults) {
   } as const;
   const models = computed(() => modelCatalog[providerId.value as keyof typeof modelCatalog]);
   const model = ref("deepseek-flash");
+  let keyStatusRequest = 0;
+  let selectedPriceRequest = 0;
   watch(
     providerId,
     (provider) => {
+      keyStatusRequest += 1;
+      selectedPriceRequest += 1;
+      billingCurrency.value = "CNY";
+      keyStatus.value = undefined;
+      keyStatusLoading.value = false;
       model.value = modelCatalog[provider as keyof typeof modelCatalog][0].id;
       profileId.value =
         profiles.value.find(
           (profile) => profile.providerId === provider && profile.model === model.value,
         )?.profileId ?? "";
-      void refreshKeyStatus(provider);
+    },
+    { flush: "sync" },
+  );
+  watch(
+    model,
+    (selectedModel) => {
+      selectedPriceRequest += 1;
+      billingCurrency.value = "CNY";
+      profileId.value =
+        profiles.value.find(
+          (profile) => profile.providerId === providerId.value && profile.model === selectedModel,
+        )?.profileId ?? "";
     },
     { flush: "sync" },
   );
   const session = shallowRef<OpenedSession>();
   const keyStatus = shallowRef<KeyStatus>();
+  const billingCurrency = ref<BillingCurrency>("CNY");
   const keyStatusLoading = ref(false);
   const credentialRevision = ref(0);
   const busy = ref(false);
   const error = shallowRef<{ code: string; message: string }>();
   let disposed = false;
-  let keyStatusRequest = 0;
+  watch(
+    [providerId, model, profileId],
+    ([provider, selectedModel, selectedProfile]) => {
+      const request = ++selectedPriceRequest;
+      billingCurrency.value = "CNY";
+      if (provider !== "deepseek" || !selectedProfile) return;
+      void transport
+        .selectedPrice(selectedProfile, provider, selectedModel, "direct")
+        .then((price) => {
+          if (
+            !disposed &&
+            request === selectedPriceRequest &&
+            providerId.value === provider &&
+            model.value === selectedModel &&
+            profileId.value === selectedProfile &&
+            (price?.currency === "CNY" || price?.currency === "USD")
+          ) {
+            billingCurrency.value = price.currency;
+          }
+        })
+        .catch(() => {});
+    },
+    { flush: "post" },
+  );
   onScopeDispose(() => {
     disposed = true;
   });
@@ -215,15 +270,19 @@ export function useProduct(transport: Transport = defaults) {
   }
   function load(): Promise<void> {
     return run(async () => {
-      const [saved, bundled] = await Promise.all([transport.profiles(), transport.scripts()]);
+      const [saved, bundled, prices] = await Promise.all([
+        transport.profiles(),
+        transport.scripts(),
+        transport.priceTemplates().catch(() => []),
+      ]);
       if (disposed) return;
       profiles.value = saved.items;
       scripts.value = bundled;
+      priceTemplates.value = prices;
       profileId.value =
         saved.items.find(
           (profile) => profile.providerId === providerId.value && profile.model === model.value,
         )?.profileId ?? "";
-      await refreshKeyStatus();
     });
   }
   async function refreshKeyStatus(provider = providerId.value): Promise<void> {
@@ -283,6 +342,19 @@ export function useProduct(transport: Transport = defaults) {
       }
     });
   }
+  function setBillingCurrency(currency: BillingCurrency): void {
+    selectedPriceRequest += 1;
+    billingCurrency.value = currency;
+  }
+  function confirmBillingPrice(): Promise<void> {
+    return run(async () => {
+      if (providerId.value !== "deepseek") return;
+      if (!priceTemplates.value.some((price) => price.currency === billingCurrency.value)) return;
+      const selected = await selectProfile();
+      await transport.confirmPrice(selected, model.value, billingCurrency.value);
+      if (!disposed) profileId.value = selected;
+    });
+  }
   function open(startNew: boolean): Promise<void> {
     return run(async () => {
       const selected = await selectProfile();
@@ -297,6 +369,7 @@ export function useProduct(transport: Transport = defaults) {
   return {
     profiles,
     scripts,
+    priceTemplates,
     profileId,
     providerId,
     providerOptions,
@@ -304,6 +377,8 @@ export function useProduct(transport: Transport = defaults) {
     model,
     session,
     keyStatus,
+    billingCurrency,
+    setBillingCurrency,
     keyStatusLoading,
     credentialRevision,
     busy,
@@ -312,6 +387,7 @@ export function useProduct(transport: Transport = defaults) {
     models,
     refreshKeyStatus,
     configureKey,
+    confirmBillingPrice,
     open,
   };
 }

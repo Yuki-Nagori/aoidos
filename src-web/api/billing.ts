@@ -41,6 +41,20 @@ export interface PriceVersion {
   validUntil?: string;
 }
 
+/** 用户确认 DeepSeek 账户币种后，将内置价登记并绑定到 profile。 */
+export function confirmDeepseekPrice(
+  profileId: string,
+  modelId: string,
+  currency: BillingCurrency,
+): Promise<PriceVersion> {
+  return invoke("budget_confirm_deepseek_price", { profileId, modelId, currency });
+}
+
+/** 读取随应用发布的 DeepSeek 价格参考；不会访问账本或发送网络请求。 */
+export function getDeepseekPriceTemplates(): Promise<PriceVersion[]> {
+  return invoke("budget_get_deepseek_price_templates");
+}
+
 interface ModelUsageSummary {
   providerId: string;
   currency: BillingCurrency;

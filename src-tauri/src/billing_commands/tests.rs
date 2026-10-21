@@ -125,6 +125,7 @@ fn price() -> serde_json::Value {
 #[tokio::test]
 async fn registered_billing_commands_cover_prices_limits_reports_and_request_pages() {
     let root = std::env::temp_dir().join(format!("aoidos-billing-ipc-{}", uuid::Uuid::new_v4()));
+    crate::llm_commands::init_llm_dir(root.join("profiles"));
     let events = StorageEvents::new(Arc::new(WindowEvents::new(|_, _| Ok(()))));
     let app = mock_builder()
         .manage(StorageService::new(&root, events))
@@ -151,6 +152,8 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
             budget_set_settings,
             budget_get_price,
             budget_register_price,
+            budget_confirm_deepseek_price,
+            budget_get_deepseek_price_templates,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -216,6 +219,10 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
         (
             "budget_register_price",
             serde_json::json!({"price":price()}),
+        ),
+        (
+            "budget_confirm_deepseek_price",
+            serde_json::json!({"profileId":"deepseek-profile","modelId":"deepseek-flash","currency":"CNY"}),
         ),
     ];
     for (name, valid) in &valid_requests {
@@ -309,6 +316,30 @@ async fn registered_billing_commands_cover_prices_limits_reports_and_request_pag
     assert_eq!(call("budget_get_suggested_limits", tauri::ipc::InvokeBody::Json(serde_json::json!({"providerId":"provider","modelId":"model","routePolicy":"direct"}))).unwrap()["cny"], serde_json::Value::Null);
     assert_eq!(call("budget_get_selected_price", tauri::ipc::InvokeBody::Json(serde_json::json!({"profileId":"profile","providerId":"provider","modelId":"model","routePolicy":"direct"}))).unwrap()["price"], serde_json::Value::Null);
     assert_eq!(call("budget_get_price", tauri::ipc::InvokeBody::Json(serde_json::json!({"providerId":"provider","modelId":"model","routePolicy":"direct","currency":"CNY"}))).unwrap()["price"], serde_json::Value::Null);
+    let templates = call(
+        "budget_get_deepseek_price_templates",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({})),
+    )
+    .unwrap();
+    assert_eq!(templates.as_array().unwrap().len(), 2);
+    assert_eq!(templates[0]["currency"], "CNY");
+    assert_eq!(templates[0]["checkedAt"], "2026-10-21T00:00:00Z");
+
+    let default_price = call(
+        "budget_confirm_deepseek_price",
+        tauri::ipc::InvokeBody::Json(
+            serde_json::json!({"profileId":"deepseek-profile","modelId":"deepseek-flash","currency":"CNY"}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(default_price["currency"], "CNY");
+    assert_eq!(default_price["providerId"], "deepseek");
+    let selected_price = call(
+        "budget_get_selected_price",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({"profileId":"deepseek-profile","providerId":"deepseek","modelId":"deepseek-flash","routePolicy":"direct"})),
+    )
+    .unwrap();
+    assert_eq!(selected_price["price"]["currency"], "CNY");
 
     let registered = call(
         "budget_register_price",
@@ -762,7 +793,7 @@ async fn billing_error_helpers_keep_stable_public_codes_and_storage_job_errors()
         (BillingError::Conflict, "budget.conflict"),
         (BillingError::Storage, "store.database"),
     ] {
-        assert_eq!(billing_fault(error).code, code);
+        assert_eq!(app_billing_fault(error).code, code);
     }
     assert_eq!(bad_amount().code(), "app.bad-request");
     assert!(!now().is_empty());

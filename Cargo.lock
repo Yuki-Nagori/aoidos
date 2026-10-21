@@ -144,6 +144,7 @@ dependencies = [
 name = "aoidos-app"
 version = "0.1.0"
 dependencies = [
+ "aoidos-billing",
  "aoidos-engine",
  "aoidos-llm",
  "aoidos-store",

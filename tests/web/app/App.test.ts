@@ -17,7 +17,6 @@ describe("App", () => {
   it("展示正式入口，初始化不打开会话或发起生成", async () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "llm_list_profiles") return { items: [] };
-      if (command === "llm_get_key_status") return { set: true, hint: "1234" };
       if (command === "engine_list_scripts")
         return [
           {
@@ -167,7 +166,8 @@ describe("App", () => {
       isComposing: true,
     });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
-    expect(wrapper.get(".settings-key-card").text()).toContain("Key is set");
+    expect(wrapper.get(".settings-key-card").text()).toContain("status has not been confirmed");
+    expect(invoke).not.toHaveBeenCalledWith("llm_get_key_status", { providerId: "deepseek" });
     expect(wrapper.get(".settings-theme-field").findAll(".settings-theme-card")).toHaveLength(3);
     const theme = wrapper.get('.settings-theme-card[aria-label="Dark"]');
     expect(theme.attributes("aria-pressed")).toBe("true");
@@ -236,8 +236,8 @@ describe("App", () => {
         .mock.calls.map(([command]) => command)
         .sort(),
     ).toEqual([
+      "budget_get_deepseek_price_templates",
       "engine_list_scripts",
-      "llm_get_key_status",
       "llm_list_profiles",
       "locale_get_preference",
       "locale_set_preference",
@@ -312,7 +312,12 @@ describe("App", () => {
       .findAll(".settings-nav button")
       .find((button) => button.text() === "模型与 API")!
       .trigger("click");
-    expect(wrapper.get(".settings-key-card").classes()).toContain("is-missing");
+    expect(wrapper.get(".settings-key-card").classes()).not.toContain("is-missing");
+    expect(wrapper.get(".settings-key-card").text()).toContain("密钥状态尚未确认");
+    await wrapper.get(".settings-key-card button.ghost").trigger("click");
+    await vi.waitFor(() =>
+      expect(wrapper.get(".settings-key-card").classes()).toContain("is-missing"),
+    );
     expect(wrapper.get(".settings-key-card").text()).toContain("密钥未设置");
     await wrapper
       .findAll(".settings-nav button")

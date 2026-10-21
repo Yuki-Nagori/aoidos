@@ -15,6 +15,26 @@ vi.mock("../../../../../src-web/api/engine", () => ({
   listScripts: vi.fn(),
   openSession: vi.fn(),
 }));
+vi.mock("../../../../../src-web/api/billing", () => ({
+  confirmDeepseekPrice: vi.fn().mockResolvedValue({ currency: "CNY" }),
+  getDeepseekPriceTemplates: vi.fn().mockResolvedValue([
+    {
+      currency: "CNY",
+      modelId: "deepseek-flash",
+      inputUncached: "1",
+      inputCached: "0.02",
+      output: "4",
+    },
+    {
+      currency: "USD",
+      modelId: "deepseek-flash",
+      inputUncached: "0.15",
+      inputCached: "0.003",
+      output: "0.6",
+    },
+  ]),
+  getSelectedPrice: vi.fn().mockResolvedValue(null),
+}));
 const profile: LlmProfile = {
   profileId: "default",
   providerId: "deepseek",
@@ -59,6 +79,46 @@ function transport() {
     scripts: vi.fn().mockResolvedValue(scripts),
     save: vi.fn().mockImplementation(async (saved: LlmProfile) => saved),
     key: vi.fn().mockResolvedValue({ set: true, hint: "1234" }),
+    confirmPrice: vi.fn().mockResolvedValue({ currency: "CNY" }),
+    priceTemplates: vi.fn().mockResolvedValue([
+      {
+        versionId: "deepseek-flash-cny-v1",
+        providerId: "deepseek",
+        modelId: "deepseek-flash",
+        routePolicy: "direct",
+        currency: "CNY",
+        unitTokens: 1_000_000,
+        inputUncached: "1",
+        inputCached: "0.02",
+        inputCachedWrite: "1",
+        output: "4",
+        schedule: null,
+        usageMappingVersion: "deepseek-usage-v1",
+        sourceKind: "official-provider-price",
+        sourceUrl: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+        checkedAt: "2026-10-21T00:00:00Z",
+        effectiveFrom: "2026-10-21T00:00:00Z",
+      },
+      {
+        versionId: "deepseek-flash-usd-v1",
+        providerId: "deepseek",
+        modelId: "deepseek-flash",
+        routePolicy: "direct",
+        currency: "USD",
+        unitTokens: 1_000_000,
+        inputUncached: "0.15",
+        inputCached: "0.003",
+        inputCachedWrite: "0.15",
+        output: "0.6",
+        schedule: null,
+        usageMappingVersion: "deepseek-usage-v1",
+        sourceKind: "official-provider-price",
+        sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing/",
+        checkedAt: "2026-10-21T00:00:00Z",
+        effectiveFrom: "2026-10-21T00:00:00Z",
+      },
+    ]),
+    selectedPrice: vi.fn().mockResolvedValue(null),
     open: vi.fn().mockResolvedValue(opened),
   };
 }
@@ -84,6 +144,8 @@ it("defaults to Flash and exposes supported providers and model choices", async 
   await product.load();
   expect(product.profileId.value).toBe("default");
   expect(product.scripts.value).toEqual(scripts);
+  expect(getKeyStatus).not.toHaveBeenCalled();
+  expect(product.keyStatus.value).toBeUndefined();
   expect(openSession).not.toHaveBeenCalled();
   await product.configureKey();
   expect(setKey).toHaveBeenLastCalledWith("deepseek", "set");
@@ -124,6 +186,49 @@ it("switches models by reusing matching DeepSeek profiles and never picks anothe
     pro,
   ]);
   expect(api.save).not.toHaveBeenCalled();
+  scope.stop();
+});
+
+it("defaults DeepSeek billing to CNY and persists an explicit currency selection", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  await product.load();
+
+  expect(product.billingCurrency.value).toBe("CNY");
+  await product.confirmBillingPrice();
+  expect(api.confirmPrice).toHaveBeenLastCalledWith("default", "deepseek-flash", "CNY");
+
+  product.billingCurrency.value = "USD";
+  await product.confirmBillingPrice();
+  expect(api.confirmPrice).toHaveBeenLastCalledWith("default", "deepseek-flash", "USD");
+  scope.stop();
+});
+it("does not let a late selected-price read overwrite an explicit currency choice", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  const pending = deferred<{ currency: string } | null>();
+  api.selectedPrice.mockReturnValue(pending.promise as never);
+  await product.load();
+  product.setBillingCurrency("USD");
+  pending.resolve({ currency: "CNY" });
+  await vi.waitFor(() => expect(api.selectedPrice).toHaveResolved());
+  expect(product.billingCurrency.value).toBe("USD");
+  scope.stop();
+});
+
+it("restores a saved profile currency and resets to CNY for an unregistered model", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  api.selectedPrice.mockResolvedValue({ currency: "USD" } as never);
+  await product.load();
+  await vi.waitFor(() => expect(product.billingCurrency.value).toBe("USD"));
+
+  product.model.value = "deepseek-v4-pro";
+  expect(product.profileId.value).toBe("");
+  await vi.waitFor(() => expect(product.billingCurrency.value).toBe("CNY"));
   scope.stop();
 });
 it("preserves default sampling, proxy and mode when creating the missing model, retaining unrelated profiles", async () => {
@@ -228,21 +333,39 @@ it("does not let an older provider key-status response replace the current provi
   const older = deferred<{ set: boolean; hint: string | null }>();
   const current = deferred<{ set: boolean; hint: string | null }>();
   const api = transport();
-  api.keyStatus.mockResolvedValueOnce({ set: false, hint: null });
   const scope = effectScope();
   const product = scope.run(() => useProduct(api))!;
   await product.load();
+  expect(api.keyStatus).not.toHaveBeenCalled();
   api.keyStatus.mockImplementation((provider) =>
     provider === "opencode-go" ? older.promise : current.promise,
   );
 
   product.providerId.value = "opencode-go";
+  const olderCheck = product.refreshKeyStatus();
   product.providerId.value = "opencode-zen";
+  const currentCheck = product.refreshKeyStatus();
   current.resolve({ set: false, hint: null });
-  await vi.waitFor(() => expect(product.keyStatus.value).toEqual({ set: false, hint: null }));
-  older.resolve({ set: true, hint: "1234" });
-  await vi.waitFor(() => expect(api.keyStatus).toHaveBeenCalledTimes(3));
+  await currentCheck;
   expect(product.keyStatus.value).toEqual({ set: false, hint: null });
+  older.resolve({ set: true, hint: "1234" });
+  await olderCheck;
+  expect(api.keyStatus).toHaveBeenCalledTimes(2);
+  expect(product.keyStatus.value).toEqual({ set: false, hint: null });
+  scope.stop();
+});
+it("clears a checked key status when the selected provider changes", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  await product.load();
+  await product.refreshKeyStatus();
+  expect(product.keyStatus.value).toEqual({ set: true, hint: "1234" });
+
+  product.providerId.value = "opencode-go";
+
+  expect(product.keyStatus.value).toBeUndefined();
+  expect(api.keyStatus).toHaveBeenCalledExactlyOnceWith("deepseek");
   scope.stop();
 });
 it("exposes the documented OpenCode Zen catalog with DeepSeek V4.1 Flash first", async () => {
@@ -336,13 +459,14 @@ it("does not let a stale key-status read overwrite the result of key configurati
   await product.load();
   api.keyStatus.mockReturnValue(staleRead.promise);
   product.providerId.value = "opencode-go";
+  const pendingRead = product.refreshKeyStatus();
   expect(api.keyStatus).toHaveBeenLastCalledWith("opencode-go");
 
   await product.configureKey();
   expect(product.keyStatus.value).toEqual({ set: true, hint: "1234" });
 
   staleRead.resolve({ set: false, hint: null });
-  await staleRead.promise;
+  await pendingRead;
   await Promise.resolve();
   expect(product.keyStatus.value).toEqual({ set: true, hint: "1234" });
   scope.stop();
@@ -355,6 +479,7 @@ it("clears key-status loading after key configuration fails while an old read is
   await product.load();
   api.keyStatus.mockReturnValue(staleRead.promise);
   product.providerId.value = "opencode-go";
+  const pendingRead = product.refreshKeyStatus();
   api.key.mockRejectedValue(new Error("private native failure"));
 
   await product.configureKey();
@@ -363,7 +488,7 @@ it("clears key-status loading after key configuration fails while an old read is
   expect(product.busy.value).toBe(false);
 
   staleRead.resolve({ set: false, hint: null });
-  await staleRead.promise;
+  await pendingRead;
   await Promise.resolve();
   expect(product.keyStatus.value).toBeUndefined();
   expect(product.keyStatusLoading.value).toBe(false);
@@ -403,8 +528,9 @@ it.each(["load", "save", "key", "open"] as const)(
     pending.resolve(result);
     await running;
     expect(product.profiles.value).toEqual([profile]);
-    expect(product.profileId.value).toBe("default");
-    expect(product.keyStatus.value).toEqual({ set: true, hint: "1234" });
+    expect(product.profileId.value).toBe(operation === "save" ? "" : "default");
+    expect(product.keyStatus.value).toBeUndefined();
+    if (operation !== "key") expect(api.keyStatus).not.toHaveBeenCalled();
     expect(product.session.value).toBeUndefined();
     if (operation === "save") expect(api.open).not.toHaveBeenCalled();
   },

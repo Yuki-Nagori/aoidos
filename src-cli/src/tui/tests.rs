@@ -1,9 +1,10 @@
 use super::{
-    SettingsSection, ViewState, append_bounded, apply_turn_snapshot, billing_lines, billing_title,
-    cancel_game, confirm_action, continue_game, draft_cursor_column, draft_cursor_position,
-    draft_cursor_row, friendly_error, game_layout, handle_game_key, handle_runtime_event,
-    load_request_preflight, next_settings_section, open_session, refresh_billing, scroll_billing,
-    settings_layout, submit_action, wrap_visual_lines,
+    SettingsSection, ViewState, append_bounded, apply_turn_snapshot, billing_currency_shortcut,
+    billing_lines, billing_title, cancel_game, confirm_action, continue_game, draft_cursor_column,
+    draft_cursor_position, draft_cursor_row, friendly_error, game_layout, handle_game_key,
+    handle_runtime_event, load_request_preflight, model_intro_lines, next_settings_section,
+    open_session, refresh_billing, scroll_billing, settings_layout, settings_profile_index_at_row,
+    submit_action, switch_settings_section, wrap_visual_lines,
 };
 use crate::{CliApp, EVENT_CAPACITY, EventBridge};
 use aoidos_app::{GameServices, TurnRuntime, billing::RunBillingSummary, profiles::Profiles};
@@ -222,6 +223,80 @@ fn settings_tabs_cycle_in_order_and_modal_stays_inside_terminal() {
     assert!(layout.model_tab.x < layout.script_tab.x);
     assert!(layout.script_tab.x < layout.billing_tab.x);
     assert!(layout.billing_tab.x < layout.close.x);
+}
+
+#[test]
+fn model_profile_mouse_rows_match_the_rendered_wrapped_introduction() {
+    let mut first = fake_profile();
+    first.profile_id = "p".repeat(180);
+    let second = fake_profile();
+    for width in [20, 28, 40, 60, 80, 120] {
+        let intro_rows = model_intro_lines(width, &[]).len();
+        let first_height =
+            wrap_visual_lines(&super::model_profile_text(&first, false, true), width).len();
+        let second_height =
+            wrap_visual_lines(&super::model_profile_text(&second, false, false), width).len();
+        assert!(first_height > 1, "fixture must wrap at width {width}");
+        let heights = [first_height, second_height];
+        assert_eq!(
+            settings_profile_index_at_row(intro_rows, intro_rows, &heights),
+            Some(0)
+        );
+        assert_eq!(
+            settings_profile_index_at_row(intro_rows + first_height - 1, intro_rows, &heights),
+            Some(0)
+        );
+        assert_eq!(
+            settings_profile_index_at_row(intro_rows + first_height, intro_rows, &heights),
+            Some(1)
+        );
+        assert_eq!(
+            settings_profile_index_at_row(intro_rows - 1, intro_rows, &heights),
+            None
+        );
+        assert_eq!(
+            settings_profile_index_at_row(
+                intro_rows + first_height + second_height,
+                intro_rows,
+                &heights
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn leaving_billing_settings_cancels_run_bound_budget_draft() {
+    let mut state = ViewState::new(Vec::new(), Vec::new());
+    state.settings_section = SettingsSection::Billing;
+    state.budget_editing = true;
+    state.budget_edit_run_id = Some("run-a".into());
+    state.budget_edit_revision = Some(4);
+    state.budget_cny_draft = "1.25".into();
+    state.budget_usd_draft = "2.50".into();
+
+    switch_settings_section(&mut state, SettingsSection::Model);
+
+    assert!(!state.budget_editing);
+    assert_eq!(state.budget_edit_run_id, None);
+    assert_eq!(state.budget_edit_revision, None);
+    assert_eq!(state.settings_section, SettingsSection::Model);
+    assert_eq!(state.budget_cny_draft, "1.25");
+}
+
+#[test]
+fn deepseek_currency_shortcuts_match_the_account_options() {
+    use crossterm::event::KeyCode;
+
+    assert_eq!(
+        billing_currency_shortcut(KeyCode::Char('c')),
+        Some(aoidos_app::billing::Currency::Cny)
+    );
+    assert_eq!(
+        billing_currency_shortcut(KeyCode::Char('U')),
+        Some(aoidos_app::billing::Currency::Usd)
+    );
+    assert_eq!(billing_currency_shortcut(KeyCode::Char('x')), None);
 }
 
 #[test]
