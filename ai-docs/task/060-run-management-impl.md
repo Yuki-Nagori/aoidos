@@ -58,7 +58,7 @@
 - [ ] 列表按固定游标分页，只读校验摘要；legacy 扫描最多处理 128 个遍历项 / 批、单 header 遵守 2 MiB 格式上限且总读取不超过 8 MiB，显式报告不完整与损坏项数量，诊断每轮重置且最多保留 256 项，损坏项隔离而不阻断其他周目。
 - [ ] 旧 transcript 的 session、memory 与账务身份仅按显式映射核验；缺少 `memory_run_sessions` 映射或映射冲突进入 `needs-repair`，不能经 profile 绑定转为可运行状态；重复扫描与 profile 绑定事务均重新核验已登记身份。
 - [ ] 新局冻结公开 profile 快照且不含凭据；旧局缺失 profile 时需要玩家明确绑定；切换恢复原剧本 / profile，不自动发送请求。
-- [ ] 切换先校验目标，忙碌时拒绝；关闭旧 owner、恢复目标、更新 SQLite 权威活动选择和修复文件镜像顺序符合 059，提交不确定可读回判定。
+- [ ] 切换先校验目标，忙碌时拒绝；关闭旧 owner、恢复目标、更新 SQLite 权威活动选择和修复文件镜像顺序符合 059；只对提交结果不确定的错误读回判定，明确 revision / 状态冲突不得被吞；镜像写入失败须在恢复与普通重开结果中报告。
 - [ ] 删除需要对具体周目显式确认；未决费用义务阻止删除，运行中的周目先安全关闭，直接来源刻痕失效且代数高水位保留。
 - [ ] 缺失完整 usage 的 `unconfirmed` 请求保持不可删除；不把它伪装成 settled、不提供无证据的手工核销。
 - [ ] transcript、partial、修复备份、memory / entity / applied、billing 和目录关联按设计清理；其它周目、全局价格 / 配置、全库备份不误删。
@@ -90,6 +90,8 @@
 - 2026-10-21：核对并修复新请求仍以 `memoryRunId` 计费的问题。普通周目冻结和私有记忆请求现在都使用 `sessionId` / canonical `billingRunId`；回归测试分别确认两条新请求都落入 session 账本，以及旧 scope 有预算时必须先完成核对。历史 scope 迁移仍待实现。
 - 2026-10-21：在账本预留事务加入 legacy scope 门禁。仅依据已核验的 `sessionId → memoryRunId` 映射检查旧范围；预算、物理请求或预算变更审计尚存时拒绝新的收费尝试并返回本地化错误码。既有 requestId 的幂等重放先于门禁检查；新增回归确认旧 scope 有零额度预算时不会创建 canonical 预留。
 - 2026-10-21：新增 engine 事务内的 legacy 账务迁移原语，并由目录 CAS 操作核验 session / memory / script 映射后同事务更新计费状态。迁移保留 requestId 与 pending settlement，按币种合并提醒且未读状态优先；预算冲突需调用方提供玩家选定的最终双币种上限，否则完整回滚。共享 app service、Tauri 命令及 Web typed API 已接入，并验证 IPC 仅接受精确十进制字符串；产品界面与 CLI/TUI 操作入口尚未接入。
+- 2026-10-21：接入显式周目恢复后端：按目录 revision、三身份映射和冻结 profile 校验目标；恢复 transcript 与记忆 owner 后才 CAS 更新 SQLite 活动选择，不发送模型请求。冻结 profile 的 provider / proxy 凭据按引用从当前凭据库读取，不用同 ID 的现行 profile 覆盖历史快照。Tauri 命令和 Web 类型已接入；文件镜像写入失败由 `selectionMirrorPending` 报告，SQLite 权威选择不回滚。扫描与恢复定向测试补齐；CLI/TUI 选择入口、Web 选择界面、删除和启动前向恢复仍未实现。
+- 2026-10-21：独立复审后收紧活动选择提交错误处理：仅 SQLite commit 结果不确定时按权威行读回，revision / 状态冲突不会因目标原本已选中而被误判成功。普通重开同样传播镜像待修复状态，并新增该连续恢复路径测试。
 
 ## 完成摘要
 

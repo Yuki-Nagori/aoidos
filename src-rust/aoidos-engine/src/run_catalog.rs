@@ -161,6 +161,184 @@ pub struct ActiveSelection {
     pub script_id: String,
 }
 
+/// 经目录身份与 revision 核验、可由玩家显式恢复的周目目标。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenTarget {
+    pub session_id: String,
+    pub script_id: String,
+    pub created_at: String,
+    pub memory_run_id: String,
+    pub profile: LlmProfile,
+    pub revision: u64,
+}
+
+struct OpenTargetRow {
+    script_id: String,
+    created_at: String,
+    memory_run_id: Option<String>,
+    billing_run_id: Option<String>,
+    profile_id: Option<String>,
+    schema_version: Option<i64>,
+    snapshot: Option<Vec<u8>>,
+    state: String,
+    revision: i64,
+}
+
+/// 读取一个周目的冻结配置，仅允许显式恢复可运行状态的目标。
+///
+/// # Errors
+/// 目录版本过期、身份映射不一致、配置缺失或目标仍需修复时拒绝打开。
+pub fn open_target(
+    connection: &rusqlite::Connection,
+    session_id: &str,
+    expected_revision: u64,
+) -> Result<OpenTarget, Fault> {
+    if !crate::record::format::valid_uuid(session_id) || expected_revision == 0 {
+        return Err(Fault::bad_request());
+    }
+    let row: Option<OpenTargetRow> = connection
+        .query_row(
+            "SELECT script_id,created_at,memory_run_id,billing_run_id,profile_id,profile_schema_version,profile_snapshot,state,revision FROM session_catalog WHERE session_id=?1",
+            [session_id],
+            |row| {
+                Ok(OpenTargetRow {
+                    script_id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    memory_run_id: row.get(2)?,
+                    billing_run_id: row.get(3)?,
+                    profile_id: row.get(4)?,
+                    schema_version: row.get(5)?,
+                    snapshot: row.get(6)?,
+                    state: row.get(7)?,
+                    revision: row.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(database)?;
+    let Some(row) = row else {
+        return Err(Fault::new("app.not-found", "周目不存在"));
+    };
+    let OpenTargetRow {
+        script_id,
+        created_at,
+        memory_run_id,
+        billing_run_id,
+        profile_id,
+        schema_version,
+        snapshot,
+        state,
+        revision,
+    } = row;
+    let revision = u64::try_from(revision).map_err(|_| corrupt())?;
+    if revision != expected_revision {
+        return Err(stale_revision());
+    }
+    if !matches!(
+        RunState::parse(&state)?,
+        RunState::Ready
+            | RunState::BillingNotConfigured
+            | RunState::BillingReconciliationRequired
+            | RunState::RecoveryRequired
+            | RunState::SettlementPending
+    ) {
+        return Err(Fault::new("app.conflict", "该周目尚不能恢复"));
+    }
+    let memory_run_id = memory_run_id.ok_or_else(corrupt)?;
+    if billing_run_id.as_deref() != Some(session_id)
+        || !crate::record::format::valid_uuid(&memory_run_id)
+        || !aoidos_script::valid_id(&script_id)
+        || created_at.is_empty()
+        || created_at.len() > 64
+    {
+        return Err(corrupt());
+    }
+    let mapped_identity: Option<(String, String)> = connection
+        .query_row(
+            "SELECT sessions.run_id,runs.script_id FROM memory_run_sessions sessions JOIN memory_runs runs ON runs.run_id=sessions.run_id WHERE sessions.session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    if !mapped_identity
+        .as_ref()
+        .is_some_and(|(run_id, mapped_script)| {
+            run_id == &memory_run_id && mapped_script == &script_id
+        })
+    {
+        return Err(Fault::new("app.conflict", "周目的身份关联需要修复"));
+    }
+    if schema_version != Some(1) {
+        return Err(Fault::new("app.conflict", "周目的模型配置版本不受支持"));
+    }
+    let snapshot = snapshot.ok_or_else(|| Fault::new("app.conflict", "周目尚未绑定模型配置"))?;
+    if snapshot.len() > MAX_PROFILE_SNAPSHOT_BYTES {
+        return Err(corrupt());
+    }
+    let profile: LlmProfile =
+        aoidos_json::decode_bytes(&snapshot, MAX_PROFILE_SNAPSHOT_BYTES).map_err(|_| corrupt())?;
+    if profile.validate().is_err()
+        || aoidos_llm::config::validate_identifier("profileId", &profile.profile_id).is_err()
+        || profile_id.as_deref() != Some(profile.profile_id.as_str())
+    {
+        return Err(corrupt());
+    }
+    Ok(OpenTarget {
+        session_id: session_id.to_owned(),
+        script_id,
+        created_at,
+        memory_run_id,
+        profile,
+        revision,
+    })
+}
+
+/// 在同一 SQLite 连接锁区内读取当前目录 revision 并解析恢复目标。
+pub fn current_open_target(
+    connection: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<OpenTarget, Fault> {
+    let revision: i64 = connection
+        .query_row(
+            "SELECT revision FROM session_catalog WHERE session_id=?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(database)?
+        .ok_or_else(|| Fault::new("app.not-found", "周目不存在"))?;
+    let revision = u64::try_from(revision).map_err(|_| corrupt())?;
+    open_target(connection, session_id, revision)
+}
+
+/// 在目标 owner 成功登记后，按原目录 revision 提交 SQLite 活动选择。
+///
+/// # Errors
+/// 目录发生变化或目标已进入不可打开状态时不切换当前选择。
+pub fn activate(
+    connection: &mut rusqlite::Connection,
+    target: &OpenTarget,
+    updated_at: &str,
+) -> Result<(), Fault> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database)?;
+    let current = open_target(&transaction, &target.session_id, target.revision)?;
+    if current != *target {
+        return Err(stale_revision());
+    }
+    transaction
+        .execute(
+            "INSERT INTO active_session(id,session_id,revision,updated_at) VALUES(1,?1,1,?2) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,revision=active_session.revision+1,updated_at=excluded.updated_at",
+            rusqlite::params![target.session_id, updated_at],
+        )
+        .map_err(database)?;
+    transaction
+        .commit()
+        .map_err(|_| Fault::new("store.commit-unknown", "活动周目提交结果不确定"))
+}
+
 /// 创建周目时冻结的公开配置与三种独立身份。
 #[derive(Debug, Clone)]
 pub struct NewRun {
@@ -777,6 +955,24 @@ mod tests {
             .unwrap();
     }
 
+    fn register_test_run(connection: &mut rusqlite::Connection) -> NewRun {
+        let run = NewRun {
+            session_id: "00000000-0000-4000-8000-000000000011".into(),
+            script_id: "mistbell".into(),
+            created_at: "2026-10-21T00:00:00Z".into(),
+            memory_run_id: "00000000-0000-4000-8000-000000000012".into(),
+            profile: profile(),
+        };
+        insert_memory_mapping(
+            connection,
+            &run.session_id,
+            &run.memory_run_id,
+            &run.script_id,
+        );
+        register_new(connection, &run).unwrap();
+        run
+    }
+
     #[test]
     fn schema_creates_catalog_selection_and_deletion_journal() {
         let connection = connection();
@@ -790,6 +986,62 @@ mod tests {
             )
             .unwrap();
         assert_eq!(revision, 1);
+    }
+
+    #[test]
+    fn explicit_open_requires_the_current_revision_and_verified_identity_mapping() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let target = open_target(&connection, &run.session_id, 1).unwrap();
+
+        assert_eq!(target.session_id, run.session_id);
+        assert_eq!(target.script_id, run.script_id);
+        assert_eq!(target.memory_run_id, run.memory_run_id);
+        assert_eq!(target.profile, run.profile);
+        assert_eq!(
+            open_target(&connection, &run.session_id, 2)
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+
+        connection
+            .execute(
+                "DELETE FROM memory_run_sessions WHERE session_id=?1",
+                [&run.session_id],
+            )
+            .unwrap();
+        assert_eq!(
+            open_target(&connection, &run.session_id, 1)
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+    }
+
+    #[test]
+    fn activation_rechecks_the_target_before_changing_authoritative_selection() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        let target = open_target(&connection, &run.session_id, 1).unwrap();
+        activate(&mut connection, &target, "2026-10-21T00:01:00Z").unwrap();
+        assert_eq!(
+            active_selection(&connection).unwrap().unwrap().session_id,
+            run.session_id
+        );
+
+        connection
+            .execute(
+                "UPDATE session_catalog SET state='deleting',revision=revision+1 WHERE session_id=?1",
+                [&run.session_id],
+            )
+            .unwrap();
+        let error = activate(&mut connection, &target, "2026-10-21T00:02:00Z").unwrap_err();
+        assert_eq!(error.code, "app.conflict");
+        assert_eq!(
+            active_selection(&connection).unwrap().unwrap().session_id,
+            run.session_id
+        );
     }
 
     #[test]

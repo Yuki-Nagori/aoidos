@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn only_an_uncertain_commit_can_be_resolved_by_reading_the_active_selection() {
+    let conflict = Fault::new("app.conflict", "revision changed");
+    let uncertain = Fault::new("store.commit-unknown", "commit outcome unknown");
+    assert!(!activation_error_matches_selection(
+        &conflict,
+        "same-session",
+        "same-session"
+    ));
+    assert!(activation_error_matches_selection(
+        &uncertain,
+        "same-session",
+        "same-session"
+    ));
+    assert!(!activation_error_matches_selection(
+        &uncertain,
+        "previous-session",
+        "same-session"
+    ));
+}
+
+#[test]
 fn selection_preserves_script_identity_and_rejects_unsafe_metadata() {
     let root = std::env::temp_dir().join(format!("aoidos-selection-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
@@ -197,6 +218,7 @@ async fn durable_game_and_private_requests_use_the_canonical_session_budget() {
     let private_input = ProviderInput::Completion(CompletionInput {
         prompt: "验证私有记忆请求使用 canonical 账务范围。".into(),
     });
+    *fixture.source.model.lock().unwrap() = "deepseek-v4-pro".into();
     let private_prepared = factory
         .prepare_private_for_session("default", &opened.session_id, None, |_| {
             Ok((private_input.clone(), GuardSpec::default()))
@@ -230,10 +252,17 @@ async fn durable_game_and_private_requests_use_the_canonical_session_budget() {
             Ok((
                 count_for(&opened.memory_run_id).map_err(|_| Fault::bad_request())?,
                 count_for(&opened.session_id).map_err(|_| Fault::bad_request())?,
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM billing_physical_requests WHERE run_id=?1 AND model_id<>'deepseek-flash'",
+                        [&opened.session_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| Fault::bad_request())?,
             ))
         })
         .unwrap();
-    assert_eq!(counts, (0, 2));
+    assert_eq!(counts, (0, 2, 0));
 
     // 旧账务数据出现后，既有请求仍可幂等重放，但两个请求入口都拒绝新收费。
     fixture
@@ -466,6 +495,23 @@ impl ProfileSource for Source {
             proxy_auth: None,
         })
     }
+
+    fn freeze_snapshot(
+        &self,
+        profile: &aoidos_llm::config::LlmProfile,
+    ) -> Result<ResolvedProfile, Fault> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.error.lock().unwrap().clone() {
+            return Err(error);
+        }
+        Ok(ResolvedProfile {
+            frozen: FrozenProfile {
+                profile: profile.clone(),
+                credential: Some("fixture-never-sent".to_owned().into()),
+            },
+            proxy_auth: None,
+        })
+    }
 }
 struct Fixture {
     root: PathBuf,
@@ -595,7 +641,8 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
         "entry"
     );
     *fixture.source.model.lock().unwrap() = "deepseek-v4-flash".into();
-    assert_eq!(fixture.open(false).await.unwrap_err().code, "app.conflict");
+    let reopened_with_frozen_profile = fixture.open(false).await.unwrap();
+    assert_eq!(reopened_with_frozen_profile.session_id, first.session_id);
     *fixture.source.model.lock().unwrap() = "deepseek-v4-pro".into();
     let frozen = fixture.factory.freeze().unwrap();
     assert_eq!(frozen.profile_id, "default");
@@ -711,6 +758,109 @@ async fn restarting_reopens_saved_identity_without_implicitly_advancing() {
         .unwrap(),
         bytes
     );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn explicitly_selecting_a_catalog_run_restores_its_frozen_identity() {
+    let fixture = Fixture::new();
+    let first = fixture.open(true).await.unwrap();
+    *fixture.source.model.lock().unwrap() = "deepseek-v4-flash".into();
+    let second = fixture
+        .product
+        .open(&fixture.service, "default".into(), "mistbell".into(), true)
+        .await
+        .unwrap();
+    assert_ne!(first.session_id, second.session_id);
+
+    let page = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap();
+    let first_entry = page
+        .entries
+        .iter()
+        .find(|entry| entry.session_id == first.session_id)
+        .unwrap();
+    let restored = fixture
+        .product
+        .open_selected(
+            &fixture.service,
+            first.session_id.clone(),
+            first_entry.revision,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(restored.session_id, first.session_id);
+    assert_eq!(restored.memory_run_id, first.memory_run_id);
+    assert!(!restored.selection_mirror_pending);
+    assert_eq!(
+        fixture
+            .storage
+            .active_run_selection()
+            .unwrap()
+            .unwrap()
+            .session_id,
+        first.session_id
+    );
+    assert!(fixture.service.get_phase(&second.session_id).is_err());
+    assert!(fixture.service.get_phase(&first.session_id).is_ok());
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn selected_run_reports_when_the_compatibility_mirror_needs_repair() {
+    let fixture = Fixture::new();
+    let first = fixture.open(true).await.unwrap();
+    let second = fixture
+        .product
+        .open(&fixture.service, "default".into(), "mistbell".into(), true)
+        .await
+        .unwrap();
+    let page = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap();
+    let revision = page
+        .entries
+        .iter()
+        .find(|entry| entry.session_id == first.session_id)
+        .unwrap()
+        .revision;
+
+    std::fs::remove_file(fixture.root.join("active-session.json")).unwrap();
+    std::fs::create_dir(fixture.root.join("active-session.json")).unwrap();
+    let restored = fixture
+        .product
+        .open_selected(&fixture.service, first.session_id.clone(), revision)
+        .await
+        .unwrap();
+
+    assert!(restored.selection_mirror_pending);
+    assert_eq!(restored.session_id, first.session_id);
+    assert_eq!(
+        fixture
+            .storage
+            .active_run_selection()
+            .unwrap()
+            .unwrap()
+            .session_id,
+        first.session_id
+    );
+    assert!(fixture.service.get_phase(&second.session_id).is_err());
+    fixture
+        .service
+        .close_session(&first.session_id)
+        .await
+        .unwrap();
+    fixture.storage.records.close(&first.session_id).unwrap();
+    let reopened = fixture
+        .product
+        .open(&fixture.service, "default".into(), "mistbell".into(), false)
+        .await
+        .unwrap();
+    assert!(reopened.selection_mirror_pending);
     fixture.close().await;
 }
 
@@ -1704,7 +1854,7 @@ async fn concurrent_open_is_rejected_before_waiting_for_profile_io() {
 }
 
 #[tokio::test]
-async fn failed_registration_and_metadata_commit_release_record_writers() {
+async fn failed_registration_releases_writers_and_mirror_failure_keeps_catalog_run_open() {
     let fixture = Fixture::new();
     let other = Service::new(
         Coordinator::new(Arc::new(Events::default()), 8).unwrap(),
@@ -1730,7 +1880,7 @@ async fn failed_registration_and_metadata_commit_release_record_writers() {
         fixture.storage.records.get(id).err().unwrap().code,
         "app.not-found"
     );
-    // 冻结阶段阻塞后制造提交冲突：读取已通过，正式登记后 metadata 原子替换失败。
+    // 冻结阶段阻塞后让兼容文件写入失败；SQLite 已登记的活动周目仍可正常使用。
     let gate = Arc::new(PrepareGate::default());
     *fixture.source.gate.lock().unwrap() = Some(gate.clone());
     let product = fixture.product.clone();
@@ -1745,13 +1895,17 @@ async fn failed_registration_and_metadata_commit_release_record_writers() {
         .unwrap();
     std::fs::create_dir(fixture.root.join("active-session.json")).unwrap();
     gate.release();
-    assert!(
-        opening
-            .await
+    let opened = opening.await.unwrap().unwrap();
+    assert!(opened.selection_mirror_pending);
+    assert!(fixture.service.get_phase(&opened.session_id).is_ok());
+    assert_eq!(
+        fixture
+            .storage
+            .active_run_selection()
             .unwrap()
-            .unwrap_err()
-            .code
-            .starts_with("store.")
+            .unwrap()
+            .session_id,
+        opened.session_id
     );
     let files = std::fs::read_dir(fixture.root.join("workspaces/mistbell/transcript"))
         .unwrap()
@@ -1760,19 +1914,21 @@ async fn failed_registration_and_metadata_commit_release_record_writers() {
     assert_eq!(files.len(), 2);
     for file in files {
         let id = file.file_stem().unwrap().to_str().unwrap();
-        assert_eq!(
-            fixture.storage.records.get(id).err().unwrap().code,
-            "app.not-found"
-        );
-        assert_eq!(
-            fixture.service.get_phase(id).unwrap_err().code,
-            "app.not-found"
-        );
+        if id == opened.session_id {
+            assert!(fixture.storage.records.get(id).is_ok());
+            assert!(fixture.service.get_phase(id).is_ok());
+        } else {
+            assert_eq!(
+                fixture.storage.records.get(id).err().unwrap().code,
+                "app.not-found"
+            );
+            assert_eq!(
+                fixture.service.get_phase(id).unwrap_err().code,
+                "app.not-found"
+            );
+        }
     }
-    assert_eq!(
-        fixture.factory.freeze().err().unwrap().code,
-        "app.not-ready"
-    );
+    assert!(fixture.factory.freeze().is_ok());
     other.shutdown().await;
     fixture.close().await;
 }

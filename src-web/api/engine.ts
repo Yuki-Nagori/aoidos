@@ -162,6 +162,8 @@ export interface OpenedSession {
   profileId: string;
   scriptId: string;
   title: string;
+  /** SQLite 已选中该周目，但兼容选择文件待修复时为 true。 */
+  selectionMirrorPending: boolean;
 }
 /** 只读内嵌资源，不读取外部文件或发生成请求。 */
 export function listScripts(): Promise<ScriptInfo[]> {
@@ -174,4 +176,12 @@ export function openSession(
   startNew: boolean,
 ): Promise<OpenedSession> {
   return invoke("engine_open_session", { profileId, scriptId, startNew });
+}
+
+/** 按目录 revision 显式恢复既有周目；恢复过程不发送模型请求。 */
+export function openSelectedRun(
+  sessionId: string,
+  expectedRevision: number,
+): Promise<OpenedSession> {
+  return invoke("engine_open_selected_run", { sessionId, expectedRevision });
 }

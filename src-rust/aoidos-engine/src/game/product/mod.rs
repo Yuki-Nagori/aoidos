@@ -53,6 +53,17 @@ pub trait ProfileSource: Send + Sync {
     /// # Errors
     /// 未知配置、存储 / 凭据 / 代理读取失败按稳定错误返回。
     fn freeze(&self, id: &str) -> Result<ResolvedProfile, Fault>;
+
+    /// 使用周目冻结的公开配置读取当前凭据；不得以同 ID 的新配置替代快照。
+    /// # Errors
+    /// adapter 无法按快照解析凭据、配置不合法或凭据读取失败时拒绝请求。
+    fn freeze_snapshot(&self, profile: &LlmProfile) -> Result<ResolvedProfile, Fault> {
+        let resolved = self.freeze(&profile.profile_id)?;
+        if resolved.frozen.profile != *profile {
+            return Err(Fault::new("app.conflict", "周目冻结的模型配置无法恢复"));
+        }
+        Ok(resolved)
+    }
 }
 /// 可信 Rust 装配的 adapter 构造入口，测试只能在这里替换本地端点。
 pub type ProviderBuilder = dyn Fn(FrozenProfile, &SystemProxySnapshot, Option<&ProxyAuth>) -> Result<Arc<dyn Provider>, Fault>
@@ -167,6 +178,56 @@ impl ProfileFactory {
         )
     }
 
+    fn for_snapshot(
+        &self,
+        profile: &LlmProfile,
+        provider_session_id: &str,
+        billing_run_id: Option<&str>,
+        legacy_billing_run_id: Option<&str>,
+    ) -> Result<FrozenRound, Fault> {
+        profile.validate().map_err(invalid_profile)?;
+        self.storage.ready()?;
+        let resolved = self.source.freeze_snapshot(profile)?;
+        if resolved.frozen.profile != *profile {
+            return Err(Fault::new("app.conflict", "周目冻结的模型配置无法恢复"));
+        }
+        let provider = (self.builder)(
+            resolved.frozen,
+            &self.snapshot,
+            resolved.proxy_auth.as_ref(),
+        )?;
+        let dice = self.storage.preferences.get()?.dice_mode;
+        let budget: Arc<dyn BudgetPort> = match (self.durable_billing, billing_run_id) {
+            (true, Some(run_id)) => {
+                let capabilities = provider.capabilities(
+                    &profile.model,
+                    aoidos_llm::provider::RequestMode::from(profile.mode),
+                );
+                Arc::new(
+                    crate::billing::LedgerBudgetPort::new(
+                        self.storage.clone(),
+                        run_id.to_owned(),
+                        profile.profile_id.clone(),
+                        profile.provider_id.clone(),
+                        profile.model.clone(),
+                        billing_route_policy(&profile.provider_id).to_owned(),
+                        u64::from(capabilities.context_limit.unwrap_or(0)),
+                    )
+                    .with_legacy_scope(legacy_billing_run_id.map(str::to_owned)),
+                )
+            }
+            _ => self.budget.clone(),
+        };
+        ProfileGeneration::with_provider_for_session(
+            profile.clone(),
+            provider,
+            dice,
+            budget,
+            self.diagnostics.clone(),
+            Some(provider_session_id.to_owned()),
+        )
+    }
+
     /// 返回可持久化的公开配置快照，不向目录写入任何凭据值。
     /// # Errors
     /// 配置缺失或结构无效时返回稳定 Fault。
@@ -199,12 +260,20 @@ impl ProfileFactory {
             Fault,
         >,
     ) -> Result<crate::request::PreparedGeneration, Fault> {
-        let frozen = self.for_profile(
-            profile_id,
-            Some(session_id),
-            Some(session_id),
-            legacy_billing_run_id,
-        )?;
+        let frozen = if self.durable_billing {
+            let target = self.storage.current_run_open_target(session_id)?;
+            if target.profile.profile_id != profile_id {
+                return Err(Fault::new("app.conflict", "周目的模型配置身份不一致"));
+            }
+            if legacy_billing_run_id.is_some_and(|id| id != target.memory_run_id) {
+                return Err(Fault::new("app.conflict", "周目的记忆账务身份不一致"));
+            }
+            let legacy_scope =
+                (target.memory_run_id != session_id).then_some(target.memory_run_id.as_str());
+            self.for_snapshot(&target.profile, session_id, Some(session_id), legacy_scope)?
+        } else {
+            self.for_profile(profile_id, Some(session_id), None, legacy_billing_run_id)?
+        };
         let mode = frozen.generation.request_mode();
         let (input, guard) = build_input(mode)?;
         frozen.generation.prepare(input, guard, false)
@@ -233,29 +302,19 @@ impl RoundFactory for ProfileFactory {
         self.for_profile(&id, None, None, None)
     }
     fn freeze_for_session(&self, session_id: &str) -> Result<FrozenRound, Fault> {
-        let id = self
-            .selected
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .ok_or_else(no_selection)?;
-        if self.durable_billing {
-            let memory_run = self
-                .storage
-                .memory_run_for_session(session_id)
-                .map_err(|error| {
-                    if error.code == "app.bad-request" {
-                        Fault::new("app.not-found", "会话不存在")
-                    } else {
-                        error
-                    }
-                })?;
-            let legacy_scope =
-                (memory_run.run_id != session_id).then_some(memory_run.run_id.as_str());
-            self.for_profile(&id, Some(session_id), Some(session_id), legacy_scope)
-        } else {
-            self.for_profile(&id, Some(session_id), None, None)
+        if !self.durable_billing {
+            let id = self
+                .selected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+                .ok_or_else(no_selection)?;
+            return self.for_profile(&id, Some(session_id), None, None);
         }
+        let target = self.storage.current_run_open_target(session_id)?;
+        let legacy_scope =
+            (target.memory_run_id != session_id).then_some(target.memory_run_id.as_str());
+        self.for_snapshot(&target.profile, session_id, Some(session_id), legacy_scope)
     }
 }
 /// 返回计费账本用于匹配当前供应商价格的路由身份。
@@ -296,6 +355,8 @@ pub struct OpenedSession {
     pub profile_id: String,
     pub script_id: String,
     pub title: String,
+    /// SQLite 已提交活动周目，但兼容文件未能写入时为 true；后续读取会重试修复。
+    pub selection_mirror_pending: bool,
 }
 pub struct Product {
     root: PathBuf,
@@ -348,8 +409,9 @@ impl Product {
         super::assets::scenario(&script_id)?;
         let root = self.root.clone();
         let storage = self.storage.clone();
-        let previous =
-            crate::blocking::run(move || read_authoritative_selection(&storage, &root)).await?;
+        let (previous, selection_mirror_pending) =
+            crate::blocking::run(move || read_authoritative_selection_with_status(&storage, &root))
+                .await?;
         if !start_new
             && let Some(previous) = &previous
             && previous.script_id == script_id
@@ -365,22 +427,41 @@ impl Product {
             && let Some(previous) = &previous
             && previous.script_id == script_id
         {
-            let factory = self.factory.clone();
-            let profile_id = profile_id.clone();
-            let profile = crate::blocking::run(move || factory.public_profile(&profile_id)).await?;
             let storage = self.storage.clone();
             let session_id = previous.session_id.clone();
-            let candidate = profile.clone();
-            if crate::blocking::run(move || storage.run_profile_matches(&session_id, &candidate))
-                .await?
-                == Some(false)
-            {
-                return Err(Fault::new(
-                    "app.conflict",
-                    "周目的模型配置已冻结；更换配置内容需要新建周目",
-                ));
+            match crate::blocking::run(move || storage.current_run_open_target(&session_id)).await {
+                Ok(target) => {
+                    if target.profile.profile_id != profile_id {
+                        return Err(Fault::new(
+                            "app.conflict",
+                            "周目的模型配置已冻结；更换配置需要新建周目",
+                        ));
+                    }
+                    frozen_profile = Some(target.profile);
+                }
+                Err(error) if error.code == "app.not-found" => {
+                    let factory = self.factory.clone();
+                    let candidate_id = profile_id.clone();
+                    let profile =
+                        crate::blocking::run(move || factory.public_profile(&candidate_id)).await?;
+                    let storage = self.storage.clone();
+                    let session_id = previous.session_id.clone();
+                    let candidate = profile.clone();
+                    if crate::blocking::run(move || {
+                        storage.run_profile_matches(&session_id, &candidate)
+                    })
+                    .await?
+                        == Some(false)
+                    {
+                        return Err(Fault::new(
+                            "app.conflict",
+                            "周目的模型配置已冻结；更换配置内容需要新建周目",
+                        ));
+                    }
+                    frozen_profile = Some(profile);
+                }
+                Err(error) => return Err(error),
             }
-            frozen_profile = Some(profile);
         }
         if !start_new
             && let Some(previous) = &previous
@@ -390,7 +471,9 @@ impl Product {
             match service.get_phase(&previous.session_id) {
                 Ok(_) => {
                     let run = self.storage.memory_run_for_session(&previous.session_id)?;
-                    return opened(previous, &run.run_id);
+                    let mut result = opened(previous, &run.run_id)?;
+                    result.selection_mirror_pending = selection_mirror_pending;
+                    return Ok(result);
                 }
                 Err(error) if error.code == "app.not-found" => {}
                 Err(error) => return Err(error),
@@ -491,13 +574,237 @@ impl Product {
         };
         let selected = selection.clone();
         let root = self.root.clone();
-        if let Err(error) = crate::blocking::run(move || write_selection(&root, &selected)).await {
-            let _ = service.close_session(&id).await;
-            self.close_record(&id).await;
+        let storage = self.storage.clone();
+        let active = match crate::blocking::run(move || storage.active_run_selection()).await {
+            Ok(active) => active,
+            Err(error) => {
+                let _ = service.close_session(&id).await;
+                self.close_record(&id).await;
+                return Err(error);
+            }
+        };
+        let has_authoritative_selection = active.as_ref().is_some_and(|active| {
+            active.session_id == selection.session_id
+                && active.profile_id == selection.profile_id
+                && active.script_id == selection.script_id
+        });
+        let selection_mirror_pending = if has_authoritative_selection {
+            crate::blocking::run(move || write_selection(&root, &selected))
+                .await
+                .is_err()
+        } else {
+            if let Err(error) =
+                crate::blocking::run(move || write_selection(&root, &selected)).await
+            {
+                let _ = service.close_session(&id).await;
+                self.close_record(&id).await;
+                return Err(error);
+            }
+            false
+        };
+        self.factory.select(selection.profile_id.clone());
+        let mut result = opened(&selection, &memory_run.run_id)?;
+        result.selection_mirror_pending = selection_mirror_pending;
+        Ok(result)
+    }
+
+    /// 玩家明确选择并恢复目录中的既有周目；恢复不自动发送模型请求。
+    /// # Errors
+    /// revision / 身份 / 剧本不匹配、owner 关闭、记录恢复或 SQLite 选择提交失败时拒绝切换。
+    pub async fn open_selected(
+        &self,
+        service: &Service,
+        session_id: String,
+        expected_revision: u64,
+    ) -> Result<OpenedSession, Fault> {
+        if !crate::record::format::valid_uuid(&session_id) || expected_revision == 0 {
+            return Err(Fault::bad_request());
+        }
+        let _opening = self.opening.try_lock().map_err(open_busy)?;
+        self.storage.ready()?;
+        let storage = self.storage.clone();
+        let requested_id = session_id.clone();
+        let target =
+            crate::blocking::run(move || storage.run_open_target(&requested_id, expected_revision))
+                .await?;
+        let scenario = super::assets::scenario(&target.script_id)?;
+        let _lease = self.coordinator.acquire()?;
+
+        match service.get_phase(&session_id) {
+            Ok(_) => {
+                let updated_at = time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(|_| Fault::new("store.database", "读取周目切换时间失败"))?;
+                let storage = self.storage.clone();
+                let activate_target = target.clone();
+                if let Err(error) = crate::blocking::run(move || {
+                    storage.activate_run(&activate_target, &updated_at)
+                })
+                .await
+                {
+                    let storage = self.storage.clone();
+                    if error.code != "store.commit-unknown" {
+                        return Err(error);
+                    }
+                    match crate::blocking::run(move || storage.active_run_selection()).await {
+                        Ok(Some(selected))
+                            if activation_error_matches_selection(
+                                &error,
+                                &selected.session_id,
+                                &target.session_id,
+                            ) => {}
+                        _ => return Err(error),
+                    }
+                }
+                let selection = Selection {
+                    version: 1,
+                    session_id: session_id.clone(),
+                    profile_id: target.profile.profile_id,
+                    script_id: target.script_id,
+                };
+                let root = self.root.clone();
+                let mirror = selection.clone();
+                let selection_mirror_pending =
+                    crate::blocking::run(move || write_selection(&root, &mirror))
+                        .await
+                        .is_err();
+                self.factory.select(selection.profile_id.clone());
+                let mut result = opened(&selection, &target.memory_run_id)?;
+                result.selection_mirror_pending = selection_mirror_pending;
+                return Ok(result);
+            }
+            Err(error) if error.code == "app.not-found" => {}
+            Err(error) => return Err(error),
+        }
+
+        let previous = {
+            let root = self.root.clone();
+            let storage = self.storage.clone();
+            crate::blocking::run(move || read_authoritative_selection(&storage, &root)).await?
+        };
+        let records = self.storage.records.clone();
+        let open_script = target.script_id.clone();
+        let open_id = target.session_id.clone();
+        let session = crate::blocking::run(move || records.open(&open_script, &open_id)).await?;
+        let header = session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .header()
+            .clone();
+        if header.session_id != target.session_id
+            || header.script_id != target.script_id
+            || header.created_at != target.created_at
+        {
+            self.close_record(&target.session_id).await;
+            return Err(Fault::new("store.corrupt", "周目记录与目录身份不一致"));
+        }
+        let context = match builtin::open(
+            self.storage.clone(),
+            session,
+            self.coordinator.clone(),
+            self.events.clone(),
+        )
+        .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                self.close_record(&target.session_id).await;
+                return Err(error);
+            }
+        };
+        let memory_run = match self.storage.memory_run_for_session(&target.session_id) {
+            Ok(memory_run) if memory_run.run_id == target.memory_run_id => memory_run,
+            Ok(_) => {
+                self.close_record(&target.session_id).await;
+                return Err(Fault::new("app.conflict", "周目的记忆身份需要修复"));
+            }
+            Err(error) => {
+                self.close_record(&target.session_id).await;
+                return Err(error);
+            }
+        };
+        let updated_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| Fault::new("store.database", "读取周目切换时间失败"))?;
+        if let Err(error) = service.register(context) {
+            self.close_record(&target.session_id).await;
             return Err(error);
         }
+        if let Some(previous) = &previous
+            && previous.session_id != session_id
+        {
+            match service.get_phase(&previous.session_id) {
+                Ok(_) => {
+                    if let Err(error) = service.close_session(&previous.session_id).await {
+                        let _ = service.close_session(&target.session_id).await;
+                        self.close_record(&target.session_id).await;
+                        return Err(error);
+                    }
+                    let records = self.storage.records.clone();
+                    let previous_id = previous.session_id.clone();
+                    if let Err(error) =
+                        crate::blocking::run(move || records.close(&previous_id)).await
+                    {
+                        let _ = service.close_session(&target.session_id).await;
+                        self.close_record(&target.session_id).await;
+                        return Err(error);
+                    }
+                }
+                Err(error) if error.code == "app.not-found" => {}
+                Err(error) => {
+                    let _ = service.close_session(&target.session_id).await;
+                    self.close_record(&target.session_id).await;
+                    return Err(error);
+                }
+            }
+        }
+        let storage = self.storage.clone();
+        let activate_target = target.clone();
+        if let Err(error) =
+            crate::blocking::run(move || storage.activate_run(&activate_target, &updated_at)).await
+        {
+            if error.code != "store.commit-unknown" {
+                let _ = service.close_session(&target.session_id).await;
+                self.close_record(&target.session_id).await;
+                return Err(error);
+            }
+            let storage = self.storage.clone();
+            let selected = crate::blocking::run(move || storage.active_run_selection()).await;
+            match selected {
+                Ok(Some(selection))
+                    if activation_error_matches_selection(
+                        &error,
+                        &selection.session_id,
+                        &target.session_id,
+                    ) => {}
+                Ok(_) => {
+                    let _ = service.close_session(&target.session_id).await;
+                    self.close_record(&target.session_id).await;
+                    return Err(error);
+                }
+                Err(_) => {
+                    // 提交结果和读回都不确定时保留目标 owner，避免 SQLite 指向已关闭记录。
+                    return Err(error);
+                }
+            }
+        }
+        let selection = Selection {
+            version: 1,
+            session_id: target.session_id.clone(),
+            profile_id: target.profile.profile_id.clone(),
+            script_id: target.script_id,
+        };
+        let root = self.root.clone();
+        let mirror = selection.clone();
+        let selection_mirror_pending =
+            crate::blocking::run(move || write_selection(&root, &mirror))
+                .await
+                .is_err();
         self.factory.select(selection.profile_id.clone());
-        opened(&selection, &memory_run.run_id)
+        let mut result = opened(&selection, &memory_run.run_id)?;
+        result.title = scenario.title;
+        result.selection_mirror_pending = selection_mirror_pending;
+        Ok(result)
     }
     async fn close_record(&self, id: &str) {
         let records = self.storage.records.clone();
@@ -508,6 +815,9 @@ impl Product {
 fn open_busy(_: tokio::sync::TryLockError) -> Fault {
     Fault::new("app.busy", "会话正在打开")
 }
+fn activation_error_matches_selection(error: &Fault, actual: &str, expected: &str) -> bool {
+    error.code == "store.commit-unknown" && actual == expected
+}
 fn opened(selection: &Selection, memory_run_id: &str) -> Result<OpenedSession, Fault> {
     Ok(OpenedSession {
         session_id: selection.session_id.clone(),
@@ -515,6 +825,7 @@ fn opened(selection: &Selection, memory_run_id: &str) -> Result<OpenedSession, F
         profile_id: selection.profile_id.clone(),
         script_id: selection.script_id.clone(),
         title: super::assets::scenario(&selection.script_id)?.title,
+        selection_mirror_pending: false,
     })
 }
 fn read_selection(root: &Path) -> Result<Option<Selection>, Fault> {
@@ -538,6 +849,13 @@ fn read_authoritative_selection(
     storage: &Storage,
     root: &Path,
 ) -> Result<Option<Selection>, Fault> {
+    Ok(read_authoritative_selection_with_status(storage, root)?.0)
+}
+
+fn read_authoritative_selection_with_status(
+    storage: &Storage,
+    root: &Path,
+) -> Result<(Option<Selection>, bool), Fault> {
     if let Some(selection) = storage.active_run_selection()? {
         let selection = Selection {
             version: 1,
@@ -545,12 +863,15 @@ fn read_authoritative_selection(
             profile_id: selection.profile_id,
             script_id: selection.script_id,
         };
-        if read_selection(root).ok().flatten().as_ref() != Some(&selection) {
-            write_selection(root, &selection)?;
-        }
-        return Ok(Some(selection));
+        let mirror_pending = if read_selection(root).ok().flatten().as_ref() != Some(&selection) {
+            // SQLite 是权威选择；镜像写入失败可在后续读取时重试，不阻断恢复。
+            write_selection(root, &selection).is_err()
+        } else {
+            false
+        };
+        return Ok((Some(selection), mirror_pending));
     }
-    read_selection(root)
+    Ok((read_selection(root)?, false))
 }
 fn write_selection(root: &Path, selection: &Selection) -> Result<(), Fault> {
     let text = aoidos_json::to_string(selection).map_err(corrupt_selection)?;

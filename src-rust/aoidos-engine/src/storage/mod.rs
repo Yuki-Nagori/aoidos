@@ -844,6 +844,44 @@ impl Storage {
         self.with_database(|connection| crate::run_catalog::active_selection(connection))
     }
 
+    /// 读取通过目录身份与 revision 校验的周目恢复目标。
+    /// # Errors
+    /// 目标不存在、身份映射不一致、快照损坏或 revision 过期时拒绝恢复。
+    pub fn run_open_target(
+        &self,
+        session_id: &str,
+        expected_revision: u64,
+    ) -> Result<crate::run_catalog::OpenTarget, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::open_target(connection, session_id, expected_revision)
+        })
+    }
+
+    /// 按 SQLite 当前 revision 读取并核验周目的冻结恢复目标。
+    /// # Errors
+    /// 目标不存在、身份映射不一致、快照损坏或周目不可打开时拒绝恢复。
+    pub fn current_run_open_target(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::run_catalog::OpenTarget, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::current_open_target(connection, session_id)
+        })
+    }
+
+    /// 在 owner 成功打开后，以目录 revision CAS 提交新的活动周目。
+    /// # Errors
+    /// 目标在打开期间发生变化或不再可恢复时不更新活动选择。
+    pub fn activate_run(
+        &self,
+        target: &crate::run_catalog::OpenTarget,
+        updated_at: &str,
+    ) -> Result<(), Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::activate(connection, target, updated_at)
+        })
+    }
+
     /// 比较指定周目冻结的公开 profile，不读取凭据。
     /// # Errors
     /// 周目身份非法或目录 / 数据库损坏时返回稳定 Fault。

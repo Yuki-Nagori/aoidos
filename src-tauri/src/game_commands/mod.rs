@@ -5,7 +5,7 @@ use crate::ipc::CmdError;
 use aoidos_engine::game::{runtime::Service, state::*};
 
 mod product;
-pub use product::{list_scripts, open_session};
+pub use product::{list_scripts, open_selected_run, open_session};
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

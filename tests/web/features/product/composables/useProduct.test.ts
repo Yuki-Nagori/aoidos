@@ -62,6 +62,7 @@ const opened = {
   profileId: "default",
   scriptId: "mistbell",
   title: "雾钟地窖",
+  selectionMirrorPending: false,
 };
 function deferred<T>() {
   let resolve!: (value: T) => void;
