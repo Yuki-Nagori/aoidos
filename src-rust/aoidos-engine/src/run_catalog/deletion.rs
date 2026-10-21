@@ -5,10 +5,12 @@ use crate::fault::Fault;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 const MAX_TRANSCRIPT_MANIFEST_ENTRIES: usize = 8_192;
 const MAX_MANIFEST_ENTRIES: usize = MAX_TRANSCRIPT_MANIFEST_ENTRIES + 1;
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
+const MAX_TRANSCRIPT_DIRECTORY_SCAN_ENTRIES: usize = 65_536;
 
 type CatalogDeletionRow = (String, String, Option<String>, Option<String>, String, i64);
 type FreezeManifestRow = (String, String, String, String, String, Option<Vec<u8>>);
@@ -51,7 +53,154 @@ pub struct DeletionManifestEntry {
     pub source: String,
     pub quarantine: String,
     pub kind: DeletionManifestEntryKind,
-    pub identity_hash: String,
+    /// Memory run 目录可在尚未写入正文时不存在；`None` 仅表示冻结时确认其缺席。
+    pub identity_hash: Option<String>,
+}
+
+/// 枚举目标周目的 transcript、partial、recovery backup 与 memory run 目录，并冻结对象身份摘要。
+///
+/// 调用方必须先持有应用生命周期锁、关闭目标 owner 并移除活动文件镜像。目录枚举有独立硬上限；
+/// 超限或发现目标周目的未知旁车时整体失败，不返回部分清单。路径操作不是原子快照，真正移动前仍须复核身份。
+///
+/// # Errors
+/// 路径身份不完整、目录超限、目标文件缺失或存储不可读时失败关闭。
+pub fn enumerate_deletion_manifest_entries(
+    root: &Path,
+    operation_id: &str,
+    script_id: &str,
+    session_id: &str,
+    memory_run_id: &str,
+) -> Result<Vec<DeletionManifestEntry>, Fault> {
+    enumerate_deletion_manifest_entries_with_limit(
+        root,
+        operation_id,
+        script_id,
+        session_id,
+        memory_run_id,
+        MAX_TRANSCRIPT_DIRECTORY_SCAN_ENTRIES,
+    )
+}
+
+fn enumerate_deletion_manifest_entries_with_limit(
+    root: &Path,
+    operation_id: &str,
+    script_id: &str,
+    session_id: &str,
+    memory_run_id: &str,
+    scan_limit: usize,
+) -> Result<Vec<DeletionManifestEntry>, Fault> {
+    if !crate::record::format::valid_uuid(operation_id)
+        || !crate::record::format::valid_uuid(session_id)
+        || !crate::record::format::valid_uuid(memory_run_id)
+        || !aoidos_script::valid_id(script_id)
+    {
+        return Err(Fault::bad_request());
+    }
+
+    let transcript_directory = format!("workspaces/{script_id}/transcript");
+    let transcript_prefix = format!("{session_id}.");
+    let transcript_name = format!("{session_id}.jsonl");
+    let listing = aoidos_store::filesystem::list_directory_entries(
+        root,
+        Path::new(&transcript_directory),
+        scan_limit,
+    )?;
+    if !listing.complete {
+        return Err(Fault::new("app.capacity", "周目文件目录超过扫描上限"));
+    }
+
+    let mut entries = Vec::new();
+    let mut transcript_found = false;
+    for name in listing.entries {
+        let encoded_name = name.as_encoded_bytes();
+        let transcript_bytes = transcript_name.as_bytes();
+        let prefix_bytes = transcript_prefix.as_bytes();
+        let (name, kind, quarantine_directory) = if encoded_name == transcript_bytes {
+            transcript_found = true;
+            (
+                transcript_name.as_str(),
+                DeletionManifestEntryKind::Transcript,
+                "transcript",
+            )
+        } else if encoded_name.starts_with(prefix_bytes) {
+            let Ok(name) = std::str::from_utf8(encoded_name) else {
+                return Err(Fault::new("app.bad-request", "周目文件名无法安全识别"));
+            };
+            let source = format!("{transcript_directory}/{name}");
+            let kind = if valid_transcript_sidecar(
+                &source,
+                &format!("{transcript_directory}/{transcript_prefix}"),
+                false,
+            ) {
+                DeletionManifestEntryKind::Partial
+            } else if valid_transcript_sidecar(
+                &source,
+                &format!("{transcript_directory}/{transcript_prefix}"),
+                true,
+            ) {
+                DeletionManifestEntryKind::RecoveryBackup
+            } else {
+                return Err(Fault::new(
+                    "app.bad-request",
+                    "周目目录包含无法识别的旁车文件",
+                ));
+            };
+            (name, kind, "transcript")
+        } else {
+            continue;
+        };
+        let source = format!("{transcript_directory}/{name}");
+        let identity_hash = aoidos_store::filesystem::file_identity_hash(root, Path::new(&source))?;
+        entries.push(manifest_entry(
+            operation_id,
+            source,
+            quarantine_directory,
+            kind,
+            Some(identity_hash),
+        ));
+    }
+    if !transcript_found {
+        return Err(Fault::new("app.conflict", "周目 transcript 文件不存在"));
+    }
+    if entries.len() > MAX_TRANSCRIPT_MANIFEST_ENTRIES {
+        return Err(Fault::new("app.capacity", "周目文件清单超过容量上限"));
+    }
+
+    let memory_source = format!("workspaces/{script_id}/memory/runs/{memory_run_id}");
+    let memory_identity =
+        match aoidos_store::filesystem::directory_identity_hash(root, Path::new(&memory_source)) {
+            Ok(identity) => Some(identity),
+            Err(aoidos_store::error::StoreError::Io {
+                code: "not-found", ..
+            }) => None,
+            Err(error) => return Err(error.into()),
+        };
+    entries.push(manifest_entry(
+        operation_id,
+        memory_source,
+        "memory",
+        DeletionManifestEntryKind::MemoryRunDirectory,
+        memory_identity,
+    ));
+    entries.sort_by(|left, right| left.source.cmp(&right.source));
+    validate_manifest_entries(&entries, operation_id, script_id, session_id, memory_run_id)?;
+    Ok(entries)
+}
+
+fn manifest_entry(
+    operation_id: &str,
+    source: String,
+    quarantine_directory: &str,
+    kind: DeletionManifestEntryKind,
+    identity_hash: Option<String>,
+) -> DeletionManifestEntry {
+    let filename = source.rsplit('/').next().unwrap_or_default().to_owned();
+    DeletionManifestEntry {
+        source,
+        quarantine: format!("deleting/{operation_id}/{quarantine_directory}/{filename}"),
+        kind,
+        identity_hash,
+    }
 }
 
 /// 删除清单只接受设计明确覆盖的本局文件类别。
@@ -369,7 +518,11 @@ fn validate_manifest_entries(
                 .split('/')
                 .any(|part| part.is_empty() || matches!(part, "." | ".."))
             || previous_source.is_some_and(|previous| previous >= source)
-            || !valid_sha256(&entry.identity_hash)
+            || !match (entry.kind, entry.identity_hash.as_deref()) {
+                (DeletionManifestEntryKind::MemoryRunDirectory, None) => true,
+                (_, Some(identity_hash)) => valid_sha256(identity_hash),
+                _ => false,
+            }
         {
             return Err(Fault::bad_request());
         }
@@ -528,4 +681,246 @@ pub fn deletion_check(
         unresolved_request_count: obligations.unresolved_request_count,
         pending_settlement_count: obligations.pending_settlement_count,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static NEXT_FIXTURE: AtomicU32 = AtomicU32::new(0);
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "aoidos-deletion-manifest-{}-{}",
+                std::process::id(),
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn prepare_run(&self, session_id: &str, memory_run_id: &str) -> PathBuf {
+            let transcript = self.0.join("workspaces/mistbell/transcript");
+            let memory = self
+                .0
+                .join(format!("workspaces/mistbell/memory/runs/{memory_run_id}"));
+            std::fs::create_dir_all(&transcript).unwrap();
+            std::fs::create_dir_all(&memory).unwrap();
+            std::fs::write(
+                transcript.join(format!("{session_id}.jsonl")),
+                b"transcript",
+            )
+            .unwrap();
+            transcript
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn filesystem_enumeration_freezes_only_the_target_run_files() {
+        let fixture = Fixture::new();
+        let operation_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let memory_run_id = "00000000-0000-4000-8000-000000000003";
+        let transcript = fixture.prepare_run(session_id, memory_run_id);
+        std::fs::write(
+            transcript.join(format!(
+                "{session_id}.00000000-0000-4000-8000-000000000004.partial.jsonl"
+            )),
+            b"partial",
+        )
+        .unwrap();
+        std::fs::write(
+            transcript.join(format!(
+                "{session_id}.recovery-00000000-0000-4000-8000-000000000005.bak"
+            )),
+            b"backup",
+        )
+        .unwrap();
+        std::fs::write(
+            transcript.join("00000000-0000-4000-8000-000000000006.jsonl"),
+            b"another run",
+        )
+        .unwrap();
+
+        let entries = enumerate_deletion_manifest_entries(
+            &fixture.0,
+            operation_id,
+            "mistbell",
+            session_id,
+            memory_run_id,
+        )
+        .unwrap();
+
+        assert_eq!(entries.len(), 4);
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| pair[0].source < pair[1].source)
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.kind == DeletionManifestEntryKind::Transcript)
+                .count(),
+            1
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.kind == DeletionManifestEntryKind::Partial)
+                .count(),
+            1
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.kind == DeletionManifestEntryKind::RecoveryBackup)
+                .count(),
+            1
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.kind == DeletionManifestEntryKind::MemoryRunDirectory)
+                .count(),
+            1
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.identity_hash.as_deref().is_some_and(valid_sha256))
+        );
+        assert!(entries.iter().all(|entry| {
+            !entry
+                .source
+                .contains("00000000-0000-4000-8000-000000000006")
+        }));
+    }
+
+    #[test]
+    fn filesystem_enumeration_refuses_incomplete_or_unknown_target_entries() {
+        let fixture = Fixture::new();
+        let operation_id = "00000000-0000-4000-8000-000000000011";
+        let session_id = "00000000-0000-4000-8000-000000000012";
+        let memory_run_id = "00000000-0000-4000-8000-000000000013";
+        let transcript = fixture.prepare_run(session_id, memory_run_id);
+        std::fs::write(transcript.join("unrelated.jsonl"), b"another run").unwrap();
+
+        let result = enumerate_deletion_manifest_entries_with_limit(
+            &fixture.0,
+            operation_id,
+            "mistbell",
+            session_id,
+            memory_run_id,
+            1,
+        );
+        assert_eq!(result.unwrap_err().code, "app.capacity");
+
+        std::fs::remove_file(transcript.join("unrelated.jsonl")).unwrap();
+        std::fs::write(transcript.join(format!("{session_id}.unknown")), b"unknown").unwrap();
+        let result = enumerate_deletion_manifest_entries(
+            &fixture.0,
+            operation_id,
+            "mistbell",
+            session_id,
+            memory_run_id,
+        );
+        assert_eq!(result.unwrap_err().code, "app.bad-request");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unrelated_links_and_directories_do_not_block_a_run_without_memory_files() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let operation_id = "00000000-0000-4000-8000-000000000021";
+        let session_id = "00000000-0000-4000-8000-000000000022";
+        let memory_run_id = "00000000-0000-4000-8000-000000000023";
+        let transcript = fixture.0.join("workspaces/mistbell/transcript");
+        std::fs::create_dir_all(&transcript).unwrap();
+        std::fs::write(
+            transcript.join(format!("{session_id}.jsonl")),
+            b"transcript",
+        )
+        .unwrap();
+        std::fs::write(fixture.0.join("unrelated-target"), b"other run").unwrap();
+        symlink(
+            fixture.0.join("unrelated-target"),
+            transcript.join("another-run.jsonl"),
+        )
+        .unwrap();
+        std::fs::create_dir(transcript.join("unrelated-directory")).unwrap();
+
+        let entries = enumerate_deletion_manifest_entries(
+            &fixture.0,
+            operation_id,
+            "mistbell",
+            session_id,
+            memory_run_id,
+        )
+        .unwrap();
+
+        assert_eq!(entries.len(), 2);
+        let memory = entries
+            .iter()
+            .find(|entry| entry.kind == DeletionManifestEntryKind::MemoryRunDirectory)
+            .unwrap();
+        assert_eq!(memory.identity_hash, None);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.kind == DeletionManifestEntryKind::Transcript)
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unrelated_non_utf8_name_does_not_block_a_run() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fixture = Fixture::new();
+        let operation_id = "00000000-0000-4000-8000-000000000031";
+        let session_id = "00000000-0000-4000-8000-000000000032";
+        let memory_run_id = "00000000-0000-4000-8000-000000000033";
+        let transcript = fixture.0.join("workspaces/mistbell/transcript");
+        std::fs::create_dir_all(&transcript).unwrap();
+        std::fs::write(
+            transcript.join(format!("{session_id}.jsonl")),
+            b"transcript",
+        )
+        .unwrap();
+        std::fs::write(
+            transcript.join(std::ffi::OsStr::from_bytes(b"unrelated-\xff.jsonl")),
+            b"other run",
+        )
+        .unwrap();
+
+        let entries = enumerate_deletion_manifest_entries(
+            &fixture.0,
+            operation_id,
+            "mistbell",
+            session_id,
+            memory_run_id,
+        )
+        .unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| {
+            entry.kind == DeletionManifestEntryKind::Transcript || entry.identity_hash.is_none()
+        }));
+    }
 }

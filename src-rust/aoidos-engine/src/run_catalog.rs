@@ -66,8 +66,8 @@ pub use legacy_scan::LegacyScanResult;
 mod deletion;
 pub use deletion::{
     DeletionManifestEntry, DeletionManifestEntryKind, DeletionOperation, RunDeletionCheck,
-    clear_active_selection_for_deletion, deletion_check, freeze_deletion_manifest,
-    request_deletion,
+    clear_active_selection_for_deletion, deletion_check, enumerate_deletion_manifest_entries,
+    freeze_deletion_manifest, request_deletion,
 };
 
 /// 目录行的可执行状态；只反映恢复与配置能力，不是游戏事实。
@@ -1513,7 +1513,7 @@ mod tests {
                     run.session_id
                 ),
                 kind: DeletionManifestEntryKind::Transcript,
-                identity_hash: digest.clone(),
+                identity_hash: Some(digest.clone()),
             },
             DeletionManifestEntry {
                 source: format!(
@@ -1525,7 +1525,7 @@ mod tests {
                     run.session_id, "00000000-0000-4000-8000-000000000031"
                 ),
                 kind: DeletionManifestEntryKind::Partial,
-                identity_hash: digest.clone(),
+                identity_hash: Some(digest.clone()),
             },
             DeletionManifestEntry {
                 source: format!(
@@ -1534,7 +1534,7 @@ mod tests {
                 ),
                 quarantine: format!("deleting/{operation_id}/memory/{}", run.memory_run_id),
                 kind: DeletionManifestEntryKind::MemoryRunDirectory,
-                identity_hash: digest.clone(),
+                identity_hash: Some(digest.clone()),
             },
             DeletionManifestEntry {
                 source: format!(
@@ -1546,7 +1546,7 @@ mod tests {
                     run.session_id, "00000000-0000-4000-8000-000000000032"
                 ),
                 kind: DeletionManifestEntryKind::RecoveryBackup,
-                identity_hash: digest,
+                identity_hash: Some(digest),
             },
         ];
         entries.sort_by(|left, right| left.source.cmp(&right.source));
@@ -1668,7 +1668,7 @@ mod tests {
                 source: format!("workspaces/{}/transcript/{filename}", run.script_id),
                 quarantine: format!("deleting/{operation_id}/transcript/{filename}"),
                 kind: DeletionManifestEntryKind::Partial,
-                identity_hash: digest.clone(),
+                identity_hash: Some(digest.clone()),
             });
         }
         entries.sort_by(|left, right| left.source.cmp(&right.source));

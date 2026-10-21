@@ -32,16 +32,17 @@ pub struct BoundedDirectoryListing {
     pub complete: bool,
 }
 
-/// 列出数据根内目录的直接普通文件，不递归，并明确报告是否触及条目上限。
+/// 列出数据根内目录的直接条目名称，不递归，并明确报告是否触及条目上限。
 ///
 /// 返回名称按平台原生形式保留；领域层负责筛选允许的文件名。超出上限时只返回前 `limit`
 /// 项并设 `complete` 为 `false`，调用方必须停止删除或要求更大的明确预算，不能把部分结果当完整清单。
 /// 这是路径式有界遍历，不是原子目录快照；组件检查与目录读取之间仍有竞态窗口。调用方须在应用
-/// 生命周期锁内使用可信数据根，并在后续移动前重新核验每个对象的身份。
+/// 生命周期锁内使用可信数据根，并在后续移动前重新核验每个目标对象的类型与身份。未筛选的条目
+/// 仅占用扫描预算，不会因链接、子目录、特殊文件或非 UTF-8 名称影响其他对象的处理。
 ///
 /// # Errors
-/// 目录路径越界、目录项包含链接 / 子目录 / 特殊文件，或读取失败时返回存储错误。
-pub fn list_regular_files(
+/// 目录路径越界或读取失败时返回存储错误。
+pub fn list_directory_entries(
     root: &Path,
     relative_directory: &Path,
     limit: usize,
@@ -64,20 +65,6 @@ pub fn list_regular_files(
             complete = false;
             break;
         }
-        if !fs::symlink_metadata(item.path())
-            .map_err(StoreError::from_io)?
-            .file_type()
-            .is_file()
-        {
-            return Err(StoreError::InvalidPath(
-                "directory contains a non-regular entry".into(),
-            ));
-        }
-        if platform_identity(&item.path())?.0 != ObjectKind::File {
-            return Err(StoreError::InvalidPath(
-                "directory contains a non-regular entry".into(),
-            ));
-        }
         entries.push(item.file_name());
     }
     validate_path_chain(root, relative_directory)?;
@@ -95,6 +82,35 @@ pub fn list_regular_files(
 /// # Errors
 /// 路径不存在、越出数据根、路径组件是符号链接 / 特殊文件，或无法读取对象身份时返回存储错误。
 pub fn identity_hash(root: &Path, relative_path: &Path) -> Result<String> {
+    let (_, identity) = verified_identity(root, relative_path)?;
+    Ok(encode_identity(identity))
+}
+
+/// 返回普通文件的身份摘要；目录或其他对象类型会被拒绝。
+///
+/// # Errors
+/// 路径无法核验或目标不是普通文件时返回存储错误。
+pub fn file_identity_hash(root: &Path, relative_path: &Path) -> Result<String> {
+    let (kind, identity) = verified_identity(root, relative_path)?;
+    if kind != ObjectKind::File {
+        return Err(StoreError::InvalidPath("expected a regular file".into()));
+    }
+    Ok(encode_identity(identity))
+}
+
+/// 返回普通目录的身份摘要；文件或其他对象类型会被拒绝。
+///
+/// # Errors
+/// 路径无法核验或目标不是普通目录时返回存储错误。
+pub fn directory_identity_hash(root: &Path, relative_path: &Path) -> Result<String> {
+    let (kind, identity) = verified_identity(root, relative_path)?;
+    if kind != ObjectKind::Directory {
+        return Err(StoreError::InvalidPath("expected a directory".into()));
+    }
+    Ok(encode_identity(identity))
+}
+
+fn verified_identity(root: &Path, relative_path: &Path) -> Result<(ObjectKind, ObjectId)> {
     validate_relative_path(relative_path)?;
     validate_path_chain(root, relative_path)?;
     let (kind, identity) = platform_identity(&root.join(relative_path))?;
@@ -106,6 +122,10 @@ pub fn identity_hash(root: &Path, relative_path: &Path) -> Result<String> {
         ));
     }
 
+    Ok((kind, identity))
+}
+
+fn encode_identity(identity: ObjectId) -> String {
     let mut digest = Sha256::new();
     match identity {
         #[cfg(unix)]
@@ -127,7 +147,7 @@ pub fn identity_hash(root: &Path, relative_path: &Path) -> Result<String> {
             digest.update(id.to_le_bytes());
         }
     }
-    Ok(encode_sha256(digest.finalize()))
+    encode_sha256(digest.finalize())
 }
 
 fn validate_relative_path(path: &Path) -> Result<()> {
@@ -324,6 +344,14 @@ mod tests {
 
         let identity = identity_hash(&fixture.0, Path::new("first.jsonl")).unwrap();
         assert_eq!(
+            file_identity_hash(&fixture.0, Path::new("first.jsonl")).unwrap(),
+            identity
+        );
+        assert!(matches!(
+            directory_identity_hash(&fixture.0, Path::new("first.jsonl")),
+            Err(StoreError::InvalidPath(_))
+        ));
+        assert_eq!(
             identity_hash(&fixture.0, Path::new("first.jsonl")).unwrap(),
             identity
         );
@@ -348,9 +376,17 @@ mod tests {
         fs::create_dir(&first).unwrap();
 
         let identity = identity_hash(&fixture.0, Path::new("memory")).unwrap();
+        assert_eq!(
+            directory_identity_hash(&fixture.0, Path::new("memory")).unwrap(),
+            identity
+        );
+        assert!(matches!(
+            file_identity_hash(&fixture.0, Path::new("memory")),
+            Err(StoreError::InvalidPath(_))
+        ));
         fs::rename(&first, &moved).unwrap();
         assert_eq!(
-            identity_hash(&fixture.0, Path::new("quarantined-memory")).unwrap(),
+            directory_identity_hash(&fixture.0, Path::new("quarantined-memory")).unwrap(),
             identity
         );
     }
@@ -363,18 +399,18 @@ mod tests {
         fs::write(nested.join("first"), b"1").unwrap();
         fs::write(nested.join("second"), b"2").unwrap();
 
-        let exact = list_regular_files(&fixture.0, Path::new("files"), 2).unwrap();
+        let exact = list_directory_entries(&fixture.0, Path::new("files"), 2).unwrap();
         assert_eq!(exact.entries.len(), 2);
         assert!(exact.complete);
 
-        let listing = list_regular_files(&fixture.0, Path::new("files"), 1).unwrap();
+        let listing = list_directory_entries(&fixture.0, Path::new("files"), 1).unwrap();
         assert_eq!(listing.entries.len(), 1);
         assert!(!listing.complete);
     }
 
     #[cfg(unix)]
     #[test]
-    fn directory_listing_rejects_symlink_entries() {
+    fn directory_listing_preserves_unrelated_symlink_names_for_domain_filtering() {
         use std::os::unix::fs::symlink;
 
         let fixture = Fixture::new();
@@ -383,10 +419,8 @@ mod tests {
         fs::write(fixture.0.join("target"), b"content").unwrap();
         symlink(fixture.0.join("target"), directory.join("link")).unwrap();
 
-        assert!(matches!(
-            list_regular_files(&fixture.0, Path::new("files"), 16),
-            Err(StoreError::InvalidPath(_))
-        ));
+        let listing = list_directory_entries(&fixture.0, Path::new("files"), 16).unwrap();
+        assert_eq!(listing.entries, ["link"]);
     }
 
     #[cfg(unix)]

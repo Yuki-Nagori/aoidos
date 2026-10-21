@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：022、023、029、035、058
 - 优先级：P1
-- 创建 / 更新：2026-10-20 / 2026-10-20
+- 创建 / 更新：2026-10-20 / 2026-10-21
 
 ## 目标与背景
 
@@ -110,8 +110,8 @@ requested → owner_closed → files_quarantined → database_purged → files_p
 ```
 
 1. 先取得生命周期门、核验目标与账务门禁。在 IMMEDIATE 事务中写 journal 并将目录行置 `deleting`；该事务提交后，任何 open / switch 都拒绝此 sessionId。若目标是活动局，关闭 owner 并清理 SQLite active-session 与兼容镜像。
-2. owner 关闭后枚举本局文件；把源 / 隔离目的相对路径、文件类型、校验身份及 manifest hash 写入 journal，状态推进为 `owner_closed`。transcript 主 JSONL、partial 与 recovery backup 清单最多 8,192 项且编码后最多 4 MiB；超限时在移动任何文件前停止并报告容量错误。memory run 目录作为同卷单一目录项隔离，不递归展开到 manifest。清单冻结后不得因重试重新扩大范围。
-3. 把 transcript manifest 文件逐项移动至同文件系统 `<data-root>/deleting/<operationId>/transcript/` 隔离目录；把整个 memory run 目录作为单一目录项移动到隔离目录。每项 rename 后同步源 / 目的父目录，再记录该项已移动；两侧均存在或类型异常时停止并进入 repair。全部完成后置 `files_quarantined`。隔离目录和 `deleting` 目录行保持到数据库及文件清理全部完成。
+2. owner 关闭后枚举本局文件；把源 / 隔离目的相对路径、文件类型、校验身份及 manifest hash 写入 journal，状态推进为 `owner_closed`。transcript 主 JSONL、partial 与 recovery backup 清单最多 8,192 项且编码后最多 4 MiB；transcript 共用目录的单次直接项扫描最多检查 65,536 项，任一上限触及时必须在移动文件前停止并报告容量错误。扫描只保留原生文件名；无关项只占扫描预算，不因其他周目的链接、目录、特殊项或非 UTF-8 名称阻止本局处理。命中本局前缀的项必须能按允许命名识别并通过普通文件身份校验，否则失败关闭。memory run 目录作为同卷单一目录项隔离，不递归展开到 manifest；若该目录从未创建，清单仍记录其路径和 `null` 身份。清单冻结后不得因重试重新扩大范围。
+3. 把 transcript manifest 文件逐项移动至同文件系统 `<data-root>/deleting/<operationId>/transcript/` 隔离目录；把存在的 memory run 目录作为单一目录项移动到隔离目录。身份为 `null` 的 memory 目录必须仍然不存在，执行时按已确认缺席跳过；若冻结后该路径出现对象，则停止并进入 repair，不能将新对象纳入删除。每项 rename 后同步源 / 目的父目录，再记录该项已移动；两侧均存在或类型异常时停止并进入 repair。全部完成后置 `files_quarantined`。隔离目录和 `deleting` 目录行保持到数据库及文件清理全部完成。
 4. 在一个 SQLite 事务中按明示外键顺序移除 run-scoped memory、entity、所有已核验 canonical / legacy 账本 scope、目录关联及直接来源 cycle marks / applied receipts，保留代数高水位，并把 journal 更新为 `database_purged`。物理请求先检查所有 scope 均 settled 且无 pending settlement；否则不能开始删除。
 5. 按冻结 manifest 删除隔离文件，并递归移除隔离的 memory run 目录；递归清理每批最多遍历 128 个文件系统条目，不跟随符号链接、不越过文件系统边界，重启后从隔离目录幂等重扫。对每个父目录变更做必要同步，全部完成后置 `files_purged`。最后在同一事务移除仍为 `deleting` 的目录行并把 journal 置为精简 `completed` 墓碑。完成墓碑只保留 operationId、目标身份哈希、完成时间和结果码，不保留正文、profile、剧本标题或费用详情。
 
