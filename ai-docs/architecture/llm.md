@@ -264,7 +264,7 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 代理模式 system / none / manual：system 使用启动时形成的环境代理快照（不隐式读环境）；none 显式禁用；manual 使用显式 HTTP(S) 或 SOCKS5 代理并禁用自动系统代理叠加（由构造方式保证：客户端统一经 `proxy::build_client` 显式组装，全程不让 reqwest 隐式读环境），客户端已启用 reqwest 的 `socks` feature。代理三模式、CONNECT 隧道、禁用重定向与经代理的 TLS 分类已由本地代理夹具验证（019）。生产 endpoint 必须 HTTPS，禁止 URL 内嵌凭据，禁止自动重定向携带请求（redirect none）；仅测试 / 用户明确配置的回环本地服务可 HTTP。代理用户名 / 密码由 Rust 凭据引用取出，不存进 URL、普通配置、日志或 CmdError.detail；关闭原始 HTTP trace。端点和代理错误仅返回脱敏类别，不输出 response body、请求头或完整 prompt。
 
-`llm_set_key` 在 Rust 原生窗口中输入密钥，命令 / 快照只返回状态；取消保留旧值。`platform/` 以同型接口提供 Windows CredUI、macOS AppKit 与 Linux GTK 密码控件，命令经 UI 主线程调度，无桌面会话显式报错。macOS 安全输入框使用原生 Edit 菜单的 Paste / Select All，并在弹窗打开时取得焦点；Windows CredUI 与 GTK Entry 使用各自平台的密码输入控件。三平台真实确认 / 取消与 OS 凭据读写清已有验证，环境、提交及最终复验结果以 [019](../task/019-llm-profile-credentials-impl.md) 为准。
+`llm_set_key` 由 Tauri 入口在 Rust 原生窗口中输入密钥，命令 / 快照只返回状态；取消保留旧值。`src-tauri/src/native_prompt/` 以同型接口提供 Windows CredUI、macOS AppKit 与 Linux GTK 密码控件，命令经 UI 主线程调度，无桌面会话显式报错；`aoidos-llm` 只负责 keyring、Vault 与凭据数据语义，不依赖 GUI 库。macOS 安全输入框使用原生 Edit 菜单的 Paste / Select All，并在弹窗打开时取得焦点；Windows CredUI 与 GTK Entry 使用各自平台的密码输入控件。三平台真实确认 / 取消与 OS 凭据读写清已有验证，环境、提交及最终复验结果以 [019](../task/019-llm-profile-credentials-impl.md) 为准。
 
 OS 凭据库由 keyring 的三平台后端承担；macOS Keychain 的授权弹窗由系统 ACL 与应用签名身份控制，选择“始终允许”后，同一可信应用身份可在后续请求中读取而不重复确认；“仅允许一次”会在下次读取时再次询问。Windows Credential Manager 与 Linux Secret Service 也可能受系统凭据库锁定状态或策略影响，不能宣称跨平台无条件免授权。不得为隐藏系统授权而把密钥转入明文 UI / 日志或绕过 OS ACL；降级文件采用 Windows 受保护 DACL / Unix 0600。权威后端指针、删除墓碑、私有发布与 hint 的唯一规则见[通信契约](ipc-contract.md#工程纪律可检查版)；读取不凭 OS 旧值推断文件值过期。`SecretString` 管理密钥生命周期，脱敏 Debug 仍不能代替 OS 权限。若将来允许设置表单处理密钥，须先修订职责边界与通信契约。
 

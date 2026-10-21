@@ -126,6 +126,11 @@ dependencies = [
  "aoidos-locale",
  "aoidos-store",
  "aoidos-theme",
+ "block2",
+ "gtk",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "reqwest",
  "rusqlite",
  "secrecy",
@@ -138,6 +143,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -229,15 +235,10 @@ version = "0.1.0"
 dependencies = [
  "aoidos-json",
  "aoidos-store",
- "block2",
  "bytes",
  "futures",
- "gtk",
  "keyring",
  "keyring-core",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
  "rcgen",
  "reqwest",
  "rustls",
@@ -249,7 +250,6 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
- "windows-sys 0.60.2",
 ]
 
 [[package]]

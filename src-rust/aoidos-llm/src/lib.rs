@@ -11,7 +11,6 @@ pub mod credentials;
 pub mod decode;
 pub mod error;
 pub mod guard;
-pub mod platform;
 pub mod provider;
 pub mod providers;
 pub mod proxy;

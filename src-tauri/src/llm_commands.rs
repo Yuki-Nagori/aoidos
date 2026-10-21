@@ -1,9 +1,9 @@
 use crate::ipc::CmdError;
+use crate::native_prompt::{NativePrompt, NativePromptText};
 use aoidos_llm::config::{LlmProfile, ProfileError, validate_identifier};
 use aoidos_llm::credentials::KeyStatus;
 #[cfg(test)]
 use aoidos_llm::credentials::{CredentialStore, CredentialVault};
-use aoidos_llm::platform::{NativePrompt, NativePromptText};
 #[cfg(test)]
 use aoidos_store::error::StoreError;
 use secrecy::SecretString;
@@ -333,7 +333,7 @@ fn native_receive_error(_: tokio::sync::oneshot::error::RecvError) -> CmdError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aoidos_llm::platform::platform_prompt;
+    use crate::native_prompt::platform_prompt;
     use aoidos_store::error::Result;
     use secrecy::ExposeSecret;
     use std::collections::BTreeMap;

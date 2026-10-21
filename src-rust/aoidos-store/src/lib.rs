@@ -11,4 +11,5 @@ pub mod filesystem;
 pub mod journal;
 pub mod lock;
 pub mod paths;
+mod private_permissions;
 pub mod read;

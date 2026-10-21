@@ -40,7 +40,7 @@ aoidos-native-tests → { aoidos, aoidos-app, 被测领域 crate }
 
 箭头表示左侧依赖右侧；测试 crate 位于末端并可依赖被测入口、共享应用层和生产 crate，不形成生产层的反向依赖。
 
-应用层构造接收宿主解析的数据根，保持 Tauri 现有数据位置兼容；CLI 默认使用同一产品数据根。应用层统一执行 profile 文件锁、密钥库访问、配置冻结与运行时装配，不复制各入口的 profile 冻结逻辑。操作系统凭据后端继续由 `aoidos-llm` 提供；Tauri 的原生对话框与 CLI 的终端输入分别留在入口，不让应用层等待 UI 输入。
+应用层构造接收宿主解析的数据根，保持 Tauri 现有数据位置兼容；CLI 默认使用同一产品数据根。应用层统一执行 profile 文件锁、密钥库访问、配置冻结与运行时装配，不复制各入口的 profile 冻结逻辑。操作系统凭据后端继续由 `aoidos-llm` 提供；Tauri 的原生对话框与 CLI 的终端输入分别留在入口，不让应用层等待 UI 输入。私有文件的原子发布与 owner-only 权限属于 L1 `aoidos-store`，GTK / AppKit / CredUI 等桌面 UI 库只由 `aoidos` 入口依赖，CLI 依赖闭包不带入这些库。
 
 依赖边只允许入口 `L5 → aoidos-app → aoidos-billing / aoidos-engine / aoidos-llm / aoidos-store`，以及 engine 依赖已登记的 L1/L2；L1/L2/L3 不得反向引用 `aoidos-app`，Tauri 与 CLI 之间不得存在边。应用层对 billing 的直接依赖仅用于共用计价类型、默认价目与应用用例，事务账本仍由 engine 持有；不得在 app 重复实现账本规则。应用层若需要入口能力，必须通过窄小的平台无关端口由入口注入；不得由 engine 或 app 反向依赖 adapter。拆分时先登记 Cargo 依赖边并扩展 `lint:layers`，再迁移装配；未迁移的 Tauri 功能可以保留已有直连，不得以此把游戏运行逻辑留在命令层。
 

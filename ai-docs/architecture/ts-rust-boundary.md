@@ -74,7 +74,7 @@ src-cli ──→ aoidos-engine / aoidos-llm / aoidos-store
 aoidos-native-tests → 需要验证的生产 crate / 入口
 ```
 
-`aoidos-app` 当前负责 profile 列表 / 保存 / 删除、提交时 profile 与凭据冻结、密钥服务、`TurnRuntime` 以及 engine `Product` / runtime 装配；Tauri 与 CLI 注入同一数据根和各自的事件端口。OS 凭据读写复用 `aoidos-llm`；Tauri 原生密钥对话框、CLI 终端输入、窗口事件与终端绘制分别留在 adapter，应用层不等待或导入 UI 类型。
+`aoidos-app` 当前负责 profile 列表 / 保存 / 删除、提交时 profile 与凭据冻结、密钥服务、`TurnRuntime` 以及 engine `Product` / runtime 装配；Tauri 与 CLI 注入同一数据根和各自的事件端口。OS 凭据读写与 Vault 语义复用 `aoidos-llm`；Tauri 原生密钥对话框、CLI 终端输入、窗口事件与终端绘制分别留在 adapter，应用层不等待或导入 UI 类型。`aoidos-store` 统一提供私有文件原子发布与平台权限实现；调用方不复制 Unix mode、Windows DACL 或本机路径编码逻辑。
 
 Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 组合 billing、engine、llm、store；CLI 为实现 engine 事件端口、共享数据根锁和受控记录读取保留直接 adapter 依赖，不承载对局业务编排。engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
 

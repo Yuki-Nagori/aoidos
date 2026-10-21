@@ -4,6 +4,9 @@ description = "AI 驱动的剧情跑团桌面应用"
 version.workspace = true
 edition.workspace = true
 
+[features]
+native-smoke = ["dep:block2"]
+
 [lib]
 name = "aoidos_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -35,3 +38,20 @@ reqwest.workspace = true
 uuid.workspace = true
 tauri = { workspace = true, features = ["test"] }
 rusqlite.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security_Credentials",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+block2 = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk.workspace = true

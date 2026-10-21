@@ -106,6 +106,8 @@ CREATE TABLE point_allocations (
 - 有界文本读取：`read::read_text_bounded` 先以字节读取上限 + 1，检查长度后才解码 UTF-8；超限及非法 UTF-8 均为 `store.corrupt`，不输出文件正文。真正缺失返回 `None`；与 SQLite 共用现存祖先目录检查，父路径被文件占据时显式报错，不当首次安装。profile 与凭据各自解析 JSON / 版本，读取上限均为 512 KiB。
 - 逻辑读改写：原子写只保证单次覆写的物理完整，**不串行化读-改-写周期**——同一文件的此类周期（如 profile 集合的增删改、降级凭据的设置 / 清除）由调用方在命令层持进程内锁串行（019：llm profile 与 key 各一把；等待用户交互的原生输入不得持锁）。应用 setup 在注入路径 / 开放命令前获取数据根 InstanceLock，并由 Tauri managed state 持有到退出；后续 SQLite 服务复用此所有权，不另取第二把实例锁。凭据状态读取同样持 key 锁，避免跨 OS / 文件更新期间读到中间状态。
 
+私有文件也通过同一个原子写流程发布：`write_atomic_private(path, bytes)` 在临时文件写入正文前，由 `aoidos-store` 按平台设置 owner-only 权限，再 fsync 并原子替换目标。Unix 使用 0600；Windows 使用仅当前用户授权的受保护 DACL。调用方不传权限回调，也不自行判断平台；准备权限失败时临时文件不会写入正文，旧目标不被替换。
+
 ## shell 与进程边界
 
 - **允许**：经 opener 能力打开 `https?` / `mailto` 链接；用系统默认应用打开 `exports/` 目录内的导出文件。

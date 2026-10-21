@@ -28,6 +28,8 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 
 依赖方向与 crate 分层见[分层规范](../standards/layering.md)。当前 Rust workspace 无环；基础与独立领域 crate 向上由领域服务、engine 与 Tauri 壳消费，原生测试位于末端。CI 通过 Cargo 元数据核验 crate 依赖边，并按变更范围选择测试、格式和 lint；具体规则与保守回退策略见[测试规范](../standards/testing.md)。
 
+平台差异按职责落位：`aoidos-store` 封装私有文件权限、原子发布及本机路径编码；Tauri 入口持有 GTK / AppKit / CredUI 原生输入，CLI 使用终端交互；`aoidos-llm` 负责凭据与 Provider 语义，不依赖桌面 UI 库。数据根解析仍由各入口按宿主约定完成。详见[目录规划](repository-layout.md)、[LLM 架构](llm.md)与[分层规范](../standards/layering.md)。
+
 ## 工程现状
 
 存储、LLM 配置 / 凭据、共享回合协调、记录持久化及前端恢复已由 013–022 交付。023 已接入阶段机与八个产品命令；实际剧本 / 配置联调由 024 承接，完整界面由 025 承接。024 已交付最小正式入口，PR #88 已合并；026 主题运行时经 [PR #105](https://github.com/Yuki-Nagori/aoidos/pull/105) 合并，三平台 CI 与本机全量 verify 通过。034 已交付界面语言、持久偏好与本地化格式；后续补齐英文消息 schema 基准、主题名和剧本目录展示名本地化。[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 三平台 CI 与本机全量 verify 均通过。025 已实现舞台、四态面板、有界记录呈现、composer、偏好及窗口恢复；本机 `bun run verify` 全项通过。跨平台原生 WebView、DPI、IME 与辅助技术验收仍未完成，任务保持 implemented。证据见[任务索引](../task-index.md)。
