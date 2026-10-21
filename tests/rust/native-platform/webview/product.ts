@@ -81,7 +81,7 @@ async function smoke(): Promise<void> {
       "scenario.credit",
     );
     if (await invoke<boolean>("product_restarting")) {
-      const restored = await openSession("native-chat", "mistbell", false);
+      const restored = await openSession("native-product", "mistbell", false);
       sessionId.value = restored.sessionId;
       await game.recover();
       await until(() => !!game.latestPublicRecord.value, "restart.record");
@@ -137,7 +137,7 @@ async function smoke(): Promise<void> {
     );
     const oldEpoch = done.stateEpoch;
     await invoke("product_restart", { sessionId: opened.sessionId });
-    const reopened = await openSession("native-chat", "mistbell", false);
+    const reopened = await openSession("native-product", "mistbell", false);
     check(reopened.sessionId === opened.sessionId && (await count()) === 2, "restart.no-http");
     await phase.recover();
     check(phase.state.value.snapshot?.stateEpoch !== oldEpoch, "restart.new-epoch");

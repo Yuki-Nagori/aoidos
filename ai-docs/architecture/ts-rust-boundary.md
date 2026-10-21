@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-21。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 正在把 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；已落地边界与未完验收以[任务 058](../task/058-cli-tui-shared-game-runtime.md)为准。工程纪律参考 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-21。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 已将 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；060 正通过共享应用服务接入周目目录和 profile 绑定，未完范围以[任务 060](../task/060-run-management-impl.md)为准。工程纪律参考 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -79,6 +79,8 @@ aoidos-native-tests → 需要验证的生产 crate / 入口
 Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 组合 billing、engine、llm、store；CLI 为实现 engine 事件端口、共享数据根锁和受控记录读取保留直接 adapter 依赖，不承载对局业务编排。engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
 
 `aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
+
+060 的周目目录 schema 与查询事务由 `aoidos-engine::Storage` 持有；`aoidos-app::RunLifecycleService` 对 Tauri 与 CLI/TUI 暴露分页和显式 profile 绑定用例，profile 快照从共享 `ProfileFactory` 读取且不包含凭据。Tauri 只解码 DTO 并转发到 app，Web API 在 `src-web/api/runs.ts` 声明对应类型。旧数据扫描、选择 / 恢复、删除及两端界面尚未完成；不得由入口直接读写目录文件或 SQLite。
 
 计价与预算用例由 `aoidos-app::BillingService` 共用，账本事务由 engine 中的唯一 `BillingLedger` 持有；engine 依赖纯领域 crate `aoidos-billing` 并实现 llm 定义的 `BudgetPort`。唯一内置价目目录在 `aoidos-billing`，app 暴露只读查询并处理确认 / 选择；GUI / TUI 不复制价格表或账本规则。Tauri 仍直接依赖 billing 以复用 IPC 金额 / 价格类型，并为报表、结算恢复和历史补录等桌面能力转发 engine 查询；不复制账本规则。前端只传递同型 DTO。store 不依赖计费、engine 或 llm，llm 也不依赖 engine / 计费实现。提交前检查 workspace 依赖图与 task 依赖图，各自必须无环；task 的实施前置不等同于 crate 的代码依赖。
 

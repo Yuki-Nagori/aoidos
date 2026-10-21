@@ -6,6 +6,7 @@ pub mod ipc;
 pub mod llm_commands;
 pub mod locale_commands;
 pub mod memory_commands;
+pub mod run_commands;
 pub mod store_commands;
 pub mod theme_commands;
 pub mod turn_commands;
@@ -214,9 +215,28 @@ pub mod game_ipc {
     }
 }
 
+/// 周目目录 IPC 宏装配；生命周期语义由 aoidos-app 所有。
+pub mod run_ipc {
+    use super::{CmdError, run_commands};
+    #[tauri::command]
+    pub fn run_catalog_page(
+        service: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<aoidos_engine::run_catalog::RunPage, CmdError> {
+        run_commands::list_page(&service, request)
+    }
+    #[tauri::command]
+    pub fn run_bind_profile(
+        service: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<u64, CmdError> {
+        run_commands::bind_profile(&service, request)
+    }
+}
+
 macro_rules! command_handler {
     ($($extra:path),* $(,)?) => { tauri::generate_handler![
-        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_get_scene_presence, game_ipc::engine_claim_scene_hint, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase,
+        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_get_scene_presence, game_ipc::engine_claim_scene_hint, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase, run_ipc::run_catalog_page, run_ipc::run_bind_profile,
         commands::store_list_backups, store_ipc::store_get_migration,
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
@@ -284,6 +304,7 @@ pub fn run() {
             aoidos_llm::proxy::SystemProxySnapshot::capture(),
         )?;
         app.manage(game.product);
+        app.manage(game.runs);
         app.manage(storage);
         app.manage(billing_commands::BalanceService::default());
         app.manage(game.runtime);

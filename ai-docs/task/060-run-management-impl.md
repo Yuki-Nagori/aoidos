@@ -1,9 +1,9 @@
 # 060 — 已开周目选择与安全删除
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：013、022、023、029、035、058、059
 - 优先级：P1
-- 创建 / 更新：2026-10-20 / 2026-10-20
+- 创建 / 更新：2026-10-20 / 2026-10-21
 
 ## 目标与背景
 
@@ -33,7 +33,7 @@
 
 - 059 设计评审通过；目录 migration 和分批旧数据扫描须保持旧存档可读，并标明扫描未完成状态。
 - 费用账本身份为 `sessionId`，记忆运行身份为独立 UUID；所有删除查询使用核验后的显式映射，不按 UUID 猜测。
-- 所有新私有记忆请求统一使用 session canonical `billingRunId`。迁移旧账本同时查 `sessionId` 和经 `memory_run_sessions` 证明的 `memoryRunId` scope，合并 request / outbox / warnings；预算冲突时阻止收费直至玩家保存新的 canonical 上限。
+- 账本迁移完成后，所有新请求统一使用 session canonical `billingRunId`。迁移前 runtime 仍可能按 `memoryRunId` 读写预算和请求；目录发现此 scope 下任何账单数据都必须标记 `billing-reconciliation-required`，不能误报为未配置或可继续收费。迁移旧账本同时查 `sessionId` 和经 `memory_run_sessions` 证明的 `memoryRunId` scope，合并 request / outbox / warnings；预算冲突时阻止收费直至玩家保存新的 canonical 上限。
 - 已结算的本局费用明细随玩家确认删除；任意 `reserved` / `unconfirmed` 请求或待结算 outbox 均阻止删除，不得丢弃未知义务。已有完整持久 usage 可走现有本地结算恢复；缺 usage 且无可核验证据时保留该局，本 task 不提供伪造费用或手工改状态的入口。
 - 跨周目来源刻痕与动态实体身份按 059 失效；剧本代数高水位、全局价格 / 配置、其他周目与全库备份保留。
 - 所有清理操作由共享 app / engine / store 生命周期 API 执行；CLI、Tauri 命令和 UI 不直接操作文件路径或 SQL 级联。
@@ -80,7 +80,8 @@
 ## 决策与工作记录
 
 - 2026-10-20：作为 058 TUI 设置缺口审查发现的独立生命周期功能创建；先由 059 定稿数据源、profile 绑定与安全删除协议。
+- 2026-10-21：实现 SQLite 周目目录 schema、活动选择行、删除 journal 基础结构和 revision 绑定 keyset 页面；启动校验逐项比对表与索引定义。新局目录记录独立的 session / memory 身份、canonical session 账本身份与不含凭据的公开 profile 快照。补充旧局 profile 绑定 CAS：只有玩家显式指定 profile 且目录 revision 匹配时才保存公开快照；发现关联的 legacy 账本数据时保持计费 reconciliation 门关闭。目录遇到尚未迁移的 memory-run 账单 scope 时同样标记待核对；SQLite 活动选择是权威值，重启时据此修复活动文件镜像。旧数据发现、恢复 / 切换、费用迁移、删除执行器及两端界面仍未实现。
 
 ## 完成摘要
 
-未开始。依赖 059 设计定稿后实施。
+实施进行中；目前完成目录 schema、新局登记、只读分页、旧局公开 profile 绑定 CAS 与 Tauri API 基础接线，尚未满足本任务验收标准。

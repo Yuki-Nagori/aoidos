@@ -2,6 +2,7 @@
 
 pub mod billing;
 pub mod profiles;
+pub mod runs;
 
 use aoidos_engine::{
     fault::Fault,
@@ -54,6 +55,7 @@ pub struct GameServices {
     pub runtime: Service,
     pub factory: Arc<ProfileFactory>,
     pub billing: billing::BillingService,
+    pub runs: runs::RunLifecycleService,
 }
 
 impl GameServices {
@@ -84,7 +86,8 @@ impl GameServices {
             factory.clone(),
         );
         let runtime = Service::new(turns.coordinator.clone(), factory.clone());
-        let billing = billing::BillingService::new(storage);
+        let billing = billing::BillingService::new(storage.clone());
+        let runs = runs::RunLifecycleService::new(storage, factory.clone());
 
         Ok(Self {
             turns,
@@ -92,6 +95,7 @@ impl GameServices {
             runtime,
             factory,
             billing,
+            runs,
         })
     }
 }

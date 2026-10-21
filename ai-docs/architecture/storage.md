@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-20。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；032 增加轮回刻痕来源与节点进度 / 提示迁移；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。周目目录与删除协议由 [059](../task/059-run-management-design.md) 定稿，060 待实现。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-21。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；032 增加轮回刻痕来源与节点进度 / 提示迁移；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。周目目录与删除协议由 [059](../task/059-run-management-design.md) 定稿，060 正在实施。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -85,13 +85,15 @@ CREATE TABLE point_allocations (
 
 - **路径规则**：装配层注入系统数据根，业务相对路径由 `join_under_root` 拼装——拒绝 `..`、分隔符、盘符，消毒 Windows 非法字符与保留名。该工具只校验组件文本，不解析符号链接；数据根及子目录必须由应用控制。不可信剧本包的完整解包防护与 Windows 长路径前缀尚未实现。`normalize` 只在 Windows 转换正斜杠，保留操作系统原始编码；Unix 反斜杠是合法文件名字符。
 
-活动选择文件有界 4 KiB，包含 version=1、sessionId、profileId、scriptId，拒绝额外字段、非法身份或版本；损坏时报 store.corrupt，不猜测或覆盖旧元数据。打开成功登记 actor / writer 后才原子确认选择；失败清退新登记者，已有记录保留。重开按 header 的原文修订和静态前缀核验，不将新资源静默应用到旧周目，也不启动生成。
+兼容活动选择文件有界 4 KiB，包含 version=1、sessionId、profileId、scriptId，拒绝额外字段、非法身份或版本；损坏时报 store.corrupt，不猜测或覆盖旧元数据。060 新增 SQLite `active_session` 权威选择行，文件降为可重建镜像；打开流程须先登记 actor / writer 和周目元数据，再提交 SQLite 选择，最后原子更新镜像。重开按 header 的原文修订和静态前缀核验，不将新资源静默应用到旧周目，也不启动生成。
 
-### 周目目录与生命周期（059 已定稿，060 待实现）
+### 周目目录与生命周期（059 已定稿，060 实施中）
 
-`sessionId` 是周目 / transcript 主身份；记忆 `memoryRunId` 是经 `memory_run_sessions` 读取的独立身份；费用账本 canonical `billingRunId` 统一为 `sessionId`。当前剧情请求已按 `sessionId` 记账，但现有 030 私有记忆请求曾以 `memoryRunId` 记账；060 必须核验映射并迁移 legacy request / reservation / settlement scope，预算冲突时停止新收费，不能漏掉另一范围的未结账务。没有任何预算 / 请求行是合法的“尚未配置”，不是目录损坏。新目录显式保存并交叉核验三项身份，不能按 UUID 字面值猜测关联。`active-session.json` 仅是最后选择的兼容镜像；SQLite 会话目录负责有界分页和生命周期状态，并新增 SQLite 活动选择权威行；transcript header 仍是会话事实源。
+`sessionId` 是周目 / transcript 主身份；记忆 `memoryRunId` 是经 `memory_run_sessions` 读取的独立身份；059 设计确定 canonical `billingRunId=sessionId`。但 060 的账本 scope 迁移尚未完成：当前 runtime 仍可能以 `memoryRunId` 查询预算 / 记录请求。目录遇到该 legacy scope 的账单数据时必须标为 reconciliation required，不能把周目显示为未配置或可继续收费；迁移须合并 request / reservation / settlement 并保留未决义务。没有任何预算 / 请求行才是合法的“尚未配置”。新目录显式保存并交叉核验三项身份，不能按 UUID 字面值猜测关联。`active-session.json` 仅是最后选择的兼容镜像；SQLite 会话目录负责有界分页和生命周期状态，并新增 SQLite 活动选择权威行；transcript header 仍是会话事实源。
 
-目录分页和预览只读取有界 header / 摘要，不调用 `Session::open`（其恢复可修复文件）或 `builtin::open`（会初始化记忆）。旧 JSONL 由 060 分批发现；发现不完整必须通过 `scanIncomplete` 明示。新局保存不含密钥的公开 profile 快照；旧局缺 profile 时标记需绑定，不使用当前新局选择代替。切换、删除及启动恢复的完整顺序见[059](../task/059-run-management-design.md)。
+目录 schema 已包含 SQLite 会话摘要、权威活动选择、revision 和删除 journal；启动时逐项比对注册的表 / 索引定义。新创建周目登记 `sessionId`、独立 `memoryRunId`、canonical `billingRunId=sessionId` 与公开 profile 快照。公开快照通过 profile 文件读取，不访问密钥库。分页使用固定排序和 revision 绑定的 keyset 游标，响应不含 transcript 与路径；旧周目的 profile 绑定使用目录 revision 做 CAS，并将 legacy 账本 scope 保守标为待核对。活动文件写入失败后，重启读取 SQLite 权威行并修复兼容镜像。当前目录仍明确报告 `scanIncomplete`，因为旧 JSONL 分批发现、只读 header 核验和完整状态交叉核对尚未完成。
+
+目录分页和预览不得调用 `Session::open`（其恢复可修复文件）或 `builtin::open`（会初始化记忆）。旧局缺 profile 时须标记需绑定，不使用当前新局选择代替。切换、账本 scope 迁移、删除及启动恢复仍按[059](../task/059-run-management-design.md)实施，当前实现尚未提供这些操作。
 
 删除经显式确认并由 engine journal 前向恢复，覆盖单局记录、partial / repair backup、run-scoped 记忆 / 实体及本局已结算账本。transcript 隔离清单最多 8,192 项 / 4 MiB，memory run 目录作为单一同卷项隔离后分批递归清理，不跟随符号链接。存在 `reserved` / `unconfirmed` 请求或待结算 outbox 时拒绝删除；若 `unconfirmed` 缺少完整 usage 且无可核验证据，当前没有任意费用核销入口，只能保留该局。直接引用被删局来源或动态实体的跨周目刻痕失效，但剧本轮回代数高水位与全库 migration backups 保留；文件 unlink 不代表安全擦除。不得依赖外键级联清理共享业务库。
 

@@ -27,6 +27,41 @@ fn selection_preserves_script_identity_and_rejects_unsafe_metadata() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[tokio::test]
+async fn sqlite_active_selection_wins_over_a_stale_compatibility_file() {
+    let fixture = Fixture::new();
+    let active = Selection {
+        version: 1,
+        session_id: uuid::Uuid::new_v4().to_string(),
+        profile_id: "default".into(),
+        script_id: "mistbell".into(),
+    };
+    let stale = Selection {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        ..active.clone()
+    };
+    let profile = fixture.factory.public_profile("default").unwrap();
+    fixture
+        .storage
+        .register_new_run(&crate::run_catalog::NewRun {
+            session_id: active.session_id.clone(),
+            script_id: active.script_id.clone(),
+            created_at: "2026-10-21T00:00:00Z".into(),
+            memory_run_id: uuid::Uuid::new_v4().to_string(),
+            profile,
+        })
+        .unwrap();
+    write_selection(&fixture.root, &stale).unwrap();
+
+    let restored = read_authoritative_selection(&fixture.storage, &fixture.root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.session_id, active.session_id);
+    assert_eq!(restored.profile_id, active.profile_id);
+    assert_eq!(read_selection(&fixture.root).unwrap(), Some(active));
+    fixture.close().await;
+}
+
 #[test]
 fn durable_factory_requires_run_identity_and_freezes_provider_price_route() {
     let root =
@@ -290,6 +325,29 @@ struct Source {
     gate: Mutex<Option<Arc<PrepareGate>>>,
 }
 impl ProfileSource for Source {
+    fn public_profile(&self, id: &str) -> Result<aoidos_llm::config::LlmProfile, Fault> {
+        if let Some(gate) = self.gate.lock().unwrap().take() {
+            gate.block(std::time::Duration::from_secs(5))?;
+        }
+        Ok(aoidos_llm::config::LlmProfile {
+            profile_id: self
+                .identity
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| id.into()),
+            provider_id: self.provider_id.lock().unwrap().clone(),
+            model: self.model.lock().unwrap().clone(),
+            mode: aoidos_llm::config::ProfileMode::Completion,
+            thinking: false,
+            sampling: aoidos_llm::sampling::Sampling {
+                temperature: 1.0,
+                max_tokens: 64,
+            },
+            proxy: aoidos_llm::config::ProxyConfig::None,
+        })
+    }
+
     fn freeze(&self, id: &str) -> Result<ResolvedProfile, Fault> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(gate) = self.gate.lock().unwrap().take() {
@@ -424,6 +482,21 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
         .memory_run_for_session(&first.session_id)
         .unwrap();
     assert_eq!(first.memory_run_id, first_run.run_id);
+    let catalog = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap();
+    assert_eq!(catalog.entries.len(), 1);
+    assert_eq!(catalog.entries[0].session_id, first.session_id);
+    assert_eq!(
+        catalog.entries[0].memory_run_id.as_deref(),
+        Some(first.memory_run_id.as_str())
+    );
+    assert_eq!(
+        catalog.entries[0].billing_run_id.as_deref(),
+        Some(first.session_id.as_str())
+    );
+    assert!(catalog.entries[0].active);
     assert_eq!(
         fixture
             .service
@@ -435,6 +508,9 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
             .scene_id,
         "entry"
     );
+    *fixture.source.model.lock().unwrap() = "deepseek-v4-flash".into();
+    assert_eq!(fixture.open(false).await.unwrap_err().code, "app.conflict");
+    *fixture.source.model.lock().unwrap() = "deepseek-v4-pro".into();
     let frozen = fixture.factory.freeze().unwrap();
     assert_eq!(frozen.profile_id, "default");
     assert_eq!(frozen.dice_mode, DiceMode::Manual);
@@ -468,14 +544,21 @@ async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_repla
     );
     assert!(fixture.service.get_phase(&first.session_id).is_ok());
     *fixture.source.error.lock().unwrap() = None;
-    let switched = fixture
+    assert_eq!(
+        fixture
+            .product
+            .open(&fixture.service, "second".into(), "mistbell".into(), false)
+            .await
+            .unwrap_err()
+            .code,
+        "app.conflict"
+    );
+    let next = fixture
         .product
-        .open(&fixture.service, "second".into(), "mistbell".into(), false)
+        .open(&fixture.service, "second".into(), "mistbell".into(), true)
         .await
         .unwrap();
-    assert_eq!(switched.session_id, first.session_id);
     assert_eq!(fixture.factory.freeze().unwrap().profile_id, "second");
-    let next = fixture.open(true).await.unwrap();
     assert_ne!(first.session_id, next.session_id);
     assert_ne!(first.memory_run_id, next.memory_run_id);
     assert_eq!(
