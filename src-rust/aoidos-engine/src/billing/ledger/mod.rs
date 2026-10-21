@@ -4,7 +4,7 @@ use aoidos_billing::{
     usage::NormalizedUsage,
 };
 use jiff::{ToSpan, civil::Date};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fmt};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -43,11 +43,22 @@ pub struct BudgetSettings {
     pub revision: u64,
 }
 
+/// 将一个已核验的旧账务范围并入会话账本后的迁移结果。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyScopeMerge {
+    pub moved_requests: u64,
+    pub moved_warnings: u64,
+    pub settings: Option<BudgetSettings>,
+}
+
 /// 单次网络尝试冻结的价格身份与保守预留金额。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reservation {
     pub request_id: String,
     pub run_id: String,
+    /// 经显式映射验证的旧账本范围；仍有数据时阻止新请求绕过迁移。
+    pub legacy_scope_id: Option<String>,
     pub turn_id: String,
     pub profile_id: String,
     pub attempt: u32,
@@ -180,6 +191,13 @@ pub struct SuggestedLimits {
     pub reference_output_tokens: u64,
 }
 
+/// 删除本地周目前必须解决的账本记录数量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeletionObligations {
+    pub unresolved_request_count: u64,
+    pub pending_settlement_count: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BillingError {
     Invalid,
@@ -190,6 +208,7 @@ pub enum BillingError {
     SettlementBacklog,
     NotFound,
     Conflict,
+    ReconciliationRequired,
     StaleRevision,
     Storage,
 }
@@ -205,6 +224,7 @@ impl fmt::Display for BillingError {
             Self::SettlementBacklog => "pending settlement recovery reached its safety limit",
             Self::NotFound => "billing request not found",
             Self::Conflict => "billing request conflicts with a previous operation",
+            Self::ReconciliationRequired => "legacy run billing scope requires reconciliation",
             Self::StaleRevision => "billing settings revision is stale",
             Self::Storage => "billing storage operation failed",
         })
@@ -267,6 +287,46 @@ type ExistingSettlement = (
 );
 
 impl BillingLedger {
+    /// 汇总一组已由调用方核验的账本范围；重复 scope 只检查一次。
+    ///
+    /// # Errors
+    /// 范围数量或标识不合法、计数溢出或 SQLite 查询失败时返回错误。
+    pub fn deletion_obligations(
+        connection: &Connection,
+        run_ids: &[&str],
+    ) -> Result<DeletionObligations, BillingError> {
+        if run_ids.is_empty() || run_ids.len() > 2 {
+            return Err(BillingError::Invalid);
+        }
+        let scopes = run_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut result = DeletionObligations {
+            unresolved_request_count: 0,
+            pending_settlement_count: 0,
+        };
+        for scope in scopes {
+            validate_text(scope, 128)?;
+            let (unresolved, pending): (i64, i64) = connection
+                .query_row(
+                    "SELECT (SELECT count(*) FROM billing_physical_requests WHERE run_id=?1 AND state<>'settled'),(SELECT count(*) FROM billing_pending_settlements p JOIN billing_physical_requests r USING(request_id) WHERE r.run_id=?1)",
+                    [scope],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(storage)?;
+            result.unresolved_request_count = result
+                .unresolved_request_count
+                .checked_add(u64::try_from(unresolved).map_err(|_| BillingError::Storage)?)
+                .ok_or(BillingError::Storage)?;
+            result.pending_settlement_count = result
+                .pending_settlement_count
+                .checked_add(u64::try_from(pending).map_err(|_| BillingError::Storage)?)
+                .ok_or(BillingError::Storage)?;
+        }
+        Ok(result)
+    }
+
     /// 预览完整保存了用量且仍能验证原冻结价格的历史未决请求。
     /// 不会使用当前价格目录替换请求原先绑定的价格。
     ///
@@ -427,6 +487,244 @@ impl BillingLedger {
             )
             .optional()
             .map_err(storage)
+    }
+
+    /// 检查账本范围是否存在预算、物理请求或本局预算修改审计。
+    ///
+    /// # Errors
+    /// 范围标识无效或 SQLite 查询失败时返回错误。
+    pub fn has_run_scope_data(connection: &Connection, run_id: &str) -> Result<bool, BillingError> {
+        validate_text(run_id, 128)?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_physical_requests WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_audit WHERE target_id=?1 AND operation_kind='run-budget-update')",
+                [run_id],
+                |row| row.get(0),
+            )
+            .map_err(storage)
+    }
+
+    /// 将已核验的 legacy scope 合并到 canonical session scope。
+    ///
+    /// canonical 与 legacy 上限冲突时，调用方必须提供玩家刚确认的最终双币种上限；
+    /// 未提供时事务不写入任何内容并返回 `ReconciliationRequired`。物理请求、待结算
+    /// outbox、预算修改审计和提醒都在同一事务内迁移，requestId 与操作 ID 保持不变。
+    ///
+    /// # Errors
+    /// 身份无效、预算冲突未获玩家选择或数据库操作失败时返回错误。
+    pub fn reconcile_legacy_scope(
+        connection: &mut Connection,
+        canonical_run_id: &str,
+        legacy_run_id: &str,
+        selected_limits: Option<(NanoMoney, NanoMoney)>,
+        updated_at: &str,
+    ) -> Result<LegacyScopeMerge, BillingError> {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let result = Self::reconcile_legacy_scope_in_transaction(
+            &transaction,
+            canonical_run_id,
+            legacy_run_id,
+            selected_limits,
+            updated_at,
+        )?;
+        transaction.commit().map_err(storage)?;
+        Ok(result)
+    }
+
+    pub(crate) fn reconcile_legacy_scope_in_transaction(
+        transaction: &Transaction<'_>,
+        canonical_run_id: &str,
+        legacy_run_id: &str,
+        selected_limits: Option<(NanoMoney, NanoMoney)>,
+        updated_at: &str,
+    ) -> Result<LegacyScopeMerge, BillingError> {
+        validate_text(canonical_run_id, 128)?;
+        validate_text(legacy_run_id, 128)?;
+        validate_text(updated_at, 64)?;
+        if canonical_run_id == legacy_run_id {
+            return Err(BillingError::Invalid);
+        }
+
+        let canonical: Option<(i64, i64, i64)> = transaction
+            .query_row(
+                "SELECT cny_limit_nanos,usd_limit_nanos,revision FROM billing_run_budgets WHERE run_id=?1",
+                [canonical_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(storage)?;
+        let legacy: Option<(i64, i64, i64)> = transaction
+            .query_row(
+                "SELECT cny_limit_nanos,usd_limit_nanos,revision FROM billing_run_budgets WHERE run_id=?1",
+                [legacy_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(storage)?;
+        let has_legacy_data = Self::has_run_scope_data(transaction, legacy_run_id)?;
+        if !has_legacy_data {
+            let settings = canonical
+                .map(|_| read_settings(transaction, canonical_run_id))
+                .transpose()?;
+            return Ok(LegacyScopeMerge {
+                moved_requests: 0,
+                moved_warnings: 0,
+                settings,
+            });
+        }
+
+        let chosen_limits = match (legacy, canonical, selected_limits) {
+            (_, _, Some(selected)) => Some(selected),
+            (Some(old), Some(current), None) if old.0 == current.0 && old.1 == current.1 => Some((
+                NanoMoney::from_nanos(current.0).map_err(|_| BillingError::Storage)?,
+                NanoMoney::from_nanos(current.1).map_err(|_| BillingError::Storage)?,
+            )),
+            (Some(_), Some(_), None) => return Err(BillingError::ReconciliationRequired),
+            (Some(old), None, None) => Some((
+                NanoMoney::from_nanos(old.0).map_err(|_| BillingError::Storage)?,
+                NanoMoney::from_nanos(old.1).map_err(|_| BillingError::Storage)?,
+            )),
+            (None, Some(current), None) => Some((
+                NanoMoney::from_nanos(current.0).map_err(|_| BillingError::Storage)?,
+                NanoMoney::from_nanos(current.1).map_err(|_| BillingError::Storage)?,
+            )),
+            (None, None, None) => None,
+        };
+
+        let request_count: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM billing_physical_requests WHERE run_id=?1",
+                [legacy_run_id],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        let warning_count: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM billing_budget_warnings WHERE run_id=?1",
+                [legacy_run_id],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+
+        let next_revision = match (canonical, legacy, chosen_limits) {
+            (None, Some((old_cny, old_usd, revision)), Some((cny, usd)))
+                if old_cny != cny.nanos() || old_usd != usd.nanos() =>
+            {
+                revision.checked_add(1).ok_or(BillingError::Invalid)?
+            }
+            (None, Some((_, _, revision)), Some(_)) => revision,
+            (None, None, Some(_)) => 1,
+            (Some((old_cny, old_usd, revision)), _, Some((cny, usd)))
+                if old_cny != cny.nanos() || old_usd != usd.nanos() =>
+            {
+                revision.checked_add(1).ok_or(BillingError::Invalid)?
+            }
+            (Some((_, _, revision)), _, Some(_)) => revision,
+            (_, _, None) => 0,
+        };
+        if let Some((cny, usd)) = chosen_limits {
+            if canonical.is_none() {
+                transaction
+                    .execute(
+                        "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,?2,?3,?4,?5)",
+                        params![canonical_run_id,cny.nanos(),usd.nanos(),next_revision,updated_at],
+                    )
+                    .map_err(storage)?;
+            } else if next_revision > canonical.map_or(0, |(_, _, revision)| revision) {
+                transaction
+                    .execute(
+                        "UPDATE billing_run_budgets SET cny_limit_nanos=?2,usd_limit_nanos=?3,revision=?4,updated_at=?5 WHERE run_id=?1",
+                        params![canonical_run_id,cny.nanos(),usd.nanos(),next_revision,updated_at],
+                    )
+                    .map_err(storage)?;
+            }
+        }
+
+        if let Some((cny, usd)) = selected_limits {
+            let details = aoidos_json::to_string(&serde_json::json!({
+                "legacyScopeId": legacy_run_id,
+                "canonicalScopeId": canonical_run_id,
+                "selectedCnyLimit": cny.to_decimal_string(),
+                "selectedUsdLimit": usd.to_decimal_string(),
+            }))
+            .map_err(|_| BillingError::Invalid)?;
+            insert_audit(
+                transaction,
+                &format!("legacy-budget-resolution:{canonical_run_id}:{legacy_run_id}"),
+                "legacy-budget-resolution",
+                legacy_run_id,
+                &details,
+                updated_at,
+            )?;
+        }
+
+        transaction
+            .execute(
+                "INSERT INTO billing_budget_warnings(run_id,currency,threshold_percent,reached_at,read_at) SELECT ?1,currency,threshold_percent,reached_at,read_at FROM billing_budget_warnings WHERE run_id=?2 ON CONFLICT(run_id,currency,threshold_percent) DO UPDATE SET reached_at=min(billing_budget_warnings.reached_at,excluded.reached_at),read_at=CASE WHEN billing_budget_warnings.read_at IS NULL OR excluded.read_at IS NULL THEN NULL ELSE min(billing_budget_warnings.read_at,excluded.read_at) END",
+                params![canonical_run_id,legacy_run_id],
+            )
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "UPDATE billing_physical_requests SET run_id=?1 WHERE run_id=?2",
+                params![canonical_run_id, legacy_run_id],
+            )
+            .map_err(storage)?;
+        if let Some((cny_limit, usd_limit)) = chosen_limits {
+            for (currency, limit) in [(Currency::Cny, cny_limit), (Currency::Usd, usd_limit)] {
+                maybe_warn(transaction, canonical_run_id, currency, limit, updated_at)?;
+            }
+        }
+        transaction
+            .execute(
+                "UPDATE billing_audit SET target_id=?1 WHERE target_id=?2 AND operation_kind='run-budget-update'",
+                params![canonical_run_id, legacy_run_id],
+            )
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "DELETE FROM billing_budget_warnings WHERE run_id=?1",
+                [legacy_run_id],
+            )
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "DELETE FROM billing_run_budgets WHERE run_id=?1",
+                [legacy_run_id],
+            )
+            .map_err(storage)?;
+
+        let operation_id = format!("legacy-scope-reconcile:{canonical_run_id}:{legacy_run_id}");
+        let details = aoidos_json::to_string(&serde_json::json!({
+            "legacyScopeId": legacy_run_id,
+            "canonicalScopeId": canonical_run_id,
+            "movedRequests": request_count,
+            "movedWarnings": warning_count,
+            "budgetSelected": selected_limits.is_some(),
+        }))
+        .map_err(|_| BillingError::Invalid)?;
+        insert_audit(
+            transaction,
+            &operation_id,
+            "legacy-scope-reconcile",
+            legacy_run_id,
+            &details,
+            updated_at,
+        )?;
+        bump_revision(transaction)?;
+        let settings = chosen_limits.map(|(cny_limit, usd_limit)| BudgetSettings {
+            run_id: canonical_run_id.to_owned(),
+            cny_limit,
+            usd_limit,
+            revision: u64::try_from(next_revision).unwrap_or(0),
+        });
+        Ok(LegacyScopeMerge {
+            moved_requests: u64::try_from(request_count).map_err(|_| BillingError::Storage)?,
+            moved_warnings: u64::try_from(warning_count).map_err(|_| BillingError::Storage)?,
+            settings,
+        })
     }
 
     /// 在计价或修改账本前暂存完整的供应商 Token 数值。
@@ -1606,6 +1904,15 @@ impl BillingLedger {
                 return Ok(());
             }
             return Err(BillingError::Conflict);
+        }
+
+        if let Some(scope) = request
+            .legacy_scope_id
+            .as_deref()
+            .filter(|scope| *scope != request.run_id)
+            && Self::has_run_scope_data(&transaction, scope)?
+        {
+            return Err(BillingError::ReconciliationRequired);
         }
 
         let price = Self::price_by_id(&transaction, &request.price_version_id)?

@@ -10,6 +10,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub struct LedgerBudgetPort {
     storage: Arc<Storage>,
     run_id: String,
+    legacy_scope_id: Option<String>,
     profile_id: String,
     provider_id: String,
     model_id: String,
@@ -30,12 +31,18 @@ impl LedgerBudgetPort {
         Self {
             storage,
             run_id,
+            legacy_scope_id: None,
             profile_id,
             provider_id,
             model_id,
             route_policy,
             max_input_tokens,
         }
+    }
+
+    pub fn with_legacy_scope(mut self, legacy_scope_id: Option<String>) -> Self {
+        self.legacy_scope_id = legacy_scope_id;
+        self
     }
 
     fn reserve_attempt(&self, attempt: &AttemptIdentity, input_tokens: u64) -> Result<(), String> {
@@ -66,6 +73,7 @@ impl LedgerBudgetPort {
                 let reservation = Reservation {
                     request_id: attempt.request_id.clone(),
                     run_id: self.run_id.clone(),
+                    legacy_scope_id: self.legacy_scope_id.clone(),
                     turn_id: attempt.turn_id.clone(),
                     profile_id: self.profile_id.clone(),
                     attempt: attempt.attempt,
@@ -315,6 +323,10 @@ fn billing_fault(error: BillingError) -> Fault {
             "待恢复费用达到安全上限，请先重试已有结算",
         ),
         BillingError::Conflict => Fault::new("budget.conflict", "请求计费状态发生冲突"),
+        BillingError::ReconciliationRequired => Fault::new(
+            "budget.reconciliation-required",
+            "历史费用范围尚未核对，暂不能发送请求",
+        ),
         BillingError::NotFound => Fault::new("app.not-found", "费用记录不存在"),
         BillingError::Storage => Fault::new("store.database", "费用账本不可用"),
     }
@@ -504,6 +516,56 @@ mod tests {
             })
             .unwrap();
         assert_eq!(reserved, NanoMoney::parse("0.19").unwrap().nanos());
+        storage.close().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_scope_with_budget_data_blocks_new_canonical_requests() {
+        let (storage, root) = storage();
+        configure(&storage, "5");
+        let port = LedgerBudgetPort::new(
+            storage.clone(),
+            "run-1".into(),
+            "profile-1".into(),
+            "provider".into(),
+            "model".into(),
+            "direct".into(),
+            100,
+        )
+        .with_legacy_scope(Some("legacy-memory-run".into()));
+        storage
+            .with_database(|connection| {
+                BillingLedger::set_settings(
+                    connection,
+                    "legacy-memory-run",
+                    NanoMoney::ZERO,
+                    NanoMoney::ZERO,
+                    None,
+                    "2020-01-01T00:00:00Z",
+                )
+                .map_err(billing_fault)?;
+                Ok(())
+            })
+            .unwrap();
+
+        let denial = port
+            .reserve_with_input_upper_bound(&attempt("model", "blocked-legacy-scope"), 100)
+            .unwrap_err();
+        assert_eq!(denial.reason, "budget.reconciliation-required");
+        let request_count = storage
+            .with_database(|connection| {
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM billing_physical_requests WHERE run_id='run-1'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(query_fault)
+            })
+            .unwrap();
+        assert_eq!(request_count, 0);
+
         storage.close().unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -956,6 +1018,7 @@ mod tests {
                         &Reservation {
                             request_id: request_id.into(),
                             run_id: "run-1".into(),
+                            legacy_scope_id: None,
                             turn_id: "turn-1".into(),
                             profile_id: profile_id.into(),
                             attempt: 1,
@@ -1019,6 +1082,10 @@ mod tests {
             ),
             (BillingError::SettlementBacklog, "budget.settlement-backlog"),
             (BillingError::Conflict, "budget.conflict"),
+            (
+                BillingError::ReconciliationRequired,
+                "budget.reconciliation-required",
+            ),
             (BillingError::NotFound, "app.not-found"),
             (BillingError::Storage, "store.database"),
         ] {

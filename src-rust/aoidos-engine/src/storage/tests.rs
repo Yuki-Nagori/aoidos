@@ -81,6 +81,337 @@ fn memory_batch_diagnostics_expose_only_registered_codes() {
 }
 
 #[test]
+fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_directory() {
+    let root = std::env::temp_dir().join(format!("aoidos-run-delete-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    storage.records.create(header.clone()).unwrap();
+    let catalog = scene_catalog();
+    let memory_run = storage
+        .with_memory(&session_id, &catalog, |repository, connection, port| {
+            repository.create_run(connection, port, policy())
+        })
+        .unwrap();
+    assert!(
+        !root
+            .join(format!(
+                "workspaces/mistbell/memory/runs/{}",
+                memory_run.run_id
+            ))
+            .exists()
+    );
+    for _ in 0..130 {
+        let partial_id = uuid::Uuid::new_v4();
+        let partial = root.join(format!(
+            "workspaces/mistbell/transcript/{session_id}.{partial_id}.partial.jsonl"
+        ));
+        std::fs::write(partial, b"partial response").unwrap();
+    }
+    storage
+        .register_new_run(&crate::run_catalog::NewRun {
+            session_id: session_id.clone(),
+            script_id: header.script_id,
+            created_at: header.created_at,
+            memory_run_id: memory_run.run_id.clone(),
+            profile: aoidos_llm::config::LlmProfile {
+                profile_id: "test-profile".into(),
+                provider_id: "deepseek".into(),
+                model: "deepseek-v4.1-flash".into(),
+                mode: aoidos_llm::config::ProfileMode::Completion,
+                thinking: false,
+                sampling: aoidos_llm::sampling::Sampling {
+                    temperature: 1.0,
+                    max_tokens: 1024,
+                },
+                proxy: aoidos_llm::config::ProxyConfig::System,
+            },
+        })
+        .unwrap();
+
+    let unrelated_run_id = uuid::Uuid::new_v4().to_string();
+    let mutation_id = uuid::Uuid::new_v4().to_string();
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,200,1,'2026-10-21T00:00:00Z'),(?2,300,400,1,'2026-10-21T00:00:00Z')",
+                    rusqlite::params![session_id, memory_run.run_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO memory_script_cycle_generations(script_id,cycle_gen) VALUES('mistbell',9) ON CONFLICT(script_id) DO UPDATE SET cycle_gen=excluded.cycle_gen",
+                    [],
+                )
+                .unwrap();
+            let entity_id = "dynamic-npc";
+            let hash = format!("sha256:{}", "1".repeat(64));
+            connection
+                .execute(
+                    "INSERT INTO store_applied(id,content_hash) VALUES(?1,?2)",
+                    rusqlite::params![mutation_id, hash],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO entity_registry_runs(session_id,script_id,script_revision,seed_revision,entity_revision) VALUES(?1,'mistbell',?2,1,2) ON CONFLICT(session_id) DO UPDATE SET script_id=excluded.script_id,script_revision=excluded.script_revision,seed_revision=excluded.seed_revision,entity_revision=excluded.entity_revision",
+                    rusqlite::params![session_id, hash],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO entity_registry_entries(session_id,entity_id,kind,scope,canonical_name,rule_id,catalog_revision,mutation_id,mutation_hash,record_seq,entity_revision) VALUES(?1,?2,'character','scene','旅店老板','rule','scene-v1',?3,?4,1,2)",
+                    rusqlite::params![session_id, entity_id, mutation_id, hash],
+                )
+                .unwrap();
+            let mark_ids = [
+                uuid::Uuid::new_v4().to_string(),
+                uuid::Uuid::new_v4().to_string(),
+                uuid::Uuid::new_v4().to_string(),
+            ];
+            for (index, (mark_id, source_run)) in [
+                (&mark_ids[0], memory_run.run_id.as_str()),
+                (&mark_ids[1], unrelated_run_id.as_str()),
+                (&mark_ids[2], unrelated_run_id.as_str()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                connection
+                    .execute(
+                        "INSERT INTO memory_cycle_marks(mark_id,script_id,cycle_gen,identity_hash,rule_id,rule_version,subject_ids_json,imprint_key,kind,detail_policy,priority,summary,payload_hash,payload_json,status) VALUES(?1,'mistbell',1,?2,'rule',1,?3,'key','fragment','vague',1,'summary',zeroblob(32),'{}','active')",
+                        rusqlite::params![
+                            mark_id,
+                            vec![index as u8; 32],
+                            if index == 2 { format!("[\"{entity_id}\"]") } else { "[]".into() }
+                        ],
+                    )
+                    .unwrap();
+                let source = serde_json::json!({
+                    "source": {
+                        "scriptId": "mistbell",
+                        "runId": source_run,
+                        "sessionId": session_id,
+                        "recordSeq": 1,
+                        "bodyHash": format!("sha256:{}", "0".repeat(64)),
+                        "startByte": 0,
+                        "endByte": 1
+                    },
+                    "historyRevision": 0
+                });
+                connection
+                    .execute(
+                        "INSERT INTO memory_cycle_sources(mark_id,source_hash,source_json,history_revision) VALUES(?1,zeroblob(32),?2,0)",
+                        rusqlite::params![mark_id, source.to_string()],
+                    )
+                    .unwrap();
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    storage
+        .request_run_deletion(&operation_id, &session_id, 1, "2026-10-21T00:00:00Z")
+        .unwrap();
+    assert_eq!(
+        storage
+            .freeze_run_deletion_manifest(&operation_id, &session_id, "2026-10-21T00:00:15Z",)
+            .unwrap_err()
+            .code,
+        "app.conflict"
+    );
+    storage.records.close(&session_id).unwrap();
+    storage
+        .clear_run_active_selection_for_deletion(&operation_id, &session_id, "2026-10-21T00:00:30Z")
+        .unwrap();
+    let frozen = storage
+        .freeze_run_deletion_manifest(&operation_id, &session_id, "2026-10-21T00:01:00Z")
+        .unwrap();
+
+    assert_eq!(frozen.state, "owner-closed");
+    let (manifest_bytes, value) = storage
+        .with_database(|connection| {
+            let bytes: Vec<u8> = connection
+                .query_row(
+                    "SELECT manifest FROM session_deletion_ops WHERE operation_id=?1",
+                    [&operation_id],
+                    |row| row.get(0),
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            let value = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| Fault::new("store.corrupt", "删除清单无法解析"))?;
+            Ok((bytes, value))
+        })
+        .unwrap();
+    let memory_entry = value["manifest"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["kind"] == "memory-run-directory")
+        .unwrap();
+    assert!(memory_entry["identityHash"].is_null());
+
+    let transcript = root.join(format!("workspaces/mistbell/transcript/{session_id}.jsonl"));
+    let quarantine = root.join(format!(
+        "deleting/{operation_id}/transcript/{session_id}.jsonl"
+    ));
+    assert!(transcript.exists());
+    let mut tampered = value;
+    tampered["hash"] = serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    let tampered = serde_json::to_vec(&tampered).unwrap();
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE session_deletion_ops SET manifest=?1 WHERE operation_id=?2",
+                    rusqlite::params![tampered, operation_id],
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        storage
+            .quarantine_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:01:30Z",)
+            .unwrap_err()
+            .code,
+        "store.corrupt"
+    );
+    assert!(transcript.exists());
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE session_deletion_ops SET manifest=?1 WHERE operation_id=?2",
+                    rusqlite::params![manifest_bytes, operation_id],
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let quarantined = storage
+        .quarantine_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:02:00Z")
+        .unwrap();
+    assert_eq!(quarantined.state, "files-quarantined");
+    assert!(!transcript.exists());
+    assert!(quarantine.exists());
+    assert_eq!(
+        storage
+            .quarantine_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:02:30Z",)
+            .unwrap(),
+        quarantined
+    );
+
+    storage
+        .with_database(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER reject_run_delete BEFORE DELETE ON memory_runs BEGIN SELECT RAISE(ABORT,'injected'); END;",
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        storage
+            .purge_run_deletion_database(&operation_id, &session_id, "2026-10-21T00:03:00Z")
+            .unwrap_err()
+            .code,
+        "store.database"
+    );
+    storage
+        .with_database(|connection| {
+            let (catalog_count, budget_count, mark_count, state): (i64, i64, i64, String) =
+                connection
+                    .query_row(
+                        "SELECT (SELECT count(*) FROM session_catalog WHERE session_id=?1),(SELECT count(*) FROM billing_run_budgets WHERE run_id IN (?1,?2)),(SELECT count(*) FROM memory_cycle_marks),(SELECT state FROM session_deletion_ops WHERE operation_id=?3)",
+                        rusqlite::params![session_id, memory_run.run_id, operation_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .map_err(aoidos_store::db::sqlite_error)?;
+            assert_eq!((catalog_count, budget_count, mark_count, state.as_str()), (1, 2, 3, "files-quarantined"));
+            connection
+                .execute_batch("DROP TRIGGER reject_run_delete")
+                .map_err(aoidos_store::db::sqlite_error)?;
+            Ok(())
+        })
+        .unwrap();
+
+    let purged = storage
+        .purge_run_deletion_database(&operation_id, &session_id, "2026-10-21T00:03:30Z")
+        .unwrap();
+    assert_eq!(purged.state, "database-purged");
+    assert_eq!(
+        storage
+            .purge_run_deletion_database(&operation_id, &session_id, "2026-10-21T00:04:00Z")
+            .unwrap(),
+        purged
+    );
+    storage
+        .with_database(|connection| {
+            let (catalog_count, run_count, mapping_count, budget_count, mark_count, generation, entity_count, receipt_count, tombstone):
+                (i64, i64, i64, i64, i64, i64, i64, i64, String) = connection
+                .query_row(
+                    "SELECT (SELECT count(*) FROM session_catalog WHERE session_id=?1),(SELECT count(*) FROM memory_runs WHERE run_id=?2),(SELECT count(*) FROM memory_run_sessions WHERE session_id=?1),(SELECT count(*) FROM billing_run_budgets WHERE run_id IN (?1,?2)),(SELECT count(*) FROM memory_cycle_marks),(SELECT cycle_gen FROM memory_script_cycle_generations WHERE script_id='mistbell'),(SELECT count(*) FROM entity_registry_entries WHERE session_id=?1),(SELECT count(*) FROM store_applied WHERE id=?3),(SELECT state FROM session_deletion_ops WHERE operation_id=?4)",
+                    rusqlite::params![session_id, memory_run.run_id, mutation_id, operation_id],
+                    |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?)),
+                )
+                .map_err(aoidos_store::db::sqlite_error)?;
+            assert_eq!((catalog_count, run_count, mapping_count, budget_count, mark_count, generation, entity_count, receipt_count, tombstone.as_str()), (0, 0, 0, 0, 1, 9, 0, 0, "database-purged"));
+            Ok(())
+        })
+        .unwrap();
+
+    let transcript_quarantine = root.join(format!(
+        "deleting/{operation_id}/transcript/{session_id}.jsonl"
+    ));
+    assert!(transcript_quarantine.exists());
+    let files_purged = storage
+        .purge_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:05:00Z")
+        .unwrap();
+    assert_eq!(files_purged.state, "database-purged");
+    let cleanup_index: i64 = storage
+        .with_database(|connection| {
+            connection
+                .query_row(
+                    "SELECT manifest_index FROM session_deletion_progress WHERE operation_id=?1",
+                    [&operation_id],
+                    |row| row.get(0),
+                )
+                .map_err(aoidos_store::db::sqlite_error)
+                .map_err(Fault::from)
+        })
+        .unwrap();
+    assert_eq!(cleanup_index, 128);
+    let files_purged = storage
+        .purge_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:05:15Z")
+        .unwrap();
+    assert_eq!(files_purged.state, "files-purged");
+    assert!(!transcript_quarantine.exists());
+    assert!(!root.join(format!("deleting/{operation_id}")).exists());
+    let completed = storage
+        .purge_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:05:30Z")
+        .unwrap();
+    assert_eq!(completed.state, "completed");
+    assert_eq!(
+        storage
+            .purge_run_deletion_files(&operation_id, &session_id, "2026-10-21T00:06:00Z")
+            .unwrap(),
+        completed
+    );
+
+    storage.close().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn memory_borrows_registered_session_and_shared_migrated_connection() {
     let root = std::env::temp_dir().join(format!("aoidos-memory-storage-{}", uuid::Uuid::new_v4()));
     let storage = Storage::new(
@@ -1263,6 +1594,20 @@ fn alias_schema_migration_only_advances_an_existing_database() {
     for migration in &STORAGE_MIGRATIONS[..STORAGE_MIGRATIONS.len() - 1] {
         legacy.execute_batch(migration).unwrap();
     }
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    legacy
+        .execute(
+            "INSERT INTO session_deletion_ops(operation_id,session_id,state,created_at,updated_at) VALUES(?1,?2,'requested','created','last-update')",
+            rusqlite::params![operation_id, session_id],
+        )
+        .unwrap();
+    legacy
+        .execute(
+            "INSERT INTO session_deletion_progress(operation_id,manifest_index,updated_at) VALUES(?1,0,'last-update')",
+            [&operation_id],
+        )
+        .unwrap();
     legacy
         .pragma_update(None, "user_version", STORAGE_MIGRATIONS.len() - 1)
         .unwrap();
@@ -1287,6 +1632,14 @@ fn alias_schema_migration_only_advances_an_existing_database() {
                 )
                 .unwrap();
             assert_eq!(table_exists, 1);
+            let progress: (i64, String, Option<Vec<u8>>) = connection
+                .query_row(
+                    "SELECT manifest_index,updated_at,directory_stack FROM session_deletion_progress WHERE operation_id=?1",
+                    [&operation_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(progress, (0, "last-update".into(), None));
             Ok(())
         })
         .unwrap();

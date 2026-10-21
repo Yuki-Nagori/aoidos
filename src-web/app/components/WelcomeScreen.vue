@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Locale } from "../../api/locale";
 import type { useProduct } from "../../features/product/composables/useProduct";
+import RunCatalogPanel from "../../features/product/components/RunCatalogPanel.vue";
 
 const props = defineProps<{
   product: ReturnType<typeof useProduct>;
@@ -11,6 +12,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ openSettings: [section: string, trigger: HTMLElement] }>();
 const { t } = useI18n();
+const runsOpen = ref(false);
 const principles = computed(() => [
   {
     id: "agency",
@@ -186,6 +188,13 @@ const canStart = computed(
           {{ t("game.newCycle") }}
         </button>
       </div>
+      <button
+        type="button"
+        class="welcome-text-button welcome-runs-button"
+        @click="runsOpen = true"
+      >
+        {{ t("welcome.openRuns") }}
+      </button>
       <div class="hr" />
       <button
         type="button"
@@ -203,5 +212,13 @@ const canStart = computed(
         </svg>
       </button>
     </section>
+    <RunCatalogPanel
+      :open="runsOpen"
+      :scripts="product.scripts.value"
+      :profiles="product.profiles.value"
+      :locale="locale"
+      @close="runsOpen = false"
+      @restore="product.adoptOpenedRun($event)"
+    />
   </div>
 </template>

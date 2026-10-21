@@ -219,11 +219,35 @@ pub mod game_ipc {
 pub mod run_ipc {
     use super::{CmdError, run_commands};
     #[tauri::command]
+    pub async fn run_open_selected(
+        lifecycle: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
+        product: tauri::State<'_, aoidos_engine::game::product::Product>,
+        runtime: tauri::State<'_, aoidos_engine::game::runtime::Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<aoidos_app::runs::OpenedRun, CmdError> {
+        run_commands::open_selected(&lifecycle, &product, &runtime, request).await
+    }
+    #[tauri::command]
+    pub async fn run_delete(
+        lifecycle: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
+        product: tauri::State<'_, aoidos_engine::game::product::Product>,
+        runtime: tauri::State<'_, aoidos_engine::game::runtime::Service>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<aoidos_engine::run_catalog::DeletionOperation, CmdError> {
+        run_commands::delete_run(&lifecycle, &product, &runtime, request).await
+    }
+    #[tauri::command]
     pub fn run_catalog_page(
         service: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
         request: tauri::ipc::Request<'_>,
     ) -> Result<aoidos_engine::run_catalog::RunPage, CmdError> {
         run_commands::list_page(&service, request)
+    }
+    #[tauri::command]
+    pub async fn run_scan_legacy(
+        service: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
+    ) -> Result<aoidos_engine::run_catalog::LegacyScanResult, CmdError> {
+        run_commands::scan_legacy(service.inner().clone()).await
     }
     #[tauri::command]
     pub fn run_bind_profile(
@@ -232,11 +256,18 @@ pub mod run_ipc {
     ) -> Result<u64, CmdError> {
         run_commands::bind_profile(&service, request)
     }
+    #[tauri::command]
+    pub fn run_reconcile_billing(
+        service: tauri::State<'_, aoidos_app::runs::RunLifecycleService>,
+        request: tauri::ipc::Request<'_>,
+    ) -> Result<aoidos_engine::run_catalog::RunBillingReconciliation, CmdError> {
+        run_commands::reconcile_billing(&service, request)
+    }
 }
 
 macro_rules! command_handler {
     ($($extra:path),* $(,)?) => { tauri::generate_handler![
-        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_get_scene_presence, game_ipc::engine_claim_scene_hint, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase, run_ipc::run_catalog_page, run_ipc::run_bind_profile,
+        game_ipc::engine_list_scripts, game_ipc::engine_open_session, game_ipc::engine_submit_input, game_ipc::engine_get_scene_presence, game_ipc::engine_claim_scene_hint, game_ipc::engine_interrupt, game_ipc::engine_cancel_round, game_ipc::engine_resume, game_ipc::engine_regenerate, game_ipc::engine_rewind, game_ipc::engine_submit_check, game_ipc::engine_get_phase, run_ipc::run_open_selected, run_ipc::run_delete, run_ipc::run_catalog_page, run_ipc::run_scan_legacy, run_ipc::run_bind_profile, run_ipc::run_reconcile_billing,
         commands::store_list_backups, store_ipc::store_get_migration,
         store_ipc::store_get_ui_preferences, store_ipc::store_set_ui_preferences, store_ipc::engine_get_record_page,store_ipc::engine_get_record_view,store_ipc::engine_get_record_body,
         llm_commands::llm_list_profiles, llm_commands::llm_save_profile, llm_commands::llm_delete_profile,
@@ -302,6 +333,10 @@ pub fn run() {
             llm_commands::profile_service()
                 .ok_or_else(|| std::io::Error::other("LLM profile service is not initialized"))?,
             aoidos_llm::proxy::SystemProxySnapshot::capture(),
+        )?;
+        tauri::async_runtime::block_on(
+            game.runs
+                .recover_pending_deletions(&game.product, &game.runtime),
         )?;
         app.manage(game.product);
         app.manage(game.runs);

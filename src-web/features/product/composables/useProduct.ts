@@ -2,6 +2,7 @@ import { computed, onScopeDispose, ref, shallowRef, watch } from "vue";
 import type { LlmProfile, KeyStatus } from "../../../api/llm";
 import { getKeyStatus, listProfiles, saveProfile, setKey } from "../../../api/llm";
 import type { OpenedSession, ScriptInfo } from "../../../api/engine";
+import type { OpenedRun } from "../../../api/runs";
 import { listScripts, openSession } from "../../../api/engine";
 import type { BillingCurrency } from "../../../api/billing";
 import {
@@ -138,6 +139,7 @@ const openCodeZenModels = openCodeZenIds.map((id) => ({
 /** 最小产品入口只登记配置及会话；异步操作不因卸载更新状态，不隐式生成或续费。 */
 export function useProduct(transport: Transport = defaults) {
   const profiles = shallowRef<LlmProfile[]>([]);
+  const activeProfile = shallowRef<LlmProfile>();
   const scripts = shallowRef<ScriptInfo[]>([]);
   const priceTemplates = shallowRef<Awaited<ReturnType<typeof getDeepseekPriceTemplates>>>([]);
   const profileId = ref("");
@@ -283,6 +285,7 @@ export function useProduct(transport: Transport = defaults) {
         saved.items.find(
           (profile) => profile.providerId === providerId.value && profile.model === model.value,
         )?.profileId ?? "";
+      activeProfile.value = profiles.value.find((profile) => profile.profileId === profileId.value);
     });
   }
   async function refreshKeyStatus(provider = providerId.value): Promise<void> {
@@ -362,12 +365,26 @@ export function useProduct(transport: Transport = defaults) {
       const opened = await transport.open(selected, scriptId.value, startNew);
       if (!disposed) {
         profileId.value = selected;
+        activeProfile.value = profiles.value.find((profile) => profile.profileId === selected);
         session.value = opened;
       }
     });
   }
+  function adoptOpenedRun(opened: OpenedRun): void {
+    const profile = opened.profile;
+    providerId.value = profile.providerId;
+    model.value = profile.model;
+    profileId.value = profile.profileId;
+    activeProfile.value = profile;
+    if (!profiles.value.some((saved) => saved.profileId === profile.profileId)) {
+      profiles.value = [...profiles.value, profile];
+    }
+    session.value = opened.session;
+    void refreshKeyStatus();
+  }
   return {
     profiles,
+    activeProfile,
     scripts,
     priceTemplates,
     profileId,
@@ -389,5 +406,6 @@ export function useProduct(transport: Transport = defaults) {
     configureKey,
     confirmBillingPrice,
     open,
+    adoptOpenedRun,
   };
 }

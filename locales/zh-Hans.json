@@ -5,6 +5,8 @@
     "readBody": "读取完整正文",
     "reconnect": "重新连接",
     "retry": "重试",
+    "previous": "上一页",
+    "next": "下一页",
     "cancel": "取消",
     "close": "关闭",
     "unknownError": "发生了意外错误"
@@ -39,7 +41,47 @@
     "startTitle": "开始一局",
     "selectedScenario": "当前选择 · {id}",
     "changeInSettings": "在设置中修改",
-    "settingsHint": "语言、主题、API、骰子与费用上限都在设置里"
+    "settingsHint": "语言、主题、API、骰子与费用上限都在设置里",
+    "openRuns": "继续已有周目"
+  },
+  "runs": {
+    "title": "已有周目",
+    "description": "浏览已保存的周目；列表不会打开记录或发送模型请求。",
+    "empty": "暂无已登记的周目。",
+    "pendingCleanup": "待继续清理的周目",
+    "lastFailure": "上次恢复错误：{code}",
+    "noProfile": "尚未绑定模型",
+    "restore": "继续周目",
+    "delete": "删除",
+    "resumeDeletion": "继续删除",
+    "scan": "扫描旧存档",
+    "refresh": "刷新",
+    "scanIncomplete": "旧存档扫描尚未完成；可再次主动扫描以继续。",
+    "bindProfile": "绑定模型",
+    "chooseProfile": "选择已保存的模型",
+    "reconcileBilling": "核对并迁移历史费用",
+    "reconcileBillingDescription": "合并已核验的旧账本记录。若历史额度冲突，请为本局选择最终 CNY 与 USD 上限；此操作不会发送模型请求。",
+    "cnyLimit": "最终 CNY 上限",
+    "usdLimit": "最终 USD 上限",
+    "invalidLimits": "请输入两个非负十进制金额，小数位最多 9 位。",
+    "confirmDeleteTitle": "确认删除此周目？",
+    "deletionPending": "周目删除仍在进行",
+    "deleteImpact": "将删除该局记录、恢复旁车、局内记忆、实体和已结算账单。",
+    "backupNotice": "数据库备份可能保留历史字节；删除不等于安全擦除。",
+    "deletionStage": "当前删除阶段：{state}",
+    "confirmDelete": "确认删除",
+    "continueDelete": "继续删除",
+    "states": {
+      "ready": "可继续",
+      "needs-profile-binding": "需要绑定模型",
+      "billing-not-configured": "尚未配置费用",
+      "billing-reconciliation-required": "费用需要核对",
+      "recovery-required": "需要恢复",
+      "needs-repair": "需要修复",
+      "script-unavailable": "剧本不可用",
+      "settlement-pending": "结算待恢复",
+      "deleting": "正在删除"
+    }
   },
   "settings": {
     "title": "设置",
@@ -409,6 +451,7 @@
       "priceHistoryLimit": "该模型已达到可保存的价格版本上限。",
       "priceMissing": "发送付费请求前，请登记与当前服务商、路由和模型匹配的价格。",
       "runLimitMissing": "发送付费请求前，请设置服务商计价币种对应的本局上限。",
+      "reconciliationRequired": "本局历史费用范围尚未核对完成，暂不能发送付费请求。",
       "settlementBacklog": "待恢复费用已达到安全上限。请先重试现有结算，再发送新请求。"
     }
   },

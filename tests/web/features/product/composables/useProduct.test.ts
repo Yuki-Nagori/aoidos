@@ -62,6 +62,7 @@ const opened = {
   profileId: "default",
   scriptId: "mistbell",
   title: "雾钟地窖",
+  selectionMirrorPending: false,
 };
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -546,4 +547,21 @@ it("ignores rejected operations after disposal", async () => {
   pending.reject(new Error("late"));
   await opening;
   expect(product.error.value).toBeUndefined();
+});
+
+it("keeps the frozen opened-run profile separate from an edited current profile", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  const editedProfile = { ...profile, model: "deepseek-v4-pro" };
+  api.profiles.mockResolvedValue({ items: [editedProfile] });
+  await product.load();
+  const frozenProfile = { ...profile, model: "deepseek-flash" };
+
+  product.adoptOpenedRun({ session: opened, profile: frozenProfile });
+
+  expect(product.profiles.value).toEqual([editedProfile]);
+  expect(product.profileId.value).toBe(frozenProfile.profileId);
+  expect(product.activeProfile.value).toEqual(frozenProfile);
+  scope.stop();
 });

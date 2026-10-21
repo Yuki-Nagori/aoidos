@@ -5,6 +5,8 @@
     "readBody": "Read full text",
     "reconnect": "Reconnect",
     "retry": "Retry",
+    "previous": "Previous",
+    "next": "Next",
     "cancel": "Cancel",
     "close": "Close",
     "unknownError": "Something went wrong"
@@ -39,7 +41,47 @@
     "startTitle": "Start a run",
     "selectedScenario": "Selected · {id}",
     "changeInSettings": "Change in Settings",
-    "settingsHint": "Language, theme, API, dice and limits all live in Settings"
+    "settingsHint": "Language, theme, API, dice and limits all live in Settings",
+    "openRuns": "Continue an existing run"
+  },
+  "runs": {
+    "title": "Existing runs",
+    "description": "Browse saved runs without opening their records or sending a request.",
+    "empty": "No saved runs are registered yet.",
+    "pendingCleanup": "Run cleanup to resume",
+    "lastFailure": "Last recovery error: {code}",
+    "noProfile": "Profile not bound",
+    "restore": "Continue",
+    "delete": "Delete",
+    "resumeDeletion": "Resume deletion",
+    "scan": "Scan legacy saves",
+    "refresh": "Refresh",
+    "scanIncomplete": "Legacy discovery is incomplete. Run another explicit scan to continue.",
+    "bindProfile": "Bind profile",
+    "chooseProfile": "Choose a saved profile",
+    "reconcileBilling": "Reconcile legacy billing",
+    "reconcileBillingDescription": "Merge verified charges from the old run scope. If historical budget limits conflict, choose the final CNY and USD limits for this run. No model request is sent.",
+    "cnyLimit": "Final CNY limit",
+    "usdLimit": "Final USD limit",
+    "invalidLimits": "Enter both limits as non-negative decimal amounts with at most 9 fractional digits.",
+    "confirmDeleteTitle": "Delete this run?",
+    "deletionPending": "Run deletion is still in progress",
+    "deleteImpact": "This removes the run transcript, recovery sidecars, run-scoped memory, entities and settled billing records.",
+    "backupNotice": "Database backups may retain historical bytes. Deletion is not secure erasure.",
+    "deletionStage": "Current deletion stage: {state}",
+    "confirmDelete": "Confirm deletion",
+    "continueDelete": "Continue deletion",
+    "states": {
+      "ready": "Ready",
+      "needs-profile-binding": "Needs a profile",
+      "billing-not-configured": "Billing not configured",
+      "billing-reconciliation-required": "Billing needs review",
+      "recovery-required": "Recovery required",
+      "needs-repair": "Needs repair",
+      "script-unavailable": "Script unavailable",
+      "settlement-pending": "Settlement pending",
+      "deleting": "Deleting"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -409,6 +451,7 @@
       "priceHistoryLimit": "This model has reached the maximum number of saved price versions.",
       "priceMissing": "Register a price for this provider, route and model before sending a paid request.",
       "runLimitMissing": "Set a limit for the provider's billing currency before sending a paid request.",
+      "reconciliationRequired": "This run's legacy billing scope has not been reconciled; paid requests are temporarily blocked.",
       "settlementBacklog": "Pending settlement recovery reached its safety limit. Retry existing settlements before sending new requests."
     }
   },

@@ -10,3 +10,7 @@ test-support = []
 [dependencies]
 rusqlite = { workspace = true }
 fs4 = { workspace = true }
+sha2 = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

@@ -149,8 +149,10 @@ dependencies = [
  "aoidos-llm",
  "aoidos-store",
  "secrecy",
+ "serde",
  "serde_json",
  "time",
+ "tokio",
 ]
 
 [[package]]
@@ -182,6 +184,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "unicode-width",
+ "uuid",
 ]
 
 [[package]]
@@ -302,6 +305,8 @@ version = "0.1.0"
 dependencies = [
  "fs4",
  "rusqlite",
+ "sha2 0.10.9",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

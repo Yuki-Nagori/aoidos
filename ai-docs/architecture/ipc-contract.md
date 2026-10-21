@@ -1,8 +1,8 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-19。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
+更新日期：2026-10-21。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。053 已定稿记忆检索命令契约，具体命令尚未实现；054 已定稿结局快照与操作接口方向，精确 DTO 随 056 实现设计确认。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。060 已接入共享周目目录、Tauri / Web 与 CLI/TUI 列表 / 扫描 / 恢复 / 删除，以及启动前向恢复；本地验收和独立评审已通过，跨平台 PR CI 待验收，见 [task 060](../task/060-run-management-impl.md)。053 已定稿记忆检索命令契约，具体命令尚未实现；054 已定稿结局快照与操作接口方向，精确 DTO 随 056 实现设计确认。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -155,8 +155,25 @@ interface OpenedSession {
   profileId: string;
   scriptId: string;
   title: string;
+  /** SQLite 已选中该周目，但兼容选择文件待修复时为 true。 */
+  selectionMirrorPending: boolean;
 }
 ```
+
+### 已开周目目录（060 实施中）
+
+Web API 位于 `src-web/api/runs.ts`。目录命令只操作共享生命周期服务，不返回路径或 transcript；显式恢复不会发送玩家行动。恢复响应除会话摘要外还包含该局冻结的公开 profile，调用方应继续使用它，不得按同 ID 重新载入当前 profile。`selectionMirrorPending` 表示 SQLite 活动选择已提交但兼容文件镜像尚待修复。
+
+| 命令                    | 参数                                               | 返回                                              | 边界                                                       |
+| ----------------------- | -------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| `run_catalog_page`      | `{ cursor?, pageSize? }`                           | `RunPage`                                         | revision 绑定游标；只读摘要                                |
+| `run_open_selected`     | `{ sessionId, expectedRevision }`                  | `{ session: OpenedSession, profile: LlmProfile }` | 显式恢复并返回冻结公开 profile；不启动模型请求             |
+| `run_scan_legacy`       | 无                                                 | `LegacyScanResult`                                | 仅玩家主动调用；分批扫描旧记录                             |
+| `run_bind_profile`      | `{ sessionId, expectedRevision, profileId }`       | revision                                          | 显式绑定无凭据 profile 快照                                |
+| `run_reconcile_billing` | `{ sessionId, expectedRevision, selectedLimits? }` | 历史账务合并摘要                                  | 只在预算冲突时传入 CNY / USD 十进制字符串上限              |
+| `run_delete`            | `{ operationId, sessionId, expectedRevision }`     | `DeletionOperation`                               | 显式确认后推进同一删除 journal；可用相同 operation ID 重试 |
+
+`OpenedRun.profile` 是该局冻结、无凭据的 `LlmProfile`。TUI 的普通重开与目录恢复都读取该快照，并以此执行费用预检和回合请求，因此修改或删除当前 profile 不会改变已开周目的模型参数。`DeletionOperation` 包含 operationId、sessionId、state、catalogRevision 和 diagnosticCode；Tauri / Web 与 TUI 的删除入口共用生命周期服务，未完成 journal 可用相同 operation ID 续跑，diagnosticCode 暴露最近一次稳定恢复错误。
 
 scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-found；不接受文件路径、正文、endpoint 或密钥。`displayNames` 从该资源目录的 `i18n.json` 读取，只本地化界面展示名，不改变原文 `title` 或存档身份。原文、实体目录、格式或本地化元数据不可用为 app.not-ready；实体目录规则见[剧本格式规范](../standards/scenarios.md)。`scriptRevision` 绑定原文与实体清单版本，重新打开时不接受版本漂移。配置、凭据与存储错误按公开码返回。startNew=true 创建新周目；false 重开同剧本的已保存活动周目，没有活动选择时首次创建。活动 profile 可显式切换，已生成记录不改写。
 
@@ -383,9 +400,9 @@ idle 无 migrationId，from == to == current 为静态持久化版本，三基�
 - 命名空间 `<域>.<错误>`：`store.*` **已落地**——`src-tauri/src/ipc.rs` 的 `From<StoreError> for CmdError` 产出 `format!("store.{}", code())` 形态的前缀码与中文映射。命令层不得把 `code()` 的返回值再当成已带前缀。中文 `message` 由命令层映射器编写，不用 `Display`（`Display` 是英文诊断）。`theme.*` 已由 026 实现；`engine.*` 的码名在本文预留（映射随 022、023 等实现任务落地）。`llm.*` 十码分工：传输类 7 码（auth / quota / rate-limited / network / tls / bad-response / aborted）已由 018 的 `aoidos-llm::ProviderError` 落地，`code()` 返回裸码、交付边界定码见 `code_at_boundary`；`stalled` / `empty-output` 由调度层 `RunError::Stalled` / `RunError::EmptyOutput` 变体承载（无 `code()`，020 域错误映射补码）；`missing-key` 是提交前未保存密钥的命令层判定，不在 crate 内。020 域错误与薄命令适配已统一加 `llm.` 前缀。`app.*` 属于命令层。
 - 通用：`app.bad-request`（参数校验失败，含分页越界）、`app.not-found`（命令参数里的 id 不存在，如剧本、场景、回合）、`app.event-failed`（载荷序列化、序号分配或平台投递失败；真实监听者以快照对齐，不重试发送）、`app.not-ready`（所需业务存储未开放：初始化尚未完成，或运行期迁移失败后被冻结；后一种由 022 的共享 Storage 门禁实现。普通业务命令拒绝，但 store_get_migration 诊断仍可用；前端主动取该快照展示脱敏迁移失败，不持续轮询）。存储路径或文件缺失只用 `store.not-found`。
 - `app.busy`：命令层在进入引擎之前拒绝第二个在飞回合；019 同型原生输入门禁也用此码拒绝第二个密码框，不占用业务 key 锁。引擎内部可以拒绝，对外仍映射成这一个码。不另设 `engine.turn-in-flight`。
-- store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。计费命令将 `BillingError::Storage` 映射为 `store.database`；这是 `billing_commands` 的命令层错误，不由 `StoreError::code()` 生成。
+- store：`store.invalid-path` `store.already-running` `store.locked` `store.migration` `store.disk-full` `store.permission` `store.not-found` `store.corrupt` `store.io`。计费命令将 `BillingError::Storage` 映射为 `store.database`；这是 `billing_commands` 的命令层错误，不由 `StoreError::code()` 生成。060 周目活动选择若 SQLite 提交返回错误且读回仍无法确认结果，返回 `store.commit-unknown`；只有该错误码允许调用方根据 SQLite 权威行判断是否已经切换。
 - theme（009 设计，026 已实现）：`theme.invalid-skin` 表示存在的皮肤结构 / 硬预算不合法；缺文件为成功 missing、单条语义失败为 warnings、读取失败为 store.*，不自动重试。
-- budget（027 已评审，035 已实现）：`budget.exceeded`（对应币种的本地单局上限不足）、`budget.price-missing`（未登记 / profile 未选择精确路由价格）、`budget.price-history-limit`（单一计价身份价格版本达到 1,024 个上限）、`budget.run-limit-missing`（该局缺少对应币种上限）、`budget.conflict`（账本请求与已有操作状态冲突）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）、`budget.settlement-backlog`（本地结算恢复队列达到 256 条上限）。不自动重试，不冒充供应商 llm.quota；旧设置 revision / 请求页游标使用 `app.bad-request` + `detail.reason=staleRevision`，存储失败沿用 store.*。历史恢复和余额查询使用各自的参数、profile 校验与本地存储错误，不引入专属错误码。
+- budget（027 已评审，035 已实现）：`budget.exceeded`（对应币种的本地单局上限不足）、`budget.price-missing`（未登记 / profile 未选择精确路由价格）、`budget.price-history-limit`（单一计价身份价格版本达到 1,024 个上限）、`budget.run-limit-missing`（该局缺少对应币种上限）、`budget.reconciliation-required`（060 历史账务 scope 尚未迁移，拒绝新收费请求）、`budget.conflict`（账本请求与已有操作状态冲突）、`budget.invalid-usage`（费用诊断中的非法用量，不撤回合法正文终态）、`budget.settlement-backlog`（本地结算恢复队列达到 256 条上限）。不自动重试，不冒充供应商 llm.quota；旧设置 revision / 请求页游标使用 `app.bad-request` + `detail.reason=staleRevision`，存储失败沿用 store.*。历史恢复和余额查询使用各自的参数、profile 校验与本地存储错误，不引入专属错误码。
 - llm 预留（005 已评审设计；crate 侧类别 018 已落地，020 已接入域错误 / 命令映射）：`llm.missing-key` `llm.auth` `llm.quota` `llm.rate-limited` `llm.network` `llm.tls` `llm.stalled` `llm.empty-output` `llm.bad-response` `llm.aborted`，触发条件见下表。用户 `llm_cancel` 成功时命令返回成功，并发送 `llm:turn:done`，`outcome` 为 `cancelled`。`llm.aborted` 只表示首字节之后的传输中断或空闲看门狗，不表示这次取消。
 
 | 码               | 触发条件                                                                                                                                                                                            | 自动重试边界                                                      |

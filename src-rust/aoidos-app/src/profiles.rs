@@ -176,6 +176,26 @@ impl Profiles {
         Ok(ResolvedProfile { frozen, proxy_auth })
     }
 
+    /// 从目录冻结的公开配置读取当前 provider / proxy 凭据，不查找可变 profile 文件。
+    /// # Errors
+    /// 配置无效、凭据库不可读或代理认证引用不存在时拒绝恢复。
+    pub fn freeze_snapshot(&self, profile: &LlmProfile) -> Result<ResolvedProfile, Fault> {
+        profile.validate().map_err(invalid_profile)?;
+        let _guard = self
+            .credential_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let frozen: FrozenProfile =
+            config::freeze(profile, self.credentials.as_ref()).map_err(store_fault)?;
+        let auth_ref = match &profile.proxy {
+            config::ProxyConfig::Manual { auth_ref, .. } => auth_ref.as_deref(),
+            config::ProxyConfig::System | config::ProxyConfig::None => None,
+        };
+        let proxy_auth =
+            proxy::resolve_proxy_auth(self.credentials.as_ref(), auth_ref).map_err(store_fault)?;
+        Ok(ResolvedProfile { frozen, proxy_auth })
+    }
+
     /// 查询密钥状态，只返回脱敏 hint。
     ///
     /// # Errors
@@ -249,6 +269,10 @@ impl aoidos_engine::game::product::ProfileSource for Profiles {
 
     fn freeze(&self, profile_id: &str) -> Result<ResolvedProfile, Fault> {
         Profiles::freeze(self, profile_id)
+    }
+
+    fn freeze_snapshot(&self, profile: &LlmProfile) -> Result<ResolvedProfile, Fault> {
+        Profiles::freeze_snapshot(self, profile)
     }
 }
 
@@ -460,6 +484,32 @@ mod tests {
         assert_eq!(reads.load(Ordering::Relaxed), 0);
         let encoded = serde_json::to_string(&snapshot).unwrap();
         assert!(!encoded.contains("not-to-be-snapshotted"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn frozen_run_profile_uses_current_provider_credentials_after_profile_deletion() {
+        let directory = temp_dir();
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let credentials = Box::new(MemoryCredentials(
+            Mutex::new(BTreeMap::new()),
+            reads.clone(),
+        ));
+        let service = Profiles::with_credentials(&directory, credentials);
+        let saved = service.save(profile()).unwrap();
+        service
+            .set_key(
+                "deepseek",
+                secrecy::SecretString::from("provider-key-after-profile-delete"),
+            )
+            .unwrap();
+        let frozen_public = service.public_profile(&saved.profile_id).unwrap();
+        service.delete(&saved.profile_id).unwrap();
+
+        let restored = service.freeze_snapshot(&frozen_public).unwrap();
+        assert_eq!(restored.frozen.profile, frozen_public);
+        assert!(restored.frozen.credential.is_some());
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

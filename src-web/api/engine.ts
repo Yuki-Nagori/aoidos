@@ -162,6 +162,8 @@ export interface OpenedSession {
   profileId: string;
   scriptId: string;
   title: string;
+  /** SQLite 已选中该周目，但兼容选择文件待修复时为 true。 */
+  selectionMirrorPending: boolean;
 }
 /** 只读内嵌资源，不读取外部文件或发生成请求。 */
 export function listScripts(): Promise<ScriptInfo[]> {

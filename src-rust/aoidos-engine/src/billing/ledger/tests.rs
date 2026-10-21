@@ -26,6 +26,7 @@ fn reservation(request_id: &str, currency: Currency, amount: &str) -> Reservatio
     Reservation {
         request_id: request_id.into(),
         run_id: "run-1".into(),
+        legacy_scope_id: None,
         turn_id: "turn-1".into(),
         profile_id: "profile-1".into(),
         attempt: 1,
@@ -619,6 +620,139 @@ fn reservation_is_idempotent_but_conflicting_identity_is_rejected() {
         BillingLedger::reserve(&mut connection, &collision),
         Err(BillingError::Conflict)
     );
+}
+
+#[test]
+fn legacy_scope_merge_preserves_requests_pending_settlements_and_unread_warnings() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let legacy_run_id = "legacy-run";
+    BillingLedger::set_settings(
+        &mut connection,
+        legacy_run_id,
+        NanoMoney::parse("10").unwrap(),
+        NanoMoney::parse("5").unwrap(),
+        None,
+        "2026-10-11T00:00:00Z",
+    )
+    .unwrap();
+
+    let canonical_request = reservation("canonical-request", Currency::Cny, "9");
+    BillingLedger::reserve(&mut connection, &canonical_request).unwrap();
+    connection
+        .execute(
+            "UPDATE billing_budget_warnings SET read_at='2026-10-11T01:00:00Z' WHERE run_id='run-1'",
+            [],
+        )
+        .unwrap();
+
+    let mut legacy_request = reservation("legacy-request", Currency::Cny, "9");
+    legacy_request.run_id = legacy_run_id.into();
+    BillingLedger::reserve(&mut connection, &legacy_request).unwrap();
+    BillingLedger::stage_settlement(
+        &mut connection,
+        &PendingSettlement {
+            request_id: legacy_request.request_id.clone(),
+            input_total: 3,
+            input_cached: Some(0),
+            input_cached_write: Some(0),
+            output_total: 2,
+            reasoning_included: None,
+            diagnostic_code: None,
+        },
+        "2026-10-11T00:01:00Z",
+    )
+    .unwrap();
+
+    let merged = BillingLedger::reconcile_legacy_scope(
+        &mut connection,
+        "run-1",
+        legacy_run_id,
+        None,
+        "2026-10-11T00:02:00Z",
+    )
+    .unwrap();
+    assert_eq!(merged.moved_requests, 1);
+    assert_eq!(merged.moved_warnings, 1);
+    assert_eq!(merged.settings.unwrap().run_id, "run-1");
+    assert!(!BillingLedger::has_run_scope_data(&connection, legacy_run_id).unwrap());
+    assert_eq!(
+        BillingLedger::request_run_id(&connection, "legacy-request").unwrap(),
+        Some("run-1".into())
+    );
+    assert!(
+        BillingLedger::pending_settlement(&connection, "legacy-request")
+            .unwrap()
+            .is_some()
+    );
+    let warnings = BillingLedger::warnings(&connection, "run-1").unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(!warnings[0].read, "任一来源未读时，合并后的提醒必须仍未读");
+    let migrated_audit: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM billing_audit WHERE operation_kind='run-budget-update' AND target_id='run-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(migrated_audit, 2);
+}
+
+#[test]
+fn legacy_scope_budget_conflict_requires_an_explicit_atomic_resolution() {
+    let mut connection = database();
+    prepare(&mut connection);
+    BillingLedger::set_settings(
+        &mut connection,
+        "legacy-run",
+        NanoMoney::parse("8").unwrap(),
+        NanoMoney::parse("5").unwrap(),
+        None,
+        "2026-10-11T00:00:00Z",
+    )
+    .unwrap();
+
+    assert_eq!(
+        BillingLedger::reconcile_legacy_scope(
+            &mut connection,
+            "run-1",
+            "legacy-run",
+            None,
+            "2026-10-11T00:01:00Z",
+        ),
+        Err(BillingError::ReconciliationRequired)
+    );
+    assert!(BillingLedger::has_run_scope_data(&connection, "legacy-run").unwrap());
+    assert_eq!(
+        BillingLedger::get_settings(&connection, "run-1")
+            .unwrap()
+            .cny_limit,
+        NanoMoney::parse("10").unwrap()
+    );
+
+    let merged = BillingLedger::reconcile_legacy_scope(
+        &mut connection,
+        "run-1",
+        "legacy-run",
+        Some((
+            NanoMoney::parse("9").unwrap(),
+            NanoMoney::parse("4").unwrap(),
+        )),
+        "2026-10-11T00:02:00Z",
+    )
+    .unwrap();
+    let settings = merged.settings.unwrap();
+    assert_eq!(settings.cny_limit, NanoMoney::parse("9").unwrap());
+    assert_eq!(settings.usd_limit, NanoMoney::parse("4").unwrap());
+    assert!(!BillingLedger::has_run_scope_data(&connection, "legacy-run").unwrap());
+    let resolution_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM billing_audit WHERE operation_kind='legacy-budget-resolution' AND target_id='legacy-run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(resolution_count, 1);
 }
 
 #[test]

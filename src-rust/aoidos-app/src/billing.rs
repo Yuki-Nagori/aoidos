@@ -333,6 +333,10 @@ pub fn billing_fault(error: BillingError) -> Fault {
             "budget.settlement-backlog",
             "待恢复费用达到安全上限，请先重试已有结算",
         ),
+        BillingError::ReconciliationRequired => Fault::new(
+            "budget.reconciliation-required",
+            "历史费用范围尚未核对，暂不能发送请求",
+        ),
         BillingError::NotFound => Fault::new("app.not-found", "费用信息不存在"),
         BillingError::Conflict => Fault::new("budget.conflict", "费用记录发生冲突"),
         BillingError::Storage => Fault::new("store.database", "费用存储不可用"),

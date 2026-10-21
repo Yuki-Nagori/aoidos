@@ -15,6 +15,7 @@ type BillingErrorDescriptor =
         | "billing.errors.priceHistoryLimit"
         | "billing.errors.priceMissing"
         | "billing.errors.runLimitMissing"
+        | "billing.errors.reconciliationRequired"
         | "billing.errors.settlementBacklog";
     }
   | { key: "errors.unknownWithCode"; values: { code: string } };
@@ -45,6 +46,8 @@ export function billingErrorDescriptor(failure: BillingFailure): BillingErrorDes
       return { key: "billing.errors.priceMissing" };
     case "budget.run-limit-missing":
       return { key: "billing.errors.runLimitMissing" };
+    case "budget.reconciliation-required":
+      return { key: "billing.errors.reconciliationRequired" };
     case "budget.settlement-backlog":
       return { key: "billing.errors.settlementBacklog" };
     default:

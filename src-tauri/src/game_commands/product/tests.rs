@@ -87,12 +87,15 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
         window_events,
         factory.clone(),
     );
+    let runs = aoidos_app::runs::RunLifecycleService::new(storage.clone(), factory.clone());
     let app = mock_builder()
         .manage(Service::new(coordinator, factory))
         .manage(product)
+        .manage(runs)
         .invoke_handler(tauri::generate_handler![
             crate::game_ipc::engine_list_scripts,
-            crate::game_ipc::engine_open_session
+            crate::game_ipc::engine_open_session,
+            crate::run_ipc::run_open_selected
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -135,6 +138,17 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
             "app.bad-request"
         );
     }
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001"}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001","expectedRevision":"1"}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001","expectedRevision":1,"scriptId":"mistbell"}),
+    ] {
+        assert_eq!(
+            call("run_open_selected", tauri::ipc::InvokeBody::Json(body)).unwrap_err()["code"],
+            "app.bad-request"
+        );
+    }
     assert_eq!(
         call("engine_open_session", tauri::ipc::InvokeBody::Raw(vec![1])).unwrap_err()["code"],
         "app.bad-request"
@@ -166,6 +180,18 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
         .deserialize::<serde_json::Value>()
         .unwrap();
     assert_eq!(reopened["sessionId"], opened["sessionId"]);
+    let selected = call(
+        "run_open_selected",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({
+            "sessionId": opened["sessionId"],
+            "expectedRevision": 1
+        })),
+    )
+    .unwrap()
+    .deserialize::<serde_json::Value>()
+    .unwrap();
+    assert_eq!(selected["session"]["sessionId"], opened["sessionId"]);
+    assert_eq!(selected["profile"]["profileId"], "p");
     app.state::<Service>().shutdown().await;
     storage.close().unwrap();
     std::fs::remove_dir_all(root).unwrap();
