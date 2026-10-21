@@ -7,6 +7,7 @@ pub mod applied;
 pub mod atomic;
 pub mod db;
 pub mod error;
+pub mod filesystem;
 pub mod journal;
 pub mod lock;
 pub mod paths;

@@ -303,6 +303,8 @@ version = "0.1.0"
 dependencies = [
  "fs4",
  "rusqlite",
+ "sha2 0.10.9",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
