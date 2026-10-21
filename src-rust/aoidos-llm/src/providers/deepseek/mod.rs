@@ -461,7 +461,9 @@ where
                 prompt_tokens,
                 completion_tokens,
                 cached_prompt_tokens,
-                cache_creation_tokens: None,
+                // DeepSeek 用输入总量与缓存命中量表示命中 / 未命中；没有独立缓存写入计数。
+                // 未命中部分按普通输入计价，显式标记不存在独立写入量，避免账本误留待结算。
+                cache_creation_tokens: Some(0),
                 reasoning_tokens: usage
                     .completion_tokens_details
                     .and_then(|details| details.reasoning_tokens),

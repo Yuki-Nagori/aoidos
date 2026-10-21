@@ -849,6 +849,7 @@ mod tests {
                     prompt_tokens: 10,
                     completion_tokens: 5,
                     cached_prompt_tokens: Some(0),
+                    cache_creation_tokens: Some(0),
                     ..Usage::default()
                 },
             })
@@ -1217,6 +1218,7 @@ mod tests {
                     prompt_tokens: 17,
                     completion_tokens: 6,
                     cached_prompt_tokens: Some(0),
+                    cache_creation_tokens: Some(0),
                     ..Usage::default()
                 },
             })

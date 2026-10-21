@@ -63,10 +63,17 @@ impl Fault {
             RunError::Stalled if delivered => ("llm.aborted".into(), None),
             RunError::Stalled => ("llm.stalled".into(), None),
             RunError::EmptyOutput { finish } => ("llm.empty-output".into(), Some(*finish)),
-            RunError::Budget { reason } if reason == "token-estimation-needs-calibration" => {
-                ("engine.invalid-phase".into(), None)
+            RunError::Budget { reason } => {
+                let code = match reason.as_str() {
+                    "token-estimation-needs-calibration" => "engine.invalid-phase",
+                    "budget.run-limit-missing" => "budget.run-limit-missing",
+                    "budget.price-missing" => "budget.price-missing",
+                    "budget.settlement-backlog" => "budget.settlement-backlog",
+                    "budget.exceeded" => "budget.exceeded",
+                    _ => "budget.exceeded",
+                };
+                (code.into(), None)
             }
-            RunError::Budget { .. } => ("budget.exceeded".into(), None),
             RunError::InvalidPolicy(_) => ("app.bad-request".into(), None),
         };
         let message = match code.as_str() {
@@ -79,6 +86,9 @@ impl Fault {
             "llm.empty-output" => "生成未返回正文",
             "llm.aborted" => "生成中断，已提交正文保留",
             "budget.exceeded" => "费用额度不足",
+            "budget.run-limit-missing" => "本局费用上限尚未设置",
+            "budget.price-missing" => "当前模型价格尚未登记",
+            "budget.settlement-backlog" => "待恢复的费用结算过多，暂不能发送请求",
             "engine.invalid-phase" => "自动请求已暂停，请重新标定 Token 估算",
             "app.bad-request" => "回合参数不合法",
             _ => "供应商响应不合法",
@@ -123,5 +133,24 @@ mod tests {
         let detailed = Fault::new("engine.invalid-phase", "暂停")
             .with_detail(serde_json::json!({"reason":"budget"}));
         assert_eq!(detailed.detail.unwrap()["reason"], "budget");
+    }
+
+    #[test]
+    fn generation_preserves_known_budget_denial_reasons() {
+        for (reason, expected_code) in [
+            ("budget.run-limit-missing", "budget.run-limit-missing"),
+            ("budget.price-missing", "budget.price-missing"),
+            ("budget.settlement-backlog", "budget.settlement-backlog"),
+            ("budget.exceeded", "budget.exceeded"),
+        ] {
+            let (fault, finish) = Fault::generation(
+                &RunError::Budget {
+                    reason: reason.into(),
+                },
+                false,
+            );
+            assert_eq!(fault.code, expected_code);
+            assert!(finish.is_none());
+        }
     }
 }

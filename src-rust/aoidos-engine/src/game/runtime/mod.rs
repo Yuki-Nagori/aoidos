@@ -464,8 +464,8 @@ impl Actor {
     }
     async fn freeze(&self) -> Result<FrozenRound, Fault> {
         let factory = self.factory.clone();
-        let run_id = self.context.publisher.snapshot().state.session_id;
-        crate::blocking::run(move || factory.freeze_for_run(&run_id)).await
+        let session_id = self.context.publisher.snapshot().state.session_id;
+        crate::blocking::run(move || factory.freeze_for_session(&session_id)).await
     }
     async fn run(mut self) {
         loop {
