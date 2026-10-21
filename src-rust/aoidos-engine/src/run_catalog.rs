@@ -510,7 +510,7 @@ fn has_ledger_data_for_scope(
 ) -> Result<bool, Fault> {
     connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_physical_requests WHERE run_id=?1)",
+            "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_physical_requests WHERE run_id=?1) OR EXISTS(SELECT 1 FROM billing_audit WHERE target_id=?1 AND operation_kind='run-budget-update')",
             [run_id],
             |row| row.get(0),
         )
@@ -933,6 +933,36 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,100,0,1,'2026-10-20T00:00:00Z')",
+                [memory_run_id],
+            )
+            .unwrap();
+
+        bind_profile(&mut connection, session_id, 1, &profile()).unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM session_catalog WHERE session_id=?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, RunState::BillingReconciliationRequired.as_str());
+    }
+
+    #[test]
+    fn profile_binding_detects_a_legacy_audit_scope_without_a_budget_row() {
+        let mut connection = connection();
+        let session_id = "00000000-0000-4000-8000-000000000061";
+        let memory_run_id = "00000000-0000-4000-8000-000000000062";
+        connection
+            .execute(
+                "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-20T00:00:00Z',?2,?1,'needs-profile-binding',1,'2026-10-20T00:00:00Z')",
+                rusqlite::params![session_id, memory_run_id],
+            )
+            .unwrap();
+        insert_memory_mapping(&connection, session_id, memory_run_id, "mistbell");
+        connection
+            .execute(
+                "INSERT INTO billing_audit(operation_id,operation_kind,target_id,details_json,created_at) VALUES('00000000-0000-4000-8000-000000000063','run-budget-update',?1,'{}','2026-10-20T00:00:00Z')",
                 [memory_run_id],
             )
             .unwrap();

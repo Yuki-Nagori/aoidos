@@ -176,14 +176,14 @@ impl ProfileFactory {
         Ok(profile)
     }
 
-    /// 按已冻结周目 profile 准备一个受统一账本约束的私有请求。
+    /// 按已冻结周目 profile 与 canonical session 账务身份准备私有请求。
     /// 输入构造器接收同一份冻结 profile 的请求模式，不需要二次读取可能已变化的设置。
     /// # Errors
     /// profile、供应商、预算、模式或输入不合法时在发送前拒绝。
-    pub fn prepare_private_for_run(
+    pub fn prepare_private_for_session(
         &self,
         profile_id: &str,
-        run_id: &str,
+        session_id: &str,
         build_input: impl FnOnce(
             aoidos_llm::provider::RequestMode,
         ) -> Result<
@@ -194,7 +194,7 @@ impl ProfileFactory {
             Fault,
         >,
     ) -> Result<crate::request::PreparedGeneration, Fault> {
-        let frozen = self.for_profile(profile_id, Some(run_id), Some(run_id))?;
+        let frozen = self.for_profile(profile_id, Some(session_id), Some(session_id))?;
         let mode = frozen.generation.request_mode();
         let (input, guard) = build_input(mode)?;
         frozen.generation.prepare(input, guard, false)
@@ -230,8 +230,7 @@ impl RoundFactory for ProfileFactory {
             .clone()
             .ok_or_else(no_selection)?;
         if self.durable_billing {
-            let billing_run = self
-                .storage
+            self.storage
                 .memory_run_for_session(session_id)
                 .map_err(|error| {
                     if error.code == "app.bad-request" {
@@ -240,7 +239,7 @@ impl RoundFactory for ProfileFactory {
                         error
                     }
                 })?;
-            self.for_profile(&id, Some(session_id), Some(&billing_run.run_id))
+            self.for_profile(&id, Some(session_id), Some(session_id))
         } else {
             self.for_profile(&id, Some(session_id), None)
         }

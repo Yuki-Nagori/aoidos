@@ -32,8 +32,8 @@
 ## 前置条件与待决策
 
 - 059 设计评审通过；目录 migration 和分批旧数据扫描须保持旧存档可读，并标明扫描未完成状态。
-- 费用账本身份为 `sessionId`，记忆运行身份为独立 UUID；所有删除查询使用核验后的显式映射，不按 UUID 猜测。
-- 账本迁移完成后，所有新请求统一使用 session canonical `billingRunId`。迁移前 runtime 仍可能按 `memoryRunId` 读写预算和请求；目录发现此 scope 下任何账单数据都必须标记 `billing-reconciliation-required`，不能误报为未配置或可继续收费。迁移旧账本同时查 `sessionId` 和经 `memory_run_sessions` 证明的 `memoryRunId` scope，合并 request / outbox / warnings；预算冲突时阻止收费直至玩家保存新的 canonical 上限。
+- 费用账本身份为 `sessionId`，记忆运行身份为独立 UUID；所有删除查询使用核验后的显式映射，不按 UUID 猜测。legacy scope reconciliation 检查预算、物理请求和 target 精确匹配的 `run-budget-update` 审计，不能因预算行缺失而忽略残留账务审计。
+- 新会话与私有记忆请求已经统一使用 session canonical `billingRunId`。历史数据仍可能留有以 `memoryRunId` 为范围的预算和请求；目录发现此 scope 下任何账单数据都必须标记 `billing-reconciliation-required`，不能误报为未配置或可继续收费。迁移旧账本同时查 `sessionId` 和经 `memory_run_sessions` 证明的 `memoryRunId` scope，合并 request / outbox / warnings；预算冲突时阻止收费直至玩家保存新的 canonical 上限。
 - 已结算的本局费用明细随玩家确认删除；任意 `reserved` / `unconfirmed` 请求或待结算 outbox 均阻止删除，不得丢弃未知义务。已有完整持久 usage 可走现有本地结算恢复；缺 usage 且无可核验证据时保留该局，本 task 不提供伪造费用或手工改状态的入口。
 - 跨周目来源刻痕与动态实体身份按 059 失效；剧本代数高水位、全局价格 / 配置、其他周目与全库备份保留。
 - 所有清理操作由共享 app / engine / store 生命周期 API 执行；CLI、Tauri 命令和 UI 不直接操作文件路径或 SQL 级联。
@@ -86,6 +86,8 @@
 - 2026-10-21：独立 review 后将遍历目录改为深度最多 3 层的 DFS 栈，目录打开与 header 读取均复核文件类型和规范路径；header 读取移到数据库互斥锁外，Tauri 扫描命令改由 blocking 执行器承载。每次扫描先清除上一轮诊断并设置未完成标记，诊断表最多保留 256 项，缺失 memory 身份映射的 transcript 进入 `needs-repair`。新增覆盖缺失映射、扫描重置、诊断上限和目录栈深度的测试。
 - 2026-10-21：重复扫描现有目录行时重新核对 `memory_run_sessions`、`memory_runs.script_id` 与目录中的三身份关联；映射缺失或损坏会持续保持 `needs-repair`，并在每轮诊断重置后重新报告。新增缺失映射重扫和已登记映射被破坏的回归测试；旧数据扫描相关 8 项测试通过。
 - 2026-10-21：独立复审发现 profile 绑定仍信任扫描时缓存的 memoryRunId，以及 header 元数据变化可能覆盖 `deleting` 状态。绑定事务现重新核验 session→memory→script、canonical billing 身份；映射异常会先持久化 `needs-repair` 再拒绝绑定。扫描器在比较 header 前保护删除状态。新增两项回归测试，目录与扫描定向测试 21 项通过。
+- 2026-10-21：legacy scope reconciliation 现同时检查预算、物理请求与 target 精确匹配的 `run-budget-update` 审计行；即使预算已不存在，残留审计仍会阻止绑定后进入可收费状态。按 operation kind 收窄查询，避免把 profile / price 审计误认成本局账务。新增 audit-only 历史 scope 回归测试。
+- 2026-10-21：核对并修复新请求仍以 `memoryRunId` 计费的问题。普通周目冻结和私有记忆请求现在都使用 `sessionId` / canonical `billingRunId`；回归测试同时配置 session 预算与零额度 legacy memory scope，确认预留只落入 session 账本。历史 scope 迁移仍待实现。
 
 ## 完成摘要
 

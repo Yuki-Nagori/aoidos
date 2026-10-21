@@ -535,9 +535,9 @@ pub async fn memory_send_batch(
 
     let factory = product.factory.clone();
     let profile_for_request = profile_id.clone();
-    let request_run_id = run_id.clone();
+    let request_session_id = run.session_id.clone();
     let prepared = aoidos_engine::blocking::run(move || {
-        factory.prepare_private_for_run(&profile_for_request, &request_run_id, |mode| {
+        factory.prepare_private_for_session(&profile_for_request, &request_session_id, |mode| {
             let prompt =
                 aoidos_engine::record::memory::prompt::build_memory_prompt(&snapshot, mode)
                     .map_err(|error| {

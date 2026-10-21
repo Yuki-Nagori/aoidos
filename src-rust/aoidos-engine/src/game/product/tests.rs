@@ -105,7 +105,7 @@ fn durable_factory_requires_run_identity_and_freezes_provider_price_route() {
 }
 
 #[tokio::test]
-async fn durable_session_freeze_reserves_against_its_memory_run_budget() {
+async fn durable_game_and_private_requests_use_the_canonical_session_budget() {
     use crate::billing::BillingLedger;
     use aoidos_billing::{
         money::{Currency, NanoMoney},
@@ -159,8 +159,19 @@ async fn durable_session_freeze_reserves_against_its_memory_run_budget() {
             .map_err(|_| Fault::bad_request())?;
             BillingLedger::set_settings(
                 connection,
-                &opened.memory_run_id,
+                &opened.session_id,
                 NanoMoney::parse("5").unwrap(),
+                NanoMoney::ZERO,
+                None,
+                now,
+            )
+            .map_err(|_| Fault::bad_request())?;
+            // 旧版本曾错误地把 memoryRunId 当作账本范围；即使旧范围仍有设置，
+            // 新请求也必须严格使用目录中的 canonical billingRunId=sessionId。
+            BillingLedger::set_settings(
+                connection,
+                &opened.memory_run_id,
+                NanoMoney::ZERO,
                 NanoMoney::ZERO,
                 None,
                 now,
@@ -194,6 +205,29 @@ async fn durable_session_freeze_reserves_against_its_memory_run_budget() {
         .reserve_with_input_upper_bound(&attempt, input_upper_bound)
         .unwrap();
 
+    let private_input = ProviderInput::Completion(CompletionInput {
+        prompt: "验证私有记忆请求使用 canonical 账务范围。".into(),
+    });
+    let private_prepared = factory
+        .prepare_private_for_session("default", &opened.session_id, |_| {
+            Ok((private_input.clone(), GuardSpec::default()))
+        })
+        .unwrap();
+    let private_attempt = AttemptIdentity {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        turn_id: "private-budget-identity-test".into(),
+        attempt: 1,
+        kind: AttemptKind::Initial,
+        model: "deepseek-flash".into(),
+        mode: RequestMode::Completion,
+        max_tokens: 2048,
+        temperature: 1.0,
+    };
+    private_prepared
+        .budget
+        .reserve_with_input_upper_bound(&private_attempt, private_input.token_upper_bound())
+        .unwrap();
+
     let counts = fixture
         .storage
         .with_database(|connection| {
@@ -210,7 +244,7 @@ async fn durable_session_freeze_reserves_against_its_memory_run_budget() {
             ))
         })
         .unwrap();
-    assert_eq!(counts, (1, 0));
+    assert_eq!(counts, (0, 2));
     service.shutdown().await;
     fixture.close().await;
 }
