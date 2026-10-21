@@ -1038,6 +1038,10 @@ mod tests {
         fs::create_dir_all(fixture.0.join(quarantine).parent().unwrap()).unwrap();
         fs::write(fixture.0.join(quarantine), b"history").unwrap();
         let identity = file_identity_hash(&fixture.0, quarantine).unwrap();
+        let replacement = Path::new("deleting/op/transcript/replacement.jsonl");
+        fs::write(fixture.0.join(replacement), b"replacement").unwrap();
+        let replacement_identity = file_identity_hash(&fixture.0, replacement).unwrap();
+        assert_ne!(identity, replacement_identity);
         fs::remove_file(fixture.0.join(quarantine)).unwrap();
 
         let missing = purge_quarantined_tree_batch(
@@ -1052,7 +1056,8 @@ mod tests {
         assert!(missing.complete);
         assert_eq!(missing.visited_entries, 0);
 
-        fs::write(fixture.0.join(quarantine), b"replacement").unwrap();
+        // 旧文件仍存在时先比较文件身份，避免删除后文件系统复用标识。
+        fs::rename(fixture.0.join(replacement), fixture.0.join(quarantine)).unwrap();
         assert!(
             purge_quarantined_tree_batch(
                 &fixture.0,
