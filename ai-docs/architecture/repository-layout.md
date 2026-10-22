@@ -1,6 +1,6 @@
 # 目录与模块规划
 
-更新日期：2026-10-20。
+更新日期：2026-10-22。
 
 [架构总览](README.md)
 
@@ -26,6 +26,7 @@
 │   ├── src/commands.rs        # #[tauri::command] 命令层、类型化载荷与命令单测
 │   ├── src/game_commands/     # 产品阶段 DTO / 命令适配，业务由 engine actor 执行
 │   ├── src/turn_commands/     # 回合服务 / 事件适配，mod.rs 与 tests.rs 并列
+│   ├── src/run_commands/      # 周目目录、恢复、删除与账务迁移命令适配
 │   ├── src/theme_commands/    # 主题目录、偏好与剧本皮肤命令适配
 │   ├── src/locale_commands/   # 语言偏好 IPC；native.rs 单独封装真实 Wry 菜单 / 托盘适配
 │   ├── src/billing_commands/  # 预算、计价、账本与供应商余额命令适配
@@ -58,6 +59,8 @@
 ├── resources/scripts/        # 已发布剧本原文与署名 / 许可，编译期内嵌
 ├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
 ├── tests/web/                 # Vitest 行为测试（目录镜像 src-web）
+│   ├── api/                   # 类型化 IPC API 行为测试
+│   ├── api/                    # 类型化 IPC API 行为测试
 │   ├── app/                   # 根组合与跨功能界面
 │   ├── features/              # 按生产 feature 镜像
 │   ├── shared/                # 共享逻辑

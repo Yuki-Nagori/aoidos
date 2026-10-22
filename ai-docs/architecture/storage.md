@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-21。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；032 增加轮回刻痕来源与节点进度 / 提示迁移；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。周目目录与删除协议由 [059](../task/059-run-management-design.md) 定稿，060 正在实施。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-22。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；032 增加轮回刻痕来源与节点进度 / 提示迁移；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。周目目录与删除协议由 [059](../task/059-run-management-design.md) 定稿，060 已实现。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -87,9 +87,9 @@ CREATE TABLE point_allocations (
 
 兼容活动选择文件有界 4 KiB，包含 version=1、sessionId、profileId、scriptId，拒绝额外字段、非法身份或版本；损坏时报 store.corrupt，不猜测或覆盖旧元数据。060 新增 SQLite `active_session` 权威选择行，文件降为可重建镜像；打开流程须先登记 actor / writer 和周目元数据，再提交 SQLite 选择，最后原子更新镜像。重开按 header 的原文修订和静态前缀核验，不将新资源静默应用到旧周目，也不启动生成。
 
-### 周目目录与生命周期（059 已定稿，060 实施中）
+### 周目目录与生命周期（059 已定稿，060 已实现）
 
-`sessionId` 是周目 / transcript 主身份；记忆 `memoryRunId` 是经 `memory_run_sessions` 读取的独立身份；059 设计确定 canonical `billingRunId=sessionId`。当前新会话与私有记忆请求均以 `sessionId` 作为账本范围；060 的历史 scope 迁移仍未完成。目录遇到经映射核实的 `memoryRunId` legacy 账单数据时必须标为 reconciliation required，不能把周目显示为未配置或可继续收费；迁移须合并 request / reservation / settlement 并保留未决义务。没有任何预算 / 请求行才是合法的“尚未配置”。新目录显式保存并交叉核验三项身份，不能按 UUID 字面值猜测关联。`active-session.json` 仅是兼容镜像；只有 SQLite 活动选择行尚未建立时才回退读取旧镜像，已建立的空选择也是权威状态；SQLite 会话目录负责有界分页和生命周期状态，transcript header 仍是会话事实源。
+`sessionId` 是周目 / transcript 主身份；记忆 `memoryRunId` 是经 `memory_run_sessions` 读取的独立身份；059 设计确定 canonical `billingRunId=sessionId`。当前新会话与私有记忆请求均以 `sessionId` 作为账本范围；060 已实现历史账务 scope 迁移。目录遇到经映射核实的 `memoryRunId` legacy 账单数据时必须标为 reconciliation required，不能把周目显示为未配置或可继续收费；迁移须合并 request / reservation / settlement 并保留未决义务。没有任何预算 / 请求行才是合法的“尚未配置”。新目录显式保存并交叉核验三项身份，不能按 UUID 字面值猜测关联。`active-session.json` 仅是兼容镜像；只有 SQLite 活动选择行尚未建立时才回退读取旧镜像，已建立的空选择也是权威状态；SQLite 会话目录负责有界分页和生命周期状态，transcript header 仍是会话事实源。
 
 目录 schema 已包含 SQLite 会话摘要、权威活动选择、revision 和删除 journal；启动时逐项比对注册的表 / 索引定义。新创建周目登记 `sessionId`、独立 `memoryRunId`、canonical `billingRunId=sessionId` 与公开 profile 快照。公开快照通过 profile 文件读取，不访问密钥库。分页使用固定排序和 revision 绑定的 keyset 游标，响应不含 transcript 与路径；旧周目的 profile 绑定使用目录 revision 做 CAS，并将 legacy 账本 scope 保守标为待核对。活动文件写入失败后，重启读取 SQLite 权威行并修复兼容镜像。玩家可显式推进旧 transcript 扫描；扫描按每批最多 128 个遍历项、最多 8 MiB header 字节和单行 2 MiB 格式上限读取，只校验首行而不打开或恢复会话。扫描以深度有界的目录栈遍历，并在打开目录和读取 header 前复核文件类型及规范路径。每次新扫描先标记未完成并清除上一轮诊断；异常项以相对路径哈希记录，最多保留 256 项，`scanIssueCount` 达上限时饱和，不会阻断其他条目。缺少 `memory_run_sessions` 映射的旧记录因无法核验独立记忆身份而进入 `needs-repair`，不允许通过 profile 绑定解锁。列表 / 预览本身不扫描，发现完成前持续报告 `scanIncomplete`；header 文件 I/O 在 SQLite 全局锁外执行。
 

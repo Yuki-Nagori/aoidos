@@ -1,6 +1,6 @@
 # 架构总览
 
-更新日期：2026-10-21。
+更新日期：2026-10-22。
 
 Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Tauri 构建界面和桌面壳，底层业务由 Rust 工作区承载。本文是架构文档入口，帮助定位模块职责、接口契约和设计对接；产品目标见[根 README](../../README.md)，实施进度见[任务索引](../task-index.md)，工程约定见[规范索引](../standards/README.md)。
 
@@ -23,7 +23,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | 键盘交互     | [快捷键与键盘交互](keyboard-shortcuts.md) | 052 已移植只读展示；动作注册、全局分发、改键与平台接线由 057 承接                                       |
 | 国际化       | [界面国际化](i18n.md)                     | zh-Hans / en、语言偏好、首窗原生文案与精确格式化；034 已验收                                            |
 | 主题与皮肤   | [主题架构](theming.md)                    | 平级主题 ID、偏好防闪、CSS 子集与失败回退；026 已三平台验收                                             |
-| 存储基建     | [存储基建](storage.md)                    | 数据目录、SQLite、实例锁、原子写及周目目录 / 删除（059 定稿，060 实施中）                               |
+| 存储基建     | [存储基建](storage.md)                    | 数据目录、SQLite、实例锁、原子写及周目目录 / 删除（059 定稿，060 已实现）                               |
 | 开发与交付   | [构建与开发](build-and-development.md)    | 本地命令、质量门禁、打包与图标                                                                          |
 
 依赖方向与 crate 分层见[分层规范](../standards/layering.md)。当前 Rust workspace 无环；基础与独立领域 crate 向上由领域服务、engine 与 Tauri 壳消费，原生测试位于末端。CI 通过 Cargo 元数据核验 crate 依赖边，并按变更范围选择测试、格式和 lint；具体规则与保守回退策略见[测试规范](../standards/testing.md)。
@@ -50,7 +50,7 @@ Aoidos 是 AI 驱动的剧情跑团桌面应用，使用 Vue、TypeScript 与 Ta
 | [记忆搜索](memory.md#记忆搜索053-已定稿055-待实现)                      | [053](../task/053-memory-query-search-design.md) | [055](../task/055-memory-search-impl.md) 检索、IPC 与共享输入组件                                                                                                                                               |
 | [结局与周目落幕](ending-flow.md)                                        | [054](../task/054-ending-flow-design.md)         | [056](../task/056-ending-flow-impl.md) 规则冻结、标签、AI 叙事与终态恢复                                                                                                                                        |
 | [回合与阶段机](turn-state-machine.md)                                   | [012](../task/012-turn-state-machine-design.md)  | [023](../task/023-turn-state-machine-impl.md) 产品入口、判定与恢复                                                                                                                                              |
-| [周目目录与生命周期](storage.md#周目目录与生命周期059-已定稿060-实施中) | [059](../task/059-run-management-design.md)      | [060](../task/060-run-management-impl.md) 目录、显式有界旧记录扫描、选择 / 恢复、账务安全门与跨存储删除                                                                                                         |
+| [周目目录与生命周期](storage.md#周目目录与生命周期059-已定稿060-已实现) | [059](../task/059-run-management-design.md)      | [060](../task/060-run-management-impl.md) 目录、显式有界旧记录扫描、选择 / 恢复、账务安全门与跨存储删除                                                                                                         |
 | [快捷键与键盘交互](keyboard-shortcuts.md)                               | `aoidos-art` 已采纳方案                          | [052](../task/052-aoidos-art-vue-port.md) 只读视觉层；[057](../task/057-keyboard-shortcuts-impl.md) 动作注册、全局分发、改键与平台接线                                                                          |
 | [界面结构与交互](ui-shell.md)                                           | [008](../task/008-ui-shell-design.md)            | [004](../task/004-tailwind-v4.md) 样式底座；[025](../task/025-ui-shell-impl.md) 完整界面，[046](../task/046-scene-presence-ui-impl.md) 在场角色选择，[057](../task/057-keyboard-shortcuts-impl.md) 快捷键与改键 |
 | [界面国际化](i18n.md)                                                   | [028](../task/028-i18n-design.md)                | [034](../task/034-i18n-impl.md) 底座 / 原生，025 / 031 消费                                                                                                                                                     |
@@ -132,7 +132,7 @@ src-cli
 
 058 将游戏运行链路迁入 `aoidos-app`。该 crate 负责 profile / 凭据服务、回合协调器、诊断状态、代理快照、`Product` / runtime 装配及共享计价 / 预算服务；061 使 Tauri 与 CLI/TUI 共用计价、价格选择和单局额度用例，价目模板唯一维护在 billing crate；Tauri 和 `src-cli/` 中的 `aoidos-cli` 在进程内复用它，不启动彼此子进程。入口为实现 engine 事件端口、共享数据根锁和受控展示类型保留少量直接依赖；这些 adapter 不复制业务状态机。engine 和领域 crate 不依赖 app，两个入口也不互相依赖。细节见[分层规范](../standards/layering.md)和[TS / Rust 边界](ts-rust-boundary.md)。
 
-周目历史目录与选择 / 删除不属于 058 的设置面板。059 定稿 `sessionId`、独立 `memoryRunId` 与 `billingRunId` 的映射、profile 快照、旧数据发现和跨存储删除 journal；060 由 Tauri 与 CLI/TUI 共用 `aoidos-app` 生命周期 API。目录已登记新局身份，提供只读分页、旧局 profile 绑定 CAS 和显式有界 transcript header 扫描；扫描使用深度有界目录栈，header 读取位于 SQLite 锁外，异常诊断每轮重置且最多保留 256 项。无法核验 memory 身份的旧记录进入 repair 状态。CLI/TUI 与 Web 均接入分页、扫描和恢复，恢复沿用该局冻结 profile；Web 与 TUI 可核对并迁移历史账务，额度冲突时须由玩家确定本局双币上限。删除链路通过共享 journal 关闭 owner、冻结并校验隔离清单、清理 run-scoped SQLite 数据，再按每批最多 128 个节点清理文件；递归预算包含目录并检查卷边界，深层路径栈跨批持久化，单项恢复失败的诊断会在目录重试入口保留。启动恢复只前向推进未完成操作且不被健康操作的失败阻断，Web / TUI 为未完成删除保留重试入口。全库迁移备份与剧本代数高水位保留。相关持久化和不可逆边界见[存储架构](storage.md#周目目录与生命周期059-已定稿060-实施中)。
+周目历史目录与选择 / 删除不属于 058 的设置面板。059 定稿 `sessionId`、独立 `memoryRunId` 与 `billingRunId` 的映射、profile 快照、旧数据发现和跨存储删除 journal；060 由 Tauri 与 CLI/TUI 共用 `aoidos-app` 生命周期 API。目录已登记新局身份，提供只读分页、旧局 profile 绑定 CAS 和显式有界 transcript header 扫描；扫描使用深度有界目录栈，header 读取位于 SQLite 锁外，异常诊断每轮重置且最多保留 256 项。无法核验 memory 身份的旧记录进入 repair 状态。CLI/TUI 与 Web 均接入分页、扫描和恢复，恢复沿用该局冻结 profile；Web 与 TUI 可核对并迁移历史账务，额度冲突时须由玩家确定本局双币上限。删除链路通过共享 journal 关闭 owner、冻结并校验隔离清单、清理 run-scoped SQLite 数据，再按每批最多 128 个节点清理文件；递归预算包含目录并检查卷边界，深层路径栈跨批持久化，单项恢复失败的诊断会在目录重试入口保留。启动恢复只前向推进未完成操作且不被健康操作的失败阻断，Web / TUI 为未完成删除保留重试入口。全库迁移备份与剧本代数高水位保留。相关持久化和不可逆边界见[存储架构](storage.md#周目目录与生命周期059-已定稿060-已实现)。
 
 前端 IPC 调用放在 `src-web/api/`；功能私有逻辑留在 `features/<feature>/`，跨功能共用逻辑放在 `shared/`；组件负责展示和编排。命令层保持薄，业务逻辑进入独立 Rust crate；业务 crate 通过普通数据交出进度，由平台层适配窗口事件。跨端类型在 Rust 定型后同步声明 TS 类型，`invoke` 负责透传。
 

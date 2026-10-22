@@ -1,6 +1,6 @@
 # 062 — 平台能力边界收敛
 
-- 状态：in-progress
+- 状态：done
 - 依赖：013、019、058
 - 优先级：P0
 - 创建 / 更新：2026-10-21 / 2026-10-22
@@ -44,7 +44,7 @@
 3. [x] 更新 Cargo feature / target dependencies、原生集成测试调用点与三平台依赖计划。
 4. [x] 更新架构文档和 task-index，检查 CLI 依赖闭包不再携带 GTK / AppKit / CredUI。
 5. [x] 运行本机完整验证；由 gpt-6.1-sol medium subagent 独立 review，修复发现并复验。
-6. [ ] PR 三平台 CI 与原生会话验证通过；核实 Windows DACL 行为后完成验收。
+6. [x] PR 三平台 CI 与原生会话验证通过；核实 Windows DACL 行为后完成验收。
 
 ## 预计改动
 
@@ -67,17 +67,17 @@
 
 ## 验证计划与结果
 
-| 日期       | 环境 / 命令                                                                                                                                        | 预期                                                       | 实际结果                                                                                                                 |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 2026-10-21 | `cargo test -p aoidos-store --lib`                                                                                                                 | 私有权限和原子写测试通过                                   | macOS 89 项通过；Windows DACL 结构测试已实现，待 Windows CI 编译和运行                                                   |
-| 2026-10-21 | `cargo test -p aoidos-llm --lib`; `cargo test -p aoidos --lib`                                                                                     | 凭据业务与 Tauri 命令测试通过                              | LLM 241 项、Tauri 58 项通过                                                                                              |
-| 2026-10-21 | `cargo check -p aoidos --features native-smoke`; native-platform test target check                                                                 | 原生 adapter、烟测 feature 与 runner 能编译                | macOS 编译通过；尚未运行真实对话框烟测                                                                                   |
-| 2026-10-21 | `cargo clippy -p aoidos-store -p aoidos-llm -p aoidos -p aoidos-cli --all-targets -- -D warnings`; `bun run lint:layers`                           | 受影响 crate 无警告、依赖方向合法                          | 通过；Cargo metadata 显示 Windows UI features 仅由 Tauri 声明，CLI 的 macOS 依赖树未包含 GTK / AppKit / UI 库            |
-| 2026-10-21 | `cargo metadata --no-deps`; `bun run format:check`; `bun run format:rust:check`                                                                    | 目标依赖与格式符合边界                                     | 通过；Windows-sys DACL 功能只由 store 声明，GUI 依赖只由 Tauri 按目标声明                                                |
-| 2026-10-21 | `bun run verify`                                                                                                                                   | 完整本机质量门禁通过                                       | 通过；473 项 Vitest、Rust 覆盖率 94.71%、视觉回归、全 workspace Clippy、构建与 rustdoc 均成功                            |
-| 2026-10-21 | gpt-6.1-sol medium 独立 final review                                                                                                               | 平台边界与安全关键改动无阻塞问题                           | 通过；修正 Windows `GetAce` 导入及 LLM 文档路径，复核后无阻塞发现                                                        |
-| 2026-10-22 | `gh run view 39629694896`; `cargo test -p aoidos-store --lib quarantine_tree_cleanup_is_idempotent_for_missing_roots_and_rejects_identity_changes` | Linux 文件身份更换测试可重复通过                           | Ubuntu CI 揭示 inode 可在删除后立即复用；测试改为旧、新文件并存时先确认身份不同，再执行替换；本机目标测试通过，CI 待复验 |
-| —          | 三平台 CI 与桌面会话实测                                                                                                                           | Windows / Linux 构建、Windows DACL 与三平台确认 / 取消验收 | 待 PR CI 和原生会话 runner                                                                                               |
+| 日期       | 环境 / 命令                                                                                                                                        | 预期                                        | 实际结果                                                                                                                                |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-21 | `cargo test -p aoidos-store --lib`                                                                                                                 | 私有权限和原子写测试通过                    | macOS 89 项通过；Windows DACL 结构测试已实现，待 Windows CI 编译和运行                                                                  |
+| 2026-10-21 | `cargo test -p aoidos-llm --lib`; `cargo test -p aoidos --lib`                                                                                     | 凭据业务与 Tauri 命令测试通过               | LLM 241 项、Tauri 58 项通过                                                                                                             |
+| 2026-10-21 | `cargo check -p aoidos --features native-smoke`; native-platform test target check                                                                 | 原生 adapter、烟测 feature 与 runner 能编译 | macOS 编译通过；尚未运行真实对话框烟测                                                                                                  |
+| 2026-10-21 | `cargo clippy -p aoidos-store -p aoidos-llm -p aoidos -p aoidos-cli --all-targets -- -D warnings`; `bun run lint:layers`                           | 受影响 crate 无警告、依赖方向合法           | 通过；Cargo metadata 显示 Windows UI features 仅由 Tauri 声明，CLI 的 macOS 依赖树未包含 GTK / AppKit / UI 库                           |
+| 2026-10-21 | `cargo metadata --no-deps`; `bun run format:check`; `bun run format:rust:check`                                                                    | 目标依赖与格式符合边界                      | 通过；Windows-sys DACL 功能只由 store 声明，GUI 依赖只由 Tauri 按目标声明                                                               |
+| 2026-10-21 | `bun run verify`                                                                                                                                   | 完整本机质量门禁通过                        | 通过；473 项 Vitest、Rust 覆盖率 94.71%、视觉回归、全 workspace Clippy、构建与 rustdoc 均成功                                           |
+| 2026-10-21 | gpt-6.1-sol medium 独立 final review                                                                                                               | 平台边界与安全关键改动无阻塞问题            | 通过；修正 Windows `GetAce` 导入及 LLM 文档路径，复核后无阻塞发现                                                                       |
+| 2026-10-22 | `gh run view 39629694896`; `cargo test -p aoidos-store --lib quarantine_tree_cleanup_is_idempotent_for_missing_roots_and_rejects_identity_changes` | Linux 文件身份更换测试可重复通过            | Ubuntu CI 揭示 inode 可在删除后立即复用；测试改为旧、新文件并存时先确认身份不同，再执行替换；本机目标测试通过，修复后 PR 三平台 CI 通过 |
+| 2026-10-22 | PR #192 CI `39633749029`                                                                                                                           | 三平台构建、受影响测试及原生平台会话均通过  | Ubuntu、macOS、Windows 与共享质量门禁全部通过；PR #192 已合并                                                                           |
 
 ## 风险与回退
 
@@ -87,8 +87,8 @@
 
 - 2026-10-21：全仓平台审计确认 POSIX / Windows 权限实现应归 `aoidos-store`，GTK / AppKit / CredUI 输入应归 Tauri 入口；CLI 数据根与终端适配、LLM keyring、store 文件身份和原子写属于各自层次，不迁移。
 - 2026-10-21：其余生产平台分支复核后保留：`aoidos-store` 的 Windows rename 错误分类、本机路径编解码与权限实现属于 L1 文件语义；CLI 的数据根解析属于入口宿主职责；engine 中 Linux RSS 读取及 Unix 符号链接夹具只在测试目标编译。没有发现其他 L2 / L3 生产 crate 自行分支平台实现。主题与 legacy scan 的根内有界读取不属于平台差异，暂不抽象成通用文件 API。
-- 2026-10-22：PR #192 的 Windows / macOS 与 Ubuntu 共享门禁通过；Ubuntu 发现文件身份测试假设文件系统不会在删除后复用 inode。修正测试为在旧文件仍存在时创建替代文件并比较身份，待 CI 全量复验。
+- 2026-10-22：PR #192 三平台 CI 与原生平台会话检查全部通过并已合并。Ubuntu 曾发现文件身份测试假设删除后 inode 不会复用；测试现于旧文件仍存在时创建替代文件并比较身份，目标用例通过。
 
 ## 完成摘要
 
-已完成平台边界迁移、其余 OS 分支审计、测试与文档同步，并通过本机 macOS 检查。Windows / Linux 构建、Windows DACL 实测及三平台原生会话验收仍待 PR CI / 原生 runner，因此任务暂不标记完成。
+已完成平台边界迁移、其余 OS 分支审计、测试与文档同步。本机完整验证与独立评审通过，PR #192 的 Ubuntu、macOS、Windows CI 和原生平台会话检查全绿并已合并。
