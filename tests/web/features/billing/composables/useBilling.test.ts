@@ -7,7 +7,6 @@ import type {
   MonthlyPeriod,
   PriceVersion,
   RunPeriod,
-  SuggestedLimits,
   ProviderBalanceSnapshot,
 } from "../../../../../src-web/api/billing";
 import {
@@ -16,7 +15,6 @@ import {
   getPrice,
   getRunPeriod,
   getSelectedPrice,
-  getSuggestedLimits,
   getProviderBalance,
   listBillingRequests,
   previewBillingBackfill,
@@ -34,7 +32,6 @@ vi.mock("../../../../../src-web/api/billing", () => ({
   getPrice: vi.fn(),
   getRunPeriod: vi.fn(),
   getSelectedPrice: vi.fn(),
-  getSuggestedLimits: vi.fn(),
   getProviderBalance: vi.fn(),
   listBillingRequests: vi.fn(),
   previewBillingBackfill: vi.fn(),
@@ -91,10 +88,6 @@ function requestPage(revision = "1", nextCursor?: string): BillingRequestPage {
   return { revision, items: [], ...(nextCursor ? { nextCursor } : {}) };
 }
 
-function suggestions(): SuggestedLimits {
-  return { cny: "20", usd: "5", referenceInputTokens: 1000, referenceOutputTokens: 500 };
-}
-
 function balanceSnapshot(): ProviderBalanceSnapshot {
   return {
     providerId: "deepseek",
@@ -129,7 +122,6 @@ beforeEach(() => {
   vi.mocked(getPrice).mockResolvedValue(null);
   vi.mocked(getRunPeriod).mockImplementation(async (id) => runPeriod(id));
   vi.mocked(getSelectedPrice).mockResolvedValue(null);
-  vi.mocked(getSuggestedLimits).mockResolvedValue(suggestions());
   vi.mocked(getProviderBalance).mockResolvedValue(balanceSnapshot());
   vi.mocked(listBillingRequests).mockResolvedValue(requestPage());
   vi.mocked(previewBillingBackfill).mockResolvedValue(null);
@@ -183,7 +175,6 @@ describe("useBilling initial loading", () => {
     vi.mocked(getBudgetSettings).mockResolvedValue(settings({ cnyLimit: "12", usdLimit: "3" }));
     vi.mocked(getSelectedPrice).mockResolvedValue(selected);
     vi.mocked(getPrice).mockResolvedValue(selected);
-    vi.mocked(getSuggestedLimits).mockResolvedValue(suggestions());
     vi.mocked(listBillingRequests).mockResolvedValue(requestPage("8", "cursor-2"));
     const { state, scope } = createState("run-1", "openrouter");
 
@@ -207,7 +198,6 @@ describe("useBilling initial loading", () => {
       "model-1",
       "openrouter",
     );
-    expect(getSuggestedLimits).toHaveBeenCalledWith("openrouter", "model-1", "openrouter");
     expect(getMonthlyPeriod).toHaveBeenCalledWith(
       expect.stringMatching(/^\d{4}-\d{2}$/),
       expect.any(String),
@@ -215,11 +205,15 @@ describe("useBilling initial loading", () => {
     scope.stop();
   });
 
-  it("uses suggested caps and direct routing when no saved settings or price exist", async () => {
+  it("persists the default CNY 10 and USD 5 caps for an empty run", async () => {
     const { state, scope } = createState();
     await waitForLoaded(state);
-    expect(state.cnyLimit.value).toBe("20");
+    await vi.waitFor(() => expect(state.ready.value).toBe(true));
+    expect(state.cnyLimit.value).toBe("10");
     expect(state.usdLimit.value).toBe("5");
+    expect(state.settings.value?.cnyLimit).toBe("10");
+    expect(state.settings.value?.usdLimit).toBe("5");
+    expect(setBudgetSettings).toHaveBeenCalledWith("run-1", "10", "5", undefined);
     expect(state.priceReady.value).toBe(false);
     expect(state.sourceUrl.value).toBe("");
     expect(getSelectedPrice).toHaveBeenCalledWith("profile-1", "provider-1", "model-1", "direct");
@@ -241,18 +235,15 @@ describe("useBilling initial loading", () => {
     scope.stop();
   });
 
-  it("keeps empty defaults when there are no saved caps, suggestions, or source URL", async () => {
-    vi.mocked(getSuggestedLimits).mockResolvedValue({
-      cny: null,
-      usd: null,
-      referenceInputTokens: 0,
-      referenceOutputTokens: 0,
-    });
+  it("uses fixed default caps for a run without saved settings", async () => {
     vi.mocked(getSelectedPrice).mockResolvedValue(price({ sourceUrl: undefined }));
     const { state, scope } = createState();
     await waitForLoaded(state);
-    expect(state.cnyLimit.value).toBe("");
-    expect(state.usdLimit.value).toBe("");
+    await vi.waitFor(() => expect(state.ready.value).toBe(true));
+    expect(state.cnyLimit.value).toBe("10");
+    expect(state.usdLimit.value).toBe("5");
+    expect(state.settings.value?.cnyLimit).toBe("10");
+    expect(state.settings.value?.usdLimit).toBe("5");
     expect(state.sourceUrl.value).toBe("");
     expect(state.priceReady.value).toBe(true);
     scope.stop();
@@ -284,13 +275,15 @@ describe("useBilling initial loading", () => {
     runId.value = "run-2";
     await nextTick();
     await waitForLoaded(state);
+    await vi.waitFor(() => expect(state.ready.value).toBe(true));
     expect(state.period.value?.runId).toBe("run-2");
 
     pending.resolve(settings({ runId: "run-1", cnyLimit: "999" }));
     await Promise.resolve();
     await Promise.resolve();
-    expect(state.settings.value).toBeNull();
-    expect(state.cnyLimit.value).toBe("20");
+    expect(state.settings.value?.runId).toBe("run-2");
+    expect(state.cnyLimit.value).toBe("10");
+    expect(state.usdLimit.value).toBe("5");
     scope.stop();
   });
 
@@ -792,6 +785,7 @@ describe("useBilling settings and period refresh", () => {
     expect(setBudgetSettings).not.toHaveBeenCalled();
     noRun.scope.stop();
 
+    vi.mocked(getBudgetSettings).mockResolvedValue(settings());
     const { state, scope } = createState();
     await waitForLoaded(state);
     state.busy.value = true;
@@ -808,10 +802,29 @@ describe("useBilling settings and period refresh", () => {
     scope.stop();
   });
 
+  it("recovers readiness after a failed automatic default write", async () => {
+    vi.mocked(setBudgetSettings)
+      .mockRejectedValueOnce(new Error("temporary storage failure"))
+      .mockResolvedValueOnce(settings());
+    const { state, scope } = createState();
+
+    await vi.waitFor(() => expect(state.error.value?.message).toBe("temporary storage failure"));
+    expect(state.ready.value).toBe(false);
+
+    await state.saveSettings();
+
+    expect(state.ready.value).toBe(true);
+    expect(state.settings.value?.cnyLimit).toBe("10");
+    scope.stop();
+  });
+
   it("ignores a settings save that completes after switching runs", async () => {
     const pending = deferred<BudgetSettings>();
     vi.mocked(getBudgetSettings).mockImplementation(async (runId) =>
       runId === "run-1" ? settings({ runId }) : null,
+    );
+    vi.mocked(listBillingRequests).mockImplementation(async (runId) =>
+      runId === "run-2" ? requestPage("1", "older-page") : requestPage(),
     );
     vi.mocked(setBudgetSettings).mockReturnValueOnce(pending.promise);
     const { state, runId, scope } = createState();
@@ -930,7 +943,7 @@ describe("useBilling settings and period refresh", () => {
     saving.scope.stop();
     saveWait.resolve(settings({ cnyLimit: "99" }));
     await save;
-    expect(saving.state.settings.value).toBeNull();
+    expect(saving.state.settings.value?.cnyLimit).toBe("10");
     expect(saving.state.busy.value).toBe(true);
   });
 

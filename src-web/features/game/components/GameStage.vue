@@ -118,18 +118,6 @@ onScopeDispose(() => window.removeEventListener("keydown", onKeydown));
           <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" />
         </svg>
       </button>
-      <button
-        type="button"
-        class="btn icon ghost"
-        :aria-label="props.triggerLabel"
-        :aria-expanded="props.panelOpen"
-        @click="emit('open')"
-      >
-        <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="4" y="5" width="16" height="14" rx="2.5" />
-          <path d="M14 5v14" />
-        </svg>
-      </button>
     </header>
 
     <div class="stage-area">

@@ -24,7 +24,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
       },
       global: { plugins: [i18n] },
     });
@@ -70,7 +69,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
       },
       global: { plugins: [i18n] },
     });
@@ -100,7 +98,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: true,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
       },
       global: { plugins: [i18n] },
     });
@@ -123,7 +120,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
       },
       global: { plugins: [i18n] },
     });
@@ -162,7 +158,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
       },
       global: { plugins: [i18n] },
     });
@@ -190,7 +185,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
       },
       global: { plugins: [i18n] },
     });
@@ -217,7 +211,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
         presenceHasScene: true,
         presenceReady: true,
         presenceCharacters: [
@@ -254,7 +247,6 @@ describe("ActionComposer", () => {
         submitLabel: "Submit action",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
         inFlight: true,
         interruptAvailable: true,
       },
@@ -292,7 +284,6 @@ describe("ActionComposer", () => {
         submitLabel: "Jump to latest",
         tooLarge: false,
         slashMenuDismissed: false,
-        rewindSelectorOpen: false,
         inFlight: true,
       },
       global: { plugins: [i18n] },

@@ -76,7 +76,13 @@ describe("RecordFeed", () => {
         recordSeq: 7,
         createdAt: "2026-10-10T00:00:06Z",
         kind: "check",
-        body: { diceSeq: 2, dc: 9, result: "success", ruleId: "probeDoor", planId: "plan" },
+        body: {
+          diceSeq: 2,
+          dc: 9,
+          result: "success",
+          ruleId: "pbta-explore-v1",
+          planId: "plan",
+        },
       },
     ];
     const wrapper = mount(RecordFeed, {
@@ -85,7 +91,6 @@ describe("RecordFeed", () => {
         characters: [{ id: "keeper", canonicalName: "Lantern keeper" }],
         olderCursor: "cursor",
         loadingOlder: false,
-        canRewind: true,
       },
       global: { plugins: [i18n] },
     });
@@ -93,7 +98,12 @@ describe("RecordFeed", () => {
     expect(wrapper.text()).toContain("17");
     expect(wrapper.text()).toContain("Lantern keeper");
     expect(wrapper.text()).toContain("The lamp leans toward the door.");
-    expect(wrapper.text()).toContain("DC 9");
+    expect(wrapper.text()).not.toContain("DC 9");
+    const checkRow = wrapper.findAll(".record-row")[6]!;
+    expect(checkRow.text()).toContain("Exploration check");
+    expect(checkRow.find(".record-result").text()).toBe("Success");
+    expect(checkRow.text()).not.toContain("1d20");
+    expect(checkRow.text()).not.toContain("17");
     expect(wrapper.find(".record-player-bubble").exists()).toBe(true);
     expect(wrapper.find(".record-character-bubble").exists()).toBe(true);
     expect(wrapper.find(".record-narrator").exists()).toBe(true);
@@ -102,19 +112,16 @@ describe("RecordFeed", () => {
     await wrapper.get("button").trigger("click");
     expect(wrapper.emitted("loadOlder")).toHaveLength(1);
     await wrapper.findAll("button")[1]!.trigger("click");
-    expect(wrapper.emitted("rewind")).toEqual([[3]]);
-    await wrapper.findAll("button")[2]!.trigger("click");
     expect(wrapper.emitted("loadBody")).toEqual([["body-ref"]]);
     wrapper.unmount();
   });
 
-  it("renders preview, terminal metadata, and an empty state", () => {
+  it("renders preview and an empty state without terminal metadata", () => {
     const wrapper = mount(RecordFeed, {
       props: {
         items: [],
         loadingOlder: false,
-        canRewind: false,
-        preview: { text: "partial", outcome: "failed", finishReason: "guard" },
+        preview: { text: "partial" },
         expandedBody: "expanded",
       },
       global: { plugins: [i18n] },
@@ -122,7 +129,56 @@ describe("RecordFeed", () => {
     expect(wrapper.text()).toContain("No records yet");
     expect(wrapper.text()).toContain("partial");
     expect(wrapper.text()).toContain("expanded");
-    expect(wrapper.text()).toContain("guard");
+    expect(wrapper.findAll(".record-terminal")).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("omits internal terminal and engine-confirmation status from the story feed", () => {
+    const wrapper = mount(RecordFeed, {
+      props: {
+        items: [
+          {
+            recordSeq: 1,
+            createdAt: "2026-10-22T00:00:00Z",
+            kind: "narration",
+            body: {
+              text: "The stair descends into darkness.",
+              turnId: "turn-1",
+              outcome: "completed",
+              finishReason: "stop",
+            },
+          },
+          {
+            recordSeq: 2,
+            createdAt: "2026-10-22T00:00:01Z",
+            kind: "system",
+            body: { code: "roundCompleted", message: "引擎确认回合事实", data: {} },
+          },
+          {
+            recordSeq: 3,
+            createdAt: "2026-10-22T00:00:02Z",
+            kind: "narration",
+            body: {
+              text: "The response could not be completed.",
+              turnId: "turn-2",
+              outcome: "failed",
+              error: { code: "llm.unavailable", message: "Provider unavailable." },
+            },
+          },
+        ],
+        loadingOlder: false,
+      },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.findAll(".record-terminal")).toHaveLength(0);
+    expect(wrapper.findAll(".record-system")).toHaveLength(0);
+    expect(wrapper.text()).toContain("The stair descends into darkness.");
+    expect(wrapper.text()).not.toContain("Normal end");
+    expect(wrapper.text()).not.toContain("引擎确认回合事实");
+    expect(wrapper.text()).toContain(i18n.global.t("game.operationFailed"));
+    expect(wrapper.text()).toContain("Provider unavailable.");
+    expect(wrapper.text()).toContain("Diagnostic code: llm.unavailable");
     wrapper.unmount();
   });
 
@@ -143,7 +199,6 @@ describe("RecordFeed", () => {
           },
         ],
         loadingOlder: false,
-        canRewind: false,
       },
       global: { plugins: [i18n] },
     });
@@ -181,7 +236,6 @@ describe("RecordFeed", () => {
           },
         ],
         loadingOlder: false,
-        canRewind: false,
       },
       global: { plugins: [i18n] },
     });
@@ -194,6 +248,61 @@ describe("RecordFeed", () => {
     expect(wrapper.text()).not.toContain("This record uses a format this version cannot display.");
     expect(wrapper.text()).not.toContain("futureSystemEvent");
     expect(wrapper.findAll("li")[2]!.find("p").text()).toBe(`${"x".repeat(1_999)}😀…`);
+    wrapper.unmount();
+  });
+
+  it("hides generic engine facts while preserving actionable check status", () => {
+    const wrapper = mount(RecordFeed, {
+      props: {
+        items: [
+          [1, "roundAccepted"],
+          [2, "checkPlanned"],
+          [3, "worldApplied"],
+          [4, "worldApplied"],
+        ].map(([recordSeq, code]) => ({
+          recordSeq: Number(recordSeq),
+          createdAt: `2026-10-20T00:00:0${recordSeq}Z`,
+          kind: "system",
+          turnId: "turn-1",
+          body: {
+            code: String(code),
+            message: "引擎确认回合事实",
+            turnId: "turn-1",
+            data: {},
+          },
+        })),
+        loadingOlder: false,
+      },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.findAll(".record-system")).toHaveLength(0);
+    expect(wrapper.findAll(".record-row")).toHaveLength(1);
+    expect(wrapper.text()).toContain(i18n.global.t("game.checkPlanned"));
+    wrapper.unmount();
+  });
+
+  it("selects a rewind target from a record row without rendering a button", async () => {
+    const wrapper = mount(RecordFeed, {
+      props: {
+        rewindSelectorOpen: true,
+        items: [
+          {
+            recordSeq: 8,
+            createdAt: "2026-10-20T00:00:08Z",
+            kind: "system",
+            body: { code: "checkPlanned", message: "", data: {} },
+          },
+        ],
+        loadingOlder: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    const row = wrapper.find(".record-row");
+    expect(row.attributes("tabindex")).toBe("0");
+    expect(row.find("button").exists()).toBe(false);
+    await row.trigger("click");
+    expect(wrapper.emitted("rewind")).toEqual([[8]]);
     wrapper.unmount();
   });
 });

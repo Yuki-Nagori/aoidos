@@ -13,7 +13,7 @@ const props = defineProps<{
   submitLabel: string;
   tooLarge: boolean;
   slashMenuDismissed: boolean;
-  rewindSelectorOpen: boolean;
+  rewindSelectorOpen?: boolean;
   inFlight?: boolean;
   interruptAvailable?: boolean;
   controlDisabled?: boolean;

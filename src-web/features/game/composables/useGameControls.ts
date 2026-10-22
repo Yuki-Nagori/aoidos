@@ -5,12 +5,12 @@ import {
   cancelRound,
   interruptRound,
   regenerate,
-  resume,
   rewind,
+  resume,
   submitCheck,
 } from "../../../api/engine";
 import { turnRecoveryError } from "../utils/turn-recovery";
-const defaults = { cancelRound, interruptRound, regenerate, resume, rewind, submitCheck };
+const defaults = { cancelRound, interruptRound, regenerate, rewind, resume, submitCheck };
 /** 控制操作使用当时确认的身份；阶段身份变化或卸载后不展示旧响应的错误。 */
 export function useGameControls(
   snapshot: MaybeRefOrGetter<DeepReadonly<PhaseSnapshot> | undefined>,
@@ -40,9 +40,9 @@ export function useGameControls(
         const roundId = state.inFlight?.roundId ?? state.lastOperation?.roundId;
         if (!roundId) return false;
         await transport.regenerate(state.sessionId, roundId);
-      } else if (action === "rewind" && typeof argument === "number")
+      } else if (action === "rewind" && typeof argument === "number") {
         await transport.rewind(state.sessionId, argument);
-      else if (action === "check" && state.inFlight?.roundId && state.check)
+      } else if (action === "check" && state.inFlight?.roundId && state.check)
         await transport.submitCheck(state.sessionId, state.inFlight.roundId, state.check.planId);
       else return false;
       return true;

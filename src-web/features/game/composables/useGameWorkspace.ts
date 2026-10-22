@@ -70,7 +70,7 @@ export function useGameWorkspace(ports: Options) {
   let followLatest = true;
   const readingDrag = ref(false);
   const panelProtected = ref(false);
-  const confirmation = ref<{ kind: "regenerate" } | { kind: "rewind"; seq: number }>();
+  const confirmation = ref<{ kind: "regenerate" } | { kind: "rewind"; seq: number } | undefined>();
   const rewindSelectorOpen = ref(false);
   const slashMenuDismissed = ref(false);
   const panel = usePanelState({
@@ -195,6 +195,11 @@ export function useGameWorkspace(ports: Options) {
   }
   function onComposerKeydown(event: KeyboardEvent): void {
     if (event.isComposing || input.composing.value) return;
+    if (event.key === "Escape" && rewindSelectorOpen.value) {
+      event.preventDefault();
+      rewindSelectorOpen.value = false;
+      return;
+    }
     if (event.key === "Escape" && composerPreview.value.slashActive && !slashMenuDismissed.value) {
       event.preventDefault();
       event.stopPropagation();
@@ -215,7 +220,7 @@ export function useGameWorkspace(ports: Options) {
     if (accepted) input.clearDraftIfCurrent(ticket);
   }
   async function submitComposer(): Promise<void> {
-    if (input.composing.value || input.tooLarge.value) return;
+    if (composerSubmitDisabled.value || input.composing.value || input.tooLarge.value) return;
     const raw = input.draft.value;
     const preview = composerPreview.value;
     if (preview.slashActive || preview.invalidSlash || preview.contentRequired) return;
@@ -243,7 +248,7 @@ export function useGameWorkspace(ports: Options) {
       return;
     } else if (name === "rewind") {
       rewindSelectorOpen.value = true;
-      return;
+      accepted = true;
     } else if (name === "pin") {
       panel.pin();
       accepted = true;
@@ -254,13 +259,21 @@ export function useGameWorkspace(ports: Options) {
     if (accepted) input.clearDraftIfCurrent(ticket);
   }
   async function confirmOperation(): Promise<void> {
-    const operation = confirmation.value;
-    if (!operation) return;
+    if (!confirmation.value) return;
+    const selected = confirmation.value;
     const accepted =
-      operation.kind === "regenerate"
+      selected.kind === "regenerate"
         ? await controls.control("regenerate")
-        : await controls.control("rewind", operation.seq);
-    if (accepted) confirmation.value = undefined;
+        : await controls.control("rewind", selected.seq);
+    if (accepted) {
+      confirmation.value = undefined;
+      rewindSelectorOpen.value = false;
+    }
+  }
+  function selectRewindTarget(seq: number): void {
+    if (!rewindSelectorOpen.value) return;
+    rewindSelectorOpen.value = false;
+    confirmation.value = { kind: "rewind", seq };
   }
   function chooseSlashCommand(command: string): void {
     if (input.composing.value) return;
@@ -285,16 +298,6 @@ export function useGameWorkspace(ports: Options) {
       loadingOlder.value = false;
     }
   }
-  const generation = computed(() => {
-    const record = game.latestPublicRecord.value;
-    const body = record?.body;
-    if (body && "outcome" in body)
-      return {
-        outcome: body.outcome,
-        finishReason: "finishReason" in body ? body.finishReason : undefined,
-      };
-    return record?.outcome ? { outcome: record.outcome } : undefined;
-  });
   const preview = computed(() =>
     turn.view.value.snapshot?.turnId === game.latestPublicRecord.value?.turnId
       ? undefined
@@ -417,7 +420,6 @@ export function useGameWorkspace(ports: Options) {
     composerSubmitLabel,
     scenePath,
     olderCursor,
-    generation,
     preview,
     hasTextSelection,
     updateFollowState,
@@ -427,6 +429,7 @@ export function useGameWorkspace(ports: Options) {
     interruptDraft,
     submitComposer,
     confirmOperation,
+    selectRewindTarget,
     chooseSlashCommand,
     closePanel,
     loadOlder,

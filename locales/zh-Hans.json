@@ -464,7 +464,6 @@
     "needsRecovery": "需要恢复",
     "paused": "已暂停，继续需要显式恢复。",
     "historyPending": "记录尚未确认，请重新连接。",
-    "generation": "生成：{outcome}",
     "action": "行动",
     "submitAction": "提交行动",
     "replyTo": "回复对象",
@@ -481,13 +480,6 @@
     "hintFailed": "暂时无法读取提示，请稍后重试。",
     "dialogue": "对话与记录",
     "workProcess": "工作过程",
-    "workPhase": "阶段",
-    "workScene": "场景",
-    "workCheck": "判定计划",
-    "workCheckWaiting": "等待确认：{expression}",
-    "workCheckRolling": "正在判定：{expression}",
-    "workOperation": "最近操作",
-    "workErrorCode": "诊断码：{code}",
     "newRecords": "有新内容 · 跳转到最新",
     "pinPanel": "固定对话面板",
     "unpinPanel": "取消固定对话面板",
@@ -496,11 +488,11 @@
     "latest": "跳转到最新内容",
     "earlierRecords": "加载更早记录",
     "unknownCheckResult": "未知判定结果：{result}",
+    "operationFailed": "请求失败",
+    "workErrorCode": "诊断码：{code}",
     "recordUnavailable": "此记录已保留，但没有可显示的正文。",
     "systemRecordUnavailable": "系统记录已保留，但没有可显示的说明。",
     "noRecords": "还没有记录。提交第一个行动即可开始故事。",
-    "noDifficulty": "未设置难度",
-    "checkDifficulty": "难度 {dc}",
     "recordOocTag": "场外",
     "diceMode": "骰点判定",
     "manual": "确认后掷骰",
@@ -530,9 +522,9 @@
     "chooseRewindTarget": "请在上方选择一条已确认记录作为回退目标。",
     "outOfCharacter": "这条消息将作为角色外内容提交。",
     "interruptNeedsText": "请先填写插话内容。",
-    "rewindToHere": "回退到此行动之前",
-    "rewindConfirm": "要将历史回退到记录 {seq} 吗？之后的有效路径会从当前视图中移除。",
     "regenerateConfirm": "要重新生成上一条回复吗？这会再次请求模型并可能产生费用。",
+    "rewindToHere": "选择此记录作为回退目标",
+    "rewindConfirm": "要从记录 {seq} 创建新的历史分支吗？原有记录仍会保留。",
     "confirmDestructive": "确认",
     "regenerate": "重新生成上一条回复",
     "interrupt": "打断并发送",
@@ -547,18 +539,11 @@
       "criticalSuccess": "大成功",
       "criticalFailure": "大失败"
     },
+    "checkRules": {
+      "pbtaExplore": "探索判定"
+    },
     "resume": "恢复",
     "confirmCheck": "确认判定（{expression}）",
-    "outcomes": {
-      "completed": "已完成",
-      "cancelled": "已取消",
-      "failed": "失败"
-    },
-    "finishReasons": {
-      "stop": "正常结束",
-      "guard": "护栏结束",
-      "length": "达到长度上限"
-    },
     "recordKinds": {
       "character": "角色发言"
     },

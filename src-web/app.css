@@ -2968,6 +2968,18 @@
     overflow-wrap: anywhere;
   }
 
+  .record-rewind-target {
+    cursor: pointer;
+    border-radius: 0.75rem;
+    outline: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: 0.125rem;
+  }
+
+  .record-rewind-target:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 0.125rem;
+  }
+
   .record-row:first-child {
     margin-top: auto;
   }
@@ -3014,6 +3026,15 @@
     line-height: 1.66;
   }
 
+  .record-failure {
+    display: block;
+    margin-top: 0.375rem;
+    color: var(--danger);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
   .record-character {
     display: flex;
     flex-direction: column;
@@ -3055,13 +3076,17 @@
 
   .record-machine {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     flex-wrap: wrap;
     gap: 0.5rem;
-    padding-left: 1rem;
     color: var(--muted);
     font-size: 0.75rem;
-    line-height: 1.5;
+    line-height: 1.6;
+  }
+
+  .record-machine .led {
+    align-self: center;
+    margin: 0;
   }
 
   .record-machine strong,
@@ -3127,7 +3152,6 @@
     align-items: flex-start;
     gap: 0.5rem;
     margin: 0.25rem 0;
-    padding-left: 1rem;
     color: var(--muted);
     font-size: 0.75rem;
     line-height: 1.5;
@@ -3135,17 +3159,8 @@
   }
 
   .record-system .led {
-    margin-top: 0.3125rem;
-  }
-
-  .record-terminal {
-    display: inline-block;
-    margin-top: 0.5rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--ink) 8%, transparent);
-    padding: 0.125rem 0.5rem;
-    color: var(--muted);
-    font-size: 0.71875rem;
+    align-self: center;
+    margin: 0;
   }
 
   .record-recap {
@@ -3182,12 +3197,13 @@
   }
 
   .record-load-older,
-  .record-read-body,
-  .record-rewind {
-    align-self: center;
+  .record-read-body {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
     color: var(--muted);
     font-size: 0.75rem;
-    text-decoration: underline;
   }
 
   .record-load-older {
@@ -3256,12 +3272,7 @@
     min-height: 1.25rem;
     align-items: center;
     gap: 0.5rem;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .work-head::-webkit-details-marker {
-    display: none;
+    cursor: default;
   }
 
   .work .led.active {
@@ -3277,33 +3288,6 @@
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .work-chevron {
-    transition: transform 120ms ease;
-  }
-
-  .work[open] .work-chevron {
-    transform: rotate(180deg);
-  }
-
-  .work ul {
-    display: grid;
-    gap: 0.1875rem;
-    margin: 0;
-    padding: 0 0 0.25rem 0.9375rem;
-    list-style: none;
-  }
-
-  .work li::before {
-    margin-right: 0.4375rem;
-    margin-left: -0.75rem;
-    color: var(--muted);
-    content: "·";
-  }
-
-  .work-value {
-    color: var(--ink);
   }
 
   .confirmation-card {

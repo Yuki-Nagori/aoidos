@@ -37,6 +37,8 @@ const panelOptions = vi.mocked(usePanelState);
 let workspace: ReturnType<typeof useGameWorkspace>;
 const composerFocus = vi.fn<() => void>();
 let ports: Parameters<typeof useGameWorkspace>[0];
+let draft: Ref<string>;
+let send: ReturnType<typeof vi.fn>;
 
 describe("useGameWorkspace", () => {
   beforeEach(() => {
@@ -94,15 +96,17 @@ describe("useGameWorkspace", () => {
       latestPublicRecord: ref(undefined),
       reconnect: vi.fn(),
     } as never);
+    draft = ref("");
+    send = vi.fn();
     vi.mocked(useGameInput).mockReturnValue({
       error: ref(undefined),
       composing: ref(false),
-      draft: ref(""),
+      draft,
       busy: ref(false),
       tooLarge: ref(false),
       captureDraft: vi.fn(),
       clearDraftIfCurrent: vi.fn(),
-      send: vi.fn(),
+      send,
     } as never);
     vi.mocked(useGameControls).mockReturnValue({
       busy: ref(false),
@@ -123,7 +127,7 @@ describe("useGameWorkspace", () => {
     } as never);
     ports = {
       session: { sessionId: "session-1" } as OpenedSession,
-      productBusy: false,
+      productBusy: ref(false),
       preferences: { panelPinned: false, setPanelPinned: vi.fn() } as unknown as ReturnType<
         typeof useUiPreferences
       >,
@@ -158,5 +162,17 @@ describe("useGameWorkspace", () => {
     await nextTick();
     await nextTick();
     expect(ports.confirmDialog.value?.showModal).toHaveBeenCalledOnce();
+  });
+
+  it("blocks Enter submission while product initialization is pending", () => {
+    draft.value = "Look around.";
+    (ports.productBusy as Ref<boolean>).value = true;
+    const event = new KeyboardEvent("keydown", { key: "Enter" });
+    const preventDefault = vi.spyOn(event, "preventDefault");
+
+    workspace.onComposerKeydown(event);
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
   });
 });

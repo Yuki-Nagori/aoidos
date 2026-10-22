@@ -85,13 +85,6 @@ export interface MonthlyPeriod {
   items: ModelUsageSummary[];
 }
 
-export interface SuggestedLimits {
-  cny: string | null;
-  usd: string | null;
-  referenceInputTokens: number;
-  referenceOutputTokens: number;
-}
-
 interface BillingRequestItem {
   requestId: string;
   profileId: string;
@@ -156,14 +149,6 @@ export function getRunPeriod(runId: string): Promise<RunPeriod> {
 /** 使用已持久化的系统时区读取自然月报表。 */
 export function getMonthlyPeriod(month: string, detectedTimeZone: string): Promise<MonthlyPeriod> {
   return invoke("budget_get_monthly", { month, detectedTimeZone });
-}
-
-export function getSuggestedLimits(
-  providerId: string,
-  modelId: string,
-  routePolicy: string,
-): Promise<SuggestedLimits> {
-  return invoke("budget_get_suggested_limits", { providerId, modelId, routePolicy });
 }
 
 export async function getSelectedPrice(
