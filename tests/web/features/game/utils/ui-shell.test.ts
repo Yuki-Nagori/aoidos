@@ -72,7 +72,11 @@ describe("composer preview", () => {
     expect(previewComposerInput("/int").candidates).toContain("interrupt");
     expect(previewComposerInput("/unknown").invalidSlash).toBe(true);
     expect(previewComposerInput("/停止")).toMatchObject({ slashActive: true, invalidSlash: true });
-    expect(previewComposerInput("/").candidates).toHaveLength(7);
+    expect(previewComposerInput("/").candidates).toHaveLength(8);
+    expect(previewComposerInput("/o")).toMatchObject({
+      activeCandidate: "ooc",
+      candidates: ["ooc", "interrupt", "stop", "resume", "regenerate", "rewind", "pin", "latest"],
+    });
     expect(previewComposerInput("(( ))")).toMatchObject({
       mode: "outOfCharacter",
       contentRequired: true,

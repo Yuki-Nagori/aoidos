@@ -61,7 +61,9 @@ export function transitionPanel(
 
 type InputMode = "inCharacter" | "outOfCharacter";
 type SlashCommand = "interrupt" | "stop" | "resume" | "regenerate" | "rewind" | "pin" | "latest";
-const slashCommands: readonly SlashCommand[] = [
+export type CommandSuggestion = "ooc" | SlashCommand;
+const slashCommands: readonly CommandSuggestion[] = [
+  "ooc",
   "interrupt",
   "stop",
   "resume",
@@ -102,7 +104,8 @@ function isRustWhitespaceOnly(text: string): boolean {
 export interface ComposerPreview {
   mode: InputMode;
   slashActive: boolean;
-  candidates: SlashCommand[];
+  candidates: CommandSuggestion[];
+  activeCandidate?: CommandSuggestion;
   command?: { name: SlashCommand; argument: string };
   invalidSlash: boolean;
   contentRequired: boolean;
@@ -227,7 +230,9 @@ export function previewComposerInput(text: string): ComposerPreview {
     };
   const name = match[1]!;
   const argument = match[2] ?? "";
-  const command = slashCommands.find((candidate) => candidate === name);
+  const command = slashCommands.find(
+    (candidate): candidate is SlashCommand => candidate !== "ooc" && candidate === name,
+  );
   if (command)
     return {
       mode: "inCharacter",
@@ -238,12 +243,15 @@ export function previewComposerInput(text: string): ComposerPreview {
       contentRequired: false,
     };
 
-  const candidates = slashCommands.filter((candidate) => candidate.startsWith(name));
+  const matching = slashCommands.filter(
+    (candidate) => candidate.startsWith(name) && !(candidate === "ooc" && argument),
+  );
   return {
     mode: "inCharacter",
     slashActive: true,
-    candidates,
-    invalidSlash: candidates.length === 0,
+    candidates: [...slashCommands],
+    activeCandidate: matching[0],
+    invalidSlash: matching.length === 0,
     contentRequired: false,
   };
 }

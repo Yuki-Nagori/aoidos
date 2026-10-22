@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import type { Locale } from "../../api/locale";
 import type { useProduct } from "../../features/product/composables/useProduct";
 import RunCatalogPanel from "../../features/product/components/RunCatalogPanel.vue";
+import SelectMenu from "../../shared/components/SelectMenu.vue";
 
 const props = defineProps<{
   product: ReturnType<typeof useProduct>;
@@ -96,21 +97,37 @@ const canStart = computed(
             {{ t("settings.credits") }}
           </button>
         </div>
-        <div class="card script-card">
-          <span class="script-ic" aria-hidden="true">
-            <svg class="i lg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z" />
-              <path d="M10 20a2 2 0 0 0 4 0" />
-            </svg>
-          </span>
-          <span class="script-copy">
-            <strong>{{ scenarioName }}</strong>
-            <span>{{ t("welcome.selectedScenario", { id: scenario?.scriptId ?? "—" }) }}</span>
-          </span>
-          <svg class="i sm muted-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m6 9 6 6 6-6" />
-          </svg>
-        </div>
+        <SelectMenu
+          class="welcome-script-select"
+          :model-value="product.scriptId.value"
+          :options="product.scripts.value.map((script) => ({
+            value: script.scriptId,
+            label: script.displayNames[locale] ?? script.title,
+          }))"
+          :label="t('settings.script')"
+          :disabled="product.busy.value"
+          @update:model-value="product.scriptId.value = $event"
+        >
+          <template #trigger>
+            <span class="card script-card">
+              <span class="script-ic" aria-hidden="true">
+                <svg class="i lg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z" />
+                  <path d="M10 20a2 2 0 0 0 4 0" />
+                </svg>
+              </span>
+              <span class="script-copy">
+                <strong>{{ scenarioName }}</strong>
+                <span>{{
+                  t("welcome.selectedScenario", { id: scenario?.scriptId ?? "—" })
+                }}</span>
+              </span>
+              <svg class="i sm muted-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </span>
+          </template>
+        </SelectMenu>
       </div>
 
       <div class="field">

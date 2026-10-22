@@ -186,7 +186,10 @@ onScopeDispose(() => window.removeEventListener("keydown", onKeydown));
           aria-pressed="true"
           @click="emit('unpin')"
         >
-          <span class="panel-unpin-icon" aria-hidden="true" />
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 4h6l-1 5 3 3v1H7v-1l3-3z" />
+            <path d="M12 13v7" />
+          </svg>
         </button>
         <button
           v-else
@@ -195,10 +198,15 @@ onScopeDispose(() => window.removeEventListener("keydown", onKeydown));
           aria-pressed="false"
           @click="emit('pin')"
         >
-          <span class="panel-pin-icon" aria-hidden="true" />
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 4h6l-1 5 3 3v1H7v-1l3-3z" />
+            <path d="M12 13v7" />
+          </svg>
         </button>
         <button type="button" :aria-label="props.closeLabel" @click="closePanel">
-          <span class="panel-close-icon" aria-hidden="true" />
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
         </button>
       </header>
       <slot name="panel" />

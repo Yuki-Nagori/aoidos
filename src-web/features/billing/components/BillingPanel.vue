@@ -61,7 +61,7 @@ const billingErrorMessage = computed(() => {
 </script>
 <template>
   <section v-if="active" class="billing-panel grid gap-4">
-    <h4 v-if="view === 'all' || view === 'billing'" class="font-semibold">
+    <h4 v-if="view === 'all'" class="font-semibold">
       {{ t("billing.title") }}
     </h4>
     <template v-if="view === 'all' || view === 'billing'">
@@ -459,7 +459,6 @@ const billingErrorMessage = computed(() => {
     <template v-if="view === 'all' || view === 'price'">
       <div class="billing-price-context">
         <div class="billing-price-identity">
-          <h4>{{ t("billing.savePrice") }}</h4>
           <p class="mono">
             {{
               t("billing.itemTitle", {

@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { ref, toRef, watch } from "vue";
+import { computed, ref, toRef, watch } from "vue";
 import ActionComposer from "./ActionComposer.vue";
 import GameStage from "./GameStage.vue";
 import RecordFeed from "./RecordFeed.vue";
-import SelectMenu from "../../../shared/components/SelectMenu.vue";
 import type { OpenedSession } from "../../../api/engine";
 import type { useUiPreferences } from "../composables/useUiPreferences";
+import type { CommandSuggestion } from "../utils/ui-shell";
 import { useGameWorkspace } from "../composables/useGameWorkspace";
 
 const props = defineProps<{
   session: OpenedSession;
+  scriptTitle: string;
   suggestedAction?: string;
   productBusy: boolean;
   preferences: ReturnType<typeof useUiPreferences>;
@@ -41,6 +42,31 @@ const {
   emitError: (error) => emit("error", error),
   emitHistoryRevision: (revision) => emit("historyRevision", revision),
 });
+const availableCommands = computed<CommandSuggestion[]>(() => {
+  const commands: CommandSuggestion[] = ["ooc", "pin", "latest"];
+  if (current.value?.inFlight?.roundId && !current.value.needsRecovery) {
+    commands.push("interrupt", "stop");
+  }
+  if (current.value?.resumeRequired && !current.value.needsRecovery) commands.push("resume");
+  if (
+    current.value?.phase === "idle" &&
+    !current.value.needsRecovery &&
+    !current.value.resumeRequired &&
+    current.value.lastOperation?.roundId
+  ) {
+    commands.push("regenerate");
+  }
+  if (
+    current.value &&
+    current.value.phase === "idle" &&
+    !current.value.needsRecovery &&
+    !current.value.resumeRequired &&
+    !current.value.inFlight
+  ) {
+    commands.push("rewind");
+  }
+  return commands;
+});
 watch(
   [() => props.session.sessionId, () => props.suggestedAction],
   () => {
@@ -58,7 +84,7 @@ defineExpose({ reconnect });
       :panel-state="panel.state.value"
       :panel-open="panel.isOpen.value"
       :modal-open="Boolean(confirmation)"
-      :title="session.title"
+      :title="scriptTitle"
       :script-id="session.scriptId"
       :scene-available="Boolean(current?.scene)"
       :scene-label="t('game.scene')"
@@ -114,17 +140,14 @@ defineExpose({ reconnect });
           </p>
         </div>
         <div v-else class="scene-empty-state">
-          <h2>{{ session.title }}</h2>
+          <h2>{{ props.scriptTitle }}</h2>
           <p>{{ current?.needsRecovery ? t("game.paused") : t("game.scenePrompt") }}</p>
         </div>
       </template>
       <template #panel-header>
-        <h2 id="dialogue-panel-heading" class="truncate text-sm font-semibold">
+        <h2 id="dialogue-panel-heading" class="min-w-0 flex-1 truncate text-sm font-semibold">
           {{ t("game.dialogue") }}
         </h2>
-        <button type="button" class="ml-auto text-xs text-muted" @click="jumpToLatest">
-          {{ t("game.latest") }}
-        </button>
       </template>
       <template #panel>
         <!-- biome-ignore lint/a11y/noStaticElementInteractions: These handlers track text selection and reading state; this panel is not an activation target. -->
@@ -268,20 +291,7 @@ defineExpose({ reconnect });
             </div>
           </dialog>
           <div v-if="panel.state.value !== 'hover'" class="border-t border-hairline p-3">
-            <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-              <div class="flex items-center gap-2">
-                {{ t("game.diceMode") }}
-                <SelectMenu
-                  :model-value="preferences.diceMode.value"
-                  :options="[
-                    { value: 'manual', label: t('game.manual') },
-                    { value: 'auto', label: t('game.automatic') },
-                  ]"
-                  :label="t('game.diceMode')"
-                  :disabled="preferences.saving.value"
-                  @update:model-value="preferences.setDiceMode($event as 'manual' | 'auto')"
-                />
-              </div>
+            <div class="game-composer-status text-xs text-muted">
               <span v-if="preferences.saveError.value" role="status">{{
                 t("game.preferenceSaveFailed")
               }}</span>
@@ -301,6 +311,11 @@ defineExpose({ reconnect });
               :too-large="input.tooLarge.value"
               :slash-menu-dismissed="slashMenuDismissed"
               :rewind-selector-open="rewindSelectorOpen"
+              :in-flight="Boolean(current?.inFlight)"
+              :interrupt-available="Boolean(current?.inFlight?.roundId && input.draft.value.trim())"
+              :available-commands="availableCommands"
+              :control-disabled="controls.busy.value"
+              :interrupt-disabled="controls.busy.value || input.composing.value"
               :submit-disabled="composerSubmitDisabled"
               :presence-has-scene="Boolean(current?.scene) && !current?.needsRecovery"
               :presence-ready="Boolean(presence.snapshot.value)"
@@ -315,24 +330,10 @@ defineExpose({ reconnect });
               @choose-command="chooseSlashCommand"
               @select-recipient="presence.select"
               @refresh-presence="presence.refresh"
+              @stop="controls.control('cancel')"
+              @interrupt="interruptDraft()"
             />
             <div class="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                v-if="current?.inFlight"
-                :disabled="controls.busy.value"
-                @click="controls.control('cancel')"
-              >
-                {{ t("game.stopTurn") }}
-              </button>
-              <button
-                type="button"
-                v-if="current?.inFlight?.roundId && input.draft.value.trim()"
-                :disabled="controls.busy.value || input.composing.value"
-                @click="interruptDraft()"
-              >
-                {{ t("game.interrupt") }}
-              </button>
               <button
                 type="button"
                 v-if="current?.resumeRequired"

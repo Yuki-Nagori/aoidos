@@ -29,7 +29,7 @@ describe("GameWorkspace", () => {
     const current = ref<{
       historyRevision: number;
       phase: string;
-      scene: { path: { kind: string; id: string; title: string }[] };
+      scene?: { path: { kind: string; id: string; title: string }[] };
       needsRecovery: boolean;
       lastOperation: { roundId: string; outcome: string };
       check?: {
@@ -138,6 +138,7 @@ describe("GameWorkspace", () => {
     const wrapper = mount(GameWorkspace, {
       props: {
         session,
+        scriptTitle: "Mistbell Cellar",
         productBusy: false,
         errorMessage: "No price is registered for this model.",
         preferences: prefs,
@@ -149,7 +150,7 @@ describe("GameWorkspace", () => {
     expect(wrapper.find(".game-stage").exists()).toBe(true);
     expect(wrapper.find(".game-topbar .phase-pill").exists()).toBe(true);
     expect(wrapper.find(".stage-area .stage-art").exists()).toBe(true);
-    expect(wrapper.text()).toContain(session.title);
+    expect(wrapper.get(".game-topbar .title").text()).toBe("Mistbell Cellar");
     expect(wrapper.get('[role="alert"]').text()).toContain(
       "No price is registered for this model.",
     );
@@ -159,6 +160,12 @@ describe("GameWorkspace", () => {
     expect((wrapper.get(".work").element as HTMLDetailsElement).open).toBe(false);
     expect(wrapper.get(".work").text()).toContain(i18n.global.t("game.workProcess"));
     expect(wrapper.get(".work").text()).toContain("第一幕 · 塔门");
+    expect(wrapper.text()).not.toContain(i18n.global.t("game.diceMode"));
+    current.value = { ...current.value, scene: undefined };
+    await nextTick();
+    expect(wrapper.get(".scene-empty-state h2").text()).toBe("Mistbell Cellar");
+    current.value = { ...current.value, scene: { path: [] } };
+    await nextTick();
     expect(wrapper.findComponent(ActionComposer).exists()).toBe(true);
     expect(capturedPorts.recordsFeed.value).toBeInstanceOf(HTMLDivElement);
     expect(capturedPorts.confirmDialog.value?.tagName).toBe("DIALOG");

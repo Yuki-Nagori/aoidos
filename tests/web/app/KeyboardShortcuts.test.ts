@@ -14,7 +14,10 @@ describe("KeyboardShortcuts", () => {
       attachTo: document.body,
       global: { plugins: [i18n] },
     });
-    expect(wrapper.text()).toContain("Keyboard shortcuts");
+    expect(wrapper.get(".shortcut-settings-intro p").text()).toBe(
+      "Input and accessibility shortcuts are fixed. Other bindings are not connected yet.",
+    );
+    expect(wrapper.find(".shortcut-settings-intro strong").exists()).toBe(false);
     expect(wrapper.findAll(".shortcut-row").length).toBeGreaterThan(10);
     expect(wrapper.findAll(".shortcut-row-settings .shortcut-lock").length).toBeGreaterThan(5);
     expect(wrapper.findAll(".shortcut-row-settings button[disabled]").length).toBeGreaterThan(5);
