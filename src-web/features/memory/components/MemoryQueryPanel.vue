@@ -456,6 +456,7 @@ onBeforeUnmount(() => {
       <div class="flex flex-wrap items-center gap-2">
         <button
           type="button"
+          class="btn memory-query-primary-action"
           :disabled="materialBusy"
           @click="collectMaterials(Boolean(materialCursor))"
         >
@@ -482,6 +483,7 @@ onBeforeUnmount(() => {
         <button
           v-if="canPrepareBatch"
           type="button"
+          class="btn memory-query-primary-action"
           :disabled="batchBusy"
           @click="prepareBatch"
         >
@@ -490,14 +492,19 @@ onBeforeUnmount(() => {
         <button
           v-if="batchId && batchStatus?.state === 'queued'"
           type="button"
+          class="btn primary"
           :disabled="batchBusy"
           @click="sendBatch"
         >
+          <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 12h12M13 6l6 6-6 6" />
+          </svg>
           {{ t("memoryQuery.sendBatch") }}
         </button>
         <button
           v-if="batchId && batchStatus?.state === 'received'"
           type="button"
+          class="btn primary"
           :disabled="batchBusy"
           @click="completeBatch"
         >
@@ -506,9 +513,14 @@ onBeforeUnmount(() => {
         <button
           v-if="batchId"
           type="button"
+          class="btn ghost btn-compact"
           :disabled="batchBusy"
           @click="refreshBatch"
         >
+          <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+            <path d="M20 4v4.5h-4.5" />
+          </svg>
           {{ t("memoryQuery.refreshBatch") }}
         </button>
         <p v-if="batchStatus" role="status" class="text-sm text-muted">
@@ -532,14 +544,23 @@ onBeforeUnmount(() => {
     </section>
     <p v-if="error" role="alert">
       {{ t("memoryQuery.error") }}
-      <button type="button" class="underline" @click="retry">
+      <button type="button" class="btn" @click="retry">
         {{ t("memoryQuery.reload") }}
       </button>
     </p>
     <section v-if="panelView === 'all' || panelView === 'pending'" class="grid gap-2">
       <div class="flex items-center justify-between gap-2">
         <h2 class="font-semibold">{{ t("memoryQuery.questions") }}</h2>
-        <button type="button" :disabled="questionBusy" @click="loadQuestions()">
+        <button
+          type="button"
+          class="btn ghost btn-compact"
+          :disabled="questionBusy"
+          @click="loadQuestions()"
+        >
+          <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+            <path d="M20 4v4.5h-4.5" />
+          </svg>
           {{ questionBusy ? t("memoryQuery.loading") : t("memoryQuery.refresh") }}
         </button>
       </div>
@@ -563,6 +584,7 @@ onBeforeUnmount(() => {
               v-for="candidate in question.draft.candidates"
               :key="JSON.stringify(candidate)"
               type="button"
+              class="btn"
               :disabled="answering.has(question.questionId)"
               @click="answer(question, { kind: 'selectCandidate', candidate })"
             >
@@ -570,6 +592,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
+              class="btn ghost"
               :disabled="answering.has(question.questionId)"
               @click="answer(question, { kind: 'none' })"
             >
@@ -577,6 +600,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
+              class="btn ghost"
               :disabled="answering.has(question.questionId)"
               @click="answer(question, { kind: 'skip' })"
             >
@@ -597,7 +621,11 @@ onBeforeUnmount(() => {
                 :aria-label="t('memoryQuery.name')"
               />
             </label>
-            <button type="submit" :disabled="answering.has(question.questionId)">
+            <button
+              type="submit"
+              class="btn primary"
+              :disabled="answering.has(question.questionId)"
+            >
               {{ t("memoryQuery.propose") }}
             </button>
           </form>
@@ -606,6 +634,7 @@ onBeforeUnmount(() => {
       <button
         v-if="questionCursor"
         type="button"
+        class="btn"
         :disabled="questionBusy"
         @click="loadQuestions(true)"
       >
@@ -616,7 +645,16 @@ onBeforeUnmount(() => {
     <section v-if="panelView === 'all' || panelView === 'list'" class="grid gap-2">
       <div class="flex items-center justify-between gap-2">
         <h2 class="font-semibold">{{ t("memoryQuery.entries") }}</h2>
-        <button type="button" :disabled="entryBusy" @click="loadEntries()">
+        <button
+          type="button"
+          class="btn ghost btn-compact"
+          :disabled="entryBusy"
+          @click="loadEntries()"
+        >
+          <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+            <path d="M20 4v4.5h-4.5" />
+          </svg>
           {{ entryBusy ? t("memoryQuery.loading") : t("memoryQuery.refresh") }}
         </button>
       </div>
@@ -630,6 +668,7 @@ onBeforeUnmount(() => {
       >
         <button
           type="button"
+          class="btn ghost w-full justify-between text-left"
           :disabled="detailBusy"
           :aria-expanded="details?.entry.entryId === entry.entryId"
           :aria-controls="`memory-entry-${entry.entryId}`"
@@ -637,9 +676,15 @@ onBeforeUnmount(() => {
         >
           <span class="font-mono">{{ entry.entryId }}</span>
           <span class="tag">{{ entryStateLabels[entry.state] }}</span>
-          <span>{{
-            t(details?.entry.entryId === entry.entryId ? "memoryQuery.hideDetails" : "memoryQuery.details")
-          }}</span>
+          <span class="ml-auto inline-flex items-center gap-1">
+            <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z" />
+              <circle cx="12" cy="12" r="2.5" />
+            </svg>
+            {{
+              t(details?.entry.entryId === entry.entryId ? "memoryQuery.hideDetails" : "memoryQuery.details")
+            }}
+          </span>
         </button>
         <div
           v-if="details?.entry.entryId === entry.entryId"
@@ -683,7 +728,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </article>
-      <button v-if="entryCursor" type="button" :disabled="entryBusy" @click="loadEntries(true)">
+      <button
+        v-if="entryCursor"
+        type="button"
+        class="btn"
+        :disabled="entryBusy"
+        @click="loadEntries(true)"
+      >
         {{ t("memoryQuery.next") }}
       </button>
     </section>

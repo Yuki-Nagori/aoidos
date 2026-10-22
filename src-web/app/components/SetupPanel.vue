@@ -393,43 +393,65 @@ function themeName(id: string, fallback: string): string {
               </div>
               <fieldset v-if="selectedPriceTemplate" class="settings-price-preview">
                 <legend>{{ t("settings.pricePreviewTitle") }}</legend>
-                <dl>
-                  <div>
-                    <dt>{{ t("settings.priceInputUncached") }}</dt>
-                    <dd>{{ selectedPriceTemplate.inputUncached }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("settings.priceInputCached") }}</dt>
-                    <dd>{{ selectedPriceTemplate.inputCached }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("settings.priceInputCachedWrite") }}</dt>
-                    <dd>{{ selectedPriceTemplate.inputCachedWrite ?? "—" }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("settings.priceOutput") }}</dt>
-                    <dd>{{ selectedPriceTemplate.output }}</dd>
-                  </div>
-                  <template v-if="selectedPriceTemplate.schedule">
-                    <div>
-                      <dt>{{ t("settings.pricePeakInputUncached") }}</dt>
-                      <dd>{{ selectedPriceTemplate.schedule.peak.inputUncached }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("settings.pricePeakInputCached") }}</dt>
-                      <dd>{{ selectedPriceTemplate.schedule.peak.inputCached }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("settings.pricePeakInputCachedWrite") }}</dt>
-                      <dd>{{ selectedPriceTemplate.schedule.peak.inputCachedWrite ?? "—" }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("settings.pricePeakOutput") }}</dt>
-                      <dd>{{ selectedPriceTemplate.schedule.peak.output }}</dd>
-                    </div>
-                  </template>
-                </dl>
-                <p class="text-sm text-muted">
+                <span
+                  v-if="product.registeredBillingCurrency.value"
+                  class="settings-price-currency"
+                >
+                  {{
+                    t("settings.currentBillingCurrency", { currency: product.registeredBillingCurrency.value })
+                  }}
+                </span>
+                <span v-else class="settings-price-currency is-unregistered">
+                  {{ t("settings.billingPriceUnregistered") }}
+                </span>
+                <div class="settings-price-periods">
+                  <section class="settings-price-period">
+                    <h4>{{ t("settings.priceRegularPeriod") }}</h4>
+                    <dl class="settings-price-grid">
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceInputUncached") }}</dt>
+                        <dd>{{ selectedPriceTemplate.inputUncached }}</dd>
+                      </div>
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceInputCached") }}</dt>
+                        <dd>{{ selectedPriceTemplate.inputCached }}</dd>
+                      </div>
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceInputCachedWrite") }}</dt>
+                        <dd>{{ selectedPriceTemplate.inputCachedWrite ?? "—" }}</dd>
+                      </div>
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceOutput") }}</dt>
+                        <dd>{{ selectedPriceTemplate.output }}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                  <section
+                    v-if="selectedPriceTemplate.schedule"
+                    class="settings-price-period is-peak"
+                  >
+                    <h4>{{ t("settings.pricePeakPeriod") }}</h4>
+                    <dl class="settings-price-grid">
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceInputUncached") }}</dt>
+                        <dd>{{ selectedPriceTemplate.schedule.peak.inputUncached }}</dd>
+                      </div>
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceInputCached") }}</dt>
+                        <dd>{{ selectedPriceTemplate.schedule.peak.inputCached }}</dd>
+                      </div>
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceInputCachedWrite") }}</dt>
+                        <dd>{{ selectedPriceTemplate.schedule.peak.inputCachedWrite ?? "—" }}</dd>
+                      </div>
+                      <div class="settings-price-item">
+                        <dt>{{ t("settings.priceOutput") }}</dt>
+                        <dd>{{ selectedPriceTemplate.schedule.peak.output }}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                </div>
+                <p class="settings-price-source text-sm text-muted">
                   {{
                     t("settings.priceCheckedAt", { date: selectedPriceTemplate.checkedAt.slice(0, 10) })
                   }}
@@ -444,7 +466,7 @@ function themeName(id: string, fallback: string): string {
               </p>
               <button
                 type="button"
-                class="btn ghost"
+                class="btn primary"
                 :disabled="product.busy.value || !selectedPriceTemplate"
                 @click="product.confirmBillingPrice"
               >
@@ -543,6 +565,7 @@ function themeName(id: string, fallback: string): string {
               <div class="settings-actions">
                 <button
                   type="button"
+                  class="settings-session-action"
                   :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
                   @click="product.open(false)"
                 >
@@ -554,12 +577,16 @@ function themeName(id: string, fallback: string): string {
                 </button>
                 <button
                   type="button"
+                  class="settings-session-action"
                   :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
                   @click="product.open(true)"
                 >
+                  <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
                   {{ t("game.newCycle") }}
                 </button>
-                <button type="button" @click="emit('reconnect')">
+                <button type="button" class="settings-session-action" @click="emit('reconnect')">
                   <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4" />
                   </svg>

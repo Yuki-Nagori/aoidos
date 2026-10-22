@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { CommandSuggestion, ComposerPreview } from "../utils/ui-shell";
 import type { ScenePresenceSnapshot } from "../../../api/engine";
@@ -42,6 +42,8 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const textarea = ref<HTMLTextAreaElement>();
 const commandMenu = ref<HTMLElement>();
+let textareaResizeObserver: ResizeObserver | undefined;
+let observedTextareaWidth = 0;
 const id = `game-command-${useId().replaceAll(":", "")}`;
 const selectedCandidate = ref<CommandSuggestion>();
 const menuOpen = computed(() => props.preview.slashActive && !props.slashMenuDismissed);
@@ -70,6 +72,24 @@ watch(
   },
   { immediate: true },
 );
+
+onMounted(async () => {
+  await nextTick();
+  const element = textarea.value;
+  if (!element) return;
+  resizeTextarea();
+  if (typeof ResizeObserver === "undefined") return;
+  observedTextareaWidth = element.getBoundingClientRect().width;
+  textareaResizeObserver = new ResizeObserver(([entry]) => {
+    const width = entry?.contentRect.width;
+    if (width === undefined || width === observedTextareaWidth) return;
+    observedTextareaWidth = width;
+    resizeTextarea();
+  });
+  textareaResizeObserver.observe(element);
+});
+
+onBeforeUnmount(() => textareaResizeObserver?.disconnect());
 watch([selectedCandidate, menuOpen], async ([candidate, open]) => {
   if (!candidate || !open) return;
   await nextTick();
@@ -77,6 +97,15 @@ watch([selectedCandidate, menuOpen], async ([candidate, open]) => {
     ?.querySelector<HTMLElement>(`#${id}-option-${candidate}`)
     ?.scrollIntoView?.({ block: "nearest" });
 });
+
+watch(
+  () => props.modelValue,
+  async () => {
+    await nextTick();
+    resizeTextarea();
+  },
+  { flush: "post" },
+);
 
 function chooseCandidate(candidate: CommandSuggestion): void {
   if (!availableCommands.value.has(candidate)) return;
@@ -119,6 +148,22 @@ function onTextareaKeydown(event: KeyboardEvent): void {
 
 function focus(): void {
   textarea.value?.focus();
+}
+
+function resizeTextarea(): void {
+  const element = textarea.value;
+  if (!element) return;
+  element.style.height = "auto";
+  const maxHeight = 192;
+  const nextHeight = Math.min(element.scrollHeight, maxHeight);
+  element.style.height = `${nextHeight}px`;
+  element.style.overflowY = element.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+function updateDraft(event: Event): void {
+  const element = event.target as HTMLTextAreaElement;
+  emit("update:modelValue", element.value);
+  resizeTextarea();
 }
 
 defineExpose({ focus });
@@ -196,7 +241,15 @@ defineExpose({ focus });
           }}</span>
           <span v-else-if="props.presenceUnavailable" role="status">
             {{ t("game.presenceUnavailable") }}
-            <button type="button" class="underline" @click="emit('refreshPresence')">
+            <button
+              type="button"
+              class="btn ghost btn-compact"
+              @click="emit('refreshPresence')"
+            >
+              <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+                <path d="M20 4v4.5h-4.5" />
+              </svg>
               {{ t("common.retry") }}
             </button>
           </span>
@@ -204,6 +257,7 @@ defineExpose({ focus });
       </div>
       <textarea
         ref="textarea"
+        rows="1"
         :value="props.modelValue"
         :aria-label="t('game.action')"
         :placeholder="t('game.actionPlaceholder')"
@@ -212,15 +266,19 @@ defineExpose({ focus });
         :aria-expanded="menuOpen"
         :aria-activedescendant="menuOpen && selectedCandidate ? `${id}-option-${selectedCandidate}` : undefined"
         class="game-composer-text"
-        @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
+        @input="updateDraft"
         @keydown="onTextareaKeydown"
         @compositionstart="emit('compositionStart')"
         @compositionend="emit('compositionEnd')"
       />
       <div class="game-composer-foot">
         <span v-if="!props.inFlight" class="game-composer-key-hints" aria-hidden="true">
-          <kbd class="kbd">Enter</kbd><span>{{ t("game.composerSendHint") }}</span>
-          <kbd class="kbd">Shift+Enter</kbd><span>{{ t("game.composerNewlineHint") }}</span>
+          <span class="game-composer-key-hint">
+            <kbd class="kbd">Enter</kbd>{{ t("game.composerSendHint") }}
+          </span>
+          <span class="game-composer-key-hint">
+            <kbd class="kbd">Shift+Enter</kbd>{{ t("game.composerNewlineHint") }}
+          </span>
         </span>
         <span v-else />
         <div

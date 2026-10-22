@@ -186,6 +186,7 @@ defineExpose({ reconnect });
           >
             <RecordFeed
               :items="orderedRecords"
+              :characters="presence.snapshot.value?.characters ?? []"
               :older-cursor="olderCursor"
               :loading-older="loadingOlder"
               :preview="preview"
@@ -277,12 +278,12 @@ defineExpose({ reconnect });
               }}
             </p>
             <div class="mt-3 flex justify-end gap-2">
-              <button type="button" @click="confirmation = undefined">
+              <button type="button" class="btn" @click="confirmation = undefined">
                 {{ t("common.cancel") }}
               </button>
               <button
                 type="button"
-                class="text-danger"
+                class="btn danger"
                 :disabled="controls.busy.value"
                 @click="confirmOperation"
               >
@@ -297,7 +298,11 @@ defineExpose({ reconnect });
               }}</span>
               <span v-if="preferences.loadError.value" role="status">
                 {{ t("game.preferenceLoadFailed") }}
-                <button type="button" class="text-ink underline" @click="preferences.load">
+                <button type="button" class="btn ghost btn-compact" @click="preferences.load">
+                  <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+                    <path d="M20 4v4.5h-4.5" />
+                  </svg>
                   {{ t("common.retry") }}
                 </button>
               </span>
@@ -336,6 +341,7 @@ defineExpose({ reconnect });
             <div class="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
+                class="btn primary"
                 v-if="current?.resumeRequired"
                 :disabled="controls.busy.value"
                 @click="controls.control('resume')"
@@ -344,6 +350,7 @@ defineExpose({ reconnect });
               </button>
               <button
                 type="button"
+                class="btn primary"
                 v-if="current?.check?.status === 'waiting' &&
                 current.check.mode === 'manual' &&
                 current.inFlight?.roundId"
@@ -354,6 +361,7 @@ defineExpose({ reconnect });
               </button>
               <button
                 type="button"
+                class="btn"
                 v-if="current?.needsRecovery"
                 :disabled="phase.connecting.value || records.state.value.recovering"
                 @click="game.recover"
@@ -362,6 +370,7 @@ defineExpose({ reconnect });
               </button>
               <button
                 type="button"
+                class="btn"
                 v-if="current?.phase === 'idle' &&
                 current.lastOperation?.roundId &&
                 !current.needsRecovery"

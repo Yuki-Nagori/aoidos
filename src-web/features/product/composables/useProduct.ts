@@ -195,11 +195,13 @@ export function useProduct(transport: Transport = defaults) {
   const model = ref("deepseek-flash");
   let keyStatusRequest = 0;
   let selectedPriceRequest = 0;
+  let registeredPriceRequest = 0;
   watch(
     providerId,
     (provider) => {
       keyStatusRequest += 1;
       selectedPriceRequest += 1;
+      registeredPriceRequest += 1;
       billingCurrency.value = "CNY";
       keyStatus.value = undefined;
       keyStatusLoading.value = false;
@@ -215,6 +217,7 @@ export function useProduct(transport: Transport = defaults) {
     model,
     (selectedModel) => {
       selectedPriceRequest += 1;
+      registeredPriceRequest += 1;
       billingCurrency.value = "CNY";
       profileId.value =
         profiles.value.find(
@@ -226,6 +229,7 @@ export function useProduct(transport: Transport = defaults) {
   const session = shallowRef<OpenedSession>();
   const keyStatus = shallowRef<KeyStatus>();
   const billingCurrency = ref<BillingCurrency>("CNY");
+  const registeredBillingCurrency = ref<BillingCurrency>();
   const keyStatusLoading = ref(false);
   const credentialRevision = ref(0);
   const busy = ref(false);
@@ -235,20 +239,26 @@ export function useProduct(transport: Transport = defaults) {
     [providerId, model, profileId],
     ([provider, selectedModel, selectedProfile]) => {
       const request = ++selectedPriceRequest;
+      const registrationRequest = ++registeredPriceRequest;
       billingCurrency.value = "CNY";
+      registeredBillingCurrency.value = undefined;
       if (provider !== "deepseek" || !selectedProfile) return;
       void transport
         .selectedPrice(selectedProfile, provider, selectedModel, "direct")
         .then((price) => {
           if (
             !disposed &&
-            request === selectedPriceRequest &&
+            registrationRequest === registeredPriceRequest &&
             providerId.value === provider &&
             model.value === selectedModel &&
-            profileId.value === selectedProfile &&
-            (price?.currency === "CNY" || price?.currency === "USD")
+            profileId.value === selectedProfile
           ) {
-            billingCurrency.value = price.currency;
+            const registeredCurrency =
+              price?.currency === "CNY" || price?.currency === "USD" ? price.currency : undefined;
+            registeredBillingCurrency.value = registeredCurrency;
+            if (request === selectedPriceRequest && registeredCurrency) {
+              billingCurrency.value = registeredCurrency;
+            }
           }
         })
         .catch(() => {});
@@ -352,10 +362,15 @@ export function useProduct(transport: Transport = defaults) {
   function confirmBillingPrice(): Promise<void> {
     return run(async () => {
       if (providerId.value !== "deepseek") return;
-      if (!priceTemplates.value.some((price) => price.currency === billingCurrency.value)) return;
+      const currency = billingCurrency.value;
+      if (!priceTemplates.value.some((price) => price.currency === currency)) return;
       const selected = await selectProfile();
-      await transport.confirmPrice(selected, model.value, billingCurrency.value);
-      if (!disposed) profileId.value = selected;
+      await transport.confirmPrice(selected, model.value, currency);
+      if (!disposed) {
+        registeredPriceRequest += 1;
+        profileId.value = selected;
+        registeredBillingCurrency.value = currency;
+      }
     });
   }
   function open(startNew: boolean): Promise<void> {
@@ -395,6 +410,7 @@ export function useProduct(transport: Transport = defaults) {
     session,
     keyStatus,
     billingCurrency,
+    registeredBillingCurrency,
     setBillingCurrency,
     keyStatusLoading,
     credentialRevision,

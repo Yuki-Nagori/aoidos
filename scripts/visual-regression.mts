@@ -286,7 +286,19 @@ async function openWelcome(
               callbacks.delete(args?.eventId as number);
               return null;
             case "llm_list_profiles":
-              return { items: [] };
+              return {
+                items: [
+                  {
+                    profileId: "visual-profile",
+                    providerId: "deepseek",
+                    model: "deepseek-flash",
+                    mode: "completion",
+                    thinking: false,
+                    sampling: { temperature: 1, maxTokens: 2048 },
+                    proxy: { mode: "system" },
+                  },
+                ],
+              };
             case "llm_save_profile":
               return args?.profile;
             case "llm_get_key_status":
@@ -358,6 +370,15 @@ async function openWelcome(
                   inputCached: "0.02",
                   inputCachedWrite: "1",
                   output: "4",
+                  schedule: {
+                    version: "deepseek-api-weekly-v1",
+                    peak: {
+                      inputUncached: "2",
+                      inputCached: "0.04",
+                      inputCachedWrite: "2",
+                      output: "8",
+                    },
+                  },
                   checkedAt: "2026-10-21T00:00:00Z",
                   sourceUrl: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
                 },
@@ -367,11 +388,38 @@ async function openWelcome(
                   inputCached: "0.003",
                   inputCachedWrite: "0.15",
                   output: "0.6",
+                  schedule: {
+                    version: "deepseek-api-weekly-v1",
+                    peak: {
+                      inputUncached: "0.3",
+                      inputCached: "0.006",
+                      inputCachedWrite: "0.3",
+                      output: "1.2",
+                    },
+                  },
                   checkedAt: "2026-10-21T00:00:00Z",
                   sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing/",
                 },
               ];
             case "budget_get_selected_price":
+              return {
+                price: {
+                  versionId: "deepseek-cny-reference-v1",
+                  providerId: "deepseek",
+                  modelId: "deepseek-flash",
+                  routePolicy: "direct",
+                  currency: "CNY",
+                  unitTokens: 1_000_000,
+                  inputUncached: "1",
+                  inputCached: "0.02",
+                  inputCachedWrite: "1",
+                  output: "4",
+                  usageMappingVersion: "deepseek-usage-v1",
+                  sourceKind: "official-provider-price",
+                  checkedAt: "2026-10-21T00:00:00Z",
+                  effectiveFrom: "2026-10-21T00:00:00Z",
+                },
+              };
             case "budget_get_price":
               return { price: null };
             case "budget_get_provider_balance":
@@ -708,6 +756,21 @@ try {
     });
     const composer = page.locator(".game-composer-input");
     await composer.waitFor();
+    const panelActions = page.locator(".dialogue-panel-header > button");
+    assert.equal(await panelActions.count(), 2, "The dialogue header has pin and close actions");
+    assert.equal(
+      await panelActions.evaluateAll((buttons) =>
+        buttons.every(
+          (button) =>
+            button.classList.contains("btn") &&
+            button.classList.contains("icon") &&
+            button.classList.contains("ghost") &&
+            button.querySelector("svg.i"),
+        ),
+      ),
+      true,
+      "Dialogue actions use the designed icon-button treatment",
+    );
     assert.equal(
       await page.locator(".dialogue-panel .select-menu").count(),
       1,
@@ -717,13 +780,18 @@ try {
     assert.equal(await composer.locator(".game-composer-submit-icon").count(), 1);
     const composerLayout = await composer.evaluate((element) => {
       const input = element.getBoundingClientRect();
-      const text = element.querySelector("textarea")?.getBoundingClientRect();
-      const submit = element.querySelector(".game-composer-submit")?.getBoundingClientRect();
+      const textarea = element.querySelector("textarea");
+      const text = textarea?.getBoundingClientRect();
+      const submitElement = element.querySelector(".game-composer-submit");
+      const submit = submitElement?.getBoundingClientRect();
       return {
         width: input.width,
         scrollWidth: element.scrollWidth,
         textInside: Boolean(text && text.left >= input.left && text.right <= input.right),
         submitInside: Boolean(submit && submit.left >= input.left && submit.right <= input.right),
+        resize: textarea ? getComputedStyle(textarea).resize : undefined,
+        submitWhiteSpace: submitElement ? getComputedStyle(submitElement).whiteSpace : undefined,
+        submitHeight: submit?.height,
       };
     });
     assert.ok(composerLayout.width > 0, "The action composer must be visible in an active run");
@@ -736,6 +804,12 @@ try {
       composerLayout.submitInside,
       "The submit action stays inside the shared composer card",
     );
+    assert.equal(composerLayout.submitWhiteSpace, "nowrap", "The submit label stays on one line");
+    assert.ok(
+      (composerLayout.submitHeight ?? 0) >= 36,
+      "The submit action keeps a comfortable touch target",
+    );
+    assert.equal(composerLayout.resize, "none", "The composer has no native resize grip");
     await composer.locator("textarea").fill("/o");
     const commandMenu = page.getByRole("listbox", { name: "Command suggestions" });
     await commandMenu.waitFor();
@@ -868,6 +942,21 @@ try {
           .locator("html")
           .evaluate((element) => getComputedStyle(element).getPropertyValue("--hairline").trim());
         assert.equal(borderColor, hairline, "Billing dividers must use the theme hairline token");
+        const usageRefresh = page
+          .locator("#billing .settings-section-heading")
+          .filter({ has: page.getByRole("heading", { name: "This run's usage" }) })
+          .locator("button");
+        assert.equal(await usageRefresh.count(), 1, "Run usage refresh stays beside its heading");
+        assert.equal(
+          await usageRefresh.locator("svg").count(),
+          1,
+          "Run usage refresh uses the shared refresh icon",
+        );
+        assert.equal(
+          await usageRefresh.evaluate((element) => getComputedStyle(element).height),
+          "24px",
+          "Run usage refresh matches the compact design control",
+        );
       }
       if (section.id === "gameplay") {
         assert.equal(await page.locator("#gameplay .select-menu").count(), 0);
@@ -885,7 +974,7 @@ try {
               fontSize: getComputedStyle(element).fontSize,
               borderRadius: getComputedStyle(element).borderRadius,
             })),
-          { height: "30px", fontSize: "12px", borderRadius: "8px" },
+          { height: "38px", fontSize: "12px", borderRadius: "8px" },
         );
       }
       if (section.id === "price") {
@@ -945,12 +1034,33 @@ try {
       }
       if (section.id === "api") {
         const currencyCard = page.locator("#api .settings-currency-card");
+        assert.equal(
+          await currencyCard.locator(".settings-price-item").count(),
+          8,
+          "The DeepSeek price card includes regular and peak rates",
+        );
+        assert.equal(await currencyCard.locator(".settings-price-period").count(), 2);
+        assert.equal(
+          await currencyCard.locator(".settings-price-period h4").nth(0).innerText(),
+          "Regular period",
+        );
+        assert.equal(
+          await currencyCard.locator(".settings-price-period h4").nth(1).innerText(),
+          "Peak period",
+        );
+        assert.match(
+          await currencyCard.locator(".settings-price-currency").innerText(),
+          /Currently billed in CNY/,
+        );
+        assert.match(await currencyCard.innerText(), /Peak period[\s\S]*Uncached input[\s\S]*2/);
+        assert.match(await currencyCard.innerText(), /Peak period[\s\S]*Output[\s\S]*8/);
         const priceLayout = await currencyCard.evaluate((element) => {
           const heading = element.querySelector<HTMLElement>(".settings-currency-heading");
           const select = element.querySelector<HTMLElement>(".select-menu");
           const preview = element.querySelector<HTMLElement>(".settings-price-preview");
-          const grid = preview?.querySelector<HTMLElement>("dl");
-          if (!heading || !select || !preview || !grid)
+          const grid = preview?.querySelector<HTMLElement>(".settings-price-grid");
+          const periods = preview?.querySelector<HTMLElement>(".settings-price-periods");
+          if (!heading || !select || !preview || !grid || !periods)
             throw new Error("API price controls are missing");
           return {
             currencyDisplay: getComputedStyle(element).display,
@@ -960,7 +1070,8 @@ try {
             previewWidth: preview.getBoundingClientRect().width,
             previewScrollWidth: preview.scrollWidth,
             priceColumns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
-            rows: Array.from(grid.children).map((row) => {
+            periodColumns: getComputedStyle(periods).gridTemplateColumns.split(" ").length,
+            items: Array.from(grid.children).map((row) => {
               const rect = row.getBoundingClientRect();
               const label = row.querySelector<HTMLElement>("dt")!.getBoundingClientRect();
               const value = row.querySelector<HTMLElement>("dd")!.getBoundingClientRect();
@@ -979,6 +1090,9 @@ try {
           assert.equal(priceLayout.currencyDisplay, "grid");
           assert.equal(priceLayout.headingColumns, 1);
           assert.equal(priceLayout.priceColumns, 1);
+          assert.equal(priceLayout.periodColumns, 1);
+        } else {
+          assert.equal(priceLayout.periodColumns, 2, "Regular and peak prices sit side by side");
         }
         assert.ok(
           priceLayout.selectWidth > 0 && priceLayout.selectWidth <= priceLayout.currencyWidth,
@@ -988,15 +1102,19 @@ try {
           `Price preview must not overflow: ${JSON.stringify(priceLayout)}`,
         );
         assert.ok(
-          priceLayout.rows.every(
+          priceLayout.items.every(
             (row) =>
               row.labelLeft >= row.left - 1 &&
               row.labelRight <= row.right + 1 &&
               row.valueLeft >= row.left - 1 &&
-              row.valueRight <= row.right + 1 &&
-              row.labelRight <= row.valueLeft + 1,
+              row.valueRight <= row.right + 1,
           ),
-          "API price labels and values must not overlap or escape their grid row",
+          "API price labels and values must stay inside their price tiles",
+        );
+        assert.equal(
+          await currencyCard.locator("button.btn.primary").count(),
+          1,
+          "Registering the selected built-in price is the clear primary action",
         );
         const trigger = page.locator("#api .select-menu-trigger").first();
         const selectedValue = await trigger.innerText();
@@ -1018,6 +1136,34 @@ try {
         await listbox.waitFor({ state: "detached" });
         assert.equal(await trigger.innerText(), selectedValue, "Escape must not change selection");
         assert.equal(await trigger.evaluate((element) => document.activeElement === element), true);
+      }
+      if (section.id === "gameplay") {
+        const runActions = page.locator("#gameplay .settings-actions button");
+        assert.equal(
+          await runActions.count(),
+          3,
+          "Run settings expose restart, new cycle, and reconnect",
+        );
+        const actionLayout = await runActions.evaluateAll((buttons) =>
+          buttons.map((button) => {
+            const rect = button.getBoundingClientRect();
+            return {
+              height: rect.height,
+              width: rect.width,
+              hasIcon: Boolean(button.querySelector("svg.settings-action-icon")),
+            };
+          }),
+        );
+        assert.equal(
+          actionLayout.every((action) => action.hasIcon),
+          true,
+        );
+        assert.ok(actionLayout.every((action) => action.height >= 38));
+        assert.ok(
+          Math.max(...actionLayout.map((action) => action.width)) -
+            Math.min(...actionLayout.map((action) => action.width)) <=
+            1,
+        );
       }
       if (section.id === "balance") {
         await page.getByRole("button", { name: /query deepseek balance/i }).click();
@@ -1069,8 +1215,17 @@ try {
           "Memory parameters remain two columns at every design viewport",
         );
       }
-      if (section.id === "memory-list")
+      if (section.id === "memory-list") {
         await page.locator('#memory-query button[aria-controls^="memory-entry-"]').waitFor();
+        const primaryActionWidths = await page
+          .locator("#memory-query .memory-query-primary-action")
+          .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().width));
+        assert.equal(primaryActionWidths.length, 2, "Both memory actions are visible");
+        assert.ok(
+          Math.abs(primaryActionWidths[0]! - primaryActionWidths[1]!) <= 1,
+          "Collect and prepare memory actions have matching widths",
+        );
+      }
       if (section.id === "memory-pending") await page.locator("#memory-query article").waitFor();
       if (section.id === "appearance") {
         assert.equal(
@@ -1140,6 +1295,27 @@ try {
         await page.locator("#shortcuts .shortcut-row").first().waitFor();
         assert.equal(await page.locator("#shortcuts .shortcut-search").count(), 0);
         assert.ok(await page.locator("#shortcuts .shortcut-lock").count());
+        const lockColumnRanges = await page
+          .locator("#shortcuts .shortcut-lock")
+          .evaluateAll((locks) => {
+            const groups = new Map<Element, number[]>();
+            for (const lock of locks) {
+              const group = lock.closest(".shortcut-group");
+              if (!group) continue;
+              const edges = groups.get(group) ?? [];
+              edges.push(lock.getBoundingClientRect().right);
+              groups.set(group, edges);
+            }
+            return [...groups.entries()].map(([group, edges]) => ({
+              heading: group.querySelector("h3")?.textContent,
+              edges,
+              range: Math.max(...edges) - Math.min(...edges),
+            }));
+          });
+        assert.ok(
+          lockColumnRanges.length > 0 && lockColumnRanges.every(({ range }) => range <= 1),
+          `Locked shortcut icons align within each shortcut group: ${JSON.stringify(lockColumnRanges)}`,
+        );
         await page.getByRole("button", { name: /view cheat sheet|查看速查表/i }).click();
         const shortcutDialog = page.getByRole("dialog", { name: /keyboard shortcuts|快捷键/i });
         await shortcutDialog.waitFor();

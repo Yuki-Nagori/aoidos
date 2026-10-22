@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import type { Locale } from "../../../api/locale";
 import { formatDate, formatExactCurrency } from "../../../shared/utils/format";
 import type { useBilling } from "../composables/useBilling";
-import { summarizeRunUsage } from "../utils/run-usage";
+import { summarizeRunUsage, usageProgressPercent } from "../utils/run-usage";
 import { billingErrorDescriptor } from "../utils/billing-error";
 import { formatPeakSchedule } from "../utils/price-schedule";
 import SelectMenu from "../../../shared/components/SelectMenu.vue";
@@ -31,6 +31,19 @@ const runTotals = computed(() =>
     USD: props.billing.settings.value?.usdLimit ?? null,
   }),
 );
+function usagePercent(amount: string, limit: string | null): number | undefined {
+  return limit === null ? undefined : usageProgressPercent(amount, limit);
+}
+function reservedUsagePercent(total: string, settled: string, limit: string | null): number | undefined {
+  const totalPercent = usagePercent(total, limit);
+  const settledPercent = usagePercent(settled, limit);
+  return totalPercent === undefined || settledPercent === undefined
+    ? undefined
+    : Math.max(0, totalPercent - settledPercent);
+}
+function usageWarning(currency: "CNY" | "USD") {
+  return props.billing.period.value?.warnings.find((warning) => warning.currency === currency);
+}
 function billingAmount(amount: string | null, currency: "CNY" | "USD"): string {
   return amount === null
     ? t("billing.unknown")
@@ -68,16 +81,60 @@ const billingErrorMessage = computed(() => {
       <p class="text-sm text-muted">{{ t("billing.explanation") }}</p>
       <p class="text-sm text-muted">{{ t("billing.referenceHint") }}</p>
       <div v-if="runTotals.length" class="billing-summary-grid" :aria-label="t('billing.usage')">
-        <article v-for="total in runTotals" :key="total.currency" class="billing-summary-card">
+        <article
+          v-for="total in runTotals"
+          :key="total.currency"
+          class="billing-summary-card"
+          :class="{ 'billing-summary-card-warning': usageWarning(total.currency) }"
+        >
           <span class="billing-summary-label">
             {{ t(total.currency === "CNY" ? "billing.currencyCny" : "billing.currencyUsd") }}
           </span>
-          <strong class="billing-summary-amount mono">
-            {{ billingAmount(total.amount, total.currency) }}
-          </strong>
-          <span v-if="total.limit" class="billing-summary-limit mono">
-            / {{ billingAmount(total.limit, total.currency) }}
-          </span>
+          <div class="billing-summary-values">
+            <strong class="billing-summary-amount mono">
+              {{ billingAmount(total.amount, total.currency) }}
+            </strong>
+            <span v-if="total.limit" class="billing-summary-limit mono">
+              / {{ billingAmount(total.limit, total.currency) }}
+            </span>
+          </div>
+          <div
+            v-if="usagePercent(total.amount, total.limit) !== undefined"
+            class="billing-usage-meter"
+            :class="{ 'billing-usage-meter-warning': usageWarning(total.currency) }"
+            role="progressbar"
+            :aria-label="t('billing.usageProgress', { currency: total.currency })"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="usagePercent(total.amount, total.limit)"
+          >
+            <span
+              :style="{
+                width: `${usagePercent(total.settledAmount, total.limit)}%`,
+              }"
+            />
+            <span
+              class="billing-usage-reserved"
+              :style="{
+                left: `${usagePercent(total.settledAmount, total.limit)}%`,
+                width: `${reservedUsagePercent(total.amount, total.settledAmount, total.limit)}%`,
+              }"
+            />
+          </div>
+          <div v-if="total.limit" class="billing-usage-breakdown">
+            <span>{{ t("billing.settled") }}</span>
+            <span class="mono">{{ billingAmount(total.settledAmount, total.currency) }}</span>
+            <span>{{ t("billing.reserved") }}</span>
+            <span class="mono">{{ billingAmount(total.reservedAmount, total.currency) }}</span>
+          </div>
+          <p v-if="usageWarning(total.currency)" class="billing-usage-warning" role="status">
+            {{
+              t("billing.warning", {
+                currency: total.currency,
+                percent: usageWarning(total.currency)?.thresholdPercent,
+              })
+            }}
+          </p>
         </article>
       </div>
     </template>
@@ -157,7 +214,21 @@ const billingErrorMessage = computed(() => {
         {{ t("billing.revision", { revision: billing.settings.value.revision }) }}
       </p>
       <section class="grid gap-2" :aria-label="t('billing.usage')">
-        <h2 class="font-semibold">{{ t("billing.usage") }}</h2>
+        <div class="settings-section-heading">
+          <h2 class="font-semibold">{{ t("billing.usage") }}</h2>
+          <button
+            type="button"
+            class="btn ghost btn-compact"
+            :disabled="billing.busy.value"
+            @click="billing.loadPeriod"
+          >
+            <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+              <path d="M20 4v4.5h-4.5" />
+            </svg>
+            {{ t("billing.refreshUsage") }}
+          </button>
+        </div>
         <p v-if="!billing.period.value?.items.length">{{ t("billing.noUsage") }}</p>
         <article
           v-for="item in billing.period.value?.items"
@@ -201,26 +272,6 @@ const billingErrorMessage = computed(() => {
             {{ t("billing.incomplete", { count: item.incompleteRequests }) }}
           </p>
         </article>
-        <p
-          v-for="warning in billing.period.value?.warnings"
-          :key="warning.currency"
-          role="status"
-        >
-          {{
-            t("billing.warning", {
-              currency: warning.currency,
-              percent: warning.thresholdPercent,
-            })
-          }}
-        </p>
-        <button
-          type="button"
-          class="btn ghost"
-          :disabled="billing.busy.value"
-          @click="billing.loadPeriod"
-        >
-          {{ t("billing.refreshUsage") }}
-        </button>
         <hr class="my-2 border-hairline" />
         <h2 class="font-semibold">{{ t("billing.requests") }}</h2>
         <article
@@ -261,6 +312,7 @@ const billingErrorMessage = computed(() => {
           <button
             v-if="item.settlementPending"
             type="button"
+            class="btn"
             :disabled="billing.retryingRequestId.value !== undefined"
             @click="billing.retrySettlement(item.requestId)"
           >
@@ -279,6 +331,7 @@ const billingErrorMessage = computed(() => {
             item.inputCachedWrite !== null &&
             item.outputTotal !== null"
             type="button"
+            class="btn"
             :disabled="billing.backfillingRequestId.value !== undefined"
             @click="billing.previewBackfill(item.requestId)"
           >
@@ -305,6 +358,7 @@ const billingErrorMessage = computed(() => {
             <p class="text-sm text-muted">{{ t("billing.backfillUnavailable") }}</p>
             <button
               type="button"
+              class="btn primary"
               :disabled="billing.backfillingRequestId.value !== undefined"
               @click="billing.commitBackfill"
             >
@@ -385,21 +439,40 @@ const billingErrorMessage = computed(() => {
           </p>
         </article>
         <div class="flex gap-3">
-          <button type="button" @click="billing.loadRequests(true)">
+          <button type="button" class="btn ghost" @click="billing.loadRequests(true)">
+            <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+              <path d="M20 4v4.5h-4.5" />
+            </svg>
             {{ t("billing.restartRequests") }}
           </button>
           <button
             v-if="billing.requests.value?.nextCursor"
             type="button"
+            class="btn"
             @click="billing.loadRequests()"
           >
             {{ t("billing.loadMore") }}
           </button>
         </div>
         <hr class="my-2 border-hairline" />
-        <h2 class="font-semibold">
-          {{ t("billing.monthly", { month: billing.monthly.value?.month ?? "—" }) }}
-        </h2>
+        <div class="settings-section-heading">
+          <h2 class="font-semibold">
+            {{ t("billing.monthly", { month: billing.monthly.value?.month ?? "—" }) }}
+          </h2>
+          <button
+            type="button"
+            class="btn ghost btn-compact"
+            :disabled="billing.busy.value"
+            @click="billing.loadMonthly"
+          >
+            <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+              <path d="M20 4v4.5h-4.5" />
+            </svg>
+            {{ t("billing.refreshMonthly") }}
+          </button>
+        </div>
         <p v-if="billing.monthly.value">
           {{ t("billing.timeZone", { timeZone: billing.monthly.value.timeZone }) }}
         </p>
@@ -446,14 +519,6 @@ const billingErrorMessage = computed(() => {
             {{ t("billing.incomplete", { count: item.incompleteRequests }) }}
           </p>
         </article>
-        <button
-          type="button"
-          class="btn ghost"
-          :disabled="billing.busy.value"
-          @click="billing.loadMonthly"
-        >
-          {{ t("billing.refreshMonthly") }}
-        </button>
       </section>
     </template>
     <template v-if="view === 'all' || view === 'price'">

@@ -10,6 +10,8 @@ use crate::{
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 
+const PBTA_2D6_RULE: &str = "2d6-pbta-v1";
+
 /// 剧本注册层提供的固定规则 / 角色 / 后果，模型不能覆盖这些字段。
 pub struct PlanSpec<'a> {
     pub rule_id: &'a str,
@@ -45,7 +47,7 @@ pub fn freeze_pbta(spec: PlanSpec<'_>) -> Result<CheckPlan, Fault> {
         expression,
         modifiers: spec.modifiers,
         result_policy: ResultPolicy {
-            kind: "pbta-2d6-v1".into(),
+            kind: PBTA_2D6_RULE.into(),
             dc: None,
         },
         success_branch_id: spec.branches[0].clone(),
@@ -107,7 +109,7 @@ pub fn validate_plan(plan: &CheckPlan, world_revision: &str) -> Result<(), Fault
         || plan.world_revision != world_revision
         || plan.plan_hash != plan_hash(plan)?
         || plan.rule_version != 1
-        || plan.result_policy.kind != "pbta-2d6-v1"
+        || plan.result_policy.kind != PBTA_2D6_RULE
         || plan.result_policy.dc.is_some()
         || format::dice_expression(&plan.expression) != Some((2, 6, modifier))
     {
