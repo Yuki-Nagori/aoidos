@@ -1,6 +1,6 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-21。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 已将 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；060 正通过共享应用服务接入周目目录、profile 绑定与账务迁移，未完范围以[任务 060](../task/060-run-management-impl.md)为准。工程纪律参考 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-22。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 已将 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；060 已通过共享应用服务接入周目目录、profile 绑定与账务迁移，完成情况见[任务 060](../task/060-run-management-impl.md)。工程纪律参考 [Herta 调查](../research/001-herta.md)。
 
 ## 原则
 
@@ -17,7 +17,7 @@
 src-tauri/            # 仅 Tauri 装配：Builder、命令层、capabilities，不沉淀业务
 src-cli/              # CLI / TUI 二进制入口：参数、终端输入与事件 adapter
 src-rust/<crate>/     # 业务 crate，按域拆分（如 aoidos-llm / aoidos-engine / aoidos-store）
-src-rust/aoidos-app/  # 无平台依赖的共享游戏应用服务（058 实施中）
+src-rust/aoidos-app/  # 无平台依赖的共享游戏应用服务（058 已完成）
 ```
 
 - 可复用业务 crate 放 `src-rust/` 下，入口 binary 放 `src-tauri/` 或 `src-cli/`；创建即加入根 `Cargo.toml` 的 `members`。`aoidos-app` 已加入 workspace，当前承载 profile / 凭据服务、共用游戏运行装配与计价 / 预算服务；Tauri 与 CLI 分别负责解析数据根和平台事件。
@@ -58,7 +58,7 @@ src-tauri（装配、命令、窗口事件适配）
 - **调度确认端口**：`OutputPort` 属 llm，engine 通过确认通道接入；LLM 仅在接纳后确认首交付，不能引用 engine 的快照。准备 / 写入错误由 engine 映射为事件和快照，LLM 不承担记录持久化。
 - **预算端口**：`BudgetPort` 属 llm，020 提供每个 turn 和物理 request 的唯一身份；035 由 engine 注入账本实现，冻结价格与周期上下文。LLM 不反向依赖计费模块，engine 不把账本写成第二套调度器。
 
-### 共享游戏应用层与 CLI / TUI（058 实施中）
+### 共享游戏应用层与 CLI / TUI（058 已完成）
 
 下图表示游戏运行链路的依赖方向；箭头始终表示左侧依赖右侧。CLI 与桌面入口并列且彼此无边；CLI 仅直接依赖 engine / llm / store 的 adapter 类型，不执行独立业务编排：
 
