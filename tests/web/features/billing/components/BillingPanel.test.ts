@@ -61,6 +61,10 @@ describe("BillingPanel", () => {
       {
         get: (_target, key) => {
           if (key === "__v_isRef" || key === "then") return undefined;
+          if (key === "period") return ref({ items: [], warnings: [] });
+          if (key === "settings") return ref({ cnyLimit: "20", usdLimit: "3" });
+          if (key === "requests") return ref({ items: [] });
+          if (key === "monthly") return ref({ month: "", timeZone: "UTC", items: [] });
           if (typeof key === "string" && key.includes("input")) return ref("");
           return ref(false);
         },
@@ -74,12 +78,21 @@ describe("BillingPanel", () => {
         providerId: "deepseek",
         providerLabel: "DeepSeek",
         modelId: "deepseek-v4-flash",
-        view: "price",
+        view: "billing",
       },
       global: { plugins: [i18n] },
     });
 
-    expect(wrapper.text()).toContain(i18n.global.t("billing.savePrice"));
+    expect(wrapper.find("h4").exists()).toBe(false);
+    expect(wrapper.text()).toContain(i18n.global.t("billing.explanation"));
+
+    await wrapper.setProps({ view: "price" });
+    expect(wrapper.findAll("h1, h2, h3, h4").map((heading) => heading.text())).not.toContain(
+      i18n.global.t("billing.savePrice"),
+    );
+    expect(wrapper.get('button[type="submit"]').text()).toContain(
+      i18n.global.t("billing.savePrice"),
+    );
     expect(wrapper.text()).toContain("DeepSeek");
     expect(wrapper.text()).toContain("deepseek-v4-flash");
     expect(wrapper.find(".billing-price-context [role=status]").exists()).toBe(true);

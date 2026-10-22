@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Page } from "playwright";
 import { chromium } from "playwright";
@@ -61,6 +61,14 @@ type BrowserBridge = {
 };
 
 const root = process.cwd();
+const captureDir = process.env.AOIDOS_VISUAL_CAPTURE_DIR;
+if (captureDir) await mkdir(captureDir, { recursive: true });
+
+async function captureVisual(page: Page, name: string): Promise<void> {
+  if (!captureDir) return;
+  await page.screenshot({ path: resolve(captureDir, name), fullPage: true });
+}
+
 const baseline = JSON.parse(
   await readFile(resolve(root, "tests/visual/welcome-layout.json"), "utf8"),
 ) as LayoutBaseline;
@@ -226,16 +234,16 @@ async function openWelcome(
         needsRecovery: false,
       };
       const memoryParameters = {
-        algorithm: "exponential",
-        baseStrength: 500_000,
-        reinforcementGain: 150_000,
-        reinforcementCap: 500_000,
+        algorithm: "segmented",
+        baseStrength: 1_000_000,
+        reinforcementGain: 120_000,
+        reinforcementCap: 600_000,
         strengthCap: 1_000_000,
-        halfLifeRounds: 100,
-        repeatWindowRounds: 20,
+        halfLifeRounds: 24,
+        repeatWindowRounds: 6,
         repeatLimit: 2,
-        revivalCooldownRounds: 20,
-        activeCapacity: 1_000,
+        revivalCooldownRounds: 12,
+        activeCapacity: 64,
         rateTableVersion: 1,
         decayRate: 993_092,
       };
@@ -305,6 +313,12 @@ async function openWelcome(
               };
             case "store_get_ui_preferences":
               return { version: 1, panelPinned: false, diceMode: "manual" };
+            case "store_set_ui_preferences":
+              return {
+                version: 1,
+                panelPinned: Boolean(args?.panelPinned),
+                diceMode: args?.diceMode === "auto" ? "auto" : "manual",
+              };
             case "theme_get_preference":
               return { version: 1, theme: currentTheme };
             case "theme_set_preference":
@@ -482,7 +496,28 @@ async function measureSettings(page: Page) {
       })(),
       nav: (() => {
         const { width } = nav.getBoundingClientRect();
-        return { width, scrollWidth: nav.scrollWidth, clientWidth: nav.clientWidth };
+        const heading = nav.querySelector<HTMLElement>(".settings-nav-heading");
+        const title = heading?.querySelector<HTMLElement>("h2");
+        if (!heading || !title) throw new Error("Settings navigation title is missing");
+        const colorProbe = document.createElement("span");
+        colorProbe.style.color = getComputedStyle(document.documentElement)
+          .getPropertyValue("--muted")
+          .trim();
+        document.body.append(colorProbe);
+        const mutedColor = getComputedStyle(colorProbe).color;
+        colorProbe.remove();
+        return {
+          width,
+          scrollWidth: nav.scrollWidth,
+          clientWidth: nav.clientWidth,
+          gap: getComputedStyle(nav).rowGap,
+          padding: getComputedStyle(nav).padding,
+          headingPadding: getComputedStyle(heading).padding,
+          titleFontSize: getComputedStyle(title).fontSize,
+          titleColor: getComputedStyle(title).color,
+          titleFontWeight: getComputedStyle(title).fontWeight,
+          mutedColor,
+        };
       })(),
       content: { scrollWidth: content.scrollWidth, clientWidth: content.clientWidth },
       visibleSections: Array.from(
@@ -565,6 +600,8 @@ try {
           !result.calls.includes("engine_open_session"),
           "Opening the app must not start a game",
         );
+        if (theme === "dark" && locale === "en" && !skin)
+          await captureVisual(page, "welcome-dark-en.png");
         await page.close();
       }
     }
@@ -583,6 +620,7 @@ try {
     });
     assertGeometry(await measure(page), viewport);
     assert.deepEqual(pageErrors, [], "The page must render without uncaught errors");
+    await captureVisual(page, `welcome-${viewport.width}x${viewport.height}.png`);
     await page.close();
   }
 
@@ -657,6 +695,94 @@ try {
     });
     await page.locator(".welcome-start").click();
     await page.locator(".game-stage").waitFor();
+    await page.locator('.game-topbar button[aria-label="Open dialogue panel"]').click();
+    await page.locator(".dialogue-panel.dialogue-panel-open").waitFor();
+    await page.getByRole("button", { name: "Pin dialogue panel" }).click();
+    await page.locator('.game-stage[data-panel-state="pinned"]').waitFor();
+    assert.equal(await page.locator(".game-stage").getAttribute("data-panel-state"), "pinned");
+    await page.waitForFunction(() => {
+      const panel = document.querySelector<HTMLElement>(".dialogue-panel");
+      if (!panel) return false;
+      const style = getComputedStyle(panel);
+      return style.opacity === "1" && new DOMMatrixReadOnly(style.transform).m41 === 0;
+    });
+    const composer = page.locator(".game-composer-input");
+    await composer.waitFor();
+    assert.equal(
+      await page.locator(".dialogue-panel .select-menu").count(),
+      1,
+      "The gameplay panel keeps recipient selection in the composer, not dice preferences",
+    );
+    assert.equal(await composer.locator(".game-composer-key-hints kbd").count(), 2);
+    assert.equal(await composer.locator(".game-composer-submit-icon").count(), 1);
+    const composerLayout = await composer.evaluate((element) => {
+      const input = element.getBoundingClientRect();
+      const text = element.querySelector("textarea")?.getBoundingClientRect();
+      const submit = element.querySelector(".game-composer-submit")?.getBoundingClientRect();
+      return {
+        width: input.width,
+        scrollWidth: element.scrollWidth,
+        textInside: Boolean(text && text.left >= input.left && text.right <= input.right),
+        submitInside: Boolean(submit && submit.left >= input.left && submit.right <= input.right),
+      };
+    });
+    assert.ok(composerLayout.width > 0, "The action composer must be visible in an active run");
+    assert.ok(
+      composerLayout.scrollWidth <= composerLayout.width,
+      "The action composer must not overflow its input card horizontally",
+    );
+    assert.ok(composerLayout.textInside, "The draft input stays inside the shared composer card");
+    assert.ok(
+      composerLayout.submitInside,
+      "The submit action stays inside the shared composer card",
+    );
+    await composer.locator("textarea").fill("/o");
+    const commandMenu = page.getByRole("listbox", { name: "Command suggestions" });
+    await commandMenu.waitFor();
+    assert.equal(await commandMenu.getByRole("option").count(), 8);
+    assert.equal(
+      await commandMenu.getByRole("option", { name: /\/ooc/ }).getAttribute("aria-selected"),
+      "true",
+    );
+    assert.equal(
+      await commandMenu.getByRole("option", { name: /\/stop/ }).getAttribute("aria-disabled"),
+      "true",
+    );
+    if (viewport.width === 960) await captureVisual(page, "gameplay-slash-menu.png");
+    if (viewport.height === 480) {
+      const textarea = composer.locator("textarea");
+      const enabledCount = await commandMenu
+        .locator('[role="option"][aria-disabled="false"]')
+        .count();
+      for (let index = 1; index < enabledCount; index += 1) {
+        await textarea.press("ArrowDown");
+      }
+      const activeId = await textarea.getAttribute("aria-activedescendant");
+      assert.ok(activeId, "Keyboard navigation exposes an active option to assistive technology");
+      const activeLayout = await page.evaluate((optionId) => {
+        const menu = document.getElementById(`${optionId}`)?.closest<HTMLElement>("[role=listbox]");
+        const option = document.getElementById(optionId);
+        if (!menu || !option) return null;
+        const menuRect = menu.getBoundingClientRect();
+        const optionRect = option.getBoundingClientRect();
+        return {
+          controlsId: document.querySelector(".game-composer-text")?.getAttribute("aria-controls"),
+          menuId: menu.id,
+          top: optionRect.top >= menuRect.top,
+          bottom: optionRect.bottom <= menuRect.bottom,
+        };
+      }, activeId);
+      assert.ok(activeLayout, "The active command belongs to the visible listbox");
+      assert.equal(activeLayout.controlsId, activeLayout.menuId);
+      assert.ok(activeLayout.top && activeLayout.bottom, "The selected command scrolls into view");
+    }
+    await composer.locator("textarea").fill("");
+    assert.equal(
+      await page.locator(".game-topbar .title").innerText(),
+      scriptNames.en,
+      "An active run title follows the selected interface language",
+    );
+    if (viewport.width === 960) await captureVisual(page, "gameplay-active.png");
     await page.locator('.topbar button[aria-label="Settings"]').click();
     await page.getByRole("dialog").waitFor();
     const modelChip = page.locator(".game-model-chip");
@@ -694,6 +820,12 @@ try {
       narrow ? baseline.layout.settings.narrowNavWidth : baseline.layout.settings.desktopNavWidth,
       "settings navigation width",
     );
+    assert.equal(layout.nav.gap, "2px", "Settings navigation uses the source vertical spacing");
+    assert.equal(layout.nav.padding, "12px 8px", "Settings navigation uses the source inset");
+    assert.equal(layout.nav.headingPadding, "8px 10px 4px");
+    assert.equal(layout.nav.titleFontSize, "10.5px");
+    assert.equal(layout.nav.titleColor, layout.nav.mutedColor);
+    assert.equal(layout.nav.titleFontWeight, "400");
     assert.ok(
       layout.nav.scrollWidth <= layout.nav.clientWidth,
       "Settings navigation must not clip horizontally",
@@ -713,8 +845,8 @@ try {
       { id: "memory", target: "memory" },
       { id: "memory-list", target: "memory-query" },
       { id: "memory-pending", target: "memory-query" },
-      { id: "scenario", target: "scenario" },
       { id: "shortcuts", target: "shortcuts" },
+      { id: "scenario", target: "scenario" },
     ];
     for (const [index, section] of sections.entries()) {
       const button = page.locator(".settings-nav button").nth(index);
@@ -722,6 +854,12 @@ try {
       assert.equal(await button.getAttribute("aria-current"), "page");
       if (section.id === "billing") {
         await page.locator("#billing .billing-summary-card").first().waitFor();
+        assert.equal(
+          await page.locator("#billing .settings-section-heading h3").innerText(),
+          "Run cost limits and model price",
+          "Billing uses the design's section title without a duplicate panel heading",
+        );
+        assert.equal(await page.locator("#billing .billing-panel > h4").count(), 0);
         const divider = page.locator("#billing hr").first();
         const borderColor = await divider.evaluate(
           (element) => getComputedStyle(element).borderTopColor,
@@ -731,9 +869,33 @@ try {
           .evaluate((element) => getComputedStyle(element).getPropertyValue("--hairline").trim());
         assert.equal(borderColor, hairline, "Billing dividers must use the theme hairline token");
       }
+      if (section.id === "gameplay") {
+        assert.equal(await page.locator("#gameplay .select-menu").count(), 0);
+        assert.equal(await page.locator("#gameplay .settings-subheading").innerText(), "Run");
+        assert.equal(
+          await page.locator("#gameplay .settings-session-note").innerText(),
+          "Reopening a cycle generates nothing on its own; a new cycle keeps cycle marks.",
+        );
+        assert.deepEqual(
+          await page
+            .locator("#gameplay .settings-actions button")
+            .first()
+            .evaluate((element) => ({
+              height: getComputedStyle(element).height,
+              fontSize: getComputedStyle(element).fontSize,
+              borderRadius: getComputedStyle(element).borderRadius,
+            })),
+          { height: "30px", fontSize: "12px", borderRadius: "8px" },
+        );
+      }
       if (section.id === "price") {
         const form = page.locator("#billing .billing-price-form");
         await form.waitFor();
+        assert.equal(
+          await page.locator("#billing .settings-section-heading h3").innerText(),
+          "Register a new immutable price",
+          "Price registration uses the design's page title once",
+        );
         assert.equal(
           await form.locator(".billing-price-base-grid .billing-price-field").count(),
           2,
@@ -777,10 +939,85 @@ try {
           (await page.locator("#scenario .scenario-resource-table").textContent()) ?? "";
         assert.match(resourceText, /theme\.css/);
         assert.match(resourceText, /4 tokens/);
-        await credits.first().locator("summary").click();
         await page
           .locator('#scenario a[href="https://creativecommons.org/licenses/by/4.0/"]')
           .waitFor();
+      }
+      if (section.id === "api") {
+        const currencyCard = page.locator("#api .settings-currency-card");
+        const priceLayout = await currencyCard.evaluate((element) => {
+          const heading = element.querySelector<HTMLElement>(".settings-currency-heading");
+          const select = element.querySelector<HTMLElement>(".select-menu");
+          const preview = element.querySelector<HTMLElement>(".settings-price-preview");
+          const grid = preview?.querySelector<HTMLElement>("dl");
+          if (!heading || !select || !preview || !grid)
+            throw new Error("API price controls are missing");
+          return {
+            currencyDisplay: getComputedStyle(element).display,
+            currencyWidth: element.getBoundingClientRect().width,
+            headingColumns: getComputedStyle(heading).gridTemplateColumns.split(" ").length,
+            selectWidth: select.getBoundingClientRect().width,
+            previewWidth: preview.getBoundingClientRect().width,
+            previewScrollWidth: preview.scrollWidth,
+            priceColumns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
+            rows: Array.from(grid.children).map((row) => {
+              const rect = row.getBoundingClientRect();
+              const label = row.querySelector<HTMLElement>("dt")!.getBoundingClientRect();
+              const value = row.querySelector<HTMLElement>("dd")!.getBoundingClientRect();
+              return {
+                left: rect.left,
+                right: rect.right,
+                labelLeft: label.left,
+                labelRight: label.right,
+                valueLeft: value.left,
+                valueRight: value.right,
+              };
+            }),
+          };
+        });
+        if (viewport.width <= 720) {
+          assert.equal(priceLayout.currencyDisplay, "grid");
+          assert.equal(priceLayout.headingColumns, 1);
+          assert.equal(priceLayout.priceColumns, 1);
+        }
+        assert.ok(
+          priceLayout.selectWidth > 0 && priceLayout.selectWidth <= priceLayout.currencyWidth,
+        );
+        assert.ok(
+          priceLayout.previewScrollWidth <= priceLayout.previewWidth,
+          `Price preview must not overflow: ${JSON.stringify(priceLayout)}`,
+        );
+        assert.ok(
+          priceLayout.rows.every(
+            (row) =>
+              row.labelLeft >= row.left - 1 &&
+              row.labelRight <= row.right + 1 &&
+              row.valueLeft >= row.left - 1 &&
+              row.valueRight <= row.right + 1 &&
+              row.labelRight <= row.valueLeft + 1,
+          ),
+          "API price labels and values must not overlap or escape their grid row",
+        );
+        const trigger = page.locator("#api .select-menu-trigger").first();
+        const selectedValue = await trigger.innerText();
+        await trigger.click();
+        const listbox = page.locator('#api [role="listbox"]').first();
+        await listbox.waitFor();
+        const listboxBox = await listbox.boundingBox();
+        assert.ok(listboxBox, "The custom selector must render its listbox");
+        assert.ok(listboxBox.x >= 0 && listboxBox.x + listboxBox.width <= viewport.width);
+        assert.ok(listboxBox.y >= 0 && listboxBox.y + listboxBox.height <= viewport.height);
+        const activeBefore = await trigger.getAttribute("aria-activedescendant");
+        await trigger.press("ArrowDown");
+        assert.notEqual(
+          await trigger.getAttribute("aria-activedescendant"),
+          activeBefore,
+          "ArrowDown must move the active listbox option",
+        );
+        await trigger.press("Escape");
+        await listbox.waitFor({ state: "detached" });
+        assert.equal(await trigger.innerText(), selectedValue, "Escape must not change selection");
+        assert.equal(await trigger.evaluate((element) => document.activeElement === element), true);
       }
       if (section.id === "balance") {
         await page.getByRole("button", { name: /query deepseek balance/i }).click();
@@ -791,6 +1028,32 @@ try {
         assert.equal(await page.locator("#memory details").count(), 0);
         assert.equal(await page.locator("#memory .memory-settings-group").count(), 2);
         assert.equal(await page.locator('#memory input[name="memory-app-algorithm"]').count(), 3);
+        assert.equal(
+          await page
+            .locator('#memory input[name="memory-app-algorithm"][value="segmented"]')
+            .isChecked(),
+          true,
+          "The memory fixture mirrors the design's segmented algorithm state",
+        );
+        assert.deepEqual(
+          await page
+            .locator("#memory .memory-settings-group")
+            .first()
+            .locator(".memory-number-field > span")
+            .allTextContents(),
+          [
+            "Base strength (1,000,000 = 1)",
+            "Reinforcement gain",
+            "Total reinforcement cap",
+            "Strength cap",
+            "Half-life rounds",
+            "Repeat window rounds",
+            "Maximum reinforcements in a window",
+            "Revival cooldown rounds",
+            "Active memory capacity",
+          ],
+          "Memory fields follow the design order for the selected algorithm",
+        );
         const memoryColumns = await page
           .locator("#memory .memory-parameter-grid")
           .first()
@@ -877,9 +1140,32 @@ try {
         await page.locator("#shortcuts .shortcut-row").first().waitFor();
         assert.equal(await page.locator("#shortcuts .shortcut-search").count(), 0);
         assert.ok(await page.locator("#shortcuts .shortcut-lock").count());
-        await page.getByRole("button", { name: /view reference|查看速查表/i }).click();
+        await page.getByRole("button", { name: /view cheat sheet|查看速查表/i }).click();
         const shortcutDialog = page.getByRole("dialog", { name: /keyboard shortcuts|快捷键/i });
         await shortcutDialog.waitFor();
+        const dialogBox = await shortcutDialog.boundingBox();
+        assert.ok(dialogBox, "The shortcut reference should have a measurable dialog frame");
+        assert.ok(dialogBox.x >= 16 && dialogBox.y >= 16);
+        assert.ok(dialogBox.x + dialogBox.width <= viewport.width - 16);
+        assert.ok(dialogBox.y + dialogBox.height <= viewport.height - 16);
+        const shortcutLayout = await shortcutDialog.evaluate((element) => {
+          const groups = element.querySelector<HTMLElement>(".shortcut-groups-dialog");
+          if (!groups) throw new Error("Shortcut groups are missing");
+          return {
+            dialogWidth: element.clientWidth,
+            dialogScrollWidth: element.scrollWidth,
+            groupsWidth: groups.clientWidth,
+            groupsScrollWidth: groups.scrollWidth,
+            columns: getComputedStyle(groups).gridTemplateColumns.split(" ").length,
+          };
+        });
+        assert.ok(shortcutLayout.dialogScrollWidth <= shortcutLayout.dialogWidth);
+        assert.ok(shortcutLayout.groupsScrollWidth <= shortcutLayout.groupsWidth);
+        assert.equal(
+          shortcutLayout.columns,
+          viewport.width <= 720 ? 1 : 2,
+          "The shortcut reference must switch to one column in the narrow drawer",
+        );
         assert.ok(await shortcutDialog.locator('input[type="search"]').count());
         assert.ok(await shortcutDialog.locator(".shortcut-row .tag").count());
         await shortcutDialog.locator('input[type="search"]').fill("Send");
@@ -913,6 +1199,7 @@ try {
         sectionLayout.content.scrollWidth <= sectionLayout.content.clientWidth,
         `${section.id} must not overflow horizontally at ${viewport.width}px (scrollWidth=${sectionLayout.content.scrollWidth}, clientWidth=${sectionLayout.content.clientWidth})`,
       );
+      if (viewport.width === 960) await captureVisual(page, `settings-${section.id}.png`);
     }
     assert.deepEqual(pageErrors, [], "Settings sections must render without uncaught errors");
     await page.close();

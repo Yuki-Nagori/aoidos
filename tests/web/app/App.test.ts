@@ -15,8 +15,14 @@ describe("App", () => {
     delete document.documentElement.dataset.localeFallback;
   });
   it("展示正式入口，初始化不打开会话或发起生成", async () => {
+    let resolveProfileSave: ((value: unknown) => void) | undefined;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "llm_list_profiles") return { items: [] };
+      if (command === "llm_save_profile")
+        return new Promise((resolve) => {
+          resolveProfileSave = resolve;
+        });
+      if (command === "engine_open_session") throw new Error("race test request completed");
       if (command === "engine_list_scripts")
         return [
           {
@@ -29,6 +35,13 @@ describe("App", () => {
             },
             attributions:
               "# Script License\n\nCC BY 4.0\n\n# SRD Attribution\n\nWizards of the Coast",
+          },
+          {
+            scriptId: "lantern-archive",
+            title: "灯塔档案",
+            displayNames: { en: "Lantern Archive", "zh-Hans": "灯塔档案" },
+            suggestedActions: { en: "Look around.", "zh-Hans": "环顾四周。" },
+            attributions: "",
           },
         ];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
@@ -139,6 +152,14 @@ describe("App", () => {
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).not.toContain(
       "memory_get_app_config",
     );
+    const welcomeScenario = wrapper.get('.welcome-script-select [role="combobox"]');
+    expect(welcomeScenario.text()).toContain("Mistbell Cellar");
+    await welcomeScenario.trigger("click");
+    await wrapper.get('[role="option"][aria-selected="false"]').trigger("click");
+    expect(wrapper.get(".script-copy").text()).toContain("Lantern Archive");
+    await welcomeScenario.trigger("click");
+    await wrapper.get('[role="option"][aria-selected="false"]').trigger("click");
+    expect(wrapper.get(".script-copy").text()).toContain("Mistbell Cellar");
     await wrapper.get('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
@@ -175,7 +196,7 @@ describe("App", () => {
     await vi.waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("theme_set_preference", { theme: "light-purple" }),
     );
-    const script = wrapper.get('[role="combobox"][aria-label="Scenario"]');
+    const script = wrapper.get(".script-copy");
     expect(script.text()).toContain("Mistbell Cellar");
     const model = wrapper.get('[role="combobox"][aria-label="Model"]');
     expect(model.text()).toContain("DeepSeek V4.1 Flash");
@@ -211,6 +232,7 @@ describe("App", () => {
     expect(wrapper.findAll(".scenario-resource-table tr")).toHaveLength(2);
     expect(wrapper.get(".scenario-resource-table").text()).toContain("舞台图");
     await wrapper.get('.settings-nav button[aria-controls="gameplay"]').trigger("click");
+    expect(wrapper.find("#gameplay .select-menu").exists()).toBe(false);
     await wrapper.get('input[name="dice-mode"][value="auto"]').setValue();
     await vi.waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("store_set_ui_preferences", {
@@ -251,7 +273,29 @@ describe("App", () => {
       "theme_list",
       "theme_set_preference",
       "theme_skin_load",
+      "theme_skin_load",
     ]);
+    await wrapper.get(".welcome-start").trigger("click");
+    await vi.waitFor(() => expect(resolveProfileSave).toBeTypeOf("function"));
+    const scriptSelector = wrapper.get('.welcome-script-select [role="combobox"]');
+    expect((scriptSelector.element as HTMLButtonElement).disabled).toBe(true);
+    expect(scriptSelector.text()).toContain("mistbell");
+    resolveProfileSave?.({
+      profileId: "default",
+      providerId: "deepseek",
+      model: "deepseek-flash",
+      mode: "completion",
+      thinking: false,
+      sampling: { temperature: 1, maxTokens: 2048 },
+      proxy: { mode: "system" },
+    });
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("engine_open_session", {
+        profileId: "default",
+        scriptId: "mistbell",
+        startNew: false,
+      }),
+    );
     wrapper.unmount();
   });
   it("浏览器缺 IPC 明确展示恢复错误，不伪造本地生成结果", async () => {

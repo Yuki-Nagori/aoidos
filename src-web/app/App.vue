@@ -27,6 +27,12 @@ const suggestedAction = computed(() => {
     .find((script) => script.scriptId === session.scriptId)
     ?.suggestedActions[locale.resolved.value];
 });
+const sessionScriptTitle = computed(() => {
+  const session = product.session.value;
+  if (!session) return "";
+  const script = product.scripts.value.find((item) => item.scriptId === session.scriptId);
+  return script?.displayNames[locale.resolved.value] ?? session.title;
+});
 const sessionId = computed(() => product.session.value?.sessionId);
 const billingProfile = computed(() => product.activeProfile.value);
 const billing = useBilling(
@@ -146,6 +152,7 @@ void preferences.load();
         v-if="product.session.value"
         ref="workspace"
         :session="product.session.value"
+        :script-title="sessionScriptTitle"
         :suggested-action="suggestedAction"
         :product-busy="product.busy.value"
         :error-message="errorMessage"

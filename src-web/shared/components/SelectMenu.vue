@@ -166,19 +166,21 @@ onScopeDispose(() => document.removeEventListener("pointerdown", onDocumentPoint
       @click="open ? hide() : show()"
       @keydown="onKeydown"
     >
-      <template v-if="props.variant === 'recipient'">
-        <span class="muted">{{ props.menuTitle }}</span>
-        <b class="select-menu-value">{{ selected?.label ?? props.modelValue }}</b>
-        <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </template>
-      <template v-else>
-        <span class="select-menu-value">{{ selected?.label ?? props.modelValue }}</span>
-        <svg class="select-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="m4 6 4 4 4-4" />
-        </svg>
-      </template>
+      <slot name="trigger">
+        <template v-if="props.variant === 'recipient'">
+          <span class="muted">{{ props.menuTitle }}</span>
+          <b class="select-menu-value">{{ selected?.label ?? props.modelValue }}</b>
+          <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </template>
+        <template v-else>
+          <span class="select-menu-value">{{ selected?.label ?? props.modelValue }}</span>
+          <svg class="select-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" />
+          </svg>
+        </template>
+      </slot>
     </button>
     <div
       v-if="open"

@@ -26,6 +26,20 @@ describe("SelectMenu", () => {
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false);
   });
 
+  it("preserves a custom trigger while keeping selection in the shared listbox", async () => {
+    const wrapper = mount(SelectMenu, {
+      props: { modelValue: "dark", options, label: "Theme" },
+      slots: { trigger: "<span class='custom-trigger'>Scenario card</span>" },
+    });
+    const trigger = wrapper.get('[role="combobox"]');
+
+    expect(trigger.get(".custom-trigger").text()).toBe("Scenario card");
+    await trigger.trigger("click");
+    await wrapper.get('[role="option"]:nth-child(3)').trigger("click");
+
+    expect(wrapper.emitted("update:modelValue")).toEqual([["light"]]);
+  });
+
   it("skips disabled options and lets Escape dismiss without changing the value", async () => {
     const wrapper = mount(SelectMenu, {
       props: { modelValue: "dark", options, label: "Theme" },

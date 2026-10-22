@@ -88,9 +88,8 @@ watch(dialogOpen, async (isOpen) => {
 
 <template>
   <div class="shortcut-settings">
-    <div class="shortcut-settings-intro card">
+    <div class="shortcut-settings-intro">
       <div>
-        <strong>{{ t("shortcuts.title") }}</strong>
         <p class="text-sm text-muted">{{ t("shortcuts.notConnected") }}</p>
       </div>
       <button
@@ -149,7 +148,6 @@ watch(dialogOpen, async (isOpen) => {
         </div>
       </section>
     </div>
-    <p class="shortcut-note text-sm text-muted">{{ t("shortcuts.settingsNote") }}</p>
   </div>
 
   <Teleport to="body">

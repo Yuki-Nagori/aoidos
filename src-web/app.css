@@ -521,6 +521,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  .welcome-script-select {
+    display: block;
+  }
+
   .muted-icon {
     color: var(--muted);
   }
@@ -586,8 +591,37 @@
   .settings-actions {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.75rem;
+    justify-content: flex-start;
+    gap: 0.5rem;
+  }
+
+  .settings-session-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+  }
+
+  .settings-subheading {
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .settings-session-note {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.71875rem;
+    line-height: 1.55;
+  }
+
+  .settings-action-icon {
+    width: 0.75rem;
+    height: 0.75rem;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.6;
   }
 
   .settings-backdrop {
@@ -625,24 +659,24 @@
   .settings-nav {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.125rem;
     overflow: auto;
     border-right: 1px solid var(--hairline);
-    padding: 0.75rem 0.65rem;
+    padding: 0.75rem 0.5rem;
   }
 
   .settings-nav-heading {
     display: flex;
-    min-height: 2rem;
     align-items: center;
     justify-content: flex-start;
     gap: 0.5rem;
-    padding: 0 0.4rem 0.5rem;
+    padding: 0.5rem 0.625rem 0.25rem;
   }
 
   .settings-nav-heading h2 {
-    font-size: 0.8125rem;
-    font-weight: 650;
+    color: var(--muted);
+    font-size: 0.65625rem;
+    font-weight: 400;
   }
 
   .settings-nav button {
@@ -651,7 +685,7 @@
     align-items: center;
     gap: 0.5rem;
     border: 1px solid transparent;
-    border-radius: 0.65rem;
+    border-radius: 0.5rem;
     padding: 0.4375rem 0.625rem;
     color: var(--muted);
     font-size: 0.78125rem;
@@ -794,9 +828,9 @@
   }
 
   .billing-price-context {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
     gap: 0.75rem;
     border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--hairline));
     border-radius: 0.75rem;
@@ -827,7 +861,6 @@
   }
 
   .billing-price-status {
-    flex: none;
     color: var(--muted);
     font-size: 0.75rem;
   }
@@ -1078,6 +1111,8 @@
 
   .settings-price-preview {
     min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
     grid-column: 1 / -1;
     display: grid;
     gap: 0.65rem;
@@ -1118,6 +1153,24 @@
 
   .settings-price-preview p {
     margin: 0;
+  }
+
+  .settings-currency-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .settings-currency-heading {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) minmax(10rem, 13rem);
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .settings-currency-card > .btn {
+    justify-self: start;
   }
 
   .settings-key-card {
@@ -1361,6 +1414,20 @@
     font-size: 0.6875rem;
   }
 
+  .select-menu.welcome-script-select > .select-menu-trigger {
+    min-height: auto;
+    border: 0;
+    border-radius: 0.75rem;
+    background: transparent;
+    padding: 0;
+  }
+
+  .select-menu.welcome-script-select > .select-menu-trigger:hover,
+  .select-menu.welcome-script-select.is-open > .select-menu-trigger {
+    border-color: transparent;
+    background: transparent;
+  }
+
   .select-menu-recipient .select-menu-trigger b {
     font-weight: 600;
   }
@@ -1411,11 +1478,22 @@
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.875rem 1rem;
+    min-width: 0;
   }
 
   .shortcut-settings-intro p {
-    margin: 0.25rem 0 0;
+    margin: 0;
+  }
+
+  div.shortcut-settings-intro > div {
+    min-width: 0;
+  }
+
+  .shortcut-settings-intro > .btn {
+    flex: none;
+    min-height: 2rem;
+    padding-inline: 0.5rem;
+    white-space: nowrap;
   }
 
   .shortcut-search {
@@ -1459,6 +1537,7 @@
 
   .shortcut-groups-settings {
     overflow: auto;
+    margin-top: 1rem;
     padding: 0.125rem 0.125rem 0.5rem;
   }
 
@@ -1610,6 +1689,27 @@
   }
 
   @media (max-width: 45rem) {
+    .settings-currency-heading {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .settings-price-preview dl {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .settings-price-preview dl > div {
+      min-width: 0;
+    }
+
+    .settings-price-preview dt {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .settings-price-preview dd {
+      flex: none;
+    }
+
     .billing-summary-grid,
     .billing-form,
     .billing-price-form,
@@ -1655,10 +1755,17 @@
   .settings-actions button {
     justify-self: start;
     border: 1px solid var(--hairline);
-    border-radius: 0.65rem;
+    border-radius: 0.5rem;
     background: color-mix(in srgb, var(--panel) 86%, transparent);
-    padding: 0.55rem 0.8rem;
+    padding: 0 0.6875rem;
     color: var(--ink);
+    font-size: 0.75rem;
+    font-weight: 520;
+  }
+
+  .settings-actions button {
+    height: 1.875rem;
+    white-space: nowrap;
   }
 
   .settings-skin {
@@ -2358,18 +2465,6 @@
     content: "✦";
   }
 
-  .panel-pin-icon::before {
-    content: "⌖";
-  }
-
-  .panel-unpin-icon::before {
-    content: "⌁";
-  }
-
-  .panel-close-icon::before {
-    content: "×";
-  }
-
   .dialogue-panel {
     position: absolute;
     z-index: 3;
@@ -2424,6 +2519,268 @@
     overflow: auto;
     overscroll-behavior: contain;
     padding: 0.75rem;
+  }
+
+  .game-composer {
+    position: relative;
+    padding: 0.5rem 0 0;
+  }
+
+  .game-command-menu {
+    position: absolute;
+    z-index: 5;
+    right: 0.75rem;
+    bottom: calc(100% - 0.25rem);
+    left: 0.75rem;
+    max-height: min(55vh, 24rem);
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--hairline);
+    border-radius: 0.875rem;
+    background: linear-gradient(var(--panel), var(--panel)), var(--overlay-solid);
+    padding: 0.375rem;
+    box-shadow: 0 0.75rem 2.25rem color-mix(in srgb, var(--ink) 16%, transparent);
+  }
+
+  .game-command-menu-head {
+    display: flex;
+    min-height: 1.875rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.5rem 0.25rem;
+    color: var(--muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+  }
+
+  .game-command-menu-hints {
+    display: flex;
+    gap: 0.2rem;
+  }
+
+  .game-command-menu-hints .kbd,
+  .game-command-tab {
+    height: 1rem;
+    padding-inline: 0.25rem;
+    font-size: 0.625rem;
+  }
+
+  .game-command-menu-empty {
+    margin: 0.25rem 0.5rem 0.375rem;
+    font-size: 0.6875rem;
+  }
+
+  .game-command-row {
+    display: grid;
+    width: 100%;
+    min-height: 2rem;
+    grid-template-columns: 6rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.625rem;
+    border: 0;
+    border-radius: 0.5rem;
+    background: transparent;
+    padding: 0.375rem 0.5rem;
+    color: var(--ink);
+    text-align: left;
+  }
+
+  .game-command-row:hover:not(:disabled),
+  .game-command-row-selected {
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+  }
+
+  .game-command-row-disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+    opacity: 0.66;
+  }
+
+  .game-command-key {
+    overflow: hidden;
+    font-family: ui-monospace, "SF Mono", Menlo, "Cascadia Code", Consolas, monospace;
+    font-size: 0.75rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .game-command-row-selected .game-command-key {
+    color: var(--accent);
+  }
+
+  .game-command-description {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.6875rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .game-command-state {
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 0.125rem 0.375rem;
+    font-size: 0.625rem;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 30rem) {
+    .game-command-row {
+      grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+      gap: 0.5rem;
+    }
+  }
+
+  .game-composer-input {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.75rem;
+    background: var(--field-surface);
+    padding: 0.625rem 0.5rem 0.5rem 0.75rem;
+    transition:
+      border-color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  .game-composer-input:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .game-composer-top,
+  .game-composer-foot {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .game-composer-top {
+    justify-content: space-between;
+  }
+
+  .game-composer-recipient {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    color: var(--muted);
+    font-size: 0.6875rem;
+  }
+
+  .game-composer-key-hints {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.2rem;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.65625rem;
+    white-space: nowrap;
+  }
+
+  .game-composer-key-hints .kbd {
+    height: 1rem;
+    padding-inline: 0.25rem;
+    font-size: 0.625rem;
+  }
+
+  .game-composer-text {
+    width: 100%;
+    min-height: 2.5rem;
+    max-height: 12rem;
+    resize: vertical;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.84375rem;
+    line-height: 1.5;
+  }
+
+  .game-composer-text::placeholder {
+    color: var(--muted);
+    opacity: 1;
+  }
+
+  .game-composer-text:focus-visible {
+    outline: none;
+  }
+
+  .game-composer-foot {
+    justify-content: space-between;
+  }
+
+  .game-composer-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.375rem;
+  }
+
+  .game-composer-submit {
+    display: inline-flex;
+    min-height: 1.875rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 0.5rem;
+    background: var(--accent);
+    padding: 0 0.625rem;
+    color: var(--on-accent);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .game-composer-submit:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .game-composer-secondary {
+    display: inline-flex;
+    min-height: 1.875rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.5rem;
+    background: color-mix(in srgb, var(--panel) 86%, transparent);
+    padding: 0 0.625rem;
+    color: var(--ink);
+    font-size: 0.75rem;
+    font-weight: 550;
+  }
+
+  .game-composer-secondary:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .game-composer-submit-icon {
+    width: 0.875rem;
+    height: 0.875rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .game-composer-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-top: 0.375rem;
+  }
+
+  .game-composer-status:empty {
+    display: none;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -2650,7 +3007,7 @@
       overflow-x: hidden;
       border-right: 1px solid var(--hairline);
       border-bottom: 0;
-      padding: 0.5rem 0.375rem;
+      padding: 0.75rem 0.5rem;
     }
 
     .settings-nav button {

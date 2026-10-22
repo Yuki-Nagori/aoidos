@@ -40,8 +40,8 @@ const sections = computed(() => [
   { id: "memory", label: t("settings.sections.memory") },
   { id: "memory-list", label: t("settings.sections.memory-list") },
   { id: "memory-pending", label: t("settings.sections.memory-pending") },
-  { id: "scenario", label: t("settings.sections.scenario") },
   { id: "shortcuts", label: t("settings.sections.shortcuts") },
+  { id: "scenario", label: t("settings.sections.scenario") },
 ] as const);
 const activeSectionTitle = computed(
   () => sections.value.find((section) => section.id === activeSection.value)?.label ?? t("settings.title"),
@@ -375,20 +375,22 @@ function themeName(id: string, fallback: string): string {
               v-if="product.providerId.value === 'deepseek' && product.model.value === 'deepseek-flash'"
               class="settings-currency-card card"
             >
-              <span class="settings-skin-copy">
-                <strong>{{ t("settings.billingCurrency") }}</strong>
-                <span class="text-sm text-muted">{{ t("settings.billingCurrencyHint") }}</span>
-              </span>
-              <SelectMenu
-                :model-value="product.billingCurrency.value"
-                :options="[
-                  { value: 'CNY', label: t('settings.billingCurrencyCny') },
-                  { value: 'USD', label: t('settings.billingCurrencyUsd') },
-                ]"
-                :label="t('settings.billingCurrency')"
-                :disabled="product.busy.value"
-                @update:model-value="product.setBillingCurrency($event)"
-              />
+              <div class="settings-currency-heading">
+                <span class="settings-skin-copy">
+                  <strong>{{ t("settings.billingCurrency") }}</strong>
+                  <span class="text-sm text-muted">{{ t("settings.billingCurrencyHint") }}</span>
+                </span>
+                <SelectMenu
+                  :model-value="product.billingCurrency.value"
+                  :options="[
+                    { value: 'CNY', label: t('settings.billingCurrencyCny') },
+                    { value: 'USD', label: t('settings.billingCurrencyUsd') },
+                  ]"
+                  :label="t('settings.billingCurrency')"
+                  :disabled="product.busy.value"
+                  @update:model-value="product.setBillingCurrency($event)"
+                />
+              </div>
               <fieldset v-if="selectedPriceTemplate" class="settings-price-preview">
                 <legend>{{ t("settings.pricePreviewTitle") }}</legend>
                 <dl>
@@ -499,19 +501,6 @@ function themeName(id: string, fallback: string): string {
               :title="t('settings.sections.gameplay')"
               @close="emit('close')"
             />
-            <div class="settings-field">
-              {{ t("settings.script") }}
-              <SelectMenu
-                :model-value="product.scriptId.value"
-                :options="product.scripts.value.map((script) => ({
-                  value: script.scriptId,
-                  label: script.displayNames[locale.resolved.value] ?? script.title,
-                }))"
-                :label="t('settings.script')"
-                :disabled="product.busy.value"
-                @update:model-value="product.scriptId.value = $event"
-              />
-            </div>
             <fieldset class="settings-choice-group">
               <legend>{{ t("game.diceMode") }}</legend>
               <div class="settings-segmented">
@@ -549,22 +538,35 @@ function themeName(id: string, fallback: string): string {
                 </label>
               </div>
             </fieldset>
-            <div class="settings-actions">
-              <button
-                type="button"
-                :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
-                @click="product.open(false)"
-              >
-                {{ t("game.restart") }}
-              </button>
-              <button
-                type="button"
-                :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
-                @click="product.open(true)"
-              >
-                {{ t("game.newCycle") }}
-              </button>
-              <button type="button" @click="emit('reconnect')">{{ t("common.reconnect") }}</button>
+            <div class="settings-session-group">
+              <h4 class="settings-subheading">{{ t("settings.session") }}</h4>
+              <div class="settings-actions">
+                <button
+                  type="button"
+                  :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
+                  @click="product.open(false)"
+                >
+                  <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+                    <path d="M20 4v4.5h-4.5" />
+                  </svg>
+                  {{ t("game.restart") }}
+                </button>
+                <button
+                  type="button"
+                  :disabled="product.busy.value || product.keyStatusLoading.value || product.keyStatus.value?.set === false"
+                  @click="product.open(true)"
+                >
+                  {{ t("game.newCycle") }}
+                </button>
+                <button type="button" @click="emit('reconnect')">
+                  <svg class="settings-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4" />
+                  </svg>
+                  {{ t("common.reconnect") }}
+                </button>
+              </div>
+              <p class="settings-session-note">{{ t("settings.sessionNote") }}</p>
             </div>
           </section>
 
@@ -573,7 +575,14 @@ function themeName(id: string, fallback: string): string {
             id="billing"
             class="settings-section"
           >
-            <SettingsSectionHeading :title="activeSectionTitle" @close="emit('close')" />
+            <SettingsSectionHeading
+              :title="activeSection === 'billing'
+              ? t('billing.title')
+              : activeSection === 'price'
+                ? t('billing.savePrice')
+                : activeSectionTitle"
+              @close="emit('close')"
+            />
             <BillingPanel
               :billing="billing"
               :locale="locale.resolved.value"
@@ -640,7 +649,7 @@ function themeName(id: string, fallback: string): string {
                 <div class="scenario-attribution-heading">
                   {{ document.heading ?? t("settings.credits") }}
                 </div>
-                <details class="scenario-attribution-document">
+                <details class="scenario-attribution-document" open>
                   <summary>{{ t("settings.viewFullAttribution") }}</summary>
                   <div class="scenario-attribution-body">
                     <template v-for="(block, index) in document.blocks" :key="index">
