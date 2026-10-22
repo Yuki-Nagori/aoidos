@@ -743,7 +743,7 @@ try {
     });
     await page.locator(".welcome-start").click();
     await page.locator(".game-stage").waitFor();
-    await page.locator('.game-topbar button[aria-label="Open dialogue panel"]').click();
+    await page.locator(".panel-edge-trigger").click();
     await page.locator(".dialogue-panel.dialogue-panel-open").waitFor();
     await page.getByRole("button", { name: "Pin dialogue panel" }).click();
     await page.locator('.game-stage[data-panel-state="pinned"]').waitFor();

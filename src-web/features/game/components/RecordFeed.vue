@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { RecordItem } from "../../../api/records";
 
@@ -7,10 +8,9 @@ const props = defineProps<{
   characters?: readonly { id: string; canonicalName: string }[];
   olderCursor?: string;
   loadingOlder: boolean;
-  preview?: { text: string; outcome?: string; finishReason?: string };
+  preview?: { text: string; outcome?: string; error?: { code: string; message: string } };
   expandedBody?: string;
-  generation?: { outcome: string; finishReason?: string };
-  canRewind: boolean;
+  rewindSelectorOpen?: boolean;
 }>();
 const emit = defineEmits<{
   loadOlder: [];
@@ -18,6 +18,18 @@ const emit = defineEmits<{
   rewind: [recordSeq: number];
 }>();
 const { t } = useI18n();
+const displayItems = computed(() => {
+  return props.items.filter(
+    (item) =>
+      !(
+        item.kind === "system" &&
+        item.body &&
+        "code" in item.body &&
+        !["checkPlanned", "checkSkipped"].includes(item.body.code) &&
+        item.body.message === "引擎确认回合事实"
+      ),
+  );
+});
 
 function characterName(id: string): string {
   return props.characters?.find((character) => character.id === id)?.canonicalName ?? id;
@@ -38,6 +50,12 @@ function checkResultName(result: string): string {
     default:
       return t("game.unknownCheckResult", { result: safeToken(result) });
   }
+}
+
+function checkRuleName(ruleId: string): string {
+  return ruleId === "pbta-explore-v1"
+    ? t("game.checkRules.pbtaExplore")
+    : safeToken(ruleId);
 }
 
 function safeToken(value: string): string {
@@ -65,47 +83,30 @@ function systemRecordMessage(message: string): string {
   return characters.length > 2_000 ? `${characters.slice(0, 2_000).join("")}…` : safeMessage;
 }
 
-function outcomeName(outcome: string): string {
-  switch (outcome) {
-    case "completed":
-      return t("game.outcomes.completed");
-    case "cancelled":
-      return t("game.outcomes.cancelled");
-    case "failed":
-      return t("game.outcomes.failed");
-    default:
-      return safeToken(outcome);
-  }
+function isFailed(item: RecordItem): boolean {
+  return (
+    item.outcome === "failed" ||
+    (!!item.body && "outcome" in item.body && item.body.outcome === "failed")
+  );
 }
 
-function finishReasonName(reason: string): string {
-  switch (reason) {
-    case "stop":
-      return t("game.finishReasons.stop");
-    case "guard":
-      return t("game.finishReasons.guard");
-    case "length":
-      return t("game.finishReasons.length");
-    default:
-      return safeToken(reason);
-  }
+function isRewindTarget(item: RecordItem): boolean {
+  return !!item.body && "code" in item.body && ["checkPlanned", "checkSkipped"].includes(item.body.code);
 }
 
-function relatedDice(item: RecordItem) {
-  if (!item.body || !("diceSeq" in item.body)) return undefined;
-  const recordSeq = item.body.diceSeq;
-  const body = props.items.find((candidate) => candidate.recordSeq === recordSeq)?.body;
-  return body && "expression" in body ? body : undefined;
+function selectRewindTarget(item: RecordItem): void {
+  if (props.rewindSelectorOpen && isRewindTarget(item)) emit("rewind", item.recordSeq);
+}
+
+function failureMessage(item: RecordItem): string | undefined {
+  const body = item.body;
+  if (!body || !("error" in body)) return undefined;
+  const message = systemRecordMessage(body.error.message);
+  return message === t("game.systemRecordUnavailable") ? undefined : message;
 }
 
 function isOutOfCharacter(item: RecordItem): boolean {
   return !!item.body && "mode" in item.body && item.body.mode === "outOfCharacter";
-}
-
-function checkDifficulty(dc: number | undefined): string {
-  return t("game.checkDifficulty", {
-    dc: dc === undefined ? t("game.noDifficulty") : dc,
-  });
 }
 </script>
 
@@ -120,8 +121,17 @@ function checkDifficulty(dc: number | undefined): string {
     {{ t("game.earlierRecords") }}
   </button>
   <ol class="record-list" :aria-label="t('game.dialogue')">
-    <li v-if="!props.items.length" class="record-empty">{{ t("game.noRecords") }}</li>
-    <li v-for="item in props.items" :key="item.recordSeq" class="record-row">
+    <li v-if="!displayItems.length" class="record-empty">{{ t("game.noRecords") }}</li>
+    <li
+      v-for="item in displayItems"
+      :key="item.recordSeq"
+      class="record-row"
+      :class="{ 'record-rewind-target': props.rewindSelectorOpen && isRewindTarget(item) }"
+      :tabindex="props.rewindSelectorOpen && isRewindTarget(item) ? 0 : undefined"
+      :aria-label="props.rewindSelectorOpen && isRewindTarget(item) ? t('game.rewindToHere') : undefined"
+      @click="selectRewindTarget(item)"
+      @keydown.enter.space.prevent="selectRewindTarget(item)"
+    >
       <div
         v-if="item.kind === 'playerSpeech' && item.body && 'text' in item.body"
         class="record-player"
@@ -136,15 +146,6 @@ function checkDifficulty(dc: number | undefined): string {
         class="record-narrator"
       >
         <p>{{ item.body.text }}</p>
-        <span
-          v-if="item.outcome || ('outcome' in item.body && item.body.outcome)"
-          class="record-terminal"
-        >
-          {{ outcomeName(item.outcome ?? ("outcome" in item.body ? item.body.outcome : "")) }}
-          <template v-if="'finishReason' in item.body && item.body.finishReason">
-            · {{ finishReasonName(item.body.finishReason ?? "") }}
-          </template>
-        </span>
       </div>
       <div
         v-else-if="item.kind === 'characterSpeech' && item.body && 'text' in item.body"
@@ -159,12 +160,6 @@ function checkDifficulty(dc: number | undefined): string {
           }}</strong>
         </div>
         <p class="record-character-bubble">{{ item.body.text }}</p>
-        <span v-if="item.outcome" class="record-terminal">
-          {{ outcomeName(item.outcome) }}
-          <template v-if="'finishReason' in item.body && item.body.finishReason">
-            · {{ finishReasonName(item.body.finishReason) }}
-          </template>
-        </span>
       </div>
       <div
         v-else-if="item.kind === 'dice' && item.body && 'expression' in item.body"
@@ -186,23 +181,9 @@ function checkDifficulty(dc: number | undefined): string {
         class="record-machine mono"
       >
         <span class="led" aria-hidden="true" />
-        <span>{{ item.body.ruleId }}</span>
-        <template v-if="relatedDice(item)">
-          <span>{{ relatedDice(item)!.expression }}</span>
-          <span
-            v-for="(roll, index) in relatedDice(item)!.rolls"
-            :key="`${item.recordSeq}:${index}`"
-            class="record-die"
-          >
-            {{ roll.value }}
-          </span>
-          <span class="record-machine-total">= {{ relatedDice(item)!.total }}</span>
-        </template>
+        <span>{{ checkRuleName(item.body.ruleId) }}</span>
         <span class="record-result" :class="`result-${item.body.result}`">
           {{ checkResultName(item.body.result) }}
-        </span>
-        <span class="record-machine-muted">
-          · {{ checkDifficulty(item.body.dc) }}
         </span>
       </div>
       <details
@@ -237,34 +218,27 @@ function checkDifficulty(dc: number | undefined): string {
         class="record-system"
       >
         <span class="led" aria-hidden="true" />
-        {{ systemRecordMessage(item.body.message) }}
+        <span>{{ systemRecordMessage(item.body.message) }}</span>
       </p>
       <p v-else class="record-compat">{{ t("game.recordUnavailable") }}</p>
-      <button
-        v-if="props.canRewind && item.kind === 'system' && item.body && 'code' in item.body && ['checkPlanned', 'checkSkipped'].includes(item.body.code)"
-        type="button"
-        class="record-rewind"
-        @click="emit('rewind', item.recordSeq)"
-      >
-        {{ t("game.rewindToHere") }}
-      </button>
+      <p v-if="isFailed(item)" class="record-failure" role="status">
+        <strong>{{ t("game.operationFailed") }}</strong>
+        <span v-if="failureMessage(item)"> · {{ failureMessage(item) }}</span>
+        <span v-if="item.body && 'error' in item.body && item.body.error.code">
+          · {{ t("game.workErrorCode", { code: safeToken(item.body.error.code) }) }}
+        </span>
+      </p>
     </li>
   </ol>
   <p v-if="props.preview" class="record-narrator record-live" data-testid="live-text">
     {{ props.preview.text }}<span class="record-cursor" aria-hidden="true" />
-    <span v-if="props.preview.outcome" class="record-terminal">
-      {{ outcomeName(props.preview.outcome) }}
-      <template v-if="props.preview.finishReason">
-        · {{ finishReasonName(props.preview.finishReason) }}
+    <span v-if="props.preview.outcome === 'failed'" class="record-failure" role="status">
+      <strong>{{ t("game.operationFailed") }}</strong>
+      <template v-if="props.preview.error?.message"> · {{ props.preview.error.message }}</template>
+      <template v-if="props.preview.error?.code">
+        · {{ t("game.workErrorCode", { code: safeToken(props.preview.error.code) }) }}
       </template>
     </span>
   </p>
   <p v-if="props.expandedBody !== undefined" class="record-expanded">{{ props.expandedBody }}</p>
-  <p v-if="props.generation" class="record-system">
-    <span class="led" aria-hidden="true" />
-    {{ t("game.generation", { outcome: outcomeName(props.generation.outcome) }) }}
-    <template v-if="props.generation.finishReason">
-      · {{ finishReasonName(props.generation.finishReason) }}
-    </template>
-  </p>
 </template>

@@ -124,6 +124,7 @@ export function resume(sessionId: string): Promise<AcceptedRound> {
 export function regenerate(sessionId: string, roundId: string): Promise<AcceptedRound> {
   return invoke("engine_regenerate", { sessionId, roundId });
 }
+/** 在合法检查点创建新历史分支；不会删除旧记录或复用序号。 */
 export function rewind(sessionId: string, targetSeq: number): Promise<AcceptedOperation> {
   return invoke("engine_rewind", { sessionId, targetSeq });
 }

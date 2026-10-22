@@ -34,6 +34,13 @@ describe("GameStage", () => {
     otherScript.unmount();
   });
 
+  it("keeps panel opening on the edge trigger instead of duplicating it in the top bar", () => {
+    const wrapper = mount(GameStage, { props });
+    expect(wrapper.findAll(".game-topbar button")).toHaveLength(1);
+    expect(wrapper.find(".panel-edge-trigger").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("opens with the platform shortcut and returns focus after Escape", async () => {
     const wrapper = mount(GameStage, { props, attachTo: document.body });
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "m", ctrlKey: true, shiftKey: true }));

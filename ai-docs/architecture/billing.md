@@ -80,7 +80,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 ## 周期、时区与提醒
 
-单局上限绑定稳定 runId；新局创建新预算，恢复 / 回退 / 段切不刷新或退还费用。全应用月报覆盖全部运行与任务，按服务商和原币分组、模型作为下钻明细，不设月额度。月报时区取系统有效 IANA 值并持久化，无法确定回退 UTC 并告知；设备后来变化不覆盖。jiff 负责自然月报表边界、DST 和时区库版本。
+单局上限绑定稳定 runId；新局创建新预算，恢复 / 回退 / 段切不刷新或退还费用。新周目在没有任何预算设置和物理请求时，前端自动登记 CNY 10、USD 5 的初始上限；已有预算不被覆盖，已有请求但缺预算的历史账本仍须由玩家显式处理。全应用月报覆盖全部运行与任务，按服务商和原币分组、模型作为下钻明细，不设月额度。月报时区取系统有效 IANA 值并持久化，无法确定回退 UTC 并告知；设备后来变化不覆盖。jiff 负责自然月报表边界、DST 和时区库版本。
 
 月报按请求 dispatchAt 与已保存报表时区归类，不创建月度额度记录、不因跨月刷新或释放预算。SQLite 只筛选覆盖月份边界的有界候选区间，最终成员关系由 Rust 按 RFC 3339 瞬间精确判断，避免 `julianday()` 的毫秒舍入改变月界归属。月度统计可按需查询，不需要后台计时或持续轮询。DST 的不存在午夜采用当日最早合法瞬间，重复午夜取最早瞬间；墙钟异常按本地时间标注统计边界，但不影响单局冻结预算。
 
@@ -94,7 +94,7 @@ SQLite 表职责如下，具体迁移编号由 store 服务统一分配，业务
 
 历史恢复只接受 `unconfirmed`、完整保存数值 usage、尚未进入结算队列且仍能读取原 `priceVersionId` 的单条请求。预览使用原冻结费率和原 `dispatchAt`，提交前核对 ledger revision，再以 audit `operationId` 幂等写入本地恢复队列；成功后复用结算恢复路径。不能导入外部账单、选择较新的费率重算已结算记录或补造缺失 usage。缺原价格或任一必要 usage 字段时不提供候选项，历史仍显示未确认。
 
-已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price / budget_retry_settlement / budget_preview_backfill / budget_commit_backfill / budget_get_provider_balance`，同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。余额命令只允许 DeepSeek profile，不能改变本地预算门禁或账本。
+已注册 `budget_get_settings / budget_set_settings / budget_get_period / budget_get_monthly / budget_list_requests / budget_get_suggested_limits / budget_get_price / budget_register_price / budget_get_selected_price / budget_select_price / budget_retry_settlement / budget_preview_backfill / budget_commit_backfill / budget_get_provider_balance`。Web 使用的同型 Rust / TS 载荷见 `src-tauri/src/billing_commands/` 与 `src-web/api/billing.ts`；建议上限命令目前只保留原生注册，不提供无调用方的 Web 包装。设置写入支持 expectedRevision；请求页限制 200 条并绑定 ledger revision，账本变更后游标失效。`budget_list_model_usage` 由周期摘要返回分组结果。余额命令只允许 DeepSeek profile，不能改变本地预算门禁或账本。
 
 错误 code 独立登记为 budget.exceeded（runBudgetId / currency / estimatedNeeded / available）、budget.run-limit-missing（runId / currency）、budget.reconciliation-required（旧账务 scope 尚未迁移，拒绝新收费请求）、budget.price-missing（providerId / modelId / missingFields）、budget.price-history-limit（单一计价身份的价格版本达到 1,024 个上限）、budget.settlement-backlog（恢复队列达到 256 条上限）、budget.conflict（账本请求与已有操作状态冲突）、budget.invalid-usage（requestId），均为受约束结构化 detail，不含密钥 / 原始响应。参数错为 app.bad-request，旧设置 / 查询为 app.bad-request（detail.reason=staleRevision），计费命令的数据库存储失败映射为 `store.database`（由命令层构造，不是 `StoreError` 的通用映射）。供应商实际额度拒绝是 llm.quota，不与本地超限混用；已有公共 OutcomeError 只有 code / message 的地方保持同型，不为计费单独塞 detail。前端按码本地化并保留 default。
 

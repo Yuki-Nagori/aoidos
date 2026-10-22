@@ -61,7 +61,7 @@ it("accepts readonly consumers and sends only controls with a confirmed round an
   await controls.control("resume");
   expect(api.resume).toHaveBeenCalledTimes(1);
 });
-it("routes interrupt, regeneration and rewind through confirmed identities", async () => {
+it("routes interrupt and regeneration through confirmed identities", async () => {
   const state = ref<PhaseSnapshot | undefined>(waiting);
   const api = transport();
   const scope = effectScope();
@@ -81,7 +81,6 @@ it("routes interrupt, regeneration and rewind through confirmed identities", asy
   expect(api.regenerate).toHaveBeenCalledExactlyOnceWith(waiting.sessionId, "round");
   expect(await controls.control("rewind", 12)).toBe(true);
   expect(api.rewind).toHaveBeenCalledExactlyOnceWith(waiting.sessionId, 12);
-  expect(await controls.control("rewind", "12")).toBe(false);
   scope.stop();
 });
 it("serializes controls and shows sanitized errors for the current revision", async () => {

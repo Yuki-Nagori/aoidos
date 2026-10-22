@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, toRef, watch } from "vue";
+import { computed, ref, toRef } from "vue";
 import ActionComposer from "./ActionComposer.vue";
 import GameStage from "./GameStage.vue";
 import RecordFeed from "./RecordFeed.vue";
@@ -26,11 +26,11 @@ const recordsFeed = ref<HTMLElement>();
 const confirmDialog = ref<HTMLDialogElement>();
 const {
   session, t, phase, records, current, presence, sceneHint, input, controls, preferences, loadingOlder, unreadRecords,
-  panelProtected, confirmation,
-  rewindSelectorOpen, slashMenuDismissed, panel, orderedRecords, composerPreview,
-  composerSubmitDisabled, composerSubmitLabel, scenePath, olderCursor, game, generation, preview,
+  panelProtected, confirmation, rewindSelectorOpen,
+  slashMenuDismissed, panel, orderedRecords, composerPreview,
+  composerSubmitDisabled, composerSubmitLabel, scenePath, olderCursor, game, preview,
   hasTextSelection, updateFollowState, onReadingPointerDown, jumpToLatest, onComposerKeydown,
-  interruptDraft, submitComposer, confirmOperation, chooseSlashCommand, closePanel, loadOlder,
+  interruptDraft, submitComposer, confirmOperation, selectRewindTarget, chooseSlashCommand, closePanel, loadOlder,
   phaseName, reconnect, connectionFailed,
 } = useGameWorkspace({
   session: toRef(props, "session"),
@@ -56,25 +56,12 @@ const availableCommands = computed<CommandSuggestion[]>(() => {
   ) {
     commands.push("regenerate");
   }
-  if (
-    current.value &&
-    current.value.phase === "idle" &&
-    !current.value.needsRecovery &&
-    !current.value.resumeRequired &&
-    !current.value.inFlight
-  ) {
+  if (current.value?.phase === "idle" && !current.value.needsRecovery && !current.value.resumeRequired)
     commands.push("rewind");
-  }
   return commands;
 });
-watch(
-  [() => props.session.sessionId, () => props.suggestedAction],
-  () => {
-    if (!input.draft.value.trim() && props.suggestedAction) {
-      input.draft.value = props.suggestedAction;
-    }
-  },
-  { immediate: true, flush: "sync" },
+const starterSuggestion = computed(() =>
+  orderedRecords.value.some((item) => item.kind === "playerSpeech") ? undefined : props.suggestedAction,
 );
 defineExpose({ reconnect });
 </script>
@@ -186,16 +173,15 @@ defineExpose({ reconnect });
           >
             <RecordFeed
               :items="orderedRecords"
+              :rewind-selector-open="rewindSelectorOpen"
               :characters="presence.snapshot.value?.characters ?? []"
               :older-cursor="olderCursor"
               :loading-older="loadingOlder"
               :preview="preview"
               :expanded-body="records.state.value.body"
-              :generation="generation"
-              :can-rewind="current?.phase === 'idle' && !current.needsRecovery"
               @load-older="loadOlder"
               @load-body="records.loadBody"
-              @rewind="confirmation = { kind: 'rewind', seq: $event }"
+              @rewind="selectRewindTarget"
             />
           </div>
           <p v-else role="status" class="m-3 rounded-lg bg-panel p-3 text-sm">
@@ -204,8 +190,8 @@ defineExpose({ reconnect });
           <button type="button" v-if="unreadRecords" class="jump-latest" @click="jumpToLatest">
             {{ t("game.newRecords") }}
           </button>
-          <details v-if="panel.state.value !== 'hover' && current" class="work">
-            <summary class="work-head mono">
+          <div v-if="panel.state.value !== 'hover' && current" class="work">
+            <div class="work-head mono" role="status">
               <span
                 class="led"
                 :class="current.needsRecovery || current.resumeRequired
@@ -218,48 +204,8 @@ defineExpose({ reconnect });
               <span class="work-title">{{ t("game.workProcess") }} · {{
                   phaseName(current.phase)
                 }}</span>
-              <svg class="i sm work-chevron" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m6 9 6 6 6-6" />
-              </svg>
-            </summary>
-            <ul class="mono">
-              <li>
-                <span>{{ t("game.workPhase") }}:</span>
-                <span class="work-value">{{ phaseName(current.phase) }}</span>
-              </li>
-              <li v-if="scenePath">
-                <span>{{ t("game.workScene") }}:</span>
-                <span class="work-value">{{ scenePath }}</span>
-              </li>
-              <li v-if="current.check">
-                <span>{{ t("game.workCheck") }}:</span>
-                <span class="work-value">
-                  {{
-                    current.check.status === "rolling"
-                    ? t("game.workCheckRolling", { expression: current.check.expression })
-                    : t("game.workCheckWaiting", { expression: current.check.expression })
-                  }}
-                </span>
-              </li>
-              <li v-if="current.lastOperation && current.lastOperation.outcome !== 'accepted'">
-                <span>{{ t("game.workOperation") }}:</span>
-                <span class="work-value">
-                  {{
-                    current.lastOperation.outcome === "completed"
-                    ? t("game.outcomes.completed")
-                    : current.lastOperation.outcome === "cancelled"
-                      ? t("game.outcomes.cancelled")
-                      : t("game.outcomes.failed")
-                  }}
-                </span>
-              </li>
-              <li v-if="current.lastOperation?.error">
-                <span>{{
-                  t("game.workErrorCode", { code: current.lastOperation.error.code })
-                }}</span>
-              </li>
-            </ul>
-          </details>
+            </div>
+          </div>
           <dialog
             ref="confirmDialog"
             class="confirmation-card"
@@ -270,11 +216,7 @@ defineExpose({ reconnect });
           >
             <p id="confirmation-message">
               {{
-                confirmation?.kind === "regenerate"
-                ? t("game.regenerateConfirm")
-                : confirmation
-                  ? t("game.rewindConfirm", { seq: confirmation.seq })
-                  : ""
+                confirmation?.kind === "rewind" ? t("game.rewindConfirm") : t("game.regenerateConfirm")
               }}
             </p>
             <div class="mt-3 flex justify-end gap-2">
@@ -310,7 +252,7 @@ defineExpose({ reconnect });
             <ActionComposer
               ref="composer"
               v-model="input.draft.value"
-              :suggested-action="props.suggestedAction"
+              :suggested-action="starterSuggestion"
               :preview="composerPreview"
               :submit-label="composerSubmitLabel"
               :too-large="input.tooLarge.value"
@@ -367,16 +309,6 @@ defineExpose({ reconnect });
                 @click="game.recover"
               >
                 {{ t("common.reconnect") }}
-              </button>
-              <button
-                type="button"
-                class="btn"
-                v-if="current?.phase === 'idle' &&
-                current.lastOperation?.roundId &&
-                !current.needsRecovery"
-                @click="confirmation = { kind: 'regenerate' }"
-              >
-                {{ t("game.regenerate") }}
               </button>
             </div>
           </div>

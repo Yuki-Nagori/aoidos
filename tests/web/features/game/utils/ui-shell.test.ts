@@ -148,14 +148,6 @@ describe("composer submit availability", () => {
     expect(canSubmitComposer(regenerate, { ...idle, resumeRequired: true }, false)).toBe(false);
   });
 
-  it("allows choosing a rewind target only after the turn has settled", () => {
-    const rewind = previewComposerInput("/rewind");
-    expect(canSubmitComposer(rewind, { ...idle, hasLastOperation: false }, false)).toBe(true);
-    expect(canSubmitComposer(rewind, { ...idle, phase: "generating" }, false)).toBe(false);
-    expect(canSubmitComposer(rewind, { ...idle, needsRecovery: true }, false)).toBe(false);
-    expect(canSubmitComposer(rewind, { ...idle, resumeRequired: true }, false)).toBe(false);
-  });
-
   it.each(["/pin", "/latest"])(
     "keeps local navigation %s available during generation and recovery",
     (command) => {

@@ -66,7 +66,7 @@ watch([sessionId, historyRevision], ([id, revision], [previousId, previousRevisi
   // 账本摘要跟随已提交记录更新；不随流式 chunk 高频读取，也不后台轮询。
   if (id && id === previousId && revision !== previousRevision) void billing.loadPeriod();
 });
-const error = computed(() => product.error.value ?? gameError.value);
+const error = computed(() => product.error.value ?? gameError.value ?? billing.error.value);
 function faultReason(failure: unknown): string | undefined {
   if (typeof failure !== "object" || failure === null || !("detail" in failure)) return undefined;
   const detail = failure.detail;
@@ -154,7 +154,7 @@ void preferences.load();
         :session="product.session.value"
         :script-title="sessionScriptTitle"
         :suggested-action="suggestedAction"
-        :product-busy="product.busy.value"
+        :product-busy="product.busy.value || !billing.ready.value"
         :error-message="errorMessage"
         :preferences="preferences"
         @error="gameError = $event as AppFault"

@@ -15,7 +15,6 @@ import {
   getSelectedPrice,
   getMonthlyPeriod,
   getRunPeriod,
-  getSuggestedLimits,
   listBillingRequests,
   previewBillingBackfill,
   commitBillingBackfill,
@@ -65,6 +64,7 @@ export function useBilling(
   credentialRevision: Ref<number> = ref(0),
 ) {
   const settings = ref<BudgetSettings | null>(null);
+  const ready = ref(false);
   const period = ref<RunPeriod>();
   const monthly = ref<MonthlyPeriod>();
   const requests = ref<BillingRequestPage>();
@@ -138,6 +138,7 @@ export function useBilling(
       priceSelectionGeneration += 1;
       const selectionAtLoad = priceSelectionGeneration;
       settings.value = null;
+      ready.value = false;
       period.value = undefined;
       monthly.value = undefined;
       requests.value = undefined;
@@ -161,13 +162,12 @@ export function useBilling(
       if (!activeRun) return;
       const periodRequest = ++periodGeneration;
       try {
-        const [savedSettings, savedPrice, savedPeriod, savedMonthly, suggestions, requestPage] =
+        const [savedSettings, savedPrice, savedPeriod, savedMonthly, requestPage] =
           await Promise.all([
             getBudgetSettings(activeRun),
             getSelectedPrice(activeProfile, provider, model, routePolicy.value),
             getRunPeriod(activeRun),
             fetchCurrentMonth(),
-            getSuggestedLimits(provider, model, routePolicy.value),
             listBillingRequests(activeRun),
           ]);
         if (disposed || current !== generation) return;
@@ -175,8 +175,8 @@ export function useBilling(
         if (periodRequest === periodGeneration) period.value = savedPeriod;
         monthly.value = savedMonthly;
         requests.value = requestPage;
-        cnyLimit.value = savedSettings?.cnyLimit ?? suggestions.cny ?? "";
-        usdLimit.value = savedSettings?.usdLimit ?? suggestions.usd ?? "";
+        cnyLimit.value = savedSettings?.cnyLimit ?? "10";
+        usdLimit.value = savedSettings?.usdLimit ?? "5";
         if (savedPrice && selectionAtLoad === priceSelectionGeneration) {
           suppressNextCurrencySelection = savedPrice.currency !== priceCurrency.value;
           priceCurrency.value = savedPrice.currency;
@@ -192,8 +192,27 @@ export function useBilling(
           sourceUrl.value = savedPrice.sourceUrl ?? "";
           priceReady.value = true;
         }
+        if (!savedSettings && requestPage.items.length === 0 && !requestPage.nextCursor) {
+          cnyLimit.value = "10";
+          usdLimit.value = "5";
+          busy.value = true;
+          try {
+            const defaults = await setBudgetSettings(activeRun, "10", "5", undefined);
+            if (disposed || current !== generation) return;
+            settings.value = defaults;
+          } catch (failure) {
+            if (disposed || current !== generation) return;
+            error.value = normalizeError(failure);
+            return;
+          } finally {
+            if (!disposed && current === generation) busy.value = false;
+          }
+        }
+        ready.value = true;
       } catch (failure) {
-        if (!disposed && current === generation) error.value = normalizeError(failure);
+        if (!disposed && current === generation) {
+          error.value = normalizeError(failure);
+        }
       }
     },
     { immediate: true },
@@ -279,6 +298,8 @@ export function useBilling(
       );
       if (!isCurrent()) return;
       settings.value = saved;
+      // 自动默认值写入失败后，玩家手动保存成功即可恢复输入。
+      ready.value = true;
       await loadPeriodFor(activeRun, current);
     } catch (failure) {
       if (isCurrent()) error.value = normalizeError(failure);
@@ -539,6 +560,7 @@ export function useBilling(
 
   return {
     settings,
+    ready,
     period,
     monthly,
     requests,

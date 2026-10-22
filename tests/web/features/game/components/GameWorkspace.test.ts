@@ -1,6 +1,7 @@
 import { mount } from "@vue/test-utils";
-import { computed, nextTick, ref, toValue } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RecordItem } from "../../../../../src-web/api/records";
 import type { OpenedSession } from "../../../../../src-web/api/engine";
 import type { useUiPreferences } from "../../../../../src-web/features/game/composables/useUiPreferences";
 import ActionComposer from "../../../../../src-web/features/game/components/ActionComposer.vue";
@@ -13,7 +14,7 @@ vi.mock("../../../../../src-web/features/game/composables/useGameWorkspace", () 
 }));
 
 let capturedPorts: Parameters<typeof useWorkspaceMock>[0];
-let confirmation: ReturnType<typeof ref<{ kind: "regenerate" } | undefined>>;
+let confirmation: ReturnType<typeof ref<boolean>>;
 
 beforeEach(() => {
   useWorkspaceMock.mockReset();
@@ -48,7 +49,8 @@ describe("GameWorkspace", () => {
       needsRecovery: false,
       lastOperation: { roundId: "round-1", outcome: "completed" },
     });
-    confirmation = ref(undefined);
+    confirmation = ref(false);
+    const orderedRecords = ref<RecordItem[]>([]);
     const prefs = {
       panelPinned: ref(false),
       diceMode: ref<"manual" | "auto">("manual"),
@@ -104,10 +106,9 @@ describe("GameWorkspace", () => {
       unreadRecords: ref(false),
       panelProtected: ref(false),
       confirmation,
-      rewindSelectorOpen: ref(false),
       slashMenuDismissed: ref(false),
       panel,
-      orderedRecords: [],
+      orderedRecords,
       composerPreview: {},
       composerSubmitDisabled: false,
       composerSubmitLabel: "行动",
@@ -139,6 +140,7 @@ describe("GameWorkspace", () => {
       props: {
         session,
         scriptTitle: "Mistbell Cellar",
+        suggestedAction: "Look around the cellar.",
         productBusy: false,
         errorMessage: "No price is registered for this model.",
         preferences: prefs,
@@ -157,9 +159,9 @@ describe("GameWorkspace", () => {
     expect(wrapper.get('[role="alert"]').text()).toContain(i18n.global.t("common.reconnect"));
     await wrapper.get('[role="alert"] button').trigger("click");
     expect(fixture.reconnect).toHaveBeenCalledOnce();
-    expect((wrapper.get(".work").element as HTMLDetailsElement).open).toBe(false);
+    expect(wrapper.get(".work").element.tagName).toBe("DIV");
     expect(wrapper.get(".work").text()).toContain(i18n.global.t("game.workProcess"));
-    expect(wrapper.get(".work").text()).toContain("第一幕 · 塔门");
+    expect(wrapper.get(".work").text()).not.toContain("第一幕 · 塔门");
     expect(wrapper.text()).not.toContain(i18n.global.t("game.diceMode"));
     current.value = { ...current.value, scene: undefined };
     await nextTick();
@@ -167,6 +169,19 @@ describe("GameWorkspace", () => {
     current.value = { ...current.value, scene: { path: [] } };
     await nextTick();
     expect(wrapper.findComponent(ActionComposer).exists()).toBe(true);
+    expect(wrapper.findComponent(ActionComposer).props("suggestedAction")).toBe(
+      "Look around the cellar.",
+    );
+    orderedRecords.value = [
+      {
+        recordSeq: 1,
+        createdAt: "2026-10-10T00:00:00Z",
+        kind: "playerSpeech",
+        body: { playerId: "player", text: "I look around." },
+      },
+    ];
+    await nextTick();
+    expect(wrapper.findComponent(ActionComposer).props("suggestedAction")).toBeUndefined();
     expect(capturedPorts.recordsFeed.value).toBeInstanceOf(HTMLDivElement);
     expect(capturedPorts.confirmDialog.value?.tagName).toBe("DIALOG");
     expect(wrapper.emitted("historyRevision")).toEqual([[8]]);
@@ -185,19 +200,19 @@ describe("GameWorkspace", () => {
       },
     };
     await nextTick();
-    await wrapper.get(".work summary").trigger("click");
-    expect(wrapper.get(".work").text()).toContain(
-      i18n.global.t("game.workCheckWaiting", { expression: "2d6+1" }),
-    );
-    expect(wrapper.get(".work").text()).toContain(i18n.global.t("game.outcomes.completed"));
+    expect(wrapper.find(".work details").exists()).toBe(false);
+    expect(wrapper.find('.work [role="status"]').exists()).toBe(true);
+    expect(wrapper.get(".work").text()).not.toContain("2d6+1");
     current.value = { ...current.value, phase: "idle", check: undefined };
     await nextTick();
 
-    const regenerate = wrapper
-      .findAll("button")
-      .find((button) => button.text() === i18n.global.t("game.regenerate"));
-    expect(regenerate).toBeDefined();
-    await regenerate?.trigger("click");
-    expect(toValue(confirmation)).toEqual({ kind: "regenerate" });
+    expect(
+      wrapper
+        .findAll("button")
+        .some((button) => button.text() === i18n.global.t("game.regenerate")),
+    ).toBe(false);
+    expect(wrapper.findComponent(ActionComposer).props("availableCommands")).toContain(
+      "regenerate",
+    );
   });
 });

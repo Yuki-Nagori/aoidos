@@ -464,7 +464,6 @@
     "needsRecovery": "Recovery needed",
     "paused": "Paused. Resume explicitly to continue.",
     "historyPending": "The record is not confirmed. Reconnect to continue.",
-    "generation": "Generation: {outcome}",
     "action": "Action",
     "submitAction": "Submit action",
     "replyTo": "Reply to",
@@ -481,13 +480,6 @@
     "hintFailed": "The hint could not be loaded. Try again later.",
     "dialogue": "Dialogue and records",
     "workProcess": "Working process",
-    "workPhase": "Phase",
-    "workScene": "Scene",
-    "workCheck": "Check plan",
-    "workCheckWaiting": "Waiting for confirmation: {expression}",
-    "workCheckRolling": "Resolving: {expression}",
-    "workOperation": "Latest operation",
-    "workErrorCode": "Diagnostic code: {code}",
     "newRecords": "New content · Jump to latest",
     "pinPanel": "Pin dialogue panel",
     "unpinPanel": "Unpin dialogue panel",
@@ -496,11 +488,11 @@
     "latest": "Jump to latest",
     "earlierRecords": "Load earlier records",
     "unknownCheckResult": "Unknown check result: {result}",
+    "operationFailed": "Request failed",
+    "workErrorCode": "Diagnostic code: {code}",
     "recordUnavailable": "This record is preserved, but it has no displayable body.",
     "systemRecordUnavailable": "The system record is preserved, but it has no displayable message.",
     "noRecords": "No records yet. Your first action will start the story.",
-    "noDifficulty": "No difficulty set",
-    "checkDifficulty": "DC {dc}",
     "recordOocTag": "Out of character",
     "diceMode": "Dice checks",
     "manual": "Ask before rolling",
@@ -521,7 +513,7 @@
       "stop": "Stop the current response",
       "resume": "Continue an interrupted response",
       "regenerate": "Request a new version of the last response",
-      "rewind": "Choose a confirmed record to rewind to",
+      "rewind": "Choose a confirmed record as the rewind target",
       "pin": "Keep the dialogue panel open",
       "latest": "Jump to the newest record"
     },
@@ -530,9 +522,9 @@
     "chooseRewindTarget": "Choose a confirmed record above as the rewind target.",
     "outOfCharacter": "This message is out of character.",
     "interruptNeedsText": "Add the interruption text before submitting.",
-    "rewindToHere": "Rewind to before this action",
-    "rewindConfirm": "Rewind history to record {seq}? The newer active path will be removed from the current view.",
     "regenerateConfirm": "Regenerate this response? This sends a new model request and may incur usage.",
+    "rewindToHere": "Choose this record as the rewind target",
+    "rewindConfirm": "Create a new history branch from record {seq}? Existing records will be preserved.",
     "confirmDestructive": "Confirm",
     "regenerate": "Regenerate last response",
     "interrupt": "Interrupt and say",
@@ -547,18 +539,11 @@
       "criticalSuccess": "Critical success",
       "criticalFailure": "Critical failure"
     },
+    "checkRules": {
+      "pbtaExplore": "Exploration check"
+    },
     "resume": "Resume",
     "confirmCheck": "Confirm check ({expression})",
-    "outcomes": {
-      "completed": "Completed",
-      "cancelled": "Cancelled",
-      "failed": "Failed"
-    },
-    "finishReasons": {
-      "stop": "Completed normally",
-      "guard": "Stopped by a guard",
-      "length": "Length limit reached"
-    },
     "recordKinds": {
       "character": "Character speech"
     },
