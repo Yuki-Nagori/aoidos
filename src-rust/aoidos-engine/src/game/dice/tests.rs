@@ -20,6 +20,7 @@ fn pbta_boundaries_plan_integrity_and_rejection_sampling_are_stable() {
         assert_eq!(classify(total), result);
     }
     let p = plan();
+    assert_eq!(p.result_policy.kind, "2d6-pbta-v1");
     validate_plan(&p, "0").unwrap();
     assert!(validate_plan(&p, "1").is_err());
     let mut changed = p.clone();
@@ -108,7 +109,7 @@ fn plan_hash_has_a_fixed_canonical_vector_and_rejects_all_frozen_identity_change
     p.plan_hash = plan_hash(&p).unwrap();
     assert_eq!(
         p.plan_hash,
-        "sha256:f1520672e9faf299a37df2f84edf294644d1da5b94683a998ef65160ad9ee688"
+        "sha256:a2f747ecbda604b2abd78703a3c69aff7435abd2d3d5867f7b44f84de0e2c8bd"
     );
     for mutate in [
         |p: &mut CheckPlan| p.plan_id = "/".into(),

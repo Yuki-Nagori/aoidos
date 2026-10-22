@@ -199,10 +199,13 @@ it("defaults DeepSeek billing to CNY and persists an explicit currency selection
   expect(product.billingCurrency.value).toBe("CNY");
   await product.confirmBillingPrice();
   expect(api.confirmPrice).toHaveBeenLastCalledWith("default", "deepseek-flash", "CNY");
+  expect(product.registeredBillingCurrency.value).toBe("CNY");
 
   product.billingCurrency.value = "USD";
+  expect(product.registeredBillingCurrency.value).toBe("CNY");
   await product.confirmBillingPrice();
   expect(api.confirmPrice).toHaveBeenLastCalledWith("default", "deepseek-flash", "USD");
+  expect(product.registeredBillingCurrency.value).toBe("USD");
   scope.stop();
 });
 it("does not let a late selected-price read overwrite an explicit currency choice", async () => {
@@ -216,6 +219,24 @@ it("does not let a late selected-price read overwrite an explicit currency choic
   pending.resolve({ currency: "CNY" });
   await vi.waitFor(() => expect(api.selectedPrice).toHaveResolved());
   expect(product.billingCurrency.value).toBe("USD");
+  expect(product.registeredBillingCurrency.value).toBe("CNY");
+  scope.stop();
+});
+
+it("does not let a late selected-price read overwrite a newly registered currency", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  const pending = deferred<{ currency: string } | null>();
+  api.selectedPrice.mockReturnValue(pending.promise as never);
+  await product.load();
+  product.setBillingCurrency("USD");
+  await product.confirmBillingPrice();
+
+  pending.resolve({ currency: "CNY" });
+  await vi.waitFor(() => expect(api.selectedPrice).toHaveResolved());
+  expect(product.billingCurrency.value).toBe("USD");
+  expect(product.registeredBillingCurrency.value).toBe("USD");
   scope.stop();
 });
 
@@ -226,10 +247,12 @@ it("restores a saved profile currency and resets to CNY for an unregistered mode
   api.selectedPrice.mockResolvedValue({ currency: "USD" } as never);
   await product.load();
   await vi.waitFor(() => expect(product.billingCurrency.value).toBe("USD"));
+  expect(product.registeredBillingCurrency.value).toBe("USD");
 
   product.model.value = "deepseek-v4-pro";
   expect(product.profileId.value).toBe("");
   await vi.waitFor(() => expect(product.billingCurrency.value).toBe("CNY"));
+  expect(product.registeredBillingCurrency.value).toBeUndefined();
   scope.stop();
 });
 it("preserves default sampling, proxy and mode when creating the missing model, retaining unrelated profiles", async () => {

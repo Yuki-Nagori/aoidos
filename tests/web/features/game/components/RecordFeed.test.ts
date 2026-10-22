@@ -15,7 +15,7 @@ describe("RecordFeed", () => {
         recordSeq: 1,
         createdAt: "2026-10-10T00:00:00Z",
         kind: "playerSpeech",
-        body: { playerId: "player", text: "Open the door." },
+        body: { playerId: "player", text: "Open the door.", mode: "outOfCharacter" },
       },
       {
         recordSeq: 2,
@@ -49,10 +49,40 @@ describe("RecordFeed", () => {
         kind: "recap",
         bodyRef: "body-ref",
       },
+      {
+        recordSeq: 5,
+        createdAt: "2026-10-10T00:00:04Z",
+        kind: "characterSpeech",
+        body: {
+          speakerId: "keeper",
+          text: "Wait before you open it.",
+          turnId: "turn-keeper",
+          outcome: "completed",
+          finishReason: "stop",
+        },
+      },
+      {
+        recordSeq: 6,
+        createdAt: "2026-10-10T00:00:05Z",
+        kind: "narration",
+        body: {
+          text: "The lamp leans toward the door.",
+          turnId: "turn-narrator",
+          outcome: "completed",
+          finishReason: "stop",
+        },
+      },
+      {
+        recordSeq: 7,
+        createdAt: "2026-10-10T00:00:06Z",
+        kind: "check",
+        body: { diceSeq: 2, dc: 9, result: "success", ruleId: "probeDoor", planId: "plan" },
+      },
     ];
     const wrapper = mount(RecordFeed, {
       props: {
         items,
+        characters: [{ id: "keeper", canonicalName: "Lantern keeper" }],
         olderCursor: "cursor",
         loadingOlder: false,
         canRewind: true,
@@ -61,6 +91,14 @@ describe("RecordFeed", () => {
     });
     expect(wrapper.text()).toContain("Open the door.");
     expect(wrapper.text()).toContain("17");
+    expect(wrapper.text()).toContain("Lantern keeper");
+    expect(wrapper.text()).toContain("The lamp leans toward the door.");
+    expect(wrapper.text()).toContain("DC 9");
+    expect(wrapper.find(".record-player-bubble").exists()).toBe(true);
+    expect(wrapper.find(".record-character-bubble").exists()).toBe(true);
+    expect(wrapper.find(".record-narrator").exists()).toBe(true);
+    expect(wrapper.find(".record-entry").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Out of character");
     await wrapper.get("button").trigger("click");
     expect(wrapper.emitted("loadOlder")).toHaveLength(1);
     await wrapper.findAll("button")[1]!.trigger("click");
@@ -85,6 +123,33 @@ describe("RecordFeed", () => {
     expect(wrapper.text()).toContain("partial");
     expect(wrapper.text()).toContain("expanded");
     expect(wrapper.text()).toContain("guard");
+    wrapper.unmount();
+  });
+
+  it("shows a bounded unknown check result without replacing the whole record", () => {
+    const wrapper = mount(RecordFeed, {
+      props: {
+        items: [
+          {
+            recordSeq: 1,
+            createdAt: "2026-10-20T00:00:00Z",
+            kind: "check",
+            body: {
+              diceSeq: 99,
+              result: "futureResult" as never,
+              ruleId: "test",
+              planId: "plan",
+            },
+          },
+        ],
+        loadingOlder: false,
+        canRewind: false,
+      },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.find(".record-result").text()).toBe("Unknown check result: futureResult");
+    expect(wrapper.text()).not.toContain("current version cannot display");
     wrapper.unmount();
   });
 

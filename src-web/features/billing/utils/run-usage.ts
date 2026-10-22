@@ -9,6 +9,8 @@ export interface RunUsageLine {
 export interface RunCurrencyTotal {
   currency: BillingCurrency;
   amount: string;
+  settledAmount: string;
+  reservedAmount: string;
   limit: string | null;
 }
 
@@ -36,10 +38,25 @@ export function summarizeRunUsage(
     const matching = items.filter((item) => item.currency === currency);
     const limit = limits[currency];
     if (matching.length === 0 && limit === null) return [];
-    const total = matching.reduce(
-      (sum, item) => sum + nanos(item.settledAmount ?? "0") + nanos(item.reservedAmount ?? "0"),
-      0n,
-    );
-    return [{ currency, amount: decimal(total), limit }];
+    const settled = matching.reduce((sum, item) => sum + nanos(item.settledAmount ?? "0"), 0n);
+    const reserved = matching.reduce((sum, item) => sum + nanos(item.reservedAmount ?? "0"), 0n);
+    return [
+      {
+        currency,
+        amount: decimal(settled + reserved),
+        settledAmount: decimal(settled),
+        reservedAmount: decimal(reserved),
+        limit,
+      },
+    ];
   });
+}
+
+/** 将原币金额换成展示进度；使用最小货币单位整数运算并封顶到 100%。 */
+export function usageProgressPercent(amount: string, limit: string): number {
+  const used = nanos(amount);
+  const maximum = nanos(limit);
+  if (maximum === 0n) return used === 0n ? 0 : 100;
+  const basisPoints = (used * 10_000n) / maximum;
+  return Number(basisPoints > 10_000n ? 10_000n : basisPoints) / 100;
 }

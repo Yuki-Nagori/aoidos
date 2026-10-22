@@ -14,13 +14,13 @@ describe("BillingPanel", () => {
           providerId: "openrouter",
           currency: "USD",
           modelId: "model",
-          settledAmount: "12.50",
-          reservedAmount: "0",
+          settledAmount: "2",
+          reservedAmount: "0.5",
           knownTokens: 25,
           incompleteRequests: 0,
         },
       ],
-      warnings: [],
+      warnings: [{ currency: "USD", thresholdPercent: 80 }],
     });
     const settings = ref({ cnyLimit: "20", usdLimit: "3" });
     const billing = new Proxy(
@@ -49,10 +49,16 @@ describe("BillingPanel", () => {
 
     await wrapper.setProps({ providerId: "deepseek" });
     expect(wrapper.text()).toContain(i18n.global.t("billing.queryBalance"));
-    expect(wrapper.text()).toContain(formatExactCurrency("12.50", "USD", "en"));
+    expect(wrapper.text()).toContain(formatExactCurrency("2.5", "USD", "en"));
     expect(wrapper.text()).toContain(formatExactCurrency("3", "USD", "en"));
+    const meter = wrapper.get(".billing-usage-meter-warning");
+    expect(meter.attributes("aria-valuenow")).toBe("83.33");
+    expect(meter.find(":scope > span").attributes("style")).toContain("width: 66.66%");
+    expect(meter.find(".billing-usage-reserved").attributes("style")).toContain("left: 66.66%");
+    expect(meter.find(".billing-usage-reserved").attributes("style")).toContain("width: 16.67%");
+    expect(wrapper.text()).toContain("Reserved or unconfirmed");
     await wrapper.setProps({ locale: "zh-Hans" });
-    expect(wrapper.text()).toContain(formatExactCurrency("12.50", "USD", "zh-Hans"));
+    expect(wrapper.text()).toContain(formatExactCurrency("2.5", "USD", "zh-Hans"));
   });
 
   it("shows only the selected design section in the settings drawer", async () => {

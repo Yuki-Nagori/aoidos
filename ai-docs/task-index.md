@@ -102,7 +102,7 @@ ai-docs/
 | 049  | [Windows 测试 I/O 与原生 HMR 超时](task/049-windows-test-io-hmr.md)                  | 底层·工程         | 048                                                        | done        |
 | 050  | [CI 分层与影响范围选择器](task/050-affected-rust-tests.md)                           | 底层·工程         | 048、049                                                   | done        |
 | 051  | [Web UI 架构拆分](task/051-web-ui-architecture-refactor.md)                          | 界面·架构         | 025、034、046、047                                         | done        |
-| 052  | [将 aoidos-art 界面移植到 Vue](task/052-aoidos-art-vue-port.md)                      | 界面·实现         | 051、025、026、031、034、035、046                          | done        |
+| 052  | [将 aoidos-art 界面移植到 Vue](task/052-aoidos-art-vue-port.md)                      | 界面·实现         | 051、025、026、031、034、035、046                          | in-progress |
 | 055  | [实现：记忆检索与共用搜索输入](task/055-memory-search-impl.md)                       | 底层·记忆 / 界面  | 031、034、052、053                                         | planned     |
 | 056  | [实现：标签驱动结局与周目落幕](task/056-ending-flow-impl.md)                         | 底层·引擎 / 界面  | 018、019、020、023、027、032、035、039、040、041、052、054 | planned     |
 | 057  | [实现：全局快捷键与改键](task/057-keyboard-shortcuts-impl.md)                        | 界面·交互         | 025、034、052、055                                         | planned     |
@@ -110,6 +110,7 @@ ai-docs/
 | 060  | [已开周目选择与安全删除](task/060-run-management-impl.md)                            | 跨端·存储 / 界面  | 013、022、023、029、035、058、059                          | done        |
 | 061  | [内置计价默认值与 TUI 账单设置](task/061-billing-defaults-tui-settings.md)           | 跨端·计费设置     | 019、027、035、058                                         | done        |
 | 062  | [平台能力边界收敛](task/062-platform-boundary-cleanup.md)                            | **底层·平台适配** | 013、019、058                                              | done        |
+| 063  | [Babylon.js 骰子可视化移植](task/063-babylon-dice-visualization.md)                  | 界面·交互         | 023、026、052                                              | planned     |
 
 实施按表中依赖推进，设计未定稿或前置未完成时保持 planned。035 消费 025 已交付的设置容器，因此接受 025 的 implemented 状态；025 的三平台实机验收仍独立待完成。035 的代码可供 030 / 033 本地联调；收费批次与真实费用实验必须等 035 完成三平台实机验收并获明确授权。018–024 承接 LLM 链路；029–033 与 043 承接记忆工程，043 提供 Rust 权威实体身份，030 与 032 单向消费它，避免实体生命周期反向依赖记忆。031 依赖 034 国际化，并负责记忆专属命令 / 查询 IPC。044 定稿可信在场与获知事件协议；045 只依赖 023 / 043 并生产权威事件，030 单向消费后端据此验证观察 / 传闻，046 再把 045 快照接入 UI 和 030 的定向入口。025、023 保持原任务范围，不回填新功能；依赖链保持 043 → 045 → 030 → 046，无循环。
 

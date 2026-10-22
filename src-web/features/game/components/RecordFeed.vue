@@ -4,6 +4,7 @@ import type { RecordItem } from "../../../api/records";
 
 const props = defineProps<{
   items: RecordItem[];
+  characters?: readonly { id: string; canonicalName: string }[];
   olderCursor?: string;
   loadingOlder: boolean;
   preview?: { text: string; outcome?: string; finishReason?: string };
@@ -18,27 +19,8 @@ const emit = defineEmits<{
 }>();
 const { t } = useI18n();
 
-function recordKindName(kind: string): string {
-  switch (kind) {
-    case "playerSpeech":
-      return t("game.recordKinds.playerSpeech");
-    case "narration":
-      return t("game.recordKinds.narration");
-    case "characterSpeech":
-      return t("game.recordKinds.character");
-    case "recap":
-      return t("game.recordKinds.recap");
-    case "dice":
-      return t("game.recordKinds.dice");
-    case "system":
-      return t("game.recordKinds.system");
-    case "check":
-      return t("game.recordKinds.check");
-    case "header":
-      return t("game.recordKinds.header");
-    default:
-      return kind;
-  }
+function characterName(id: string): string {
+  return props.characters?.find((character) => character.id === id)?.canonicalName ?? id;
 }
 
 function checkResultName(result: string): string {
@@ -54,34 +36,20 @@ function checkResultName(result: string): string {
     case "criticalFailure":
       return t("game.checkResults.criticalFailure");
     default:
-      return t("game.compatRecord");
+      return t("game.unknownCheckResult", { result: safeToken(result) });
   }
 }
 
-function outcomeName(outcome: string): string {
-  switch (outcome) {
-    case "completed":
-      return t("game.outcomes.completed");
-    case "cancelled":
-      return t("game.outcomes.cancelled");
-    case "failed":
-      return t("game.outcomes.failed");
-    default:
-      return outcome;
-  }
-}
-
-function finishReasonName(reason: string): string {
-  switch (reason) {
-    case "stop":
-      return t("game.finishReasons.stop");
-    case "guard":
-      return t("game.finishReasons.guard");
-    case "length":
-      return t("game.finishReasons.length");
-    default:
-      return reason;
-  }
+function safeToken(value: string): string {
+  const safe = Array.from(value)
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint >= 0x20 && !(codePoint >= 0x7f && codePoint <= 0x9f);
+    })
+    .join("")
+    .trim();
+  const characters = Array.from(safe);
+  return characters.length > 80 ? `${characters.slice(0, 80).join("")}…` : safe;
 }
 
 function systemRecordMessage(message: string): string {
@@ -96,113 +64,207 @@ function systemRecordMessage(message: string): string {
   const characters = Array.from(safeMessage);
   return characters.length > 2_000 ? `${characters.slice(0, 2_000).join("")}…` : safeMessage;
 }
+
+function outcomeName(outcome: string): string {
+  switch (outcome) {
+    case "completed":
+      return t("game.outcomes.completed");
+    case "cancelled":
+      return t("game.outcomes.cancelled");
+    case "failed":
+      return t("game.outcomes.failed");
+    default:
+      return safeToken(outcome);
+  }
+}
+
+function finishReasonName(reason: string): string {
+  switch (reason) {
+    case "stop":
+      return t("game.finishReasons.stop");
+    case "guard":
+      return t("game.finishReasons.guard");
+    case "length":
+      return t("game.finishReasons.length");
+    default:
+      return safeToken(reason);
+  }
+}
+
+function relatedDice(item: RecordItem) {
+  if (!item.body || !("diceSeq" in item.body)) return undefined;
+  const recordSeq = item.body.diceSeq;
+  const body = props.items.find((candidate) => candidate.recordSeq === recordSeq)?.body;
+  return body && "expression" in body ? body : undefined;
+}
+
+function isOutOfCharacter(item: RecordItem): boolean {
+  return !!item.body && "mode" in item.body && item.body.mode === "outOfCharacter";
+}
+
+function checkDifficulty(dc: number | undefined): string {
+  return t("game.checkDifficulty", {
+    dc: dc === undefined ? t("game.noDifficulty") : dc,
+  });
+}
 </script>
 
 <template>
   <button
-    type="button"
     v-if="props.olderCursor"
-    class="mb-3 w-full rounded-lg border border-hairline px-3 py-2 text-xs text-muted"
+    type="button"
+    class="record-load-older"
     :disabled="props.loadingOlder"
     @click="emit('loadOlder')"
   >
     {{ t("game.earlierRecords") }}
   </button>
   <ol class="record-list" :aria-label="t('game.dialogue')">
-    <li v-if="!props.items.length" class="record-system">{{ t("game.noRecords") }}</li>
-    <li
-      v-for="item in props.items"
-      :key="item.recordSeq"
-      class="record-entry"
-      :class="item.kind === 'playerSpeech'
-      ? 'record-player'
-      : item.kind === 'narration'
-        ? 'record-narrator'
-        : item.kind === 'characterSpeech'
-          ? 'record-story'
-          : 'record-system'"
-    >
-      <span class="record-kind">{{
-        t("game.recordKind", { kind: recordKindName(item.kind) })
-      }}</span>
-      <details v-if="item.kind === 'recap' && item.body && 'text' in item.body">
+    <li v-if="!props.items.length" class="record-empty">{{ t("game.noRecords") }}</li>
+    <li v-for="item in props.items" :key="item.recordSeq" class="record-row">
+      <div
+        v-if="item.kind === 'playerSpeech' && item.body && 'text' in item.body"
+        class="record-player"
+      >
+        <span v-if="isOutOfCharacter(item)" class="record-ooc">
+          {{ t("game.recordOocTag") }}
+        </span>
+        <p class="record-player-bubble">{{ item.body.text }}</p>
+      </div>
+      <div
+        v-else-if="item.kind === 'narration' && item.body && 'text' in item.body"
+        class="record-narrator"
+      >
+        <p>{{ item.body.text }}</p>
+        <span
+          v-if="item.outcome || ('outcome' in item.body && item.body.outcome)"
+          class="record-terminal"
+        >
+          {{ outcomeName(item.outcome ?? ("outcome" in item.body ? item.body.outcome : "")) }}
+          <template v-if="'finishReason' in item.body && item.body.finishReason">
+            · {{ finishReasonName(item.body.finishReason ?? "") }}
+          </template>
+        </span>
+      </div>
+      <div
+        v-else-if="item.kind === 'characterSpeech' && item.body && 'text' in item.body"
+        class="record-character"
+      >
+        <div class="record-nameplate">
+          <span class="record-avatar" aria-hidden="true" />
+          <strong>{{
+            "speakerId" in item.body
+            ? characterName(item.body.speakerId ?? "")
+            : t("game.recordKinds.character")
+          }}</strong>
+        </div>
+        <p class="record-character-bubble">{{ item.body.text }}</p>
+        <span v-if="item.outcome" class="record-terminal">
+          {{ outcomeName(item.outcome) }}
+          <template v-if="'finishReason' in item.body && item.body.finishReason">
+            · {{ finishReasonName(item.body.finishReason) }}
+          </template>
+        </span>
+      </div>
+      <div
+        v-else-if="item.kind === 'dice' && item.body && 'expression' in item.body"
+        class="record-machine mono"
+      >
+        <span class="led" aria-hidden="true" />
+        <strong>{{ item.body.expression }}</strong>
+        <span
+          v-for="(roll, index) in item.body.rolls"
+          :key="`${item.recordSeq}:${index}`"
+          class="record-die"
+        >
+          {{ roll.value }}
+        </span>
+        <span class="record-machine-total">= {{ item.body.total }}</span>
+      </div>
+      <div
+        v-else-if="item.kind === 'check' && item.body && 'result' in item.body"
+        class="record-machine mono"
+      >
+        <span class="led" aria-hidden="true" />
+        <span>{{ item.body.ruleId }}</span>
+        <template v-if="relatedDice(item)">
+          <span>{{ relatedDice(item)!.expression }}</span>
+          <span
+            v-for="(roll, index) in relatedDice(item)!.rolls"
+            :key="`${item.recordSeq}:${index}`"
+            class="record-die"
+          >
+            {{ roll.value }}
+          </span>
+          <span class="record-machine-total">= {{ relatedDice(item)!.total }}</span>
+        </template>
+        <span class="record-result" :class="`result-${item.body.result}`">
+          {{ checkResultName(item.body.result) }}
+        </span>
+        <span class="record-machine-muted">
+          · {{ checkDifficulty(item.body.dc) }}
+        </span>
+      </div>
+      <details
+        v-else-if="item.kind === 'recap' && item.body && 'text' in item.body"
+        class="record-recap"
+      >
         <summary>{{ t("game.recap") }}</summary>
-        <p class="mt-2 whitespace-pre-wrap break-words">{{ item.body.text }}</p>
+        <p>{{ item.body.text }}</p>
       </details>
-      <p v-else-if="item.body && 'text' in item.body" class="whitespace-pre-wrap break-words">
-        {{ item.body.text }}
-      </p>
-      <div v-else-if="item.body && 'expression' in item.body" class="whitespace-pre-wrap">
-        {{
-          t("game.rollSummary", {
-            expression: item.body.expression,
-            total: item.body.total,
-            rolls: item.body.rolls
-              .map((roll) => t("game.rollDie", { sides: roll.sides, value: roll.value }))
-              .join(", "),
-          })
-        }}
-      </div>
-      <div v-else-if="item.body && 'result' in item.body" class="whitespace-pre-wrap">
-        {{
-          t("game.checkSummary", {
-            result: checkResultName(item.body.result),
-            dc: item.body.dc ?? t("game.noDifficulty"),
-          })
-        }}
-      </div>
       <button
-        type="button"
         v-else-if="item.bodyRef"
-        class="text-xs text-ink underline"
+        type="button"
+        class="record-read-body"
         @click="emit('loadBody', item.bodyRef)"
       >
         {{ t("common.readBody") }}
       </button>
-      <p v-else-if="item.body && 'code' in item.body && item.body.code === 'checkPlanned'">
-        {{ t("game.checkPlanned") }}
-      </p>
-      <p v-else-if="item.body && 'code' in item.body && item.body.code === 'checkSkipped'">
-        {{ t("game.checkSkipped") }}
+      <p
+        v-else-if="item.body && 'code' in item.body && item.body.code === 'checkPlanned'"
+        class="record-machine mono"
+      >
+        <span class="led accent" aria-hidden="true" />{{ t("game.checkPlanned") }}
       </p>
       <p
-        v-else-if="item.body && 'code' in item.body"
-        class="whitespace-pre-wrap break-words"
+        v-else-if="item.body && 'code' in item.body && item.body.code === 'checkSkipped'"
+        class="record-machine mono"
       >
+        <span class="led" aria-hidden="true" />{{ t("game.checkSkipped") }}
+      </p>
+      <p
+        v-else-if="item.kind === 'system' && item.body && 'code' in item.body"
+        class="record-system"
+      >
+        <span class="led" aria-hidden="true" />
         {{ systemRecordMessage(item.body.message) }}
       </p>
-      <p v-else class="whitespace-pre-wrap break-words">{{ t("game.recordUnavailable") }}</p>
+      <p v-else class="record-compat">{{ t("game.recordUnavailable") }}</p>
       <button
+        v-if="props.canRewind && item.kind === 'system' && item.body && 'code' in item.body && ['checkPlanned', 'checkSkipped'].includes(item.body.code)"
         type="button"
-        v-if="props.canRewind &&
-        item.kind === 'system' &&
-        item.body &&
-        'code' in item.body &&
-        ['checkPlanned', 'checkSkipped'].includes(item.body.code)"
-        class="mt-2 text-xs text-danger"
+        class="record-rewind"
         @click="emit('rewind', item.recordSeq)"
       >
         {{ t("game.rewindToHere") }}
       </button>
     </li>
   </ol>
-  <pre
-    v-if="props.preview"
-    class="record-entry record-story whitespace-pre-wrap break-words"
-    data-testid="live-text"
-  >{{ props.preview.text }}</pre>
-  <pre
-    v-if="props.expandedBody !== undefined"
-    class="record-expanded whitespace-pre-wrap break-words"
-  >{{ props.expandedBody }}</pre>
-  <p v-if="props.generation" class="record-system">
-    {{ t("game.generation", { outcome: outcomeName(props.generation.outcome) }) }}
-    <span v-if="props.generation.finishReason">{{
-      finishReasonName(props.generation.finishReason)
-    }}</span>
+  <p v-if="props.preview" class="record-narrator record-live" data-testid="live-text">
+    {{ props.preview.text }}<span class="record-cursor" aria-hidden="true" />
+    <span v-if="props.preview.outcome" class="record-terminal">
+      {{ outcomeName(props.preview.outcome) }}
+      <template v-if="props.preview.finishReason">
+        · {{ finishReasonName(props.preview.finishReason) }}
+      </template>
+    </span>
   </p>
-  <p v-else-if="props.preview?.outcome" class="record-system">
-    {{ t("game.generation", { outcome: outcomeName(props.preview.outcome) }) }}
-    {{ finishReasonName(props.preview.finishReason ?? "") }}
+  <p v-if="props.expandedBody !== undefined" class="record-expanded">{{ props.expandedBody }}</p>
+  <p v-if="props.generation" class="record-system">
+    <span class="led" aria-hidden="true" />
+    {{ t("game.generation", { outcome: outcomeName(props.generation.outcome) }) }}
+    <template v-if="props.generation.finishReason">
+      · {{ finishReasonName(props.generation.finishReason) }}
+    </template>
   </p>
 </template>

@@ -98,7 +98,7 @@ CheckProposal 禁止 expression / rolls / dc / modifier / worldPatch；reason �
 
 引擎构造 `CheckPlan`：planId、ruleId / ruleVersion、actorId、规范 expression、modifiers、resultPolicy、三档后果分支。修正项 `{ value, source: { kind, id } }` 来自可信角色 / 处境 / 剧本状态，模型只能建议 ruleId。计划保存输入 world revision 及 hash；掷骰前再次确认条件，变化则失败，不拿旧能力继续掷。
 
-v1 默认注册规则为 `pbta-2d6-v1`：2d6 + 修正之和，修正之和限定整数 −3 到 3；total >= 10 为 success，7–9 为 costlySuccess，<= 6 为 failure。三分支均须注册合法后果：代价与失败后果由规则表选择并交给叙事，失败推进新的处境，不自动终结游戏。结束只有可信 sessionEnded 条件能决定。规则可关闭骰判；暴击 / DC 判定是注册扩展，不改变五阶段。
+v1 默认注册规则为 `2d6-pbta-v1`：2d6 + 修正之和，修正之和限定整数 −3 到 3；total >= 10 为 success，7–9 为 costlySuccess，<= 6 为 failure。三分支均须注册合法后果：代价与失败后果由规则表选择并交给叙事，失败推进新的处境，不自动终结游戏。结束只有可信 sessionEnded 条件能决定。规则可关闭骰判；暴击 / DC 判定是注册扩展，不改变五阶段。
 
 骰式的 K 是 modifiers 的来源分解之和：total = sum(rolls.value) + K，不能再把 modifiers 加第二次。骰式 v1 只支持 `NdS±K`：N 1–20，S 2–1000，K 整数 −100 到 100；PbtA 默认仍固定 2d6，修正规则更严格。拒绝爆炸骰、无限重掷、任意函数和非有限数。骰式解析先用小子集，caith / tyche 留作候选，不在未验证可注入 RNG 及限制前接入；[caith 官方说明](https://github.com/Geobert/caith)包含更丰富骰式，不能直接视为本项目合法输入。
 
@@ -110,7 +110,7 @@ v1 默认注册规则为 `pbta-2d6-v1`：2d6 + 修正之和，修正之和限定
 
 单次采样最多消耗 4096 个原始字，耗尽返回 invalid-phase，整组骰子不提交；系统熵获取失败不使用备用 seed。零 seed 的前两个原始字为 `0xade0b876 / 0x903df1a0`，2d6 拒绝采样结果为 `[1, 1]`，endCounter 为 `2`。计划摘要覆盖除 planHash 自身之外的完整 CheckPlan，按键排序的 JSON 对象序列化并包含末尾 LF；执行前重核规则版本、表达式、修正来源、身份形状和冻结 worldRevision。
 
-dice 包含 `planId`、`rng`、`modifiers`；check 包含 `planId`，result 包含 costlySuccess，dc 为可选：PbtA 省略，DC 注册规则必有有限 dc。dice.source 指向规则 / plan，check.diceSeq 必须引用当前有效因果路径上的既有 dice。修正之和、各骰值和 total 校验一致；没有 check 但已有 dice 时重算分档，不能再掷。022 已实现类型化读写，023 的默认 PbtA 已加入计划和采样基础；当前执行器只支持 `pbta-2d6-v1`，DC / 暴击仅保留格式扩展位，后续须增加并登记相应执行器，不能从历史或模型字段自动启用。
+dice 包含 `planId`、`rng`、`modifiers`；check 包含 `planId`，result 包含 costlySuccess，dc 为可选：PbtA 省略，DC 注册规则必有有限 dc。dice.source 指向规则 / plan，check.diceSeq 必须引用当前有效因果路径上的既有 dice。修正之和、各骰值和 total 校验一致；没有 check 但已有 dice 时重算分档，不能再掷。022 已实现类型化读写，023 的默认 PbtA 已加入计划和采样基础；当前执行器只支持 `2d6-pbta-v1`；DC / 暴击仅保留格式扩展位，后续须增加并登记相应执行器，不能从历史或模型字段自动启用。
 
 | 走查       | 输入 / 骰值                                         | 结论                                                |
 | ---------- | --------------------------------------------------- | --------------------------------------------------- |

@@ -288,7 +288,11 @@ watch(
       </div>
       <p v-if="appError" role="alert">
         {{ t("memorySettings.error") }}
-        <button type="button" class="underline" @click="loadApp(true)">
+        <button type="button" class="btn ghost btn-compact" @click="loadApp(true)">
+          <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+            <path d="M20 4v4.5h-4.5" />
+          </svg>
           {{ t("common.retry") }}
         </button>
       </p>
@@ -367,9 +371,13 @@ watch(
         {{ t("memorySettings.error") }}
         <button
           type="button"
-          class="underline"
+          class="btn ghost btn-compact"
           @click="loadScript(scriptId, ++scriptLoadRevision, true)"
         >
+          <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+            <path d="M20 4v4.5h-4.5" />
+          </svg>
           {{ t("common.retry") }}
         </button>
       </p>

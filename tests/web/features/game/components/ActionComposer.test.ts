@@ -1,4 +1,4 @@
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 import ActionComposer from "../../../../../src-web/features/game/components/ActionComposer.vue";
 import { i18n } from "../../../../../src-web/i18n/index";
@@ -46,6 +46,43 @@ describe("ActionComposer", () => {
     expect(wrapper.get('button[type="submit"]').text()).toBe("Submit action");
     expect(wrapper.get('button[type="submit"]').classes()).toContain("game-composer-submit");
     wrapper.unmount();
+  });
+
+  it("sizes an initial multiline draft before the first edit", async () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+    Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLTextAreaElement) {
+        return this.value.split("\n").length * 24;
+      },
+    });
+    const wrapper = mount(ActionComposer, {
+      props: {
+        modelValue: "first line\nsecond line\nthird line",
+        preview: {
+          mode: "inCharacter",
+          slashActive: false,
+          candidates: [],
+          invalidSlash: false,
+          contentRequired: false,
+        },
+        submitDisabled: false,
+        submitLabel: "Submit action",
+        tooLarge: false,
+        slashMenuDismissed: false,
+        rewindSelectorOpen: false,
+      },
+      global: { plugins: [i18n] },
+    });
+
+    try {
+      await flushPromises();
+      expect(wrapper.get("textarea").element.style.height).toBe("72px");
+    } finally {
+      wrapper.unmount();
+      if (original) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", original);
+      else Reflect.deleteProperty(HTMLTextAreaElement.prototype, "scrollHeight");
+    }
   });
 
   it("shows safe slash suggestions and blocks submission while disabled", async () => {
