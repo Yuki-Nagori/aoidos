@@ -782,6 +782,82 @@ try {
           .locator('#scenario a[href="https://creativecommons.org/licenses/by/4.0/"]')
           .waitFor();
       }
+      if (section.id === "api") {
+        const currencyCard = page.locator("#api .settings-currency-card");
+        const priceLayout = await currencyCard.evaluate((element) => {
+          const heading = element.querySelector<HTMLElement>(".settings-currency-heading");
+          const select = element.querySelector<HTMLElement>(".select-menu");
+          const preview = element.querySelector<HTMLElement>(".settings-price-preview");
+          const grid = preview?.querySelector<HTMLElement>("dl");
+          if (!heading || !select || !preview || !grid)
+            throw new Error("API price controls are missing");
+          return {
+            currencyDisplay: getComputedStyle(element).display,
+            currencyWidth: element.getBoundingClientRect().width,
+            headingColumns: getComputedStyle(heading).gridTemplateColumns.split(" ").length,
+            selectWidth: select.getBoundingClientRect().width,
+            previewWidth: preview.getBoundingClientRect().width,
+            previewScrollWidth: preview.scrollWidth,
+            priceColumns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
+            rows: Array.from(grid.children).map((row) => {
+              const rect = row.getBoundingClientRect();
+              const label = row.querySelector<HTMLElement>("dt")!.getBoundingClientRect();
+              const value = row.querySelector<HTMLElement>("dd")!.getBoundingClientRect();
+              return {
+                left: rect.left,
+                right: rect.right,
+                labelLeft: label.left,
+                labelRight: label.right,
+                valueLeft: value.left,
+                valueRight: value.right,
+              };
+            }),
+          };
+        });
+        if (viewport.width <= 720) {
+          assert.equal(priceLayout.currencyDisplay, "grid");
+          assert.equal(priceLayout.headingColumns, 1);
+          assert.equal(priceLayout.priceColumns, 1);
+        }
+        assert.ok(
+          priceLayout.selectWidth > 0 && priceLayout.selectWidth <= priceLayout.currencyWidth,
+        );
+        assert.ok(
+          priceLayout.previewScrollWidth <= priceLayout.previewWidth,
+          `Price preview must not overflow: ${JSON.stringify(priceLayout)}`,
+        );
+        assert.ok(
+          priceLayout.rows.every(
+            (row) =>
+              row.labelLeft >= row.left - 1 &&
+              row.labelRight <= row.right + 1 &&
+              row.valueLeft >= row.left - 1 &&
+              row.valueRight <= row.right + 1 &&
+              row.labelRight <= row.valueLeft + 1,
+          ),
+          "API price labels and values must not overlap or escape their grid row",
+        );
+        const trigger = page.locator("#api .select-menu-trigger").first();
+        const selectedValue = await trigger.innerText();
+        await trigger.click();
+        const listbox = page.locator('#api [role="listbox"]').first();
+        await listbox.waitFor();
+        const listboxBox = await listbox.boundingBox();
+        assert.ok(listboxBox, "The custom selector must render its listbox");
+        assert.ok(listboxBox.x >= 0 && listboxBox.x + listboxBox.width <= viewport.width);
+        assert.ok(listboxBox.y >= 0 && listboxBox.y + listboxBox.height <= viewport.height);
+        const activeBefore = await trigger.getAttribute("aria-activedescendant");
+        await trigger.press("ArrowDown");
+        assert.notEqual(
+          await trigger.getAttribute("aria-activedescendant"),
+          activeBefore,
+          "ArrowDown must move the active listbox option",
+        );
+        await trigger.press("Escape");
+        await listbox.waitFor({ state: "detached" });
+        assert.equal(await trigger.innerText(), selectedValue, "Escape must not change selection");
+        assert.equal(await trigger.evaluate((element) => document.activeElement === element), true);
+      }
       if (section.id === "balance") {
         await page.getByRole("button", { name: /query deepseek balance/i }).click();
         await page.locator("#billing .billing-balance-card").waitFor();
@@ -880,6 +956,29 @@ try {
         await page.getByRole("button", { name: /view reference|查看速查表/i }).click();
         const shortcutDialog = page.getByRole("dialog", { name: /keyboard shortcuts|快捷键/i });
         await shortcutDialog.waitFor();
+        const dialogBox = await shortcutDialog.boundingBox();
+        assert.ok(dialogBox, "The shortcut reference should have a measurable dialog frame");
+        assert.ok(dialogBox.x >= 16 && dialogBox.y >= 16);
+        assert.ok(dialogBox.x + dialogBox.width <= viewport.width - 16);
+        assert.ok(dialogBox.y + dialogBox.height <= viewport.height - 16);
+        const shortcutLayout = await shortcutDialog.evaluate((element) => {
+          const groups = element.querySelector<HTMLElement>(".shortcut-groups-dialog");
+          if (!groups) throw new Error("Shortcut groups are missing");
+          return {
+            dialogWidth: element.clientWidth,
+            dialogScrollWidth: element.scrollWidth,
+            groupsWidth: groups.clientWidth,
+            groupsScrollWidth: groups.scrollWidth,
+            columns: getComputedStyle(groups).gridTemplateColumns.split(" ").length,
+          };
+        });
+        assert.ok(shortcutLayout.dialogScrollWidth <= shortcutLayout.dialogWidth);
+        assert.ok(shortcutLayout.groupsScrollWidth <= shortcutLayout.groupsWidth);
+        assert.equal(
+          shortcutLayout.columns,
+          viewport.width <= 720 ? 1 : 2,
+          "The shortcut reference must switch to one column in the narrow drawer",
+        );
         assert.ok(await shortcutDialog.locator('input[type="search"]').count());
         assert.ok(await shortcutDialog.locator(".shortcut-row .tag").count());
         await shortcutDialog.locator('input[type="search"]').fill("Send");

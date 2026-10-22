@@ -375,20 +375,22 @@ function themeName(id: string, fallback: string): string {
               v-if="product.providerId.value === 'deepseek' && product.model.value === 'deepseek-flash'"
               class="settings-currency-card card"
             >
-              <span class="settings-skin-copy">
-                <strong>{{ t("settings.billingCurrency") }}</strong>
-                <span class="text-sm text-muted">{{ t("settings.billingCurrencyHint") }}</span>
-              </span>
-              <SelectMenu
-                :model-value="product.billingCurrency.value"
-                :options="[
-                  { value: 'CNY', label: t('settings.billingCurrencyCny') },
-                  { value: 'USD', label: t('settings.billingCurrencyUsd') },
-                ]"
-                :label="t('settings.billingCurrency')"
-                :disabled="product.busy.value"
-                @update:model-value="product.setBillingCurrency($event)"
-              />
+              <div class="settings-currency-heading">
+                <span class="settings-skin-copy">
+                  <strong>{{ t("settings.billingCurrency") }}</strong>
+                  <span class="text-sm text-muted">{{ t("settings.billingCurrencyHint") }}</span>
+                </span>
+                <SelectMenu
+                  :model-value="product.billingCurrency.value"
+                  :options="[
+                    { value: 'CNY', label: t('settings.billingCurrencyCny') },
+                    { value: 'USD', label: t('settings.billingCurrencyUsd') },
+                  ]"
+                  :label="t('settings.billingCurrency')"
+                  :disabled="product.busy.value"
+                  @update:model-value="product.setBillingCurrency($event)"
+                />
+              </div>
               <fieldset v-if="selectedPriceTemplate" class="settings-price-preview">
                 <legend>{{ t("settings.pricePreviewTitle") }}</legend>
                 <dl>

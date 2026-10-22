@@ -1078,6 +1078,8 @@
 
   .settings-price-preview {
     min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
     grid-column: 1 / -1;
     display: grid;
     gap: 0.65rem;
@@ -1118,6 +1120,24 @@
 
   .settings-price-preview p {
     margin: 0;
+  }
+
+  .settings-currency-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .settings-currency-heading {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) minmax(10rem, 13rem);
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .settings-currency-card > .btn {
+    justify-self: start;
   }
 
   .settings-key-card {
@@ -1610,6 +1630,27 @@
   }
 
   @media (max-width: 45rem) {
+    .settings-currency-heading {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .settings-price-preview dl {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .settings-price-preview dl > div {
+      min-width: 0;
+    }
+
+    .settings-price-preview dt {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .settings-price-preview dd {
+      flex: none;
+    }
+
     .billing-summary-grid,
     .billing-form,
     .billing-price-form,
