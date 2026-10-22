@@ -56,14 +56,14 @@
 
 ## 验收标准
 
-- [ ] `write_atomic_private(path, bytes)` 在所有受支持平台都于写入正文前设置 owner-only 权限；注入失败时不发布明文、不损坏旧目标且清理临时文件。
-- [ ] POSIX mode 与 Windows DACL 均由 `aoidos-store` 实际验证；Windows DACL 只含当前用户授权且受保护，不把 Unix 0600 语义套用到 Windows。
-- [ ] `aoidos-llm` 不实现文件权限或 GUI 对话框，也不再依赖 GTK、AppKit、CredUI UI 功能；CLI 凭据交互仅走终端接口。
-- [ ] Tauri 命令只调用统一的原生输入函数接口；取消为 `None`、失败脱敏、密码缓冲清理及 UI 主线程约束保持原语义，命令层不含 OS 条件分支。
-- [ ] Windows、macOS、Linux 确认 / 取消烟测从 Tauri 入口通过专用 native-session runner 验证；未实际验证的平台不宣称支持。
-- [ ] workspace 依赖图无环，CLI 的生产依赖闭包不包含 GUI 原生输入库；分层 lint、受影响格式 / lint / 测试通过。
-- [ ] `repository-layout.md`、`llm.md`、`storage.md`、`i18n.md` 与 layering 规范描述一致；旧归属与失效引用已清理。
-- [ ] 代码、中文注释、类型、测试、文档和 task 一致；subagent 独立 review 的问题已处理，PR 三平台 CI 通过。
+- [x] `write_atomic_private(path, bytes)` 在所有受支持平台都于写入正文前设置 owner-only 权限；注入失败时不发布明文、不损坏旧目标且清理临时文件。
+- [x] POSIX mode 与 Windows DACL 均由 `aoidos-store` 实际验证；Windows DACL 只含当前用户授权且受保护，不把 Unix 0600 语义套用到 Windows。
+- [x] `aoidos-llm` 不实现文件权限或 GUI 对话框，也不再依赖 GTK、AppKit、CredUI UI 功能；CLI 凭据交互仅走终端接口。
+- [x] Tauri 命令只调用统一的原生输入函数接口；取消为 `None`、失败脱敏、密码缓冲清理及 UI 主线程约束保持原语义，命令层不含 OS 条件分支。
+- [x] Windows、macOS、Linux 确认 / 取消烟测从 Tauri 入口通过专用 native-session runner 验证；未实际验证的平台不宣称支持。
+- [x] workspace 依赖图无环，CLI 的生产依赖闭包不包含 GUI 原生输入库；分层 lint、受影响格式 / lint / 测试通过。
+- [x] `repository-layout.md`、`llm.md`、`storage.md`、`i18n.md` 与 layering 规范描述一致；旧归属与失效引用已清理。
+- [x] 代码、中文注释、类型、测试、文档和 task 一致；subagent 独立 review 的问题已处理，PR 三平台 CI 通过。
 
 ## 验证计划与结果
 

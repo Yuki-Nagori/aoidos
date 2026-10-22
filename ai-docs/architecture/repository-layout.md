@@ -5,81 +5,80 @@
 [架构总览](README.md)
 
 ```text
-├── index.html                 # Vite 入口 HTML（挂载点 #app）
-├── src-web/                   # 前端：Vue 3 + TypeScript
-│   ├── main.ts                # 应用入口：挂载根组件
-│   ├── app/                   # App.vue 根组合、WelcomeScreen 与设置抽屉
-│   ├── features/              # game、product、billing、memory、locale、theme 功能模块
-│   │   ├── game/              # 对局舞台、记录、输入与状态编排
-│   │   │   └── assets/        # 仅由对应剧本状态选择的游戏视觉资源
-│   │   └── <feature>/         # 各自的 components/、composables/、utils/ 与类型
-│   ├── shared/                # 跨功能共享的纯逻辑 / 展示原语，不依赖 feature
-│   ├── app.css                # Tailwind v4 接线与设计 token 真源（分层见 ui.md / theming.md）
-│   ├── api/                   # IPC 薄调用与 TS 载荷类型
-│   ├── i18n/                  # vue-i18n 实例与挂载前持久语言同步
-│   ├── styles/                # 全局样式扩展；generated/ 仅放构建生成的 CSS
-│   ├── theme-bootstrap.ts     # 首帧主题引导（构建为 /theme-bootstrap.js）
-│   ├── locale-bootstrap.ts    # 首帧语言引导（构建为 /locale-bootstrap.js）
-│   └── bench/                 # tinybench 正文消费基准
-├── src-tauri/                 # Tauri 适配层：Rust（装配与命令适配，业务进 src-rust）
-│   ├── src/lib.rs             # 应用装配（Builder）；事件循环不可测，不入覆盖门槛
-│   ├── src/commands.rs        # #[tauri::command] 命令层、类型化载荷与命令单测
-│   ├── src/game_commands/     # 产品阶段 DTO / 命令适配，业务由 engine actor 执行
-│   ├── src/turn_commands/     # 回合服务 / 事件适配，mod.rs 与 tests.rs 并列
-│   ├── src/run_commands/      # 周目目录、恢复、删除与账务迁移命令适配
-│   ├── src/theme_commands/    # 主题目录、偏好与剧本皮肤命令适配
-│   ├── src/locale_commands/   # 语言偏好 IPC；native.rs 单独封装真实 Wry 菜单 / 托盘适配
-│   ├── src/billing_commands/  # 预算、计价、账本与供应商余额命令适配
-│   ├── src/memory_commands/   # 记忆配置、查询、确认与批次命令适配
-│   ├── src/llm_commands.rs    # LLM 配置 / 凭据命令（019）；调用统一原生输入接口
-│   ├── src/native_prompt/     # GTK / AppKit / CredUI 原生输入；仅桌面入口依赖平台 UI 库
-│   ├── src/ipc.rs             # CmdError 与域 / 平台错误映射
-│   ├── src/events.rs          # 每流序号与事件信封，窗口投递由 turn_commands 适配
-│   ├── tauri.conf.json        # 窗口 / 打包 / 开发服务器
-│   ├── capabilities/          # IPC 权限声明
-│   ├── icons/                 # 平台图标（tauri icon 生成，勿手改）
-│   ├── src/store_commands/   # 存储参数适配及有界平台事件队列
-│   └── build.rs               # tauri-build
-├── src-cli/                   # CLI / TUI 二进制入口（参数、终端事件与展示 adapter）
-│   ├── Cargo.toml              # aoidos-cli workspace package
-│   └── src/                    # clap 命令、运行时事件桥与 Ratatui 界面
-├── src-rust/                  # 不依赖 tauri 的业务 crate
-│   ├── aoidos-script/         # 剧本原文解析 / 格式校验，不执行内容规则
-│   ├── aoidos-json/           # 基于 serde_json 的共用编解码、重复键校验与规范化
-│   ├── aoidos-engine/         # 协调 / lease、record/、game/、迁移 / 偏好 / Storage
-│   ├── aoidos-app/            # profile / 凭据服务与 GUI / CLI 共用游戏装配
-│   ├── aoidos-theme/          # 主题目录 / 偏好 / 剧本皮肤校验，含 assets/themes/ 与 build.rs
-│   ├── aoidos-billing/        # 模型计价、周期、账本与预算领域规则
-│   ├── aoidos-memory/         # 记忆模型、仓储、批次、轮回节点与恢复协议
-│   ├── aoidos-locale/         # 034：受限语言偏好、系统语言归一化与独立 SQLite schema
-│   ├── aoidos-store/          # 路径、原子发布、有界读取、journal / applied 与 SQLite 基建
-│   └── aoidos-llm/            # 供应商适配 / 护栏 / 调度 / 配置 / 凭据 / 代理
-│       ├── src/providers/    # deepseek/、opencode/、models/ 的 mod.rs 与 tests.rs 并列
-│       └── src/credentials.rs # keyring、Vault 与降级凭据文件；权限策略复用 aoidos-store
-├── resources/scripts/        # 已发布剧本原文与署名 / 许可，编译期内嵌
-├── tests/rust/native-platform/ # 真实 UI / OS 凭据 / 主 Webview IPC 集成测试 crate（显式桌面会话）
-├── tests/web/                 # Vitest 行为测试（目录镜像 src-web）
-│   ├── api/                   # 类型化 IPC API 行为测试
-│   ├── api/                    # 类型化 IPC API 行为测试
-│   ├── app/                   # 根组合与跨功能界面
-│   ├── features/              # 按生产 feature 镜像
-│   ├── shared/                # 共享逻辑
-│   └── i18n/                  # 启动语言同步测试
-├── scripts/                   # 仓库脚本（环境 / 覆盖率 / 原生夹具与 Rust 构建适配；TS 独立 tsconfig）
-├── coverage-rust.config.mts   # Rust 覆盖率门禁的忽略清单与逐文件预算（scripts/coverage-rust.mts 消费）
-├── locales/                  # zh-Hans / en 单源 JSON；Vite 与原生构建共用
-├── .github/workflows/ci.yml   # 三平台 CI
-├── .husky/pre-commit          # 提交前查双端格式（全量门禁在 CI）
-├── ai-docs/                   # 本文档体系
-├── public/                    # Vite 静态资产（icon.png 作 favicon）
+├── index.html                  # Vite 入口 HTML（挂载点 #app）
+├── src-web/                    # Vue 3 + TypeScript 前端
+│   ├── main.ts                 # 前端入口
+│   ├── app/                    # 根组合、欢迎页与应用级设置抽屉
+│   ├── api/                    # IPC 调用封装与 TypeScript 载荷类型
+│   ├── features/               # game、product、billing、memory、locale、theme
+│   │   ├── game/               # 对局舞台、记录、输入与状态编排
+│   │   │   └── assets/         # 游戏视觉资源
+│   │   └── <feature>/          # 功能私有组件、composables、utils 与类型
+│   ├── i18n/                   # vue-i18n 实例与语言初始化
+│   ├── shared/                 # 不依赖 feature 的共享逻辑与展示原语
+│   ├── styles/                 # 全局样式扩展；generated/ 保存固定生成物
+│   ├── app.css                 # Tailwind 与全局设计 token（见 ../standards/ui.md、theming.md）
+│   ├── theme-bootstrap.ts      # 首帧主题引导，构建为 /theme-bootstrap.js
+│   ├── locale-bootstrap.ts     # 首帧语言引导，构建为 /locale-bootstrap.js
+│   └── bench/                  # tinybench 基准
+├── src-tauri/                  # 桌面入口：装配、IPC 与平台适配
+│   ├── src/
+│   │   ├── lib.rs              # Tauri 应用装配
+│   │   ├── commands.rs         # 命令注册、载荷与命令级测试
+│   │   ├── billing_commands/   # 预算、计价、账本与供应商余额适配
+│   │   ├── game_commands/      # 产品阶段 DTO 与命令适配
+│   │   ├── llm_commands.rs     # LLM 配置与凭据命令
+│   │   ├── locale_commands/    # 语言偏好 IPC 与原生菜单适配
+│   │   ├── memory_commands/    # 记忆配置、查询、确认与批次适配
+│   │   ├── native_prompt/      # GTK、AppKit、CredUI 原生输入适配
+│   │   ├── run_commands/       # 周目目录、恢复、删除与账务迁移适配
+│   │   ├── store_commands/     # 存储参数与平台事件队列适配
+│   │   ├── theme_commands/     # 主题目录、偏好与剧本皮肤适配
+│   │   ├── turn_commands/      # 回合服务与事件适配
+│   │   ├── events.rs           # 事件序号与信封
+│   │   └── ipc.rs              # 命令错误及域错误映射
+│   ├── capabilities/           # IPC 权限声明
+│   ├── icons/                  # Tauri 图标资源
+│   ├── tauri.conf.json         # 窗口、打包与开发服务器配置
+│   └── build.rs                # tauri-build 入口
+├── src-cli/                    # CLI / TUI workspace package
+│   ├── Cargo.toml              # aoidos-cli
+│   └── src/                    # clap 命令、事件桥与 Ratatui 界面
+├── src-rust/                   # 不依赖 Tauri 的领域与基础设施 crate
+│   ├── aoidos-app/             # GUI / CLI 共用的应用服务与游戏装配
+│   ├── aoidos-billing/         # 模型计价、周期、账本与预算规则
+│   ├── aoidos-engine/          # 游戏协调、回合、记录、迁移与存储编排
+│   ├── aoidos-json/            # serde_json 共用编解码、重复键校验与规范化
+│   ├── aoidos-llm/             # 供应商、护栏、调度、配置、凭据与代理
+│   ├── aoidos-locale/          # 受限语言偏好与系统语言归一化
+│   ├── aoidos-memory/          # 记忆模型、仓储、批次与轮回协议
+│   ├── aoidos-script/          # 剧本原文解析与格式校验
+│   ├── aoidos-store/           # 路径、私有原子发布、有界读取与 SQLite 基建
+│   └── aoidos-theme/           # 主题目录、偏好与剧本皮肤校验
+├── resources/scripts/         # 已发布剧本原文、署名与许可（编译期内嵌）
+├── tests/
+│   ├── rust/native-platform/  # 真实原生 UI、OS 凭据与 Webview IPC 集成测试
+│   └── web/                   # Vitest 行为测试，目录镜像 src-web
+│       ├── api/               # 类型化 IPC API 行为测试
+│       ├── app/               # 根组合与跨功能界面
+│       ├── features/          # 按生产 feature 镜像
+│       ├── i18n/              # 启动语言同步测试
+│       └── shared/            # 共享逻辑测试
+├── scripts/                   # 环境、覆盖率、原生夹具与构建脚本
+├── locales/                   # zh-Hans / en 单源 JSON
+├── public/                    # Vite 静态资源
+├── ai-docs/                   # 架构、规范、研究与实施任务
+├── .github/workflows/         # CI 与 Nightly 工作流
+├── .husky/pre-commit          # 提交前的双端格式检查
+├── coverage-rust.config.mts   # Rust 覆盖率忽略项与逐文件预算
 ├── biome.json / dprint.json / knip.json / vite.config.ts / vitest.config.ts
 ├── rust-toolchain.toml        # Rust 工具链锁定
-└── Cargo.toml                 # 虚拟工作区根（members 与 profile 调优）
+└── Cargo.toml                 # Rust 虚拟工作区与 profile 配置
 ```
 
 ## 归属规则
 
-上图记录当前实际目录。`app/App.vue` 只装配产品、语言、主题、计费、记忆和对局功能；`WelcomeScreen` 呈现未开局摘要与显式开局，应用级 `SetupPanel` 作为跨功能设置抽屉，通过插槽承载记忆设置 / 查询；`GameWorkspace` 管理游戏内状态与呈现。feature 之间不互相导入实现；共享能力放 `shared/`，测试按生产目录镜像。
+上图列出主要源码与测试目录；构建输出、生成夹具和被忽略的临时文件不在图中。`app/App.vue` 只装配产品、语言、主题、计费、记忆和对局功能；`WelcomeScreen` 呈现未开局摘要与显式开局，应用级 `SetupPanel` 作为跨功能设置抽屉，通过插槽承载记忆设置 / 查询；`GameWorkspace` 管理游戏内状态与呈现。feature 之间不互相导入实现；共享能力放 `shared/`，测试按生产目录镜像。
 
 组件只做编排与渲染，跨功能共享的纯逻辑进 `shared/utils/` 并配单测，功能私有逻辑留在对应 feature；`commands.rs` 只做解参数、调逻辑、回包，业务长大后在 `src-rust/` 下拆独立 crate（加入 `members`，依赖方向与工程纪律见[职责边界](ts-rust-boundary.md)），命令层只做转发。全局状态、路由、UI 组件库在需求真实出现前不引入，也不建占位目录。
 
