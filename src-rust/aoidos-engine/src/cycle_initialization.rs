@@ -1,6 +1,7 @@
 //! 周目开局生成的持久化边界；旧周目没有记录时继续使用 legacy 恢复语义。
 
 use rusqlite::OptionalExtension;
+use rusqlite::Transaction;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -39,6 +40,78 @@ ALTER TABLE cycle_initialization_attempts
 "#;
 
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
+
+/// Installs the first initialization attempt while the creation coordinator owns its
+/// transaction. This deliberately accepts a recovery-required catalog entry: the run stays
+/// non-playable until an explicit recovery/dispatch workflow claims the request.
+pub(crate) fn prepare_in_transaction(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    request_id: &str,
+    input_snapshot: &[u8],
+    created_at: &str,
+) -> Result<(), Fault> {
+    validate_identity(session_id, request_id, created_at)?;
+    validate_json(input_snapshot)?;
+
+    let catalog: Option<(String, Option<Vec<u8>>, Option<String>)> = transaction
+        .query_row(
+            "SELECT state,profile_snapshot,billing_run_id FROM session_catalog WHERE session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    if !catalog.is_some_and(|(state, profile, billing_run_id)| {
+        state == "recovery-required"
+            && profile.is_some()
+            && billing_run_id.as_deref() == Some(session_id)
+    }) {
+        return Err(Fault::new("app.conflict", "周目尚未准备好开局"));
+    }
+    let budget_exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1)",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if !budget_exists {
+        return Err(Fault::new("budget.not-configured", "请先完成周目预算设置"));
+    }
+    let already_initialized: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM cycle_initializations WHERE session_id=?1)",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    let request_used: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1)",
+            [request_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if already_initialized || request_used {
+        return Err(Fault::new("app.conflict", "周目开局已登记"));
+    }
+
+    let input_hash = hash(input_snapshot);
+    transaction
+        .execute(
+            "INSERT INTO cycle_initializations(session_id,state,revision,current_request_id,input_snapshot,input_hash,created_at,updated_at) VALUES(?1,'initializing',1,?2,?3,?4,?5,?5)",
+            rusqlite::params![session_id, request_id, input_snapshot, input_hash, created_at],
+        )
+        .map_err(database)?;
+    transaction
+        .execute(
+            "INSERT INTO cycle_initialization_attempts(request_id,session_id,state,created_at,updated_at) VALUES(?1,?2,'pending',?3,?3)",
+            rusqlite::params![request_id, session_id, created_at],
+        )
+        .map_err(database)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -618,6 +691,7 @@ fn validate_json(bytes: &[u8]) -> Result<(), Fault> {
     }
     Ok(())
 }
+
 fn validate_identity(session_id: &str, request_id: &str, timestamp: &str) -> Result<(), Fault> {
     if !crate::record::format::valid_uuid(session_id)
         || !crate::record::format::valid_uuid(request_id)
@@ -628,16 +702,18 @@ fn validate_identity(session_id: &str, request_id: &str, timestamp: &str) -> Res
     }
     Ok(())
 }
+
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+
 fn database(_: rusqlite::Error) -> Fault {
-    Fault::new("store.database", "周目开局状态存储失败")
-}
-fn corrupt() -> Fault {
-    Fault::new("store.corrupt", "周目开局状态损坏")
+    Fault::new("store.database", "周目开局存储失败")
 }
 
+fn corrupt() -> Fault {
+    Fault::new("store.corrupt", "周目开局数据损坏")
+}
 #[cfg(test)]
 mod tests {
     use super::*;

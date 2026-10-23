@@ -103,6 +103,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     crate::cycle_initialization::SCHEMA,
     crate::cycle_initialization::DISPATCH_MIGRATION,
     crate::run_catalog::creation::MIGRATION,
+    crate::run_catalog::creation::PREPARATION_MIGRATION,
 ];
 
 pub struct Storage {
@@ -164,7 +165,8 @@ impl Storage {
         storage
     }
 
-    /// 新建不可玩的周目占位并可在重启后重放创建意图；不创建 owner、预算预留或模型请求。
+    /// 新建不可玩的周目占位并可在重启后重放创建意图；可选初始化准备仅原子保存预算与待发送输入，
+    /// 不创建 owner、预算预留或模型请求。
     /// # Errors
     /// 身份冲突、header 不匹配或任一持久化阶段失败时保留 journal 供恢复。
     pub fn create_inactive_run(

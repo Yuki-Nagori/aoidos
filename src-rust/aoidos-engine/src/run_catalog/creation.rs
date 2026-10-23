@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::record::format::Header;
+use aoidos_billing::money::NanoMoney;
 use aoidos_llm::config::LlmProfile;
 use sha2::{Digest, Sha256};
 
@@ -22,11 +23,23 @@ CREATE INDEX session_creation_pending ON session_creation_ops(state, created_at,
   WHERE state IN ('intent','record-created');
 "#;
 
+/// Optional cycle preparation is persisted separately so databases created before this slice
+/// retain their exact legacy journal semantics.
+pub const PREPARATION_MIGRATION: &str = r#"
+CREATE TABLE session_creation_preparations (
+  operation_id TEXT PRIMARY KEY REFERENCES session_creation_ops(operation_id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL UNIQUE CHECK(length(request_id) = 36),
+  snapshot BLOB NOT NULL CHECK(length(snapshot) BETWEEN 2 AND 1048576),
+  snapshot_hash TEXT NOT NULL CHECK(length(snapshot_hash) = 64)
+);
+"#;
+
 #[derive(Debug, Clone)]
 pub struct InactiveRunIntent {
     pub operation_id: String,
     pub header: Header,
     pub profile: LlmProfile,
+    pub preparation: Option<InitializationPreparation>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,10 +47,46 @@ pub struct InactiveRunCreation {
     pub operation_id: String,
     pub header: Header,
     pub profile: LlmProfile,
+    pub preparation: Option<InitializationPreparation>,
     pub state: String,
 }
 
+/// Exact provider input and confirmed per-currency limits frozen before writing the record header.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitializationPreparation {
+    pub version: u32,
+    pub request_id: String,
+    pub input: FrozenInitializationInput,
+    pub cny_limit: NanoMoney,
+    pub usd_limit: NanoMoney,
+}
+
+/// Versioned request envelope. `provider_request` is the complete serialized request body;
+/// `script_revision` and `profile_snapshot_hash` bind it to the immutable run inputs.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrozenInitializationInput {
+    pub version: u32,
+    pub operation_id: String,
+    pub session_id: String,
+    pub script_id: String,
+    pub script_revision: String,
+    pub profile_id: String,
+    pub profile_snapshot_hash: String,
+    pub locale: String,
+    pub prompt_version: String,
+    pub output_schema_version: u32,
+    pub script_snapshot: Vec<u8>,
+    pub entity_snapshot: Vec<u8>,
+    pub cycle_input_snapshot: Vec<u8>,
+    /// Captured for durable preparation only; no caller may dispatch it until a future
+    /// coordinator validates it against the provider request contract.
+    pub provider_request: serde_json::Value,
+}
+
 struct StoredCreation {
+    operation_id: String,
     script_id: String,
     header_snapshot: Vec<u8>,
     header_hash: String,
@@ -67,6 +116,18 @@ pub(crate) fn begin_inactive_creation(
     validate_intent(intent)?;
     let header = aoidos_json::to_vec(&intent.header).map_err(|_| Fault::bad_request())?;
     let profile = aoidos_json::to_vec(&intent.profile).map_err(|_| Fault::bad_request())?;
+    let preparation = intent
+        .preparation
+        .as_ref()
+        .map(aoidos_json::to_vec)
+        .transpose()
+        .map_err(|_| Fault::bad_request())?;
+    if preparation
+        .as_ref()
+        .is_some_and(|bytes| bytes.len() > 1_048_576)
+    {
+        return Err(Fault::bad_request());
+    }
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database)?;
@@ -79,12 +140,17 @@ pub(crate) fn begin_inactive_creation(
         .optional()
         .map_err(database)?
     {
+        let stored_preparation = load_preparation(&transaction, &intent.operation_id)?;
         if existing.0 == intent.operation_id
             && existing.1 == intent.header.script_id
             && existing.2 == header
             && existing.3 == hash(&header)
             && existing.4 == profile
             && existing.5 == hash(&profile)
+            && stored_preparation
+                .as_ref()
+                .map(|stored| stored.0.as_slice())
+                == preparation.as_deref()
         {
             return transaction.commit().map_err(database);
         }
@@ -106,6 +172,16 @@ pub(crate) fn begin_inactive_creation(
             rusqlite::params![intent.operation_id, intent.header.session_id, intent.header.script_id, header, hash(&header), profile, hash(&profile), intent.header.created_at],
         )
         .map_err(database)?;
+    if let (Some(preparation), Some(preparation_bytes)) =
+        (intent.preparation.as_ref(), preparation.as_ref())
+    {
+        transaction
+            .execute(
+                "INSERT INTO session_creation_preparations(operation_id,request_id,snapshot,snapshot_hash) VALUES(?1,?2,?3,?4)",
+                rusqlite::params![intent.operation_id, preparation.request_id, preparation_bytes, hash(preparation_bytes)],
+            )
+            .map_err(database)?;
+    }
     transaction.commit().map_err(database)
 }
 
@@ -156,17 +232,18 @@ pub(crate) fn complete_inactive_creation(
         .map_err(database)?;
     let row: Option<StoredCreation> = transaction
         .query_row(
-            "SELECT script_id,header_snapshot,header_hash,profile_snapshot,profile_hash,state,created_at FROM session_creation_ops WHERE session_id=?1",
+            "SELECT operation_id,script_id,header_snapshot,header_hash,profile_snapshot,profile_hash,state,created_at FROM session_creation_ops WHERE session_id=?1",
             [session_id],
             |row| {
                 Ok(StoredCreation {
-                    script_id: row.get(0)?,
-                    header_snapshot: row.get(1)?,
-                    header_hash: row.get(2)?,
-                    profile_snapshot: row.get(3)?,
-                    profile_hash: row.get(4)?,
-                    state: row.get(5)?,
-                    created_at: row.get(6)?,
+                    operation_id: row.get(0)?,
+                    script_id: row.get(1)?,
+                    header_snapshot: row.get(2)?,
+                    header_hash: row.get(3)?,
+                    profile_snapshot: row.get(4)?,
+                    profile_hash: row.get(5)?,
+                    state: row.get(6)?,
+                    created_at: row.get(7)?,
                 })
             },
         )
@@ -175,7 +252,15 @@ pub(crate) fn complete_inactive_creation(
     let Some(row) = row else {
         return Err(Fault::new("app.not-found", "周目创建意图不存在"));
     };
+    let preparation = load_preparation(&transaction, &row.operation_id)?;
     if row.state == "registered" {
+        if let Some((snapshot, snapshot_hash, preparation)) = preparation {
+            if hash(&snapshot) != snapshot_hash {
+                return Err(corrupt());
+            }
+            let input_snapshot = aoidos_json::to_vec(&preparation.input).map_err(|_| corrupt())?;
+            verify_registered_preparation(&transaction, session_id, &preparation, &input_snapshot)?;
+        }
         return transaction.commit().map_err(database);
     }
     if row.state != "record-created"
@@ -187,9 +272,10 @@ pub(crate) fn complete_inactive_creation(
     let header: Header = decode(&row.header_snapshot)?;
     let profile: LlmProfile = decode(&row.profile_snapshot)?;
     validate_intent(&InactiveRunIntent {
-        operation_id: "00000000-0000-4000-8000-000000000000".into(),
+        operation_id: row.operation_id.clone(),
         header: header.clone(),
         profile: profile.clone(),
+        preparation: preparation.as_ref().map(|(_, _, value)| value.clone()),
     })?;
     if header.session_id != session_id
         || header.script_id != row.script_id
@@ -197,13 +283,39 @@ pub(crate) fn complete_inactive_creation(
     {
         return Err(corrupt());
     }
+    let preparation = preparation
+        .map(|(snapshot, snapshot_hash, preparation)| {
+            if hash(&snapshot) != snapshot_hash {
+                return Err(corrupt());
+            }
+            Ok((snapshot, preparation))
+        })
+        .transpose()?;
     bump_revision(&transaction)?;
     transaction
         .execute(
-            "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,profile_id,profile_schema_version,profile_snapshot,state,revision,updated_at) VALUES(?1,?2,?3,NULL,NULL,?4,1,?5,'recovery-required',1,?3)",
-            rusqlite::params![session_id, row.script_id, row.created_at, profile.profile_id, row.profile_snapshot],
+            "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,profile_id,profile_schema_version,profile_snapshot,state,revision,updated_at) VALUES(?1,?2,?3,NULL,?6,?4,1,?5,'recovery-required',1,?3)",
+            rusqlite::params![session_id, row.script_id, row.created_at, profile.profile_id, row.profile_snapshot, preparation.as_ref().map(|_| session_id)],
         )
         .map_err(database)?;
+    if let Some((_snapshot, preparation)) = preparation {
+        let timestamp = row.created_at.as_str();
+        crate::billing::BillingLedger::initialize_settings_in_transaction(
+            &transaction,
+            session_id,
+            preparation.cny_limit,
+            preparation.usd_limit,
+            timestamp,
+        )
+        .map_err(|_| Fault::new("store.database", "初始化预算写入失败"))?;
+        crate::cycle_initialization::prepare_in_transaction(
+            &transaction,
+            session_id,
+            &preparation.request_id,
+            &aoidos_json::to_vec(&preparation.input).map_err(|_| corrupt())?,
+            timestamp,
+        )?;
+    }
     transaction
         .execute(
             "UPDATE session_creation_ops SET state='registered',updated_at=?1 WHERE session_id=?2 AND state='record-created'",
@@ -250,6 +362,8 @@ pub(crate) fn pending_inactive_creations(
             operation_id: row.operation_id.clone(),
             header: header.clone(),
             profile: profile.clone(),
+            preparation: load_preparation(connection, &row.operation_id)?
+                .map(|(_, _, preparation)| preparation),
         })?;
         if header.session_id != row.session_id
             || header.script_id != row.script_id
@@ -259,9 +373,11 @@ pub(crate) fn pending_inactive_creations(
             return Err(corrupt());
         }
         pending.push(InactiveRunCreation {
-            operation_id: row.operation_id,
+            operation_id: row.operation_id.clone(),
             header,
             profile,
+            preparation: load_preparation(connection, &row.operation_id)?
+                .map(|(_, _, preparation)| preparation),
             state: row.state,
         });
     }
@@ -273,7 +389,115 @@ fn validate_intent(intent: &InactiveRunIntent) -> Result<(), Fault> {
         return Err(Fault::bad_request());
     }
     intent.header.validate().map_err(|_| Fault::bad_request())?;
-    intent.profile.validate().map_err(|_| Fault::bad_request())
+    intent
+        .profile
+        .validate()
+        .map_err(|_| Fault::bad_request())?;
+    if let Some(preparation) = &intent.preparation {
+        if preparation.version != 1
+            || !crate::record::format::valid_uuid(&preparation.request_id)
+            || preparation.input.version != 1
+            || preparation.input.operation_id != intent.operation_id
+            || preparation.input.session_id != intent.header.session_id
+            || preparation.input.script_id != intent.header.script_id
+            || preparation.input.script_revision != intent.header.script_revision
+            || preparation.input.profile_id != intent.profile.profile_id
+            || preparation.input.profile_snapshot_hash
+                != hash(&aoidos_json::to_vec(&intent.profile).map_err(|_| Fault::bad_request())?)
+            || !crate::record::format::valid_hash(&preparation.input.script_revision)
+            || !matches!(preparation.input.locale.as_str(), "zh-Hans" | "en")
+            || preparation.input.prompt_version != "init-v1"
+            || preparation.input.output_schema_version != 2
+            || !preparation.input.provider_request.is_object()
+        {
+            return Err(Fault::bad_request());
+        }
+        let input = aoidos_json::to_vec(&preparation.input).map_err(|_| Fault::bad_request())?;
+        if input.len() > 1_048_576
+            || preparation.input.script_snapshot.len() > 1_048_576
+            || preparation.input.entity_snapshot.len() > 1_048_576
+            || preparation.input.cycle_input_snapshot.len() > 128 * 1024
+        {
+            return Err(Fault::bad_request());
+        }
+        crate::game::assets::validate_frozen_initialization_assets(
+            &preparation.input.script_id,
+            &preparation.input.script_revision,
+            &preparation.input.script_snapshot,
+            &preparation.input.entity_snapshot,
+            &preparation.input.cycle_input_snapshot,
+        )
+        .map_err(|_| Fault::bad_request())?;
+    }
+    Ok(())
+}
+
+fn load_preparation(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+) -> Result<Option<(Vec<u8>, String, InitializationPreparation)>, Fault> {
+    let stored: Option<(String, Vec<u8>, String)> = connection
+        .query_row(
+            "SELECT request_id,snapshot,snapshot_hash FROM session_creation_preparations WHERE operation_id=?1",
+            [operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((request_id, snapshot, snapshot_hash)) = stored else {
+        return Ok(None);
+    };
+    if snapshot.len() > 1_048_576 || hash(&snapshot) != snapshot_hash {
+        return Err(corrupt());
+    }
+    let preparation: InitializationPreparation = decode(&snapshot)?;
+    if preparation.request_id != request_id {
+        return Err(corrupt());
+    }
+    Ok(Some((snapshot, snapshot_hash, preparation)))
+}
+
+fn verify_registered_preparation(
+    transaction: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    preparation: &InitializationPreparation,
+    snapshot: &[u8],
+) -> Result<(), Fault> {
+    let initialization: Option<(String, String, Vec<u8>, String)> = transaction
+        .query_row(
+            "SELECT state,current_request_id,input_snapshot,input_hash FROM cycle_initializations WHERE session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let budget: Option<(i64, i64)> = transaction
+        .query_row(
+            "SELECT cny_limit_nanos,usd_limit_nanos FROM billing_run_budgets WHERE run_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let dispatch_started: Option<i64> = transaction
+        .query_row(
+            "SELECT dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2",
+            rusqlite::params![preparation.request_id, session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(database)?;
+    if !initialization.as_ref().is_some_and(|value| {
+        value.0 == "initializing"
+            && value.1 == preparation.request_id
+            && value.2 == snapshot
+            && value.3 == hash(snapshot)
+    }) || budget != Some((preparation.cny_limit.nanos(), preparation.usd_limit.nanos()))
+        || dispatch_started != Some(0)
+    {
+        return Err(corrupt());
+    }
+    Ok(())
 }
 
 fn hash(bytes: &[u8]) -> String {

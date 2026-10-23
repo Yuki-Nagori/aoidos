@@ -198,6 +198,32 @@ fn previously_current_cycle_input_revision_remains_available_after_schema_upgrad
 }
 
 #[test]
+fn new_initialization_rejects_legacy_cycle_input_v1() {
+    let raw = &BUNDLED[0];
+    let manifest = decode_entity_manifest(raw.entities).unwrap();
+    let legacy_input: CycleInputManifest =
+        aoidos_json::decode_bytes(raw.legacy_cycle_input, MAX_CYCLE_INPUT_BYTES).unwrap();
+    let legacy_revision = script_revision(
+        raw.body,
+        raw.entities,
+        raw.legacy_cycle_input,
+        manifest.revision,
+        legacy_input.revision,
+    );
+
+    assert!(
+        validate_frozen_initialization_assets(
+            raw.id,
+            &legacy_revision,
+            raw.body,
+            raw.entities,
+            raw.legacy_cycle_input,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn cycle_input_is_bounded_typed_versioned_and_bound_to_a_registered_character() {
     let manifest = decode_entity_manifest(BUNDLED[0].entities).unwrap();
     let input = decode_cycle_input(BUNDLED[0].cycle_input, &manifest).unwrap();
