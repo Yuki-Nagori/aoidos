@@ -110,7 +110,13 @@ const MAX_PROFILE_SNAPSHOT_BYTES: usize = 65_536;
 
 pub(crate) mod legacy_scan;
 pub use legacy_scan::LegacyScanResult;
+pub(crate) mod creation;
 mod deletion;
+pub use creation::{InactiveRunCreation, InactiveRunIntent};
+pub(crate) use creation::{
+    begin_inactive_creation, complete_inactive_creation, mark_inactive_record_created,
+    pending_inactive_creations,
+};
 pub(crate) use deletion::{
     DeletionCleanupProgress, advance_deletion_cleanup,
     compact_completed_receipts as compact_completed_deletion_receipts, complete_deletion,
@@ -1024,6 +1030,7 @@ fn corrupt() -> Fault {
 pub fn verify(connection: &rusqlite::Connection) -> Result<(), StoreError> {
     for statement in SCHEMA
         .split(';')
+        .chain(creation::MIGRATION.split(';'))
         .map(str::trim)
         .filter(|sql| sql.starts_with("CREATE "))
     {
@@ -1173,6 +1180,7 @@ mod tests {
             .execute_batch(aoidos_memory::schema::SCHEMA)
             .unwrap();
         connection.execute_batch(SCHEMA).unwrap();
+        connection.execute_batch(creation::MIGRATION).unwrap();
         connection
             .execute_batch(DELETION_CLEANUP_MIGRATION)
             .unwrap();

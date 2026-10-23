@@ -9,6 +9,8 @@ use crate::{
 };
 use std::{
     collections::BTreeMap,
+    fs,
+    io::{BufReader, Read},
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
@@ -52,6 +54,73 @@ impl Records {
         ));
         registry.insert(id, session.clone());
         Ok(session)
+    }
+    /// 幂等创建仅含冻结 header 的 inactive record，不将其注册为可写 owner。
+    /// # Errors
+    /// 已存在文件必须是同一份 header-only record；冲突或磁盘错误拒绝恢复。
+    pub(crate) fn ensure_inactive_header(&self, header: &Header) -> Result<(), Fault> {
+        header.validate().map_err(store_fault)?;
+        let path = self.path(&header.script_id, &header.session_id)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                let canonical_root = fs::canonicalize(&self.root).map_err(|_| {
+                    store_fault(aoidos_store::error::StoreError::Corrupt(
+                        "record root is unavailable".into(),
+                    ))
+                })?;
+                let canonical_path = fs::canonicalize(&path).map_err(|_| {
+                    store_fault(aoidos_store::error::StoreError::Corrupt(
+                        "inactive record path is unavailable".into(),
+                    ))
+                })?;
+                if !canonical_path.starts_with(canonical_root) {
+                    return Err(Fault::new("store.corrupt", "周目记录路径无效"));
+                }
+                let file = fs::File::open(&path)
+                    .map_err(|_| Fault::new("store.database", "周目记录读取失败"))?;
+                let mut line = Vec::new();
+                let bytes = BufReader::new(file)
+                    .take((format::MAX_LINE + 1) as u64)
+                    .read_to_end(&mut line)
+                    .map_err(|_| Fault::new("store.database", "周目记录读取失败"))?;
+                if bytes == 0
+                    || bytes > format::MAX_LINE
+                    || line.last() != Some(&b'\n')
+                    || !fs::metadata(&path).is_ok_and(|metadata| metadata.len() == bytes as u64)
+                {
+                    return Err(Fault::new(
+                        "store.needs-repair",
+                        "未激活周目记录与创建意图不符",
+                    ));
+                }
+                let line = String::from_utf8(line)
+                    .map_err(|_| Fault::new("store.corrupt", "周目记录 header 编码损坏"))?;
+                let value = format::json(&line).map_err(store_fault)?;
+                let stored: Header = aoidos_json::from_value(value)
+                    .map_err(|_| Fault::new("store.corrupt", "周目记录 header 损坏"))?;
+                stored.validate().map_err(store_fault)?;
+                let expected = aoidos_json::to_vec(header).map_err(|_| Fault::bad_request())?;
+                let actual = aoidos_json::to_vec(&stored)
+                    .map_err(|_| Fault::new("store.corrupt", "周目记录 header 损坏"))?;
+                if expected != actual {
+                    return Err(Fault::new(
+                        "store.needs-repair",
+                        "未激活周目身份与创建意图冲突",
+                    ));
+                }
+                Ok(())
+            }
+            Ok(_) => Err(Fault::new(
+                "store.needs-repair",
+                "未激活周目路径不是普通文件",
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let mut session = Session::create(path, header.clone(), self.events.clone())
+                    .map_err(store_fault)?;
+                session.close()
+            }
+            Err(_) => Err(Fault::new("store.database", "周目记录创建失败")),
+        }
     }
     /// 已登记会话只返回同一个单写者，不从只读查询副作用打开文件。
     /// # Errors
@@ -177,6 +246,31 @@ impl Records {
 mod tests {
     use super::*;
     use crate::record::test_support::{Events, header};
+    #[test]
+    fn inactive_header_verification_bounds_reads_of_corrupt_files() {
+        let root =
+            std::env::temp_dir().join(format!("aoidos-inactive-bounded-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let header = header();
+        let path = root.join(format!(
+            "workspaces/{}/transcript/{}.jsonl",
+            header.script_id, header.session_id
+        ));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![b'x'; format::MAX_LINE * 2]).unwrap();
+        let records = Records::new(root.clone(), Arc::new(Events::default()));
+
+        assert_eq!(
+            records.ensure_inactive_header(&header).unwrap_err().code,
+            "store.needs-repair"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            (format::MAX_LINE * 2) as u64
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn close_keeps_identity_registered_until_old_writer_and_events_are_retired() {
         struct ClosingEvents {

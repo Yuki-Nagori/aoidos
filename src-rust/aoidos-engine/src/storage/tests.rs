@@ -51,6 +51,290 @@ fn scene_catalog() -> crate::game::catalog::SceneCatalog {
     .unwrap()
 }
 
+fn test_profile() -> aoidos_llm::config::LlmProfile {
+    aoidos_llm::config::LlmProfile {
+        profile_id: "test-profile".into(),
+        provider_id: "deepseek".into(),
+        model: "deepseek-v4.1-flash".into(),
+        mode: aoidos_llm::config::ProfileMode::Completion,
+        thinking: false,
+        sampling: aoidos_llm::sampling::Sampling {
+            temperature: 1.0,
+            max_tokens: 1024,
+        },
+        proxy: aoidos_llm::config::ProxyConfig::System,
+    }
+}
+
+#[test]
+fn inactive_run_creation_journal_survives_record_before_catalog_crash_and_blocks_legacy_import() {
+    let root =
+        std::env::temp_dir().join(format!("aoidos-inactive-create-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let events = Arc::new(Events::default());
+    let record_events = Arc::new(test_support::Events::default());
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let session_id = header.session_id.clone();
+    {
+        let storage = Storage::new(&root, events.clone(), record_events.clone());
+        let intent = crate::run_catalog::InactiveRunIntent {
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            header: header.clone(),
+            profile: test_profile(),
+        };
+        storage
+            .with_database(|connection| {
+                crate::run_catalog::begin_inactive_creation(connection, &intent)
+            })
+            .unwrap();
+        storage.records.ensure_inactive_header(&header).unwrap();
+
+        for _ in 0..4 {
+            storage.scan_legacy_runs().unwrap();
+        }
+        let (catalog_rows, active_rows): (i64, i64) = storage
+            .with_database(|connection| {
+                Ok((
+                    connection
+                        .query_row(
+                            "SELECT count(*) FROM session_catalog WHERE session_id=?1",
+                            [&session_id],
+                            |row| row.get(0),
+                        )
+                        .unwrap(),
+                    connection
+                        .query_row(
+                            "SELECT count(*) FROM active_session WHERE session_id=?1",
+                            [&session_id],
+                            |row| row.get(0),
+                        )
+                        .unwrap(),
+                ))
+            })
+            .unwrap();
+        assert_eq!((catalog_rows, active_rows), (0, 0));
+    }
+
+    // Startup recovery replays the persisted header, registers a fail-closed catalog row,
+    // and never makes it the active run or opens a record owner.
+    let reopened = Storage::new(&root, events, record_events);
+    let (state, active_rows): (String, i64) = reopened
+        .with_database(|connection| {
+            Ok((
+                connection
+                    .query_row(
+                        "SELECT state FROM session_catalog WHERE session_id=?1",
+                        [&session_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM active_session WHERE session_id=?1",
+                        [&session_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(state, "recovery-required");
+    assert_eq!(active_rows, 0);
+    assert_eq!(
+        reopened.records.get(&session_id).err().unwrap().code,
+        "app.not-found"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn inactive_run_creation_is_idempotent_and_does_not_set_active_selection() {
+    let root = std::env::temp_dir().join(format!(
+        "aoidos-inactive-idempotent-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let intent = crate::run_catalog::InactiveRunIntent {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        header: crate::game::builtin::header("mistbell").unwrap(),
+        profile: test_profile(),
+    };
+    storage.create_inactive_run(&intent).unwrap();
+    storage.create_inactive_run(&intent).unwrap();
+    let (state, count): (String, i64) = storage
+        .with_database(|connection| {
+            Ok((
+                connection
+                    .query_row(
+                        "SELECT state FROM session_catalog WHERE session_id=?1",
+                        [&intent.header.session_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM active_session WHERE session_id=?1",
+                        [&intent.header.session_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(state, "recovery-required");
+    assert_eq!(count, 0);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn inactive_creation_rejects_a_tampered_identity_snapshot_before_writing_any_file() {
+    let root =
+        std::env::temp_dir().join(format!("aoidos-inactive-tampered-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let events = Arc::new(Events::default());
+    let record_events = Arc::new(test_support::Events::default());
+    let original = crate::game::builtin::header("mistbell").unwrap();
+    let storage = Storage::new(&root, events.clone(), record_events.clone());
+    let intent = crate::run_catalog::InactiveRunIntent {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        header: original.clone(),
+        profile: test_profile(),
+    };
+    storage
+        .with_database(|connection| {
+            crate::run_catalog::begin_inactive_creation(connection, &intent)
+        })
+        .unwrap();
+    let mut tampered = original;
+    tampered.session_id = uuid::Uuid::new_v4().to_string();
+    let snapshot = aoidos_json::to_vec(&tampered).unwrap();
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE session_creation_ops SET header_snapshot=?1 WHERE session_id=?2",
+                    rusqlite::params![snapshot, intent.header.session_id],
+                )
+                .map_err(|_| Fault::new("store.database", "test update failed"))?;
+            Ok(())
+        })
+        .unwrap();
+    drop(storage);
+
+    let reopened = Storage::new(&root, events, record_events);
+    let tampered_path = root.join(format!(
+        "workspaces/{}/transcript/{}.jsonl",
+        tampered.script_id, tampered.session_id
+    ));
+    let original_path = root.join(format!(
+        "workspaces/{}/transcript/{}.jsonl",
+        intent.header.script_id, intent.header.session_id
+    ));
+    assert!(!tampered_path.exists());
+    assert!(!original_path.exists());
+    let (ops, catalog): (i64, i64) = reopened
+        .with_database(|connection| {
+            Ok((
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM session_creation_ops WHERE state='intent'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM session_catalog WHERE session_id=?1",
+                        [&intent.header.session_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!((ops, catalog), (1, 0));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn creation_journal_migration_appends_after_the_previous_storage_version() {
+    let root =
+        std::env::temp_dir().join(format!("aoidos-migration-append-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("storage.sqlite");
+    let previous_migrations = STORAGE_MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|migration| *migration != crate::run_catalog::creation::MIGRATION)
+        .collect::<Vec<_>>();
+    let migration = Migration::new(Arc::new(Events::default()));
+    let old_connection = migration.open(&path, &previous_migrations).unwrap();
+    assert_eq!(
+        old_connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('cycle_initialization_attempts') WHERE name='dispatch_started'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1,
+        "the existing database must already have applied the dispatch migration"
+    );
+    assert_eq!(
+        old_connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='session_creation_ops'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    drop(old_connection);
+    drop(migration);
+
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    storage
+        .with_database(|connection| {
+            let current: i64 = connection
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(current as usize, STORAGE_MIGRATIONS.len());
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM pragma_table_info('cycle_initialization_attempts') WHERE name='dispatch_started'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='session_creation_ops'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+            Ok(())
+        })
+        .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 fn memory_batch_diagnostics_expose_only_registered_codes() {
     assert_eq!(

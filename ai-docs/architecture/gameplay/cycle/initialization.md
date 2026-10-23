@@ -30,6 +30,8 @@ dispatch 围栏由初始化专用预算端口实现：它在单个 SQLite `IMMED
 
 records 文件和 SQLite 不是同一事务。先创建不可玩的 record/header，再持久登记 canonical run、profile / 输入快照、预算身份和初始化状态；崩溃留下的未激活 record 必须可识别并恢复或显式放弃，不能被 legacy scanner 当作可玩旧局。物理请求身份和冻结输入必须在调用 Provider 前持久化。响应整体校验后，以同一 SQLite 事务 CAS 当前 run revision / requestId，保存规范化快照与 hash 并标记 `playable`；失败不得部分写入，也不得先注册普通 owner。成功冻结与 owner 注册之间若发生崩溃，恢复从冻结快照建立 owner，不再调用 Provider。
 
+首个创建阶段以 `session_creation_ops` 持久保存 operationId、session/header、公开 profile 快照及 hash。写入顺序为 intent → header-only transcript → 单个 SQLite 事务登记 `recovery-required` 目录行并结束创建 journal。每一步可按相同快照重放；应用启动会恢复未结束的 intent。创建 journal 持有的 sessionId 对 legacy scanner 是排除项，因此扫描即使先于目录登记，也不能将 header 导入成历史可玩周目。该阶段不注册 `Records` owner、不更改 `active_session`、不创建记忆 run / 预算、不预留费用或访问 Provider；只有后续初始化 coordinator 原子接好全部冻结身份和恢复门禁后，才能继续初始化与激活。
+
 持久化接口应由 engine 内的初始化 repository 提供 begin / load / prepare-attempt / finish-attempt / finalize 等窄操作；状态跃迁以 runId、requestId 和 revision 作 CAS，重复同结果调用幂等，冲突或旧身份拒绝。跨多表的预算与 attempt 原子写入需抽取 `BillingLedger` 的事务内 helper；不能把会自行开启 SQLite 事务的公开 API 嵌套进外层事务。首个存储契约提交可先只对测试显式构造的初始化 run 启用门禁；在所有入口具备恢复与预算设置能力前，不得切换现有新局入口。
 
 放弃未完成初始化仅停止该 run，保留请求与费用审计；玩家再次勾选并确认完整删除时，复用周目删除 journal 清理本地该局数据，包括未结物理请求和结算 outbox。删除仍校验账务身份范围，不触及共享价目或无法确认归属的记录。
