@@ -7,11 +7,11 @@
 
 ## 目标与背景
 
-交付 [计价与预算](../architecture/billing.md)的统一费用端口，剧情与记忆共用金额额度。027 已完成设计；当前已有精确计价、SQLite 原币账本、物理请求预算端口、IPC 与费用面板。OpenCode Zen / Go 的 Provider 由 042 提供；本任务负责匹配其模型费率、缓存写入用量和 Go DeepSeek 峰谷费率。Go token 费率只估算模型额度使用，不追踪 Go / Go Plus 固定订阅费用。历史恢复只处理完整持久用量和原冻结价格仍可验证的记录；余额查询首版仅支持玩家主动查询 DeepSeek 官方接口。三平台实机 UI 展示留证仍待补，故标为 implemented 而非 done。
+交付 [计价与预算](../architecture/ai/billing.md)的统一费用端口，剧情与记忆共用金额额度。027 已完成设计；当前已有精确计价、SQLite 原币账本、物理请求预算端口、IPC 与费用面板。OpenCode Zen / Go 的 Provider 由 042 提供；本任务负责匹配其模型费率、缓存写入用量和 Go DeepSeek 峰谷费率。Go token 费率只估算模型额度使用，不追踪 Go / Go Plus 固定订阅费用。历史恢复只处理完整持久用量和原冻结价格仍可验证的记录；余额查询首版仅支持玩家主动查询 DeepSeek 官方接口。三平台实机 UI 展示留证仍待补，故标为 implemented 而非 done。
 
 ## 必读
 
-[计价架构](../architecture/billing.md) · [LLM 架构](../architecture/llm.md) · [国际化](../architecture/i18n.md) · [存储](../architecture/storage.md) · [通信契约](../architecture/ipc-contract.md) · [Rust](../standards/rust.md) · [前端](../standards/frontend.md) · [注释](../standards/comments.md) · [测试](../standards/testing.md) · [提交](../standards/commits.md)。官方资料及核验日期见架构，实际 API / 价格 / 依赖在接入时复核。
+[计价架构](../architecture/ai/billing.md) · [LLM 架构](../architecture/ai/llm.md) · [国际化](../architecture/interface/i18n.md) · [存储](../architecture/data/storage.md) · [通信契约](../architecture/core/ipc-contract.md) · [Rust](../standards/rust.md) · [前端](../standards/frontend.md) · [注释](../standards/comments.md) · [测试](../standards/testing.md) · [提交](../standards/commits.md)。官方资料及核验日期见架构，实际 API / 价格 / 依赖在接入时复核。
 
 ## 范围与非目标
 

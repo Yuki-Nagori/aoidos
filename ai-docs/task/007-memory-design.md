@@ -11,15 +11,15 @@ Memory / Growth 承诺「世界会记住、角色会成长」。借鉴 [Herta �
 
 ## 必读
 
-[职责边界](../architecture/ts-rust-boundary.md) · [LLM 设计](../architecture/llm.md) · [记录引擎](../architecture/record-engine.md) · [存储基建](../architecture/storage.md) · [阶段机](../architecture/turn-state-machine.md) · [构想 001](../ideas/001-context-state-decoupling.md)。
+[职责边界](../architecture/core/ts-rust-boundary.md) · [LLM 设计](../architecture/ai/llm.md) · [记录引擎](../architecture/data/record-engine.md) · [存储基建](../architecture/data/storage.md) · [阶段机](../architecture/gameplay/turn-state-machine.md) · [构想 001](../ideas/001-context-state-decoupling.md)。
 
 ## 文档职责与产出物
 
-| 文档                                                         | 主责                                                            |
-| ------------------------------------------------------------ | --------------------------------------------------------------- |
-| [memory.md](../architecture/memory.md)                       | 三域、来源 / 角色权限、门控、生命周期、设置、存储恢复与模块边界 |
-| [memory-algorithms.md](../architecture/memory-algorithms.md) | 算法候选、正确性约束、样本 / 对照方法、参数标定和运行期验证计划 |
-| 本 task                                                      | 当前决策摘要、剩余交付、设计验收与工作证据                      |
+| 文档                                                              | 主责                                                            |
+| ----------------------------------------------------------------- | --------------------------------------------------------------- |
+| [memory.md](../architecture/data/memory.md)                       | 三域、来源 / 角色权限、门控、生命周期、设置、存储恢复与模块边界 |
+| [memory-algorithms.md](../architecture/data/memory-algorithms.md) | 算法候选、正确性约束、样本 / 对照方法、参数标定和运行期验证计划 |
+| 本 task                                                           | 当前决策摘要、剩余交付、设计验收与工作证据                      |
 
 架构维护当前规则，task 保留必要决策历史；同一条规则不在多个文档分别定型。工程协议 v1 经用户授权整体复核定稿，运行期实测由后续实现任务承接。
 
@@ -74,7 +74,7 @@ Memory / Growth 承诺「世界会记住、角色会成长」。借鉴 [Herta �
 - [x] 与 005 / 006 / 011 / 012 互校，独立批次保持三调用上限；后续分期实施范围与依赖明确，029–033 已登记并保持 planned。
 - [x] 用户授权整体复核，无阻断项后评审通过；设计标 done，029–033 实施任务已登记。
 
-运行期正确性、故障注入、实测参数和长对局结果由[算法文档的实现验收](../architecture/memory-algorithms.md#后续实现与标定验收)及后续实施任务追踪，不混入“当前已通过”的设计证据。
+运行期正确性、故障注入、实测参数和长对局结果由[算法文档的实现验收](../architecture/data/memory-algorithms.md#后续实现与标定验收)及后续实施任务追踪，不混入“当前已通过”的设计证据。
 
 ## 验证计划与结果
 

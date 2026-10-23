@@ -11,7 +11,7 @@
 
 ## 必读
 
-[快捷键与键盘交互](../architecture/keyboard-shortcuts.md) · [界面交互](../architecture/ui-shell.md) · [架构总览](../architecture/README.md) · [偏好与 IPC 契约](../architecture/ipc-contract.md) · [前端规范](../standards/frontend.md) · [分层规范](../standards/layering.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md) · [提交规范](../standards/commits.md)。设计对照：本仓库[快捷键与键盘交互](../architecture/keyboard-shortcuts.md)及基线提交中的 `aoidos-art/docs/shortcuts.md`、`screens/shortcuts.html`、`screens/shortcuts-settings.html`。
+[快捷键与键盘交互](../architecture/interface/keyboard-shortcuts.md) · [界面交互](../architecture/interface/ui-shell.md) · [架构总览](../architecture/README.md) · [偏好与 IPC 契约](../architecture/core/ipc-contract.md) · [前端规范](../standards/frontend.md) · [分层规范](../standards/layering.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md) · [提交规范](../standards/commits.md)。设计对照：本仓库[快捷键与键盘交互](../architecture/interface/keyboard-shortcuts.md)及基线提交中的 `aoidos-art/docs/shortcuts.md`、`screens/shortcuts.html`、`screens/shortcuts-settings.html`。
 
 ## 范围与非目标
 

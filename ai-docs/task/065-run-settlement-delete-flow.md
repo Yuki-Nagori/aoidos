@@ -13,7 +13,7 @@
 
 ## 必读
 
-- [费用与账本架构](../architecture/billing.md)、[存储架构](../architecture/storage.md)、[周目管理实现](060-run-management-impl.md)、[前端规范](../standards/frontend.md)、[测试规范](../standards/testing.md)。
+- [费用与账本架构](../architecture/ai/billing.md)、[存储架构](../architecture/data/storage.md)、[周目管理实现](060-run-management-impl.md)、[前端规范](../standards/frontend.md)、[测试规范](../standards/testing.md)。
 
 ## 范围与非目标
 

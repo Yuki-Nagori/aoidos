@@ -11,7 +11,7 @@
 
 ## 必读
 
-[架构总览](../architecture/README.md#json-共用能力) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。底层 API 使用 [Serde](https://serde.rs/) 与 [serde_json](https://docs.rs/serde_json/)，依赖版本以根锁文件为准。
+[架构总览](../architecture/README.md#json-共用能力) · [职责边界](../architecture/core/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。底层 API 使用 [Serde](https://serde.rs/) 与 [serde_json](https://docs.rs/serde_json/)，依赖版本以根锁文件为准。
 
 ## 范围与非目标
 

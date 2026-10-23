@@ -189,6 +189,19 @@ async fn original_revision_and_framed_prefix_are_both_required_on_reopen() {
         assert_eq!(fixture.session.lock().unwrap().last_event_seq(), 0);
     }
 }
+
+#[tokio::test]
+async fn legacy_session_reopens_with_its_original_entity_revision_for_memory_reads() {
+    let legacy_revision = super::super::assets::legacy_revision("mistbell").unwrap();
+    let fixture = Fixture::new(|header| header.script_revision = legacy_revision);
+    let context = fixture.open().await.unwrap();
+    let run_id = context.completed.run_id().unwrap();
+    let (_, catalog) = fixture.storage.memory_catalog_for_run(&run_id).unwrap();
+    assert_eq!(
+        catalog.script_revision(),
+        fixture.session.lock().unwrap().header().script_revision
+    );
+}
 #[tokio::test]
 async fn registered_domain_freezes_rules_and_commits_only_supported_idempotent_intents() {
     let fixture = Fixture::new(|_| {});

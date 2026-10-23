@@ -7,15 +7,15 @@
 
 ## 目标与背景
 
-[通信契约](../architecture/ipc-contract.md)冻结了事件形状：`<域>:<对象>:<阶段>` 命名、`{ seq, data }` 信封、seq 按「事件名 + 流标识」单调递增、监听者以快照对齐且不重放。本任务把事件发送侧做成基座，供 020（`llm:turn:*`）与 022（`store:migration:*`）复用事件名与 data 的发送机制，不重复实现序号与信封。
+[通信契约](../architecture/core/ipc-contract.md)冻结了事件形状：`<域>:<对象>:<阶段>` 命名、`{ seq, data }` 信封、seq 按「事件名 + 流标识」单调递增、监听者以快照对齐且不重放。本任务把事件发送侧做成基座，供 020（`llm:turn:*`）与 022（`store:migration:*`）复用事件名与 data 的发送机制，不重复实现序号与信封。
 
 ## 必读
 
-[通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md)（业务 crate 不得依赖 Tauri，进度经无 Tauri 类型的出口交出）· [注释规范](../standards/comments.md)。
+[通信契约](../architecture/core/ipc-contract.md) · [职责边界](../architecture/core/ts-rust-boundary.md)（业务 crate 不得依赖 Tauri，进度经无 Tauri 类型的出口交出）· [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 
-已实现：事件名 / 流标识二元键、每流序号、可失败信封构造及 lib.rs 平台发送适配。data 序列化失败不占号；序号上限、锁中毒或投递失败统一为 app.event-failed。完整形状和范围见[通信契约](../architecture/ipc-contract.md)，不在本任务维护第二份参数表。
+已实现：事件名 / 流标识二元键、每流序号、可失败信封构造及 lib.rs 平台发送适配。data 序列化失败不占号；序号上限、锁中毒或投递失败统一为 app.event-failed。完整形状和范围见[通信契约](../architecture/core/ipc-contract.md)，不在本任务维护第二份参数表。
 
 本任务交付发送基座；真实发送方、流状态与清退已分别由 [020](020-llm-turn-ipc-impl.md)（LLM）和 [022](022-record-engine-impl.md)（迁移 / 记录）接入。监听恢复由 021 / 022 承接，调用方串行确认同一流。
 

@@ -2,7 +2,7 @@
 
 更新日期：2026-10-13。
 
-[架构总览](README.md)
+[架构总览](../README.md)
 
 精确小版本以 `bun.lock` 与根 `Cargo.lock` 为准，本文只维护主版本口径；升级后同步本表。
 
@@ -35,7 +35,7 @@
 
 TypeScript 主版本升级前，先核对 Vue 类型检查、Vite、Bun 脚本与测试工具的兼容性，并在完整 `verify` 通过后再更新锁定版本。npm 镜像可能缺失部分包的 `latest` dist-tag，`bun update --latest` 报 tag not found 时按 `bun outdated` 的具体版本号手动写入 `package.json`。
 
-Tauri 原生密钥输入使用 Windows CredUI、macOS AppKit（objc2）和 Linux GTK 3（gtk-rs）；目标平台依赖只由 `src-tauri` 声明，并经同型接口调用，因此 CLI 不引入 GUI 库。平台验证记录归 [019 配置与凭据](../task/019-llm-profile-credentials-impl.md)，不把原生输入可用等同于安装包已验证。
+Tauri 原生密钥输入使用 Windows CredUI、macOS AppKit（objc2）和 Linux GTK 3（gtk-rs）；目标平台依赖只由 `src-tauri` 声明，并经同型接口调用，因此 CLI 不引入 GUI 库。平台验证记录归 [019 配置与凭据](../../task/019-llm-profile-credentials-impl.md)，不把原生输入可用等同于安装包已验证。
 
 ## IPC 通道
 
@@ -45,4 +45,4 @@ Tauri 原生密钥输入使用 Windows CredUI、macOS AppKit（objc2）和 Linux
 
 `.github/workflows/ci.yml` 在 push main 与 PR 时于 macOS / Windows / Ubuntu 执行门禁；PR 三平台构建 Web 产物及受影响 Tauri 应用，并按差异运行测试，格式、类型、lint、Clippy 等检查只在 Ubuntu 执行。原生输入、OS 凭据与主 Webview IPC 集成测试按相关输入变更在三平台执行。Nightly 三平台运行完整构建与 Vitest / Rust / 原生测试；完整覆盖率及其他静态检查仅在 Ubuntu 运行。编译分工与触发范围见[构建与开发](build-and-development.md#verify-构成)，Linux 原生会话依赖见[构建与开发](build-and-development.md#原生能力集成验证)。
 
-JSON 采用 [Serde](https://serde.rs/) 与 [serde_json](https://docs.rs/serde_json/) 的现有实现；项目层统一校验策略，消费方仍直接依赖 serde_json 的类型 / 宏，职责及兼容性见[架构总览](README.md#json-共用能力)。
+JSON 采用 [Serde](https://serde.rs/) 与 [serde_json](https://docs.rs/serde_json/) 的现有实现；项目层统一校验策略，消费方仍直接依赖 serde_json 的类型 / 宏，职责及兼容性见[架构总览](../README.md#json-共用能力)。

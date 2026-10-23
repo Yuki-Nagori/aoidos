@@ -11,7 +11,7 @@
 
 ## 必读
 
-[LLM 设计](../architecture/llm.md) · [记忆设计](../architecture/memory.md) · [通信契约](../architecture/ipc-contract.md) · [存储基建](../architecture/storage.md) · [007](007-memory-design.md) · [028 国际化设计](028-i18n-design.md)。
+[LLM 设计](../architecture/ai/llm.md) · [记忆设计](../architecture/data/memory.md) · [通信契约](../architecture/core/ipc-contract.md) · [存储基建](../architecture/data/storage.md) · [007](007-memory-design.md) · [028 国际化设计](028-i18n-design.md)。
 
 ## 范围与非目标
 
@@ -19,7 +19,7 @@
 
 ## 前置条件与设计结论
 
-005 / 007 / 028 已定稿，精确协议见[计价与预算架构](../architecture/billing.md)。每局分别设置 CNY、USD 上限，各自按对应服务商原币费用检查；默认值分别由同币种参考 Token 与模型价格生成。账本及月报不换算、不跨币相加；月报按服务商和币种统计。PriceVersion、NanoMoney、发送意图持久预留、幂等结算、报表周期和可选余额均已定义。035 已开始实施核心计价与运行时链路；历史补价、供应商余额及三平台人工验收仍未完成。
+005 / 007 / 028 已定稿，精确协议见[计价与预算架构](../architecture/ai/billing.md)。每局分别设置 CNY、USD 上限，各自按对应服务商原币费用检查；默认值分别由同币种参考 Token 与模型价格生成。账本及月报不换算、不跨币相加；月报按服务商和币种统计。PriceVersion、NanoMoney、发送意图持久预留、幂等结算、报表周期和可选余额均已定义。035 已开始实施核心计价与运行时链路；历史补价、供应商余额及三平台人工验收仍未完成。
 
 ## 产出物
 

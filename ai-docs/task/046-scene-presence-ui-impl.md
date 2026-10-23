@@ -11,7 +11,7 @@
 
 ## 必读
 
-[场景角色在场与定向交互设计](044-scene-presence-dialogue-design.md) · [场景在场与可信获知事件](045-scene-presence-dialogue-impl.md) · [记忆门控与批次](030-memory-gates-batches-impl.md) · [界面交互](../architecture/ui-shell.md) · [通信契约](../architecture/ipc-contract.md) · [国际化](../architecture/i18n.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
+[场景角色在场与定向交互设计](044-scene-presence-dialogue-design.md) · [场景在场与可信获知事件](045-scene-presence-dialogue-impl.md) · [记忆门控与批次](030-memory-gates-batches-impl.md) · [界面交互](../architecture/interface/ui-shell.md) · [通信契约](../architecture/core/ipc-contract.md) · [国际化](../architecture/interface/i18n.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 

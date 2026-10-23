@@ -15,7 +15,7 @@ PR 在三平台构建 Web 产物及受影响 Tauri 应用，并运行受影响�
 
 - [测试规范](../standards/testing.md)
 - [分层规范](../standards/layering.md)
-- [CI 与构建](../architecture/build-and-development.md)
+- [CI 与构建](../architecture/core/build-and-development.md)
 - [提交规范](../standards/commits.md)
 - [048：测试质量与 CI 用时优化](048-test-quality-ci.md)
 - [049：Windows 测试 I/O 与原生 HMR 超时](049-windows-test-io-hmr.md)

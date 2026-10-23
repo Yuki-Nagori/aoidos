@@ -38,6 +38,6 @@ Biome 负责 JavaScript / TypeScript、CSS、JSON 的 lint 与格式化；Vue、
 
 ## 样式分工
 
-组件样式用 Tailwind 工具类 + `@layer components` 小组件类；token 真源与 app.css 分层结构见[UI 风格](ui.md)禁则与[主题架构](../architecture/theming.md)目录。构建生成的样式集中放 `src-web/styles/generated/`，由根样式入口导入，不放在 `src-web/` 根层。主题源变更后更新并提交生成 CSS；`test` / `test:coverage` 先运行生成一致性检查，`tests/web/appcss.test.ts` 再互校 CSS token 与 Tailwind 映射。不在组件里写色值 / 时长魔法数，改样式统一动 token 或组件类。
+组件样式用 Tailwind 工具类 + `@layer components` 小组件类；token 真源与 app.css 分层结构见[UI 风格](ui.md)禁则与[主题架构](../architecture/interface/theming.md)目录。构建生成的样式集中放 `src-web/styles/generated/`，由根样式入口导入，不放在 `src-web/` 根层。主题源变更后更新并提交生成 CSS；`test` / `test:coverage` 先运行生成一致性检查，`tests/web/appcss.test.ts` 再互校 CSS token 与 Tailwind 映射。不在组件里写色值 / 时长魔法数，改样式统一动 token 或组件类。
 
 简单图标优先使用组件内 SVG；场景插画等复杂图形按功能归档在 `features/<feature>/assets/` 并通过静态 import 引用，不写运行时路径猜测。剧本专属资源必须由真实剧本 ID 选择，缺少资源时使用通用状态，不回退到其他剧本的专属图。

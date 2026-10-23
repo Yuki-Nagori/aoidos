@@ -13,8 +13,8 @@
 
 - [前端规范](../standards/frontend.md)
 - [测试规范](../standards/testing.md)
-- [工具链架构](../architecture/tech-stack.md)
-- [开发与验证命令](../architecture/build-and-development.md)
+- [工具链架构](../architecture/core/tech-stack.md)
+- [开发与验证命令](../architecture/core/build-and-development.md)
 - [Biome formatter](https://biomejs.dev/formatter/)（查阅：2026-10-13）
 - [Biome configuration](https://biomejs.dev/reference/configuration/)（查阅：2026-10-13）
 - [Biome VS Code](https://biomejs.dev/reference/vscode)（查阅：2026-10-13）

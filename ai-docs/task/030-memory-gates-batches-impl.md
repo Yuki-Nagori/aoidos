@@ -11,7 +11,7 @@
 
 ## 必读
 
-[记忆规则与工程协议](../architecture/memory.md) · [算法与标定](../architecture/memory-algorithms.md) · [通信契约](../architecture/ipc-contract.md) · [记录引擎](../architecture/record-engine.md) · [阶段机](../architecture/turn-state-machine.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
+[记忆规则与工程协议](../architecture/data/memory.md) · [算法与标定](../architecture/data/memory-algorithms.md) · [通信契约](../architecture/core/ipc-contract.md) · [记录引擎](../architecture/data/record-engine.md) · [阶段机](../architecture/gameplay/turn-state-machine.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 

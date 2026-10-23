@@ -11,7 +11,7 @@
 
 ## 必读
 
-[LLM 规则与结构](../architecture/llm.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖和后续任务从[任务索引](../task-index.md)查阅；协议与预算不在本任务重复维护。
+[LLM 规则与结构](../architecture/ai/llm.md) · [通信契约](../architecture/core/ipc-contract.md) · [职责边界](../architecture/core/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖和后续任务从[任务索引](../task-index.md)查阅；协议与预算不在本任务重复维护。
 
 ## 范围与非目标
 
@@ -28,13 +28,13 @@
 
 ## 设计决策
 
-| 事项             | 采用方式                                                                                                                 | 规则归属                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| 逻辑读改写并发   | 命令层 profile / key 两把锁；凭据状态读取同样串行；等待原生输入不持业务锁                                                | [存储并发](../architecture/storage.md#原子写工具全仓唯一实现) |
-| 两后端先后与删除 | credentials.json v2 保存 OS 指针、文件值或删除墓碑；读取按权威后端，旧字典保留文件值；跨 OS / 文件失败可能表示提交不确定 | [密钥隔离](../architecture/ipc-contract.md#工程纪律可检查版)  |
-| 原生能力与线程   | Windows CredUI、macOS AppKit、Linux GTK 各自实现同型接口；命令经 UI 主线程调度，独立门禁覆盖窗口生命周期                 | [平台封装](../standards/rust.md#平台能力封装)                 |
-| Sampling 归属    | 独立 `sampling.rs` 供配置、传输和阶梯共用，持久化不反向依赖传输实现                                                      | [LLM 结构](../architecture/llm.md)                            |
-| 共用文件规则     | 私有发布、有界读取与祖先路径检查归 store；业务 JSON / 版本及标识符校验归 LLM                                             | [目录归属](../architecture/repository-layout.md#归属规则)     |
+| 事项             | 采用方式                                                                                                                 | 规则归属                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| 逻辑读改写并发   | 命令层 profile / key 两把锁；凭据状态读取同样串行；等待原生输入不持业务锁                                                | [存储并发](../architecture/data/storage.md#原子写工具全仓唯一实现) |
+| 两后端先后与删除 | credentials.json v2 保存 OS 指针、文件值或删除墓碑；读取按权威后端，旧字典保留文件值；跨 OS / 文件失败可能表示提交不确定 | [密钥隔离](../architecture/core/ipc-contract.md#工程纪律可检查版)  |
+| 原生能力与线程   | Windows CredUI、macOS AppKit、Linux GTK 各自实现同型接口；命令经 UI 主线程调度，独立门禁覆盖窗口生命周期                 | [平台封装](../standards/rust.md#平台能力封装)                      |
+| Sampling 归属    | 独立 `sampling.rs` 供配置、传输和阶梯共用，持久化不反向依赖传输实现                                                      | [LLM 结构](../architecture/ai/llm.md)                              |
+| 共用文件规则     | 私有发布、有界读取与祖先路径检查归 store；业务 JSON / 版本及标识符校验归 LLM                                             | [目录归属](../architecture/core/repository-layout.md#归属规则)     |
 
 以上事项已处置；没有以 TODO 留下阻塞验收的实现缺口。
 

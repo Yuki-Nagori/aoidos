@@ -15,7 +15,7 @@
 
 ## 主题与 Token
 
-- 全部设计 token 走 CSS custom properties（目录与扩展规则见[主题架构](../architecture/theming.md)），`<html data-theme="<theme-id>">` 单属性切换。`dark`、`light`、`light-purple` 和模板登记主题都是平级选项；不另设明暗模式层。每个主题独立声明 `color-scheme` 浏览器提示，不从 ID 推断。默认选中 `dark`，不做「跟随系统」自动解析。
+- 全部设计 token 走 CSS custom properties（目录与扩展规则见[主题架构](../architecture/interface/theming.md)），`<html data-theme="<theme-id>">` 单属性切换。`dark`、`light`、`light-purple` 和模板登记主题都是平级选项；不另设明暗模式层。每个主题独立声明 `color-scheme` 浏览器提示，不从 ID 推断。默认选中 `dark`，不做「跟随系统」自动解析。
 - 状态色的语义和色相固定；表格展示 light / dark 两套基线，其他主题可采用自己的亮度。皮肤不可覆盖状态色，不能另用 LED 蓝与活动紫制造两套口径。
 - 背景是签名的组成部分：多层 radial 星云渐变 + 底部 linear，画在 `body` 上预模糊一次（性能决策，不用逐帧 `backdrop-filter`）。
 - 表面是玻璃阶梯：半透明白（浅色）/ 深板岩（深色）+ hairline 边框（ink 按透明度）+ `inset 0 1px 0` 顶高光 + 柔和大阴影。
@@ -67,7 +67,7 @@
 
 ## 剧本皮肤
 
-每个已登记剧本可携带 `theme.css`，只覆盖[主题架构](../architecture/theming.md)白名单中的 custom properties。Rust 校验并解析为常量，前端将合法覆盖应用在受控的 `:root[data-script="…"]` 作用域；原文件不进入 Webview。单条语义错误丢弃并告警，结构 / 预算错误整份作废；缺少 `theme.css`、没有合法覆盖或加载失败时，使用当前基础主题的默认值。单份皮肤会叠加到所有基础主题，默认应保留基础主题的背景和中性色；覆盖强调色时要同时提供对比足够的 `--on-accent`。内置与第三方走同一校验，v1 禁止包内 / 外部图和字体引用。
+每个已登记剧本可携带 `theme.css`，只覆盖[主题架构](../architecture/interface/theming.md)白名单中的 custom properties。Rust 校验并解析为常量，前端将合法覆盖应用在受控的 `:root[data-script="…"]` 作用域；原文件不进入 Webview。单条语义错误丢弃并告警，结构 / 预算错误整份作废；缺少 `theme.css`、没有合法覆盖或加载失败时，使用当前基础主题的默认值。单份皮肤会叠加到所有基础主题，默认应保留基础主题的背景和中性色；覆盖强调色时要同时提供对比足够的 `--on-accent`。内置与第三方走同一校验，v1 禁止包内 / 外部图和字体引用。
 
 主题偏好由 Rust 持久化为一个平级主题 ID；内置主题与模板登记主题遵循同一选择协议。首窗 bootstrap、失败确认与皮肤代次按主题架构实施。颜色 / 字体 / 圆角等只有登记具名 token 后才可换肤；不允许任意 CSS 选择器、样式或动态资源。
 
@@ -80,20 +80,20 @@
 ## 布局
 
 - **与 Herta 不同**：主区是**游戏界面**（全幅舞台），对话记录不占居中主位——它是**右侧悬浮面板**，可收起（收起后完全让位给游戏），经悬停屏幕右缘或唤起按钮展开。
-- 记录面板本身玻璃化（`--panel` + hairline + 顶高光），收起 / 展开参数以[界面交互规范](../architecture/ui-shell.md)为准；面板内记录列保留 `max-width: 880px` 上限的 measure。
+- 记录面板本身玻璃化（`--panel` + hairline + 顶高光），收起 / 展开参数以[界面交互规范](../architecture/interface/ui-shell.md)为准；面板内记录列保留 `max-width: 880px` 上限的 measure。
 - 气泡与机器行共享同一左缘 token（如 `--record-left: 8px`），视觉上同一条记录线。
 - 密度慷慨：行距 ~26px，气泡 `border-radius: 18px`，内边距 15–24px；chrome 用微字号，内容用正文字号。
-- 滚动列：自定义贴底跟随 + 边缘雾化渐隐 + 「跳到最新」浮标；v1 普通历史项使用 `content-visibility: auto` + `contain-intrinsic-size`，行为及降级见[界面架构](../architecture/ui-shell.md)；它不替代有界分页、inert 或内存上限。
+- 滚动列：自定义贴底跟随 + 边缘雾化渐隐 + 「跳到最新」浮标；v1 普通历史项使用 `content-visibility: auto` + `contain-intrinsic-size`，行为及降级见[界面架构](../architecture/interface/ui-shell.md)；它不替代有界分页、inert 或内存上限。
 
 ## 视觉语法（按行类型）
 
 - **玩家**：右对齐，冷灰玻璃气泡，15px，无光晕。
 - **角色**：左侧白玻璃气泡与名牌，16px，多段落拆叠层气泡，悬停浮现复制 / 时间戳。
-- **旁白**：左侧通栏叠层，无名牌 / 引号，比角色泡更浅；段落与事实身份以[界面结构](../architecture/ui-shell.md)为准。
+- **旁白**：左侧通栏叠层，无名牌 / 引号，比角色泡更浅；段落与事实身份以[界面结构](../architecture/interface/ui-shell.md)为准。
 - **机器（骰子、判定、系统、脱敏工作状态）**：通栏 12px 等宽行 + 7px LED 圆点（活动 `var(--led-active)` 脉冲 / 静止灰），运行中的行用文字 shimmer 渐变；结果类行（如 `命中 · 伤害 12`）静态 LED + 等宽汇总。
 - 状态徽章克制：警示琥珀是唯一高饱和强调，diff 绿红刻意去饱和，不让机器行盖过台词。
 
-记录块、生成预览、recap、中断和未知 kind 的语义映射见[记录引擎](../architecture/record-engine.md#ui-映射与验收)；一个事实块可渲染多段气泡，不能反向改变持久记录粒度。面板四态、舞台缩放、输入、骰判与异常交互已按[界面交互规范](../architecture/ui-shell.md)接通；真实 WebView、辅助技术、DPI 与三平台验收仍由 025 跟踪。
+记录块、生成预览、recap、中断和未知 kind 的语义映射见[记录引擎](../architecture/data/record-engine.md#ui-映射与验收)；一个事实块可渲染多段气泡，不能反向改变持久记录粒度。面板四态、舞台缩放、输入、骰判与异常交互已按[界面交互规范](../architecture/interface/ui-shell.md)接通；真实 WebView、辅助技术、DPI 与三平台验收仍由 025 跟踪。
 
 ## 动效
 

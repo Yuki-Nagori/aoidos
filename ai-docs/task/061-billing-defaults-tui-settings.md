@@ -11,9 +11,9 @@
 
 ## 必读
 
-- [计价架构](../architecture/billing.md)
+- [计价架构](../architecture/ai/billing.md)
 - [Rust / Web / 测试依赖方向](../standards/layering.md)
-- [TS / Rust 边界](../architecture/ts-rust-boundary.md)
+- [TS / Rust 边界](../architecture/core/ts-rust-boundary.md)
 - [Rust 规范](../standards/rust.md)
 - [前端规范](../standards/frontend.md)
 - [测试规范](../standards/testing.md)
@@ -54,7 +54,7 @@
 - `src-tauri`：计费命令变为 app 服务薄 adapter。
 - `src-cli`：费用设置交互和 TUI 布局 / 行为测试。
 - `src-web`：在 GUI 费用表单消费统一模板 / 额度建议；已有手工编辑保留。
-- `ai-docs/architecture/billing.md`、`ai-docs/standards/layering.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/ts-rust-boundary.md`、058 task 与本 task。
+- `ai-docs/architecture/ai/billing.md`、`ai-docs/standards/layering.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/core/ts-rust-boundary.md`、058 task 与本 task。
 
 ## 验收标准
 

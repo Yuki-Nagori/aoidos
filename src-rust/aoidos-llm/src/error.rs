@@ -1,6 +1,6 @@
 //! LLM 域错误：结构化类别 + 错误链分类。
 //!
-//! `code()` 返回裸码，调用方加 `llm.` 前缀（契约见 ai-docs/architecture/ipc-contract.md）。
+//! `code()` 返回裸码，调用方加 `llm.` 前缀（契约见 ai-docs/architecture/core/ipc-contract.md）。
 //! TLS 分类对 error source 链做类型下钻，不匹配错误字符串；reqwest / hyper 原始错误不进
 //! `Display` 与 IPC 载荷（脱敏：类别 + 可选 HTTP 状态）。
 

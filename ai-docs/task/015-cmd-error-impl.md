@@ -7,11 +7,11 @@
 
 ## 目标与背景
 
-[通信契约](../architecture/ipc-contract.md)已定稿（010 done）：所有命令返回 `Result<T, CmdError>`，`CmdError` 序列化为 `{ code, message, detail? }`，`store.*` 码由 `StoreError::code()` 加前缀得到，中文 `message` 由命令层映射器编写。本任务把这一形状落地为 `src-tauri` 的命令层基座，让后续 005 / 006 的命令直接复用。
+[通信契约](../architecture/core/ipc-contract.md)已定稿（010 done）：所有命令返回 `Result<T, CmdError>`，`CmdError` 序列化为 `{ code, message, detail? }`，`store.*` 码由 `StoreError::code()` 加前缀得到，中文 `message` 由命令层映射器编写。本任务把这一形状落地为 `src-tauri` 的命令层基座，让后续 005 / 006 的命令直接复用。
 
 ## 必读
 
-[通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 约定](../standards/rust.md) · [注释规范](../standards/comments.md)。
+[通信契约](../architecture/core/ipc-contract.md) · [职责边界](../architecture/core/ts-rust-boundary.md) · [Rust 约定](../standards/rust.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 

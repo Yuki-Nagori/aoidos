@@ -15,7 +15,7 @@
 
 ## 必读
 
-[053 记忆检索设计](053-memory-query-search-design.md) · [记忆架构](../architecture/memory.md) · [通信契约](../architecture/ipc-contract.md) · [界面架构](../architecture/ui-shell.md) · [分层规范](../standards/layering.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
+[053 记忆检索设计](053-memory-query-search-design.md) · [记忆架构](../architecture/data/memory.md) · [通信契约](../architecture/core/ipc-contract.md) · [界面架构](../architecture/interface/ui-shell.md) · [分层规范](../standards/layering.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 
@@ -37,7 +37,7 @@
 
 ## 预计改动
 
-`src-rust/aoidos-memory/`、`src-rust/aoidos-engine/`、`src-tauri/src/memory_commands/`、`src-web/api/memory.ts`、`src-web/shared/components/`、`src-web/features/memory/`、`locales/`、对应 Rust / Vitest 测试；同步 `ai-docs/architecture/memory.md`、`ipc-contract.md`、`ui-shell.md`、`architecture/README.md` 和本 task。
+`src-rust/aoidos-memory/`、`src-rust/aoidos-engine/`、`src-tauri/src/memory_commands/`、`src-web/api/memory.ts`、`src-web/shared/components/`、`src-web/features/memory/`、`locales/`、对应 Rust / Vitest 测试；同步 `ai-docs/architecture/data/memory.md`、`ipc-contract.md`、`ui-shell.md`、`architecture/README.md` 和本 task。
 
 ## 验收标准
 

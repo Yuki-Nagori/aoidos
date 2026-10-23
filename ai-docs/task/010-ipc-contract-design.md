@@ -7,15 +7,15 @@
 
 ## 目标与背景
 
-[职责边界](../architecture/ts-rust-boundary.md)已定原则（TS 只做 UI、命令层薄、事件推送、密钥隔离、原子写），但落到多 crate 多命令的规模，需要一份无歧义的契约细则，否则每个实现 task 都要重新发明命名与错误处理。本 task 是**设计任务**：把契约与工程纪律细化成可检查的规则，作为所有实现 task 的引用基线。
+[职责边界](../architecture/core/ts-rust-boundary.md)已定原则（TS 只做 UI、命令层薄、事件推送、密钥隔离、原子写），但落到多 crate 多命令的规模，需要一份无歧义的契约细则，否则每个实现 task 都要重新发明命名与错误处理。本 task 是**设计任务**：把契约与工程纪律细化成可检查的规则，作为所有实现 task 的引用基线。
 
 ## 必读
 
-[职责边界](../architecture/ts-rust-boundary.md) · [Rust 约定](../standards/rust.md) · [Herta 调查](../research/001-herta.md)（工程纪律来源）。
+[职责边界](../architecture/core/ts-rust-boundary.md) · [Rust 约定](../standards/rust.md) · [Herta 调查](../research/001-herta.md)（工程纪律来源）。
 
 ## 产出物
 
-契约体量超出 boundary 篇的承载，按预案拆出独立文档：**`ai-docs/architecture/ipc-contract.md`**（命令 / 事件 / 错误码 / 工程纪律可检查清单），职责边界篇只留原则并互链。契约需敲定：
+契约体量超出 boundary 篇的承载，按预案拆出独立文档：**`ai-docs/architecture/core/ipc-contract.md`**（命令 / 事件 / 错误码 / 工程纪律可检查清单），职责边界篇只留原则并互链。契约需敲定：
 
 1. 命令命名与分组规则（域前缀、camelCase 参数、分页约定）。
 2. 事件命名与载荷约定（流式 chunk / 进度 / 状态变更的统一信封）。
@@ -47,10 +47,10 @@
 ## 决策与工作记录
 
 - 2026-10-05：创建设计任务。工程纪律条目自职责边界与 Herta 可借鉴处收拢，细化到可检查粒度。
-- 2026-10-05：契约草案 v1 完成（[ipc-contract.md](../architecture/ipc-contract.md)）：命令 `<域>_<动词>` 与 camelCase ↔ snake_case 映射、事件 `<域>:<对象>:<阶段>` + `{ v, seq, data }` 信封（缺口不重放、以快照命令对齐）、错误码 `<域>.<错误>` 目录（store 已映射，llm / engine 预留对接位）、看门狗预算表与五条可检查工程纪律。职责边界篇与架构导航互链。**待评审**。
+- 2026-10-05：契约草案 v1 完成（[ipc-contract.md](../architecture/core/ipc-contract.md)）：命令 `<域>_<动词>` 与 camelCase ↔ snake_case 映射、事件 `<域>:<对象>:<阶段>` + `{ v, seq, data }` 信封（缺口不重放、以快照命令对齐）、错误码 `<域>.<错误>` 目录（store 已映射，llm / engine 预留对接位）、看门狗预算表与五条可检查工程纪律。职责边界篇与架构导航互链。**待评审**。
 - 2026-10-05：按评审回写。错误形状只留在契约，边界与 Rust 约定改为链接。事件由命令层 `emit_to("main")`，业务 crate 用无 Tauri 类型的进度出口。`seq` 按事件名加流标识计数，监听者先取快照再对齐，不重放。去掉信封 `v`，不兼容变更只换事件名。`store.*` 写成 `format!("store.{}", code())`，中文 `message` 归命令层。迁移 SQL 的 busy 维持 `store.migration`。传输重试在首字节截止，排除 `llm.tls`，计为 1 次请求加 2 次重试。取消成功走 `llm:turn:done` / `cancelled`。单回合拒绝只用 `app.busy`。原子写步骤改指向 storage.md，并写明三处例外。005 / 006 / 012 改为引用已冻结部分。
 - 2026-10-05：评审复核通过，标 done。复核补一处：`llm_get_turn` 快照的 outcome 枚举补 `failed`，与 `:failed` 事件对齐。
 
 ## 完成摘要
 
-通信契约定稿（[ipc-contract.md](../architecture/ipc-contract.md)）：命令 `<域>_<动词>` + camelCase ↔ snake_case、事件 `<域>:<对象>:<阶段>` + 每流 `seq` 与快照对齐（不重放）、错误码 `<域>.<错误>` 目录（store 已映射，llm / engine 留对接位）、看门狗预算表与五条可检查工程纪律。boundary / tech-stack / rust.md / research / 005 / 006 / 012 已改为引用契约，不再各写一套。限制：`llm.*` 与 `engine.*` 触发条件由 005 / 012 冻结；`store:migration:*` 事件需先给 `db::open` 加进度回调才可发（契约已注明）。
+通信契约定稿（[ipc-contract.md](../architecture/core/ipc-contract.md)）：命令 `<域>_<动词>` + camelCase ↔ snake_case、事件 `<域>:<对象>:<阶段>` + 每流 `seq` 与快照对齐（不重放）、错误码 `<域>.<错误>` 目录（store 已映射，llm / engine 留对接位）、看门狗预算表与五条可检查工程纪律。boundary / tech-stack / rust.md / research / 005 / 006 / 012 已改为引用契约，不再各写一套。限制：`llm.*` 与 `engine.*` 触发条件由 005 / 012 冻结；`store:migration:*` 事件需先给 `db::open` 加进度回调才可发（契约已注明）。

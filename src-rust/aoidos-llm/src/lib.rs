@@ -1,6 +1,6 @@
 //! aoidos-llm：LLM 供应商适配、流式护栏与单层请求策略。
 //!
-//! 设计见 ai-docs/architecture/llm.md，预算与错误码口径见通信契约。本 crate 不依赖 tauri，
+//! 设计见 ai-docs/architecture/ai/llm.md，预算与错误码口径见通信契约。本 crate 不依赖 tauri，
 //! 不生成 turnId、不投递窗口事件、不写数据库；费用账本经 [`schedule::BudgetPort`] 注入（035 落地前默认放行）。
 //! 传输层显式禁用隐式重试与重连：reqwest `retry(never)`，SSE 解析器只消费既有字节流。
 //! 配置 / 凭据 / 代理（019）：profile 持久化经 aoidos-store 原子写，凭据走

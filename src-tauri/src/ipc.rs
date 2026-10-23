@@ -1,5 +1,5 @@
 //! 命令层错误形状：`CmdError` 序列化为 `{ code, message, detail? }`，
-//! 命名空间与映射规则见 ai-docs/architecture/ipc-contract.md。
+//! 命名空间与映射规则见 ai-docs/architecture/core/ipc-contract.md。
 
 use aoidos_store::error::StoreError;
 use serde::Serialize;
@@ -91,7 +91,7 @@ impl From<StoreError> for CmdError {
 }
 
 /// `StoreError::code()` 的九个返回值 → 可展示中文。新增码先在
-/// ai-docs/architecture/ipc-contract.md 错误码目录登记，再在此补一行。
+/// ai-docs/architecture/core/ipc-contract.md 错误码目录登记，再在此补一行。
 fn store_message(code: &str) -> String {
     let text = match code {
         "invalid-path" => "路径不合法",

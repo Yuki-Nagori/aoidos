@@ -11,7 +11,7 @@
 
 ## 必读
 
-[主题架构](../architecture/theming.md) · [UI 风格](../standards/ui.md) · [界面结构](../architecture/ui-shell.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [存储基建](../architecture/storage.md) · [前端规范](../standards/frontend.md) · [Rust 规范](../standards/rust.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖官方资料及日期见主题架构；实际版本在接入时锁定。
+[主题架构](../architecture/interface/theming.md) · [UI 风格](../standards/ui.md) · [界面结构](../architecture/interface/ui-shell.md) · [通信契约](../architecture/core/ipc-contract.md) · [职责边界](../architecture/core/ts-rust-boundary.md) · [存储基建](../architecture/data/storage.md) · [前端规范](../standards/frontend.md) · [Rust 规范](../standards/rust.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖官方资料及日期见主题架构；实际版本在接入时锁定。
 
 ## 范围与非目标
 

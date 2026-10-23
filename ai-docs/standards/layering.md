@@ -1,6 +1,6 @@
 # 依赖分层规范
 
-更新日期：2026-10-21。本文规定 Aoidos 的 Rust crate、Tauri 壳、Vue 层及测试代码的依赖方向。实现边界见[架构总览](../architecture/README.md)与[TS / Rust 边界](../architecture/ts-rust-boundary.md)；CI 检查不得替代架构评审。
+更新日期：2026-10-21。本文规定 Aoidos 的 Rust crate、Tauri 壳、Vue 层及测试代码的依赖方向。实现边界见[架构总览](../architecture/README.md)与[TS / Rust 边界](../architecture/core/ts-rust-boundary.md)；CI 检查不得替代架构评审。
 
 ## Rust crate
 

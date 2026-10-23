@@ -11,7 +11,7 @@
 
 ## 必读
 
-[目录与命名](../architecture/repository-layout.md)、[存储](../architecture/storage.md)、[测试](../standards/testing.md)、[提交](../standards/commits.md)。
+[目录与命名](../architecture/core/repository-layout.md)、[存储](../architecture/data/storage.md)、[测试](../standards/testing.md)、[提交](../standards/commits.md)。
 
 ## 实施与验收
 

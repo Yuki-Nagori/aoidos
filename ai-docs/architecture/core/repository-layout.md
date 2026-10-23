@@ -2,7 +2,7 @@
 
 更新日期：2026-10-22。
 
-[架构总览](README.md)
+[架构总览](../README.md)
 
 ```text
 ├── index.html                  # Vite 入口 HTML（挂载点 #app）
@@ -84,7 +84,7 @@
 
 标准库类型与调用不按 import 集中封装：各模块可直接使用 `Path`、`Duration`、`io::Error` 等。带有项目统一存储规则的能力（原子写、私有权限发布、有界读取、缺失路径判断、实例锁）归 `aoidos-store`；共用 JSON 编解码 / 重复键校验 / 规范化归 `aoidos-json`，领域 JSON schema / 版本校验归消费 crate。桌面原生输入适配归 `src-tauri`，CLI 输入留在 CLI；文件权限实现归 `aoidos-store`，凭据业务和 keyring 归 `aoidos-llm`。请求超时归 LLM 调度。只提取真实共用的规则，不为统一调用外观增加转发层。
 
-Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../standards/rust.md#rust-模块目录)。
+Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../../standards/rust.md#rust-模块目录)。
 
 新增文件的归属按职责判断，不按语言堆放；访问私有实现的测试贴近源码（如 `commands.rs` 的 `mod tests`），前端公开行为的测试放 `tests/web/` 并镜像目录结构，例如 `tests/web/features/game/utils/turn-consumer.test.ts` 对应 `src-web/features/game/utils/turn-consumer.ts`。
 
@@ -96,8 +96,8 @@ Rust 模块拆分后采用同目录 `mod.rs` 入口，规则见[Rust 规范](../
 
 `aoidos-engine/src/record/` 下按格式、注册事实、会话、世界协议、历史、工作集、投影、摘要候选、压缩和视图拆分；带外置单测的模块统一使用 `{mod.rs,tests.rs}`，包括 `facts/`。通用测试 Provider 位于 engine 的 `test_support.rs`，记录夹具位于 `record/test_support.rs`，均仅在测试构建编译。
 
-`aoidos-engine/src/game/` 分为串行驱动 / 执行、场景目录、骰判、转换、恢复、控制和阶段发布；`domain.rs` 定义可信域端口，`input.rs`、`proposal.rs`、`state.rs` 分别保存输入、提议与 IPC 数据。前端阶段链路见[架构总览](README.md#阶段机基础链路)，验收证据见 [023](../task/023-turn-state-machine-impl.md)。
+`aoidos-engine/src/game/` 分为串行驱动 / 执行、场景目录、骰判、转换、恢复、控制和阶段发布；`domain.rs` 定义可信域端口，`input.rs`、`proposal.rs`、`state.rs` 分别保存输入、提议与 IPC 数据。前端阶段链路见[架构总览](../README.md#阶段机基础链路)，验收证据见 [023](../../task/023-turn-state-machine-impl.md)。
 
-`aoidos-memory/src/repository/` 的 `mod.rs` 提供共享存储能力；aliases、config、confirmations、cycle、materials、operations、reconciliation、recovery 各自使用同目录 `{mod.rs,tests.rs}`，cycle 另有 `outbox.rs`；跨模块 SQLite 夹具在 `test_support.rs`。engine 通过 `record/memory/{mod.rs,tests.rs}` 持有记忆端口与共享连接，memory 不反向依赖 engine，避免依赖环。产品链路已接入配置、显式查询 / 确认、素材批次与轮回节点；算法参数及长对局 / 供应商实验的验收状态见 [033](../task/033-memory-calibration-integration.md)。
+`aoidos-memory/src/repository/` 的 `mod.rs` 提供共享存储能力；aliases、config、confirmations、cycle、materials、operations、reconciliation、recovery 各自使用同目录 `{mod.rs,tests.rs}`，cycle 另有 `outbox.rs`；跨模块 SQLite 夹具在 `test_support.rs`。engine 通过 `record/memory/{mod.rs,tests.rs}` 持有记忆端口与共享连接，memory 不反向依赖 engine，避免依赖环。产品链路已接入配置、显式查询 / 确认、素材批次与轮回节点；算法参数及长对局 / 供应商实验的验收状态见 [033](../../task/033-memory-calibration-integration.md)。
 
 `tests/fixtures/record/token-estimation-v1.json` 保存匿名合成输入与离线 tokenizer 标定数据；不含玩家数据或密钥。原生窗口夹具继续放 `tests/rust/native-platform/`，不把需要私有实现访问的单测迁入此处。

@@ -7,15 +7,15 @@
 
 ## 目标与背景
 
-「上下文占用与对局时长解耦」（[构想 001](../ideas/001-context-state-decoupling.md)）的落地前提是一套冻结的记录结构。本 task 是**设计任务**：把记录块语法、持久化结构、投影与预算规则敲定成结构文档，实现已规划为 022，须本设计定稿后才能开工（践行 [职责边界](../architecture/ts-rust-boundary.md)，业务进 `src-rust/`）。
+「上下文占用与对局时长解耦」（[构想 001](../ideas/001-context-state-decoupling.md)）的落地前提是一套冻结的记录结构。本 task 是**设计任务**：把记录块语法、持久化结构、投影与预算规则敲定成结构文档，实现已规划为 022，须本设计定稿后才能开工（践行 [职责边界](../architecture/core/ts-rust-boundary.md)，业务进 `src-rust/`）。
 
 ## 必读
 
-[LLM 规则与结构](../architecture/llm.md)（GuardSpec 与输出提交约束，005 已评审通过） · [构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [通信契约](../architecture/ipc-contract.md) · [017 store 查询与迁移回调](017-store-commands-migration-events.md)（迁移事件待接入） · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [UI 风格规范](../standards/ui.md)（视觉语法）。
+[LLM 规则与结构](../architecture/ai/llm.md)（GuardSpec 与输出提交约束，005 已评审通过） · [构想 001](../ideas/001-context-state-decoupling.md) · [Herta 调查](../research/001-herta.md) · [通信契约](../architecture/core/ipc-contract.md) · [017 store 查询与迁移回调](017-store-commands-migration-events.md)（迁移事件待接入） · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [UI 风格规范](../standards/ui.md)（视觉语法）。
 
 ## 产出物
 
-[ai-docs/architecture/record-engine.md](../architecture/record-engine.md)（规则与结构文档），需敲定：
+[ai-docs/architecture/data/record-engine.md](../architecture/data/record-engine.md)（规则与结构文档），需敲定：
 
 1. 记录块语法及 GuardSpec：玩家台词共用稳定保留前缀，open tag / 闭合标签 / stop 由同一语法生成，匹配机制沿用 005；块类型（台词 / 旁白 / 掷骰 / 判定 / 系统事件 / …）、字段、序列化格式、版本字段；附黄金样例。
 2. 持久化结构及共享输出写入方：明确安全增量先提交、后更新快照和事件，写入失败不发对应 chunk，终态与取消也保持已提交前文；JSONL 行格式、文件切分（按会话 / 按剧本）、原子写与崩溃截断恢复规则（复用 [011](011-storage-design.md) 的原子写工具与目录规范）。

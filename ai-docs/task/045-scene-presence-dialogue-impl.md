@@ -11,7 +11,7 @@
 
 ## 必读
 
-[场景角色在场与定向交互设计](044-scene-presence-dialogue-design.md) · [阶段机](../architecture/turn-state-machine.md) · [记忆系统](../architecture/memory.md) · [通信契约](../architecture/ipc-contract.md) · [实体注册表](043-rust-entity-registry-impl.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
+[场景角色在场与定向交互设计](044-scene-presence-dialogue-design.md) · [阶段机](../architecture/gameplay/turn-state-machine.md) · [记忆系统](../architecture/data/memory.md) · [通信契约](../architecture/core/ipc-contract.md) · [实体注册表](043-rust-entity-registry-impl.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 

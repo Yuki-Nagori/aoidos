@@ -1,15 +1,15 @@
 # TS / Rust 职责边界
 
-更新日期：2026-10-22。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../task-index.md)。058 已将 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；060 已通过共享应用服务接入周目目录、profile 绑定与账务迁移，完成情况见[任务 060](../task/060-run-management-impl.md)。工程纪律参考 [Herta 调查](../research/001-herta.md)。
+更新日期：2026-10-22。均为项目约定。存储基建（013）、LLM 适配 / 配置（018 / 019）、协调与记录 / 阶段机（020–023）、主题（026）、记忆存储与恢复（029）、JSON 共用工具（036）、IPC 基座（015–017）、国际化底座（034，已验收）及计价与费用控制（035，代码已交付，三平台实机展示待验收）按本文分工实现；验收证据见[任务索引](../../task-index.md)。058 已将 CLI / TUI 与桌面 GUI 接入同一无 Tauri 游戏应用层；060 已通过共享应用服务接入周目目录、profile 绑定与账务迁移，完成情况见[任务 060](../../task/060-run-management-impl.md)。工程纪律参考 [Herta 调查](../../research/001-herta.md)。
 
 ## 原则
 
 - **TS 只做 UI**：视图编排、展示状态、调用命令、渲染事件流。不写业务规则，不直接触碰文件系统、path、shell、SQL 或网络。
 - **Rust 拥有一切底层与领域能力**：path / 文件 IO、shell 与进程、存储（SQL、文件持久化）、状态机（回合与阶段流转）、LLM 客户端、对局引擎、记忆系统、密钥管理。
 - **入口层薄**：`src-tauri` 的 `#[tauri::command]` 只解参数、调用 Rust 应用服务、回包及适配窗口事件，不写业务；`src-cli` 直接调用同一 Rust 应用服务，不经由 GUI 子进程或 IPC；业务逻辑留在 workspace crate。
-- **内存域结构归 Rust**：图（技能树 / 关系网）、索引、缓存等运行时领域结构在业务 crate 内存中维护（候选库如 petgraph，仅在需求真实出现时经 task 引入）；SQLite 与文件只做持久化与查询，重启时由持久层重建内存状态。详见[存储基建](storage.md)「三层模型」。
+- **内存域结构归 Rust**：图（技能树 / 关系网）、索引、缓存等运行时领域结构在业务 crate 内存中维护（候选库如 petgraph，仅在需求真实出现时经 task 引入）；SQLite 与文件只做持久化与查询，重启时由持久层重建内存状态。详见[存储基建](../data/storage.md)「三层模型」。
 
-域 → 任务覆盖：LLM 与密钥 → [task 005](../task/005-llm-design.md)；记录与上下文 → [006](../task/006-record-design.md)；记忆 → [007](../task/007-memory-design.md)；存储 / path / IO / shell 进程边界 → [011](../task/011-storage-design.md)；回合与阶段状态机（含骰判） → [012](../task/012-turn-state-machine-design.md)；通信契约 → [010](../task/010-ipc-contract-design.md)；主题 / 皮肤校验 → [009](../task/009-theming-design.md) 与 [026](../task/026-theming-impl.md)（设计 / 实现）；CLI / TUI 与共用游戏应用层 → [058](../task/058-cli-tui-shared-game-runtime.md)。
+域 → 任务覆盖：LLM 与密钥 → [task 005](../../task/005-llm-design.md)；记录与上下文 → [006](../../task/006-record-design.md)；记忆 → [007](../../task/007-memory-design.md)；存储 / path / IO / shell 进程边界 → [011](../../task/011-storage-design.md)；回合与阶段状态机（含骰判） → [012](../../task/012-turn-state-machine-design.md)；通信契约 → [010](../../task/010-ipc-contract-design.md)；主题 / 皮肤校验 → [009](../../task/009-theming-design.md) 与 [026](../../task/026-theming-impl.md)（设计 / 实现）；CLI / TUI 与共用游戏应用层 → [058](../../task/058-cli-tui-shared-game-runtime.md)。
 
 ## 工作区布局
 
@@ -76,9 +76,9 @@ aoidos-native-tests → 需要验证的生产 crate / 入口
 
 `aoidos-app` 当前负责 profile 列表 / 保存 / 删除、提交时 profile 与凭据冻结、密钥服务、`TurnRuntime` 以及 engine `Product` / runtime 装配；Tauri 与 CLI 注入同一数据根和各自的事件端口。OS 凭据读写与 Vault 语义复用 `aoidos-llm`；Tauri 原生密钥对话框、CLI 终端输入、窗口事件与终端绘制分别留在 adapter，应用层不等待或导入 UI 类型。`aoidos-store` 统一提供私有文件原子发布与平台权限实现；调用方不复制 Unix mode、Windows DACL 或本机路径编码逻辑。
 
-Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 组合 billing、engine、llm、store；CLI 为实现 engine 事件端口、共享数据根锁和受控记录读取保留直接 adapter 依赖，不承载对局业务编排。engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
+Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoidos-app`；CLI/TUI 在本进程直接调用 `aoidos-app`。GUI 不启动 `aoidos-cli`，CLI 不依赖 Tauri。`aoidos-app` 组合 billing、engine、llm、store；CLI 为实现 engine 事件端口、共享数据根锁和受控记录读取保留直接 adapter 依赖，不承载对局业务编排。engine、领域 crate 不得反向依赖 app。新增 Cargo 边先更新[分层规范](../../standards/layering.md)和 `lint:layers`，再实现并验证有向无环。
 
-`aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](README.md#json-共用能力)。
+`aoidos-json` 不依赖项目业务 crate；JSON schema、错误码与持久化仍归消费模块，详见[共用 JSON 能力](../README.md#json-共用能力)。
 
 060 的周目目录 schema 与查询事务由 `aoidos-engine::Storage` 持有；`aoidos-app::RunLifecycleService` 对 Tauri 与 CLI/TUI 暴露分页、玩家显式推进旧 transcript 扫描、profile 绑定、显式恢复、legacy 账务迁移和删除用例，profile 快照从共享 `ProfileFactory` 读取且不包含凭据。扫描使用深度有界目录栈，仅读取有界 header；文件读取在 SQLite 锁外执行，入口通过 engine blocking 执行器调度。账务迁移在同一 SQLite 事务内核验 session / memory / script 身份并更新账本及目录状态；冲突上限作为玩家明确选择的十进制字符串传递。错误项以相对路径摘要哈希记录并受固定容量限制，不调用 session open / repair。显式恢复由 engine 校验 revision、身份映射和冻结 profile，先恢复记录与 owner，再 CAS 更新 SQLite 活动选择；仅提交结果不确定时读取权威选择，镜像文件写入失败由 `selectionMirrorPending` 从 Rust DTO 传给 TypeScript，普通重开也保留该诊断。Tauri 命令与 CLI/TUI 都调用共享生命周期服务；恢复结果附带冻结的公开 profile，CLI 不以当前同名配置替代旧周目配置，回合费用预检也始终使用冻结快照。Web API 在 `src-web/api/runs.ts` 声明同型目录、恢复、账务迁移与删除 DTO；目录页独立返回有界待处理 journal 和 `diagnosticCode`，Web 与 TUI 在恢复失败后展示持久化诊断，重试成功时清除。启动恢复逐项隔离失败操作，不阻止健康周目启动。递归文件清理按设备 / 卷隔离，以追加 migration 持久化有界原生路径栈，跨批继续且不越过挂载点。入口不得直接读写目录文件或 SQLite。
 
@@ -92,14 +92,14 @@ Tauri GUI 经 IPC 调用 Tauri 命令 adapter，再由 adapter 直接调用 `aoi
 
 命令 / 事件 / 错误码的命名与形状细则（含看门狗预算表、重试单层化、后台任务门槛的可检查清单）见[通信契约](ipc-contract.md)。
 
-- 命令：已落地的 store 薄调用和载荷类型在 `src-web/api/store.ts`；前端 `invoke(name, args)` ↔ Rust command；参数 / 返回类型 Rust 定型后 TS 立即声明同型（沿用 [Rust 约定](../standards/rust.md)）。
-- 事件：长流程（LLM 流式输出、对局推进、后台任务进度）由命令层 `emit_to("main", …)` 推给前端。业务 crate 只通过不含 Tauri 类型的进度出口交出载荷。021 的前端恢复分为纯消费 / 注入式协调与 Vue 生命周期，链路见[架构总览](README.md#前端回合消费链路)。前端不轮询、不用 setTimeout 凑实时。信封与序号见[通信契约](ipc-contract.md)。
+- 命令：已落地的 store 薄调用和载荷类型在 `src-web/api/store.ts`；前端 `invoke(name, args)` ↔ Rust command；参数 / 返回类型 Rust 定型后 TS 立即声明同型（沿用 [Rust 约定](../../standards/rust.md)）。
+- 事件：长流程（LLM 流式输出、对局推进、后台任务进度）由命令层 `emit_to("main", …)` 推给前端。业务 crate 只通过不含 Tauri 类型的进度出口交出载荷。021 的前端恢复分为纯消费 / 注入式协调与 Vue 生命周期，链路见[架构总览](../README.md#前端回合消费链路)。前端不轮询、不用 setTimeout 凑实时。信封与序号见[通信契约](ipc-contract.md)。
 - 错误：形状与目录见[通信契约](ipc-contract.md)。前端按 `code` 分支。
 - 大数据（对局记录、记忆文本）不塞 IPC 返回值——Rust 侧落盘，IPC 只回句柄 / 路径 / 摘要，前端需要时再按命令取分页。
 
 ## 工程纪律（借鉴 Herta）
 
-- **持久化一律原子写**：普通文件用唯一 tmp 名 + rename + 半截文件自愈。SQLite、实例锁和 JSONL 受控追加 / 截断的例外见[存储基建](storage.md)。
+- **持久化一律原子写**：普通文件用唯一 tmp 名 + rename + 半截文件自愈。SQLite、实例锁和 JSONL 受控追加 / 截断的例外见[存储基建](../data/storage.md)。
 - **密钥隔离**：API key 只存 Rust 侧（OS 凭据库优先），IPC 只传「已设置 + 尾号 hint」，明文不进 webview、不进前端状态。尾号长度和降级文件权限见[通信契约](ipc-contract.md)。
 - **网络调用分层看门狗**：连接建立（头阶段）与流式空闲分别设限；重试策略单层化——传输层与业务循环不叠加重试。
 - **后台任务默认关**：烧用户 quota 的自动化任务（记忆蒸馏、后台总结）默认关闭，启动前过多重门槛，用户返回时可在边界让位。

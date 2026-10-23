@@ -14,10 +14,10 @@
 ## 必读
 
 - [Rust / Web / 测试依赖方向](../standards/layering.md)
-- [Repository layout](../architecture/repository-layout.md)
-- [LLM 接入与护栏](../architecture/llm.md)
-- [计费架构](../architecture/billing.md)
-- [UI Shell](../architecture/ui-shell.md)
+- [Repository layout](../architecture/core/repository-layout.md)
+- [LLM 接入与护栏](../architecture/ai/llm.md)
+- [计费架构](../architecture/ai/billing.md)
+- [UI Shell](../architecture/interface/ui-shell.md)
 - [剧本格式规范](../standards/scenarios.md)
 - [Rust 规范](../standards/rust.md)
 - [测试规范](../standards/testing.md)

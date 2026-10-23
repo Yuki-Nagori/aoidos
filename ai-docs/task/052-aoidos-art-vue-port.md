@@ -13,7 +13,7 @@
 
 ## 必读
 
-[前端规范](../standards/frontend.md) · [UI 风格](../standards/ui.md) · [UI 架构](../architecture/ui-shell.md) · [国际化架构](../architecture/i18n.md) · [主题架构](../architecture/theming.md) · [计费架构](../architecture/billing.md) · [记忆架构](../architecture/memory.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md) · [提交规范](../standards/commits.md)。
+[前端规范](../standards/frontend.md) · [UI 风格](../standards/ui.md) · [UI 架构](../architecture/interface/ui-shell.md) · [国际化架构](../architecture/interface/i18n.md) · [主题架构](../architecture/interface/theming.md) · [计费架构](../architecture/ai/billing.md) · [记忆架构](../architecture/data/memory.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md) · [提交规范](../standards/commits.md)。
 
 外部设计来源：用户维护的 `aoidos-art` 仓库；2026-10-19 复核并采用提交 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde`，共 43 个 `screens/*.html`。该版本补充快捷键速查 / 设置设计和 055 / 056 对照页，并更新结局流程与在场选择稿。实施时复核其 `README.md`、`index.html`、`components.html`、`screens/` 和 `assets/app.css` 的最新版本及界面清单，并记录实际采用的提交。设计仓库不纳入 Aoidos 的构建或运行时依赖。
 
@@ -67,7 +67,7 @@
 
 ## 预计改动
 
-`src-web/features/`（按 051 的最终结构）、共享组件与正式主题样式、`locales/`、对应 `tests/web/` 及必要的 UI 验收脚本；同步 `ai-docs/architecture/ui-shell.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/repository-layout.md`、`ai-docs/standards/frontend.md`、`ai-docs/standards/ui.md` 和 025 的外部验收引用（仅在实际影响其范围时）。不改 `aoidos-art` 仓库。
+`src-web/features/`（按 051 的最终结构）、共享组件与正式主题样式、`locales/`、对应 `tests/web/` 及必要的 UI 验收脚本；同步 `ai-docs/architecture/interface/ui-shell.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/core/repository-layout.md`、`ai-docs/standards/frontend.md`、`ai-docs/standards/ui.md` 和 025 的外部验收引用（仅在实际影响其范围时）。不改 `aoidos-art` 仓库。
 
 ## 验收标准
 

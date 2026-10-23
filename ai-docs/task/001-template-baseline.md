@@ -11,7 +11,7 @@
 
 ## 必读
 
-[架构总览](../architecture/README.md) · [构建与开发](../architecture/build-and-development.md) · [提交规范](../standards/commits.md) · [测试规范](../standards/testing.md)。
+[架构总览](../architecture/README.md) · [构建与开发](../architecture/core/build-and-development.md) · [提交规范](../standards/commits.md) · [测试规范](../standards/testing.md)。
 
 ## 范围与非目标
 
@@ -60,7 +60,7 @@
 | 2026-10-05 | macOS / issue #3 与 CI 优化         | `bun run verify`                                                                          | 十项 exit 0                          |
 | 2026-10-05 | Ubuntu / macOS / Windows            | [PR #4 / run 37237430870](https://github.com/Yuki-Nagori/aoidos/actions/runs/37237430870) | 提交 `a443f12` 三平台全部通过        |
 
-issue #3 复核已核对三平台矩阵、Rust 工具链、CI 调用的 bun scripts 与本地门槛。testing.md 仅引用脚本入口，实际参数统一在 package.json 维护。CI 的编译形态合并与步骤顺序见[构建与开发](../architecture/build-and-development.md)。
+issue #3 复核已核对三平台矩阵、Rust 工具链、CI 调用的 bun scripts 与本地门槛。testing.md 仅引用脚本入口，实际参数统一在 package.json 维护。CI 的编译形态合并与步骤顺序见[构建与开发](../architecture/core/build-and-development.md)。
 
 ## 风险与回退
 

@@ -7,15 +7,15 @@
 
 ## 目标与背景
 
-[职责边界](../architecture/ts-rust-boundary.md)把 path / 文件 IO、shell 与进程、存储划给 Rust，但一直没有落地载体——006（记录持久化）、007（记忆载体）都在等它的选型与工具。本 task 是**设计任务**：把存储引擎、目录与路径规范、原子写工具、shell / 进程使用边界敲定成结构文档，供全部业务 crate 复用；实现 task 待定稿后新增（业务 crate `src-rust/aoidos-store` 或工具 crate）。
+[职责边界](../architecture/core/ts-rust-boundary.md)把 path / 文件 IO、shell 与进程、存储划给 Rust，但一直没有落地载体——006（记录持久化）、007（记忆载体）都在等它的选型与工具。本 task 是**设计任务**：把存储引擎、目录与路径规范、原子写工具、shell / 进程使用边界敲定成结构文档，供全部业务 crate 复用；实现 task 待定稿后新增（业务 crate `src-rust/aoidos-store` 或工具 crate）。
 
 ## 必读
 
-[职责边界](../architecture/ts-rust-boundary.md)（工程纪律：原子写 / 密钥隔离）· [Herta 调查](../research/001-herta.md)（Windows 文件语义教训）。
+[职责边界](../architecture/core/ts-rust-boundary.md)（工程纪律：原子写 / 密钥隔离）· [Herta 调查](../research/001-herta.md)（Windows 文件语义教训）。
 
 ## 产出物
 
-`ai-docs/architecture/storage.md`（规则与结构文档），需敲定：
+`ai-docs/architecture/data/storage.md`（规则与结构文档），需敲定：
 
 1. 存储引擎选型：SQLite vs 纯文件 vs 混合的决策与理由；SQL 访问层（rusqlite / sqlx 等）与 schema 版本迁移策略。
 2. 目录与路径规范：应用数据根（userData）与剧本工作区的布局、跨平台路径规则（非法字符 / 长路径 / 大小写）。
@@ -49,7 +49,7 @@
 ## 决策与工作记录
 
 - 2026-10-05：创建设计任务。补上职责边界清单中 path / IO、shell / 进程、存储三项的落地载体；006 / 007 依赖同步指向本任务。
-- 2026-10-05：设计稿 v1 完成（[storage.md](../architecture/storage.md)）：混合存储决策（SQLite 状态 + 文件记录）、rusqlite + user_version 迁移、数据根注入（业务 crate 不依赖 tauri）、script-id 消毒规范、唯一原子写 API、shell allowlist、备份与 zip 导入约定。**待评审**；评审通过前验收项不勾。
+- 2026-10-05：设计稿 v1 完成（[storage.md](../architecture/data/storage.md)）：混合存储决策（SQLite 状态 + 文件记录）、rusqlite + user_version 迁移、数据根注入（业务 crate 不依赖 tauri）、script-id 消毒规范、唯一原子写 API、shell allowlist、备份与 zip 导入约定。**待评审**；评审通过前验收项不勾。
 - 2026-10-05：评审中补充「三层模型」（剧本文件 ⇄ 引擎内存结构 ⇄ SQLite）与「关系复杂度的边界」（含加点点位表示例），职责边界文档同步「内存域结构归 Rust」原则。
 - 2026-10-05：用户验收通过，标 done；实现立项为 [task 013](013-storage-impl.md)。
 - 2026-10-06：006 定稿后统一事实源口径：JSONL 因果事实与 SQLite 已应用状态投影，SQL 点位表仅作建模示例，新增 schema 须带幂等标记；普通文件原子覆写与 JSONL 受控追加例外保持一致。没有改变已实现 store 基建。

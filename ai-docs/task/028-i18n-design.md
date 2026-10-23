@@ -11,7 +11,7 @@
 
 ## 必读
 
-[前端规范](../standards/frontend.md) · [通信契约](../architecture/ipc-contract.md) · [界面设计](../architecture/ui-shell.md) · [主题架构](../architecture/theming.md) · [LLM 预算](../architecture/llm.md) · [文档规范](../standards/documentation.md)。[027 费用设计](027-llm-cost-control-design.md)消费本任务的语言 / 格式化契约，不反向依赖计价设计。
+[前端规范](../standards/frontend.md) · [通信契约](../architecture/core/ipc-contract.md) · [界面设计](../architecture/interface/ui-shell.md) · [主题架构](../architecture/interface/theming.md) · [LLM 预算](../architecture/ai/llm.md) · [文档规范](../standards/documentation.md)。[027 费用设计](027-llm-cost-control-design.md)消费本任务的语言 / 格式化契约，不反向依赖计价设计。
 
 ## 范围与非目标
 
@@ -19,7 +19,7 @@
 
 ## 前置条件与设计结论
 
-首版 zh-Hans / en，以英文资源作为源码与类型基准，简体中文由门禁逐键校验；system 由 Rust 检测。vue-i18n v11 预编译、独立 LocalePreference / LocaleBootstrap、原生单源资源、精确金额显示与错误码映射见[国际化架构](../architecture/i18n.md)。与 026 共用首窗初始化，025 消费底座，034 承接独立实施。没有有效偏好或 bootstrap 时确定性回退到英文；正常启动使用 Rust 持久化偏好及首帧 bootstrap。依赖已由 034 引入并验收。
+首版 zh-Hans / en，以英文资源作为源码与类型基准，简体中文由门禁逐键校验；system 由 Rust 检测。vue-i18n v11 预编译、独立 LocalePreference / LocaleBootstrap、原生单源资源、精确金额显示与错误码映射见[国际化架构](../architecture/interface/i18n.md)。与 026 共用首窗初始化，025 消费底座，034 承接独立实施。没有有效偏好或 bootstrap 时确定性回退到英文；正常启动使用 Rust 持久化偏好及首帧 bootstrap。依赖已由 034 引入并验收。
 
 ## 产出物
 

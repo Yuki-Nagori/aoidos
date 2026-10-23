@@ -46,7 +46,7 @@
 
 审计依据见 [037](../task/037-rust-coverage-audit.md)。覆盖率口径调整理由、行为风险清单和实测对比见 [048](../task/048-test-quality-ci.md)。
 
-src-tauri 的 commands / events / ipc 等非忽略文件及业务 crate 的逻辑都计入聚合门槛；关键行为还须满足上方风险清单，不能由整体百分比替代。前置组件与安装见[构建与开发](../architecture/build-and-development.md)。
+src-tauri 的 commands / events / ipc 等非忽略文件及业务 crate 的逻辑都计入聚合门槛；关键行为还须满足上方风险清单，不能由整体百分比替代。前置组件与安装见[构建与开发](../architecture/core/build-and-development.md)。
 
 忽略范围和聚合覆盖底线属于门禁配置；调整时先在 task 里给出理由、风险行为证据与验证结果，再同步脚本、配置和本节台账。
 

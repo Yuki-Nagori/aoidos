@@ -11,7 +11,7 @@
 
 ## 必读
 
-[记忆架构](../architecture/memory.md) · [通信契约](../architecture/ipc-contract.md) · [界面架构](../architecture/ui-shell.md) · [前端规范](../standards/frontend.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
+[记忆架构](../architecture/data/memory.md) · [通信契约](../architecture/core/ipc-contract.md) · [界面架构](../architecture/interface/ui-shell.md) · [前端规范](../standards/frontend.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 

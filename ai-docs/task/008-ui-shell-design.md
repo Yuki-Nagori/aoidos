@@ -11,11 +11,11 @@
 
 ## 必读
 
-[UI 风格规范](../standards/ui.md) · [Tailwind task 004](004-tailwind-v4.md)（实现载体）· [006 记录设计](006-record-design.md)（块类型对齐） · [记录引擎](../architecture/record-engine.md)（行语义与预览 / 封口替换）。
+[UI 风格规范](../standards/ui.md) · [Tailwind task 004](004-tailwind-v4.md)（实现载体）· [006 记录设计](006-record-design.md)（块类型对齐） · [记录引擎](../architecture/data/record-engine.md)（行语义与预览 / 封口替换）。
 
 ## 产出物
 
-`ai-docs/architecture/ui-shell.md`（界面结构与交互规范），需敲定：
+`ai-docs/architecture/interface/ui-shell.md`（界面结构与交互规范），需敲定：
 
 1. 舞台区：游戏主视图容器、尺寸 / 缩放策略、与面板的层叠与焦点关系。
 2. 对话面板状态机：收起 / 悬停唤起 / 展开 / 钉住四态，触发区与阈值，收展动画参数（收展时长、曲线与位移量）。
@@ -57,4 +57,4 @@
 
 ## 完成摘要
 
-设计完成，规范见[界面结构与交互](../architecture/ui-shell.md)。008 与索引同步 done；当前 greet 界面未改变。实现相关输入已补既有 004 / 021 / 022 / 023 / 024，完整界面由 025 承接，尚未开始。
+设计完成，规范见[界面结构与交互](../architecture/interface/ui-shell.md)。008 与索引同步 done；当前 greet 界面未改变。实现相关输入已补既有 004 / 021 / 022 / 023 / 024，完整界面由 025 承接，尚未开始。
