@@ -73,15 +73,19 @@ describe("共享骰子渲染器", () => {
     const dispose = vi.fn();
     const glCanvases: HTMLCanvasElement[] = [];
     const gpuCanvases: HTMLCanvasElement[] = [];
+    const glOptions: unknown[] = [];
+    const gpuOptions: unknown[] = [];
     class GL {
-      constructor(canvas: HTMLCanvasElement) {
+      constructor(canvas: HTMLCanvasElement, _antialias?: boolean, options?: unknown) {
         glCanvases.push(canvas);
+        glOptions.push(options);
       }
     }
     class GPU {
       static IsSupportedAsync = supported;
-      constructor(canvas: HTMLCanvasElement) {
+      constructor(canvas: HTMLCanvasElement, options?: unknown) {
         gpuCanvases.push(canvas);
+        gpuOptions.push(options);
       }
       initAsync = init;
       dispose = dispose;
@@ -92,12 +96,15 @@ describe("共享骰子渲染器", () => {
       dispose,
       glCanvases,
       gpuCanvases,
+      glOptions,
+      gpuOptions,
     };
   }
   it("GPU 就绪后使用 GPU；失败候选释放后，WebGL 回退使用独立画布", async () => {
     const gpu = engines(Promise.resolve(true));
     expect(await createDiceEngine(gpu.GL, gpu.GPU)).toBeInstanceOf(gpu.GPU);
-    expect(diceRenderer.canvas?.width).toBe(16);
+    expect(gpu.gpuOptions[0]).toMatchObject({ doNotHandleContextLost: false });
+    expect(gpu.gpuCanvases[0]?.width).toBe(16);
     const failed = engines(
       Promise.resolve(true),
       vi.fn(async () => {
@@ -105,11 +112,13 @@ describe("共享骰子渲染器", () => {
       }),
     );
     expect(await createDiceEngine(failed.GL, failed.GPU)).toBeInstanceOf(failed.GL);
+    expect(failed.gpuOptions[0]).toMatchObject({ doNotHandleContextLost: false });
+    expect(failed.glOptions[0]).toMatchObject({ doNotHandleContextLost: false });
     expect(failed.dispose).toHaveBeenCalledOnce();
     expect(failed.glCanvases[0]).not.toBe(failed.gpuCanvases[0]);
-    expect(diceRenderer.canvas).toBe(failed.glCanvases[0]);
     const unavailable = engines(Promise.resolve(false));
     expect(await createDiceEngine(unavailable.GL, unavailable.GPU)).toBeInstanceOf(unavailable.GL);
+    expect(unavailable.glOptions[0]).toMatchObject({ doNotHandleContextLost: false });
     expect(unavailable.glCanvases[0]).not.toBe(unavailable.gpuCanvases[0]);
     const rejected = engines(Promise.reject(new Error("unsupported")));
     expect(await createDiceEngine(rejected.GL, rejected.GPU)).toBeInstanceOf(rejected.GL);
@@ -137,6 +146,48 @@ describe("共享骰子渲染器", () => {
     frames[1]!(116);
     expect(diceRenderer.live.size).toBe(0);
     expect(requestFrame).toHaveBeenCalledTimes(2);
+  });
+
+  it("单个渲染回调抛错时只回退该实例，不中断其他共享 RAF", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const failure = new Error("render failed");
+    const onError = vi.fn();
+    const healthy = vi.fn(() => false);
+    wakeDice(() => {
+      throw failure;
+    }, onError);
+    wakeDice(healthy);
+
+    frames[0]!(100);
+
+    expect(onError).toHaveBeenCalledWith(failure);
+    expect(healthy).toHaveBeenCalledOnce();
+    expect(diceRenderer.live.size).toBe(0);
+    expect(frames).toHaveLength(1);
+  });
+
+  it("再次唤醒时保留实例的渲染错误处理器", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const failure = new Error("render failed");
+    const onError = vi.fn();
+    const loop = () => {
+      throw failure;
+    };
+    wakeDice(loop, onError);
+    wakeDice(loop);
+
+    frames[0]!(100);
+
+    expect(onError).toHaveBeenCalledWith(failure);
+    expect(diceRenderer.live.size).toBe(0);
   });
 });
 

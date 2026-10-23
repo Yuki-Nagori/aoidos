@@ -148,6 +148,8 @@ Enter 发送，Shift+Enter 换行；event.isComposing 或本地 compositionstart
 
 默认 manual 骰判；用户可选择 auto，偏好在下一回合接纳时由 Rust 冻结，不热切换正在等待的 plan。UI 只提交 sessionId / roundId / planId 身份，不产生骰值；按钮防连击加 Rust 恰一次保护，取消 / 恢复 / 重生成仍复用已有 dice。重启后的待判定只恢复检查点，不自动掷骰或收费。
 
+骰子的 Babylon 场景只呈现已确认的 dice / check 事实，不参与随机数或判定。可见实例共享图形引擎与帧循环；离开视口、页面切到后台或组件卸载时取消未完成初始化并释放场景 / 引擎引用。WebGPU / WebGL context 或单实例绘制失败时回退到静态 2D 骰面和原始数值，不能阻塞回合；运行期间系统开启减少动态效果时停止持续动画。原生 GPU、context-loss 恢复路径及辅助技术仍需真实桌面 WebView 验收，见 [063](../task/063-babylon-dice-visualization.md)。
+
 ## 历史滚动、未读与有界状态
 
 距底部 <= 24px 且无选区 / 正文展开 / 拖拽时，用户视为跟随最新；只在此状态追加或预览增长后贴底。用户上滚超过阈值立即停止跟随，新内容显示“跳到最新”浮标；点击后清未读并跟随。状态变化、错误及骰判不得强制把阅读位置拉到底。

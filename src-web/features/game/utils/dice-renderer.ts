@@ -9,6 +9,7 @@ export const diceRenderer = {
   environment: undefined as Uint8Array[] | undefined,
   live: new Set<(time: number) => boolean>(),
 };
+const renderErrors = new WeakMap<(time: number) => boolean, (error: unknown) => void>();
 let diceFrame = 0;
 
 /** 在场景仍等待 Babylon 资源就绪时，可主动释放场景并结束等待。 */
@@ -67,7 +68,6 @@ export async function createDiceEngine(
     return canvas;
   };
   const canvas = createCanvas();
-  diceRenderer.canvas = canvas;
   try {
     if (await WebGPUEngine.IsSupportedAsync) {
       const candidate = new WebGPUEngine(canvas, {
@@ -75,7 +75,7 @@ export async function createDiceEngine(
         powerPreference: "low-power",
         stencil: false,
         audioEngine: false,
-        doNotHandleContextLost: true,
+        doNotHandleContextLost: false,
       });
       try {
         await candidate.initAsync();
@@ -90,7 +90,6 @@ export async function createDiceEngine(
   // HTMLCanvasElement 一旦取得 WebGPU 上下文，之后不能再切换为 WebGL 上下文。
   // 即使候选引擎初始化失败，也必须让回退引擎使用全新的画布。
   const fallbackCanvas = createCanvas();
-  diceRenderer.canvas = fallbackCanvas;
   return new Engine(
     fallbackCanvas,
     true,
@@ -100,7 +99,7 @@ export async function createDiceEngine(
       premultipliedAlpha: false,
       stencil: false,
       powerPreference: "low-power",
-      doNotHandleContextLost: true,
+      doNotHandleContextLost: false,
       audioEngine: false,
     },
     false,
@@ -108,7 +107,11 @@ export async function createDiceEngine(
 }
 
 /** 将实例加入共享 RAF，直到该实例返回 false。 */
-export function wakeDice(callback: (time: number) => boolean): void {
+export function wakeDice(
+  callback: (time: number) => boolean,
+  onError?: (error: unknown) => void,
+): void {
+  if (onError) renderErrors.set(callback, onError);
   diceRenderer.live.add(callback);
   if (!diceFrame) diceFrame = requestAnimationFrame(renderDiceFrame);
 }
@@ -116,7 +119,16 @@ export function wakeDice(callback: (time: number) => boolean): void {
 function renderDiceFrame(time: number): void {
   diceFrame = 0;
   diceRenderer.live.forEach((callback) => {
-    if (!callback(time)) diceRenderer.live.delete(callback);
+    try {
+      if (!callback(time)) diceRenderer.live.delete(callback);
+    } catch (error) {
+      diceRenderer.live.delete(callback);
+      try {
+        renderErrors.get(callback)?.(error);
+      } catch {
+        // One renderer's fallback must not stop the other shared RAF callbacks.
+      }
+    }
   });
   if (diceRenderer.live.size) diceFrame = requestAnimationFrame(renderDiceFrame);
 }
