@@ -50,6 +50,7 @@ let workspace: ReturnType<typeof useGameWorkspace>;
 const composerFocus = vi.fn<() => void>();
 let ports: Parameters<typeof useGameWorkspace>[0];
 let draft: Ref<string>;
+let composing: Ref<boolean>;
 let send: ReturnType<typeof vi.fn>;
 
 describe("useGameWorkspace", () => {
@@ -111,10 +112,11 @@ describe("useGameWorkspace", () => {
       reconnect: vi.fn(),
     } as never);
     draft = ref("");
+    composing = ref(false);
     send = vi.fn();
     vi.mocked(useGameInput).mockReturnValue({
       error: ref(undefined),
-      composing: ref(false),
+      composing,
       draft,
       busy: ref(false),
       tooLarge: ref(false),
@@ -187,6 +189,17 @@ describe("useGameWorkspace", () => {
     workspace.onComposerKeydown(event);
 
     expect(preventDefault).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not submit an action from Enter or the submit button during IME composition", async () => {
+    draft.value = "Look around.";
+    composing.value = true;
+    const event = new KeyboardEvent("keydown", { key: "Enter", isComposing: true });
+
+    workspace.onComposerKeydown(event);
+    await workspace.submitComposer();
+
     expect(send).not.toHaveBeenCalled();
   });
 
