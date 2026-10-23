@@ -63,10 +63,14 @@ const canvasRenderer = ref<"babylon" | "2d">("babylon");
 const renderFailed = ref(false);
 const popElements = ref<HTMLElement[]>([]);
 const visible = ref(false);
+const reduceMotionQuery =
+  typeof window === "undefined" ? undefined : window.matchMedia?.("(prefers-reduced-motion: reduce)");
+let reducedMotion = reduceMotionQuery?.matches ?? false;
 let cleanupScene: (() => void) | undefined;
 let releaseRenderer: (() => void) | undefined;
 const pendingScenes = new Set<() => void>();
 let observer: IntersectionObserver | undefined;
+let inViewport = false;
 let themeObserver: MutationObserver | undefined;
 let resizeObserver: ResizeObserver | undefined;
 let disposed = false;
@@ -84,6 +88,38 @@ let settledSent = false;
 
 function getShape() {
   return diceVisualShape(props.expression, props.rolls, props.motion !== "result");
+}
+
+function releaseVisibleScene(): void {
+  revision += 1;
+  cleanupScene?.();
+  cleanupScene = undefined;
+  pendingScenes.forEach((cancel) => cancel());
+  pendingScenes.clear();
+  available.value = false;
+  releaseRenderer?.();
+  releaseRenderer = undefined;
+}
+
+function updateVisibility(): void {
+  const shouldRender = inViewport && !document.hidden;
+  if (visible.value === shouldRender) return;
+  visible.value = shouldRender;
+  if (shouldRender) {
+    releaseRenderer ??= retainDiceRenderer();
+    void renderDice();
+  } else {
+    releaseVisibleScene();
+  }
+}
+
+function onPageVisibilityChange(): void {
+  updateVisibility();
+}
+
+function onReducedMotionChange(event: MediaQueryListEvent): void {
+  reducedMotion = event.matches;
+  activeScene?.wake();
 }
 const fallbackValues = computed(() => getShape()?.values ?? []);
 
@@ -160,6 +196,7 @@ async function makeScene(
     import("@babylonjs/core/Meshes/Builders/linesBuilder"),
     import("@babylonjs/core/Materials/Textures/rawCubeTexture"),
   ]);
+  if (disposed || revision !== instance) throw new Error("dice-render-cancelled");
   const shape = getShape();
   if (!shape) throw new Error("unsupported-dice-shape");
   const { Engine } = engineModule;
@@ -175,9 +212,18 @@ async function makeScene(
   const { Mesh } = meshModule;
   const { VertexData } = vertexModule;
   const { CreateLineSystem } = lineModule;
-  diceRenderer.engine ??= createDiceEngine(Engine, WebGPUEngine);
-  const activeEngine = await diceRenderer.engine;
-  if (disposed || revision !== instance) throw new Error("dice-render-cancelled");
+  let enginePromise = diceRenderer.engine;
+  if (!enginePromise) {
+    enginePromise = createDiceEngine(Engine, WebGPUEngine);
+    diceRenderer.engine = enginePromise;
+  }
+  const activeEngine = await enginePromise;
+  if (disposed || revision !== instance || diceRenderer.engine !== enginePromise) {
+    throw new Error("dice-render-cancelled");
+  }
+  const renderingCanvas = activeEngine.getRenderingCanvas();
+  if (!renderingCanvas) throw new Error("dice-render-canvas-unavailable");
+  diceRenderer.canvas = renderingCanvas;
   const output = targetCanvas.getContext("2d");
   if (!output) throw new Error("dice-output-context-unavailable");
   const resizeOutput = () => {
@@ -442,7 +488,6 @@ async function makeScene(
       camera.setTarget(new Vector3(0, pop ? 0.42 : 0.02, 0));
     };
     relayout();
-    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     const duration = Math.max(...geometries.map((item) => item.delay + item.duration * 1.3));
     const startTime = performance.now();
     const liveEffect = () => !reducedMotion && props.effect !== "" && settledEffectAt > 0;
@@ -590,7 +635,7 @@ async function makeScene(
         if (diceRenderer.canvas) {
           context.save();
           if (showEffect && props.effect === "fumble") context.filter = "brightness(0.72) saturate(0.35)";
-          context.drawImage(diceRenderer.canvas, 0, 0, width, height);
+          context.drawImage(renderingCanvas, 0, 0, width, height);
           context.restore();
         }
         if (showEffect && props.effect === "crit") {
@@ -643,13 +688,13 @@ async function makeScene(
       }
       return true;
     };
-    wakeDice(loop);
+    wakeDice(loop, onContextLost);
     await waitForDiceSceneReady(scene.whenReadyAsync(), cancellation.promise);
     pendingScenes.delete(cancellation.cancel);
     if (!disposed && revision === instance) render(performance.now());
     return {
       render,
-      wake: () => wakeDice(loop),
+      wake: () => wakeDice(loop, onContextLost),
       resize: () => {
         resizeOutput();
         relayout();
@@ -781,6 +826,7 @@ async function renderDice(): Promise<void> {
     renderFailed.value = false;
     return;
   }
+  releaseRenderer ??= retainDiceRenderer();
   const currentRevision = ++revision;
   const keepCurrentFrame = available.value;
   pendingScenes.forEach((cancel) => cancel());
@@ -796,12 +842,7 @@ async function renderDice(): Promise<void> {
     const instance = currentRevision;
     const contextLost = () => {
       if (currentRevision !== revision) return;
-      available.value = false;
-      renderFailed.value = true;
-      revision += 1;
-      cleanupScene?.();
-      cleanupScene = undefined;
-      if (props.motion === "rolling") emitSettledOnce(getShape()?.values ?? []);
+      fallbackFromSceneFailure();
     };
     const created = await makeScene(canvas.value, instance, contextLost);
     if (disposed || currentRevision !== revision) {
@@ -820,6 +861,8 @@ async function renderDice(): Promise<void> {
     available.value = drawFallbackFrame();
     canvasRenderer.value = "2d";
     renderFailed.value = !available.value;
+    releaseRenderer?.();
+    releaseRenderer = undefined;
     if (props.motion === "rolling") emitSettledOnce(getShape()?.values ?? []);
   }
 }
@@ -830,23 +873,31 @@ function emitSettledOnce(values: readonly number[]): void {
   emit("settled", { values, effect: props.effect });
 }
 
+function fallbackFromSceneFailure(): void {
+  revision += 1;
+  cleanupScene?.();
+  cleanupScene = undefined;
+  pendingScenes.forEach((cancel) => cancel());
+  pendingScenes.clear();
+  available.value = drawFallbackFrame();
+  canvasRenderer.value = "2d";
+  renderFailed.value = !available.value;
+  releaseRenderer?.();
+  releaseRenderer = undefined;
+  if (props.motion === "rolling") emitSettledOnce(getShape()?.values ?? []);
+}
+
 function observeVisibility(): void {
   if (!host.value || typeof IntersectionObserver === "undefined") {
-    visible.value = true;
-    void renderDice();
+    inViewport = true;
+    updateVisibility();
     return;
   }
   observer = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) {
-      visible.value = true;
-      void renderDice();
-    } else {
-      visible.value = false;
-      revision += 1;
-      cleanupScene?.();
-      cleanupScene = undefined;
-      available.value = false;
-    }
+    const entry = entries.find((item) => item.target === host.value);
+    if (!entry) return;
+    inViewport = entry.isIntersecting;
+    updateVisibility();
   });
   observer.observe(host.value);
 }
@@ -905,7 +956,8 @@ function cancelCharge(): void {
 }
 
 onMounted(() => {
-  releaseRenderer = retainDiceRenderer();
+  document.addEventListener("visibilitychange", onPageVisibilityChange);
+  reduceMotionQuery?.addEventListener("change", onReducedMotionChange);
   observeVisibility();
   if (typeof MutationObserver !== "undefined") {
     themeObserver = new MutationObserver(() => {
@@ -918,8 +970,12 @@ onMounted(() => {
   }
   if (typeof ResizeObserver !== "undefined" && host.value) {
     resizeObserver = new ResizeObserver(() => {
-      activeScene?.resize();
-      activeScene?.render(performance.now());
+      try {
+        activeScene?.resize();
+        activeScene?.render(performance.now());
+      } catch {
+        if (visible.value) fallbackFromSceneFailure();
+      }
     });
     resizeObserver.observe(host.value);
   }
@@ -954,6 +1010,8 @@ onScopeDispose(() => {
   disposed = true;
   revision += 1;
   if (chargeTimer) clearInterval(chargeTimer);
+  document.removeEventListener("visibilitychange", onPageVisibilityChange);
+  reduceMotionQuery?.removeEventListener("change", onReducedMotionChange);
   observer?.disconnect();
   themeObserver?.disconnect();
   resizeObserver?.disconnect();
