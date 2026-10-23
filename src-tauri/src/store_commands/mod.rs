@@ -4,7 +4,7 @@ mod events;
 use crate::ipc::CmdError;
 use aoidos_engine::{
     fault::Fault,
-    preferences::UiPreferences,
+    preferences::{DiceSkin, UiPreferences},
     record::{
         facts::DiceMode,
         view::{BodyPage, Page, View},
@@ -52,6 +52,7 @@ pub async fn store_get_ui_preferences(
 struct SetPreferences {
     panel_pinned: bool,
     dice_mode: DiceMode,
+    dice_skin: DiceSkin,
 }
 fn decode<T: serde::de::DeserializeOwned>(
     request: &tauri::ipc::Request<'_>,
@@ -68,7 +69,8 @@ pub async fn store_set_ui_preferences(
     let params: SetPreferences = decode(&request)?;
     state.ready()?;
     let preferences = state.storage.preferences.clone();
-    storage_job(move || preferences.set(params.panel_pinned, params.dice_mode)).await
+    storage_job(move || preferences.set(params.panel_pinned, params.dice_mode, params.dice_skin))
+        .await
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

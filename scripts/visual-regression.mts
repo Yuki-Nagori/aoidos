@@ -209,6 +209,29 @@ async function openWelcome(
         sessionId: session.sessionId,
         items: [
           {
+            recordSeq: 3,
+            kind: "dice",
+            createdAt: "2026-10-19T00:00:00Z",
+            body: {
+              expression: "2d6",
+              rolls: [
+                { sides: 6, value: 5 },
+                { sides: 6, value: 2 },
+              ],
+              total: 7,
+              source: { kind: "rule", id: "explore" },
+              planId: "visual-plan",
+              rng: {
+                algorithm: "chacha20-v1",
+                mappingVersion: 1,
+                seed: "visual-seed",
+                startCounter: "0",
+                endCounter: "2",
+              },
+              modifiers: [],
+            },
+          },
+          {
             recordSeq: 2,
             kind: "narration",
             createdAt: "2026-10-19T00:00:00Z",
@@ -229,7 +252,7 @@ async function openWelcome(
           },
         ],
         lastSeq: 0,
-        lastRecordSeq: 2,
+        lastRecordSeq: 3,
         viewEpoch: "00000000-0000-4000-8000-000000000005",
         needsRecovery: false,
       };
@@ -743,11 +766,50 @@ try {
     });
     await page.locator(".welcome-start").click();
     await page.locator(".game-stage").waitFor();
+    const stageLayout = await page.locator(".stage-area").evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const stage = element.querySelector<HTMLElement>(".stage")?.getBoundingClientRect();
+      return { x: rect.x, width: rect.width, stageX: stage?.x, stageWidth: stage?.width };
+    });
+    assert.equal(stageLayout.x, 0, "The scene stage starts at the left edge of the client area");
+    assert.equal(stageLayout.width, viewport.width, "The scene stage fills the client width");
+    assert.equal(stageLayout.stageX, 0, "Stage artwork does not leave a side gutter");
+    assert.equal(stageLayout.stageWidth, viewport.width, "Stage artwork fills the available width");
     await page.locator(".panel-edge-trigger").click();
     await page.locator(".dialogue-panel.dialogue-panel-open").waitFor();
     await page.getByRole("button", { name: "Pin dialogue panel" }).click();
     await page.locator('.game-stage[data-panel-state="pinned"]').waitFor();
+    await page.locator(".record-machine .record-dice-value").first().waitFor();
     assert.equal(await page.locator(".game-stage").getAttribute("data-panel-state"), "pinned");
+    assert.equal(await page.locator(".record-machine .record-dice-value").count(), 2);
+    assert.equal(await page.locator(".record-machine canvas").count(), 0);
+    const diceRow = await page
+      .locator(".record-machine")
+      .filter({ has: page.locator(".record-dice-value") })
+      .first()
+      .evaluate((element) => {
+        const values = Array.from(
+          element.querySelectorAll<HTMLElement>(
+            "strong, .record-dice-value, .record-machine-total",
+          ),
+        );
+        return {
+          centers: values.map((value) => {
+            const bounds = value.getBoundingClientRect();
+            return bounds.y + bounds.height / 2;
+          }),
+          chipHeights: Array.from(element.querySelectorAll<HTMLElement>(".record-dice-value")).map(
+            (value) => value.getBoundingClientRect().height,
+          ),
+          gap: getComputedStyle(element).columnGap,
+        };
+      });
+    assert.ok(
+      Math.max(...diceRow.centers) - Math.min(...diceRow.centers) <= 0.5,
+      "Formula, dice values and total share the same vertical center",
+    );
+    assert.deepEqual(diceRow.chipHeights, [20, 20]);
+    assert.equal(diceRow.gap, "6px");
     await page.waitForFunction(() => {
       const panel = document.querySelector<HTMLElement>(".dialogue-panel");
       if (!panel) return false;
@@ -913,6 +975,7 @@ try {
       { id: "appearance", target: "appearance" },
       { id: "api", target: "api" },
       { id: "gameplay", target: "gameplay" },
+      { id: "dice", target: "dice" },
       { id: "billing", target: "billing" },
       { id: "price", target: "billing" },
       { id: "balance", target: "billing" },
@@ -975,6 +1038,43 @@ try {
               borderRadius: getComputedStyle(element).borderRadius,
             })),
           { height: "38px", fontSize: "12px", borderRadius: "8px" },
+        );
+      }
+      if (section.id === "dice") {
+        // 首次进入需等待 PBR 着色器与图集上传；固定延时会把数字占位误拍为骰子。
+        await page.waitForFunction(() => {
+          const dice = Array.from(
+            document.querySelectorAll<HTMLElement>("#dice .record-dice-visual"),
+          );
+          const viewport = document.querySelector(".settings-content")!.getBoundingClientRect();
+          const visible = dice.filter((element) => {
+            const bounds = element.getBoundingClientRect();
+            return (
+              bounds.bottom > viewport.top && bounds.top < Math.min(innerHeight, viewport.bottom)
+            );
+          });
+          return (
+            dice.length === 9 &&
+            visible.length > 0 &&
+            visible.every((element) => element.dataset.renderer === "babylon")
+          );
+        });
+        await captureVisual(page, `settings-dice-${viewport.width}.png`);
+        assert.equal(await page.locator("#dice .dice-preview-formulas button").count(), 3);
+        assert.equal(await page.locator("#dice .dice-preview-actions button").count(), 3);
+        assert.equal(await page.locator("#dice .dice-skin-card").count(), 8);
+        const gridLayout = await page.locator("#dice .dice-skin-grid").evaluate((element) => ({
+          columns: getComputedStyle(element).gridTemplateColumns.split(" ").length,
+          width: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+        }));
+        assert.ok(
+          gridLayout.columns >= 1 && gridLayout.columns <= 4,
+          "Dice skin cards adapt their column count to available space",
+        );
+        assert.ok(
+          gridLayout.scrollWidth <= gridLayout.width,
+          "Dice skin cards stay inside the settings content",
         );
       }
       if (section.id === "price") {
@@ -1382,7 +1482,7 @@ try {
   }
 
   console.log(
-    `欢迎页与设置视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个欢迎页窗口、3 个真实会话设置窗口、11 个分区（含账单 / 记忆数据 / 快捷键）和 2 种失败状态。`,
+    `欢迎页与设置视觉布局检查通过：${baseline.source.commit.slice(0, 7)}，3 个主题、2 种语言、Mistbell 皮肤开关、3 个欢迎页窗口、3 个真实会话设置窗口、12 个分区（含骰子、账单、记忆数据与快捷键）和 2 种失败状态。`,
   );
 } finally {
   await browser?.close();

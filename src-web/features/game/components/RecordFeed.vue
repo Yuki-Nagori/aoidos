@@ -1,23 +1,45 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { RecordItem } from "../../../api/records";
+import type { DiceSkinId } from "../utils/dice-visual";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   items: RecordItem[];
+  scriptId?: string;
+  diceSkin?: DiceSkinId;
+  scriptSkinEnabled?: boolean;
   characters?: readonly { id: string; canonicalName: string }[];
   olderCursor?: string;
   loadingOlder: boolean;
   preview?: { text: string; outcome?: string; error?: { code: string; message: string } };
   expandedBody?: string;
   rewindSelectorOpen?: boolean;
-}>();
+  onRetry?: () => void;
+  onRequestRewind?: () => void;
+  actionsBusy?: boolean;
+}>(), {
+  diceSkin: "auto",
+  scriptSkinEnabled: true,
+});
 const emit = defineEmits<{
   loadOlder: [];
   loadBody: [bodyRef: string];
   rewind: [recordSeq: number];
 }>();
 const { t } = useI18n();
+const copiedCode = ref<string>();
+const copyFailed = ref(false);
+async function copyErrorCode(code: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(safeToken(code));
+    copiedCode.value = code;
+    copyFailed.value = false;
+  } catch {
+    copiedCode.value = undefined;
+    copyFailed.value = true;
+  }
+}
 const displayItems = computed(() => {
   return props.items.filter(
     (item) =>
@@ -30,6 +52,10 @@ const displayItems = computed(() => {
       ),
   );
 });
+function displayText(text: string): string {
+  return text.replace(/\s+$/u, "");
+}
+const livePreviewText = computed(() => displayText(props.preview?.text ?? ""));
 
 function characterName(id: string): string {
   return props.characters?.find((character) => character.id === id)?.canonicalName ?? id;
@@ -121,7 +147,9 @@ function isOutOfCharacter(item: RecordItem): boolean {
     {{ t("game.earlierRecords") }}
   </button>
   <ol class="record-list" :aria-label="t('game.dialogue')">
-    <li v-if="!displayItems.length" class="record-empty">{{ t("game.noRecords") }}</li>
+    <li v-if="!displayItems.length && !props.preview" class="record-empty">
+      {{ t("game.noRecords") }}
+    </li>
     <li
       v-for="item in displayItems"
       :key="item.recordSeq"
@@ -139,13 +167,13 @@ function isOutOfCharacter(item: RecordItem): boolean {
         <span v-if="isOutOfCharacter(item)" class="record-ooc">
           {{ t("game.recordOocTag") }}
         </span>
-        <p class="record-player-bubble">{{ item.body.text }}</p>
+        <p class="record-player-bubble">{{ displayText(item.body.text) }}</p>
       </div>
       <div
         v-else-if="item.kind === 'narration' && item.body && 'text' in item.body"
         class="record-narrator"
       >
-        <p>{{ item.body.text }}</p>
+        <p>{{ displayText(item.body.text) }}</p>
       </div>
       <div
         v-else-if="item.kind === 'characterSpeech' && item.body && 'text' in item.body"
@@ -159,7 +187,7 @@ function isOutOfCharacter(item: RecordItem): boolean {
             : t("game.recordKinds.character")
           }}</strong>
         </div>
-        <p class="record-character-bubble">{{ item.body.text }}</p>
+        <p class="record-character-bubble">{{ displayText(item.body.text) }}</p>
       </div>
       <div
         v-else-if="item.kind === 'dice' && item.body && 'expression' in item.body"
@@ -167,13 +195,9 @@ function isOutOfCharacter(item: RecordItem): boolean {
       >
         <span class="led" aria-hidden="true" />
         <strong>{{ item.body.expression }}</strong>
-        <span
-          v-for="(roll, index) in item.body.rolls"
-          :key="`${item.recordSeq}:${index}`"
-          class="record-die"
-        >
-          {{ roll.value }}
-        </span>
+        <span v-for="(roll, index) in item.body.rolls" :key="index" class="record-dice-value">{{
+          roll.value
+        }}</span>
         <span class="record-machine-total">= {{ item.body.total }}</span>
       </div>
       <div
@@ -191,7 +215,7 @@ function isOutOfCharacter(item: RecordItem): boolean {
         class="record-recap"
       >
         <summary>{{ t("game.recap") }}</summary>
-        <p>{{ item.body.text }}</p>
+        <p>{{ displayText(item.body.text) }}</p>
       </details>
       <button
         v-else-if="item.bodyRef"
@@ -221,24 +245,111 @@ function isOutOfCharacter(item: RecordItem): boolean {
         <span>{{ systemRecordMessage(item.body.message) }}</span>
       </p>
       <p v-else class="record-compat">{{ t("game.recordUnavailable") }}</p>
-      <p v-if="isFailed(item)" class="record-failure" role="status">
-        <strong>{{ t("game.operationFailed") }}</strong>
-        <span v-if="failureMessage(item)"> · {{ failureMessage(item) }}</span>
-        <span v-if="item.body && 'error' in item.body && item.body.error.code">
-          · {{ t("game.workErrorCode", { code: safeToken(item.body.error.code) }) }}
-        </span>
-      </p>
+      <div v-if="isFailed(item)" class="record-failure" role="status">
+        <div class="record-failure-heading">
+          <strong>{{ t("game.operationFailed") }}</strong>
+          <span v-if="failureMessage(item)"> · {{ failureMessage(item) }}</span>
+        </div>
+        <div class="record-failure-meta">
+          <span
+            v-if="item.body && 'error' in item.body && item.body.error.code"
+            class="record-failure-code mono"
+          >
+            {{ t("game.workErrorCode", { code: safeToken(item.body.error.code) }) }}
+            <button
+              type="button"
+              class="btn ghost btn-compact"
+              :aria-label="t('game.copyErrorCode')"
+              @click.stop="copyErrorCode(item.body.error.code)"
+            >
+              ⧉
+            </button>
+          </span>
+          <span class="text-xs text-muted">{{ t("game.failureCostUnknown") }}</span>
+        </div>
+        <div
+          v-if="item === displayItems.at(-1) && (onRetry || onRequestRewind)"
+          class="record-failure-actions"
+        >
+          <button
+            v-if="onRetry"
+            type="button"
+            class="btn primary"
+            :disabled="actionsBusy"
+            @click.stop="onRetry()"
+          >
+            {{ t("common.retry") }}
+          </button>
+          <button
+            v-if="onRequestRewind"
+            type="button"
+            class="btn ghost"
+            :disabled="actionsBusy"
+            @click.stop="onRequestRewind()"
+          >
+            {{ t("game.rewindToHere") }}
+          </button>
+        </div>
+        <p class="text-xs text-muted">{{ t("game.failedPartialKept") }}</p>
+      </div>
+    </li>
+    <li v-if="props.preview" class="record-row record-live-row">
+      <div class="record-narrator record-live" data-testid="live-text">
+        {{ livePreviewText }}<span class="record-cursor" aria-hidden="true" />
+        <div v-if="props.preview.outcome === 'failed'" class="record-failure" role="status">
+          <strong>{{ t("game.operationFailed") }}</strong>
+          <template v-if="props.preview.error?.message">
+            · {{ props.preview.error.message }}</template>
+          <span v-if="props.preview.error?.code" class="record-failure-code mono">
+            {{ t("game.workErrorCode", { code: safeToken(props.preview.error.code) }) }}
+            <button
+              type="button"
+              class="btn ghost btn-compact"
+              :aria-label="t('game.copyErrorCode')"
+              @click="copyErrorCode(props.preview.error.code)"
+            >
+              ⧉
+            </button>
+          </span>
+          <p class="text-xs text-muted">{{ t("game.failureCostUnknown") }}</p>
+          <div v-if="onRetry || onRequestRewind" class="record-failure-actions">
+            <button
+              v-if="onRetry"
+              type="button"
+              class="btn primary"
+              :disabled="actionsBusy"
+              @click="onRetry()"
+            >
+              {{ t("common.retry") }}
+            </button>
+            <button
+              v-if="onRequestRewind"
+              type="button"
+              class="btn ghost"
+              :disabled="actionsBusy"
+              @click="onRequestRewind()"
+            >
+              {{ t("game.rewindToHere") }}
+            </button>
+          </div>
+          <p class="text-xs text-muted">{{ t("game.failedPartialKept") }}</p>
+        </div>
+      </div>
     </li>
   </ol>
-  <p v-if="props.preview" class="record-narrator record-live" data-testid="live-text">
-    {{ props.preview.text }}<span class="record-cursor" aria-hidden="true" />
-    <span v-if="props.preview.outcome === 'failed'" class="record-failure" role="status">
-      <strong>{{ t("game.operationFailed") }}</strong>
-      <template v-if="props.preview.error?.message"> · {{ props.preview.error.message }}</template>
-      <template v-if="props.preview.error?.code">
-        · {{ t("game.workErrorCode", { code: safeToken(props.preview.error.code) }) }}
-      </template>
-    </span>
+  <p v-if="copiedCode" class="text-xs text-muted" role="status">{{ t("game.errorCodeCopied") }}</p>
+  <p v-if="copyFailed" class="text-xs text-muted" role="status">
+    {{ t("game.errorCodeCopyFailed") }}
   </p>
-  <p v-if="props.expandedBody !== undefined" class="record-expanded">{{ props.expandedBody }}</p>
+  <p v-if="props.expandedBody !== undefined" class="record-expanded">
+    {{ displayText(props.expandedBody) }}
+  </p>
 </template>
+
+<style scoped>
+.record-failure { display: grid; gap: .5rem; border: 1px solid color-mix(in srgb, var(--diff-remove) 35%, transparent); background: color-mix(in srgb, var(--diff-remove) 7%, transparent); border-radius: .75rem; padding: .625rem .75rem; margin-top: .5rem; }
+.record-failure-heading, .record-failure-meta, .record-failure-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.record-failure-heading strong { color: var(--diff-remove); }
+.record-failure-heading { color: var(--ink); font-size: .8125rem; }
+.record-failure-code { display: inline-flex; gap: .25rem; align-items: center; border: 1px solid var(--hairline); border-radius: .4375rem; padding-left: .5rem; color: var(--muted); font-size: .6875rem; overflow-wrap: anywhere; }
+</style>

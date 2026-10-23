@@ -4,7 +4,9 @@ defineProps<{
     | "appearance"
     | "api"
     | "gameplay"
+    | "dice"
     | "billing"
+    | "rates"
     | "price"
     | "balance"
     | "memory"
@@ -34,7 +36,13 @@ defineProps<{
       <circle cx="15" cy="9" r="0.9" fill="currentColor" />
       <circle cx="9" cy="15" r="0.9" fill="currentColor" />
     </template>
-    <template v-else-if="name === 'billing'">
+    <template v-else-if="name === 'dice'">
+      <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3z" />
+      <path d="m4.3 7.7 7.7 4.4 7.7-4.4M12 12.1V21" />
+      <circle cx="9" cy="8" r=".7" fill="currentColor" />
+      <circle cx="15" cy="16" r=".7" fill="currentColor" />
+    </template>
+    <template v-else-if="name === 'billing' || name === 'rates'">
       <ellipse cx="12" cy="7" rx="7" ry="3" />
       <path d="M5 7v5c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5" />
     </template>

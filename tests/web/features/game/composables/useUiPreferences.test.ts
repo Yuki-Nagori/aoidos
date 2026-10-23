@@ -1,6 +1,7 @@
 import { effectScope } from "vue";
 import { describe, expect, it, vi } from "vitest";
 import { useUiPreferences } from "../../../../../src-web/features/game/composables/useUiPreferences";
+import type { UiPreferences } from "../../../../../src-web/api/store";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -14,39 +15,53 @@ function deferred<T>() {
 
 describe("useUiPreferences", () => {
   it("does not let a late initial read overwrite an interaction", async () => {
-    const read = deferred<{ version: 1; panelPinned: boolean; diceMode: "manual" | "auto" }>();
-    const set = vi.fn(async (panelPinned: boolean, diceMode: "manual" | "auto") => ({
-      version: 1 as const,
-      panelPinned,
-      diceMode,
-    }));
+    const read = deferred<UiPreferences>();
+    const set = vi.fn(
+      async (
+        panelPinned: boolean,
+        diceMode: "manual" | "auto",
+        diceSkin: UiPreferences["diceSkin"] = "auto",
+      ) => ({
+        version: 1 as const,
+        panelPinned,
+        diceMode,
+        diceSkin,
+      }),
+    );
     const scope = effectScope();
     const state = scope.run(() => useUiPreferences({ get: () => read.promise, set }))!;
 
     const loading = state.load();
     await state.setPanelPinned(true);
-    read.resolve({ version: 1, panelPinned: false, diceMode: "manual" });
+    read.resolve({ version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" });
     await loading;
 
     expect(state.panelPinned.value).toBe(true);
-    expect(set).toHaveBeenCalledWith(true, "manual");
+    expect(set).toHaveBeenCalledWith(true, "manual", "auto");
     scope.stop();
   });
 
   it("serializes full replacements and keeps the latest intent", async () => {
-    const first = deferred<{ version: 1; panelPinned: boolean; diceMode: "manual" | "auto" }>();
+    const first = deferred<UiPreferences>();
     const set = vi
       .fn()
       .mockReturnValueOnce(first.promise)
-      .mockImplementationOnce(async (panelPinned: boolean, diceMode: "manual" | "auto") => ({
-        version: 1 as const,
-        panelPinned,
-        diceMode,
-      }));
+      .mockImplementationOnce(
+        async (
+          panelPinned: boolean,
+          diceMode: "manual" | "auto",
+          diceSkin: UiPreferences["diceSkin"] = "auto",
+        ) => ({
+          version: 1 as const,
+          panelPinned,
+          diceMode,
+          diceSkin,
+        }),
+      );
     const scope = effectScope();
     const state = scope.run(() =>
       useUiPreferences({
-        get: async () => ({ version: 1, panelPinned: false, diceMode: "manual" }),
+        get: async () => ({ version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" }),
         set,
       }),
     )!;
@@ -56,12 +71,12 @@ describe("useUiPreferences", () => {
     await Promise.resolve();
     const mode = state.setDiceMode("auto");
     expect(set).toHaveBeenCalledTimes(1);
-    first.resolve({ version: 1, panelPinned: true, diceMode: "manual" });
+    first.resolve({ version: 1, panelPinned: true, diceMode: "manual", diceSkin: "auto" });
     await Promise.all([pinning, mode]);
 
     expect(set.mock.calls).toEqual([
-      [true, "manual"],
-      [true, "auto"],
+      [true, "manual", "auto"],
+      [true, "auto", "auto"],
     ]);
     expect(state.panelPinned.value).toBe(true);
     expect(state.diceMode.value).toBe("auto");
@@ -72,7 +87,7 @@ describe("useUiPreferences", () => {
     const scope = effectScope();
     const state = scope.run(() =>
       useUiPreferences({
-        get: async () => ({ version: 1, panelPinned: false, diceMode: "manual" }),
+        get: async () => ({ version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" }),
         set: async () => {
           throw { code: "store.io", message: "private detail" };
         },
@@ -89,12 +104,21 @@ describe("useUiPreferences", () => {
 });
 
 it("preserves pending dice intent across initial load and does not reload confirmed state", async () => {
-  const get = vi.fn().mockResolvedValue({ version: 1, panelPinned: true, diceMode: "manual" });
-  const set = vi.fn(async (panelPinned: boolean, diceMode: "manual" | "auto") => ({
-    version: 1 as const,
-    panelPinned,
-    diceMode,
-  }));
+  const get = vi
+    .fn()
+    .mockResolvedValue({ version: 1, panelPinned: true, diceMode: "manual", diceSkin: "auto" });
+  const set = vi.fn(
+    async (
+      panelPinned: boolean,
+      diceMode: "manual" | "auto",
+      diceSkin: UiPreferences["diceSkin"] = "auto",
+    ) => ({
+      version: 1 as const,
+      panelPinned,
+      diceMode,
+      diceSkin,
+    }),
+  );
   const scope = effectScope();
   const state = scope.run(() => useUiPreferences({ get, set }))!;
   await state.setDiceMode("auto");
@@ -102,7 +126,7 @@ it("preserves pending dice intent across initial load and does not reload confir
   await state.load();
   expect(get).toHaveBeenCalledOnce();
   await vi.waitFor(() => expect(state.saving.value).toBe(false));
-  expect(set).toHaveBeenCalledExactlyOnceWith(true, "auto");
+  expect(set).toHaveBeenCalledExactlyOnceWith(true, "auto", "auto");
   expect(state.diceMode.value).toBe("auto");
   scope.stop();
 });
@@ -111,7 +135,7 @@ it("retries failed reads without writing against an unknown baseline", async () 
   const get = vi
     .fn()
     .mockRejectedValueOnce(new Error("secret"))
-    .mockResolvedValueOnce({ version: 1, panelPinned: true, diceMode: "auto" });
+    .mockResolvedValueOnce({ version: 1, panelPinned: true, diceMode: "auto", diceSkin: "auto" });
   const set = vi.fn();
   const scope = effectScope();
   const state = scope.run(() => useUiPreferences({ get, set }))!;
@@ -127,20 +151,27 @@ it("retries failed reads without writing against an unknown baseline", async () 
 });
 
 it("keeps newer changes queued when an earlier replacement fails", async () => {
-  type Pref = { version: 1; panelPinned: boolean; diceMode: "manual" | "auto" };
+  type Pref = UiPreferences;
   const first = deferred<Pref>();
   const set = vi
     .fn()
     .mockReturnValueOnce(first.promise)
-    .mockImplementationOnce(async (panelPinned: boolean, diceMode: "manual" | "auto") => ({
-      version: 1 as const,
-      panelPinned,
-      diceMode,
-    }));
+    .mockImplementationOnce(
+      async (
+        panelPinned: boolean,
+        diceMode: "manual" | "auto",
+        diceSkin: UiPreferences["diceSkin"],
+      ) => ({
+        version: 1 as const,
+        panelPinned,
+        diceMode,
+        diceSkin,
+      }),
+    );
   const scope = effectScope();
   const state = scope.run(() =>
     useUiPreferences({
-      get: async () => ({ version: 1, panelPinned: false, diceMode: "manual" }),
+      get: async () => ({ version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" }),
       set,
     }),
   )!;
@@ -150,8 +181,8 @@ it("keeps newer changes queued when an earlier replacement fails", async () => {
   first.reject({ code: "store.io", message: "retry" });
   await Promise.all([sending, queued]);
   expect(set.mock.calls).toEqual([
-    [false, "auto"],
-    [true, "manual"],
+    [false, "auto", "auto"],
+    [true, "manual", "auto"],
   ]);
   expect(state.panelPinned.value).toBe(true);
   expect(state.diceMode.value).toBe("manual");
@@ -159,20 +190,27 @@ it("keeps newer changes queued when an earlier replacement fails", async () => {
 });
 
 it("does not roll back a newer dice choice when a prior pinning write fails", async () => {
-  type Pref = { version: 1; panelPinned: boolean; diceMode: "manual" | "auto" };
+  type Pref = UiPreferences;
   const first = deferred<Pref>();
   const set = vi
     .fn()
     .mockReturnValueOnce(first.promise)
-    .mockImplementationOnce(async (panelPinned: boolean, diceMode: "manual" | "auto") => ({
-      version: 1 as const,
-      panelPinned,
-      diceMode,
-    }));
+    .mockImplementationOnce(
+      async (
+        panelPinned: boolean,
+        diceMode: "manual" | "auto",
+        diceSkin: UiPreferences["diceSkin"],
+      ) => ({
+        version: 1 as const,
+        panelPinned,
+        diceMode,
+        diceSkin,
+      }),
+    );
   const scope = effectScope();
   const state = scope.run(() =>
     useUiPreferences({
-      get: async () => ({ version: 1, panelPinned: false, diceMode: "manual" }),
+      get: async () => ({ version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" }),
       set,
     }),
   )!;
@@ -182,8 +220,8 @@ it("does not roll back a newer dice choice when a prior pinning write fails", as
   first.reject(new Error("private"));
   await Promise.all([sending, queued]);
   expect(set.mock.calls).toEqual([
-    [true, "manual"],
-    [false, "auto"],
+    [true, "manual", "auto"],
+    [false, "auto", "auto"],
   ]);
   expect(state.panelPinned.value).toBe(false);
   expect(state.diceMode.value).toBe("auto");
@@ -193,9 +231,11 @@ it("does not roll back a newer dice choice when a prior pinning write fails", as
 it.each(["load", "save", "failure"])(
   "ignores late %s responses after disposal",
   async (operation) => {
-    type Pref = { version: 1; panelPinned: boolean; diceMode: "manual" | "auto" };
+    type Pref = UiPreferences;
     const pending = deferred<Pref>();
-    const get = vi.fn().mockResolvedValue({ version: 1, panelPinned: false, diceMode: "manual" });
+    const get = vi
+      .fn()
+      .mockResolvedValue({ version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" });
     if (operation === "load") get.mockReturnValue(pending.promise);
     const set = vi.fn().mockReturnValue(pending.promise);
     const scope = effectScope();
@@ -208,7 +248,7 @@ it.each(["load", "save", "failure"])(
     }
     scope.stop();
     if (operation === "failure") pending.reject(new Error("secret"));
-    else pending.resolve({ version: 1, panelPinned: true, diceMode: "auto" });
+    else pending.resolve({ version: 1, panelPinned: true, diceMode: "auto", diceSkin: "auto" });
     await sending;
     await state.setPanelPinned(false);
     await state.setDiceMode("manual");

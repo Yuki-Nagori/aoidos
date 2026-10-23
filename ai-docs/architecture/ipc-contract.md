@@ -267,12 +267,12 @@ stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每
 
 ## 界面偏好（008 设计，022 已实现）
 
-| 命令                     | 参数                        | 成功返回                                       |
-| ------------------------ | --------------------------- | ---------------------------------------------- |
-| store_get_ui_preferences | 无                          | UiPreferences                                  |
-| store_set_ui_preferences | `{ panelPinned, diceMode }` | 已持久化确认的 UiPreferences；完整替换两个偏好 |
+| 命令                     | 参数                                  | 成功返回                                       |
+| ------------------------ | ------------------------------------- | ---------------------------------------------- |
+| store_get_ui_preferences | 无                                    | UiPreferences                                  |
+| store_set_ui_preferences | `{ panelPinned, diceMode, diceSkin }` | 已持久化确认的 UiPreferences；完整替换三个偏好 |
 
-UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "auto" }`，首次默认为 false / manual；未知枚举、额外可写字段为 app.bad-request，持久化失败为对应 store.*。Rust 拥有持久化，前端不写文件。偏好修改不改变当前 round 的冻结值；任务 022 接入存储，023 在接纳时使用，025 界面实施消费该类型。源 schema / 配置升级由存储规范约束，不能把焦点、草稿或凭据塞进偏好。
+UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "auto", diceSkin: "auto" | "theme" | "obsidian" | "brass" | "jade" | "crystal" | "bone" | "mistbell" }`，首次默认为 false / manual / auto。旧版 v1 文件缺少 `diceSkin` 时读取为 `auto`；未知枚举、额外可写字段为 app.bad-request，持久化失败为对应 store.*。Rust 拥有持久化，前端不写文件。偏好修改不改变当前 round 的冻结值；任务 022 接入存储，023 在接纳时使用，025 界面实施消费该类型，063 添加骰子皮肤偏好。源 schema / 配置升级由存储规范约束，不能把焦点、草稿或凭据塞进偏好。
 
 ## 主题与皮肤命令（009 设计，026 实施中）
 

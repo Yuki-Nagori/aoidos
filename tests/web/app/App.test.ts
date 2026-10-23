@@ -48,9 +48,9 @@ describe("App", () => {
       if (command === "theme_set_preference")
         return { version: 1, theme: (args as { theme?: string } | undefined)?.theme ?? "dark" };
       if (command === "store_get_ui_preferences")
-        return { version: 1, panelPinned: false, diceMode: "manual" };
+        return { version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" };
       if (command === "store_set_ui_preferences")
-        return { version: 1, panelPinned: false, diceMode: "auto" };
+        return { version: 1, panelPinned: false, diceMode: "auto", diceSkin: "auto" };
       if (command === "theme_list")
         return [
           { id: "dark", name: "深色", colorScheme: "dark" },
@@ -163,7 +163,7 @@ describe("App", () => {
     await wrapper.get('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
-    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(11);
+    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(13);
     const dialog = wrapper.get('[role="dialog"]');
     const focusable = Array.from(
       dialog.element.querySelectorAll<HTMLElement>(
@@ -238,6 +238,7 @@ describe("App", () => {
       expect(invoke).toHaveBeenCalledWith("store_set_ui_preferences", {
         panelPinned: false,
         diceMode: "auto",
+        diceSkin: "auto",
       });
     });
     await wrapper.get('[role="dialog"]').trigger("keydown", { key: "Escape" });
@@ -247,6 +248,7 @@ describe("App", () => {
     );
     await wrapper.get(".model-settings").trigger("click");
     expect(wrapper.find('.settings-nav button[aria-current="page"]').text()).toBe("模型与 API");
+    expect(wrapper.find(".settings-currency-heading").exists()).toBe(false);
     await wrapper.get("#api .settings-section-close").trigger("click");
     await vi.waitFor(() =>
       expect(wrapper.get(".model-settings").element).toBe(document.activeElement),
@@ -329,7 +331,7 @@ describe("App", () => {
         ];
       if (command === "theme_get_preference") return { version: 1, theme: "dark" };
       if (command === "store_get_ui_preferences")
-        return { version: 1, panelPinned: false, diceMode: "manual" };
+        return { version: 1, panelPinned: false, diceMode: "manual", diceSkin: "auto" };
       if (command === "theme_list") return [];
       if (command === "theme_skin_load")
         return {

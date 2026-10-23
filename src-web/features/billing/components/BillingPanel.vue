@@ -7,6 +7,7 @@ import type { useBilling } from "../composables/useBilling";
 import { summarizeRunUsage, usageProgressPercent } from "../utils/run-usage";
 import { billingErrorDescriptor } from "../utils/billing-error";
 import { formatPeakSchedule } from "../utils/price-schedule";
+import BillingRates from "./BillingRates.vue";
 import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const { t } = useI18n();
@@ -17,7 +18,7 @@ const props = defineProps<{
   providerId: string;
   providerLabel?: string;
   modelId?: string;
-  view?: "all" | "billing" | "price" | "balance";
+  view?: "all" | "billing" | "price" | "balance" | "rates";
 }>();
 const billing = computed(() => props.billing);
 const locale = computed(() => props.locale);
@@ -521,6 +522,13 @@ const billingErrorMessage = computed(() => {
         </article>
       </section>
     </template>
+    <BillingRates
+      v-if="view === 'rates'"
+      :price="billing.selectedPrice?.value"
+      :locale="locale"
+      :time-zone="billing.monthly.value?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone"
+      :provider-label="props.providerLabel ?? providerId"
+    />
     <template v-if="view === 'all' || view === 'price'">
       <div class="billing-price-context">
         <div class="billing-price-identity">

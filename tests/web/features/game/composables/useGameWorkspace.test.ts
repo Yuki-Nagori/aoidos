@@ -33,6 +33,18 @@ vi.mock("../../../../../src-web/features/game/composables/usePanelState", () => 
 }));
 
 let phaseState: Ref<{ snapshot: { historyRevision: number; phase: string }; error: undefined }>;
+let turnView: Ref<{
+  snapshot:
+    | {
+        turnId: string;
+        text: string;
+        seq: { chunk: number; done: number; failed: number };
+        outcome?: "completed";
+      }
+    | undefined;
+  recoveryError: undefined;
+}>;
+let panelOpen: Ref<boolean>;
 const panelOptions = vi.mocked(usePanelState);
 let workspace: ReturnType<typeof useGameWorkspace>;
 const composerFocus = vi.fn<() => void>();
@@ -47,6 +59,7 @@ describe("useGameWorkspace", () => {
       state: phaseState,
       connectionError: ref(undefined),
     };
+    turnView = ref({ snapshot: undefined, recoveryError: undefined });
     const records = {
       items: ref([]),
       state: ref({ pages: [], view: undefined, body: undefined, error: undefined }),
@@ -71,9 +84,10 @@ describe("useGameWorkspace", () => {
     });
     const recordsFeed = ref(feed);
     const confirmDialog = ref(dialog);
+    panelOpen = ref(false);
     const panel = {
       state: ref("closed"),
-      isOpen: ref(false),
+      isOpen: panelOpen,
       enterTrigger: vi.fn(),
       leaveTrigger: vi.fn(),
       enterPanel: vi.fn(),
@@ -89,7 +103,7 @@ describe("useGameWorkspace", () => {
     vi.mocked(useGameView).mockReturnValue({
       phase,
       turn: {
-        view: ref({ snapshot: undefined, recoveryError: undefined }),
+        view: turnView,
         connectionError: ref(undefined),
       },
       records,
@@ -174,5 +188,31 @@ describe("useGameWorkspace", () => {
 
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("starts following the newest narration after the player submits an action", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    panelOpen.value = true;
+    const feed = ports.recordsFeed.value!;
+    feed.scrollTop = 0;
+    workspace.updateFollowState();
+    draft.value = "Look around.";
+
+    await workspace.submitComposer();
+    turnView.value.snapshot = {
+      turnId: "turn-1",
+      text: "The room answers.",
+      seq: { chunk: 1, done: 0, failed: 0 },
+    };
+    await nextTick();
+    await nextTick();
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(feed.scrollTop).toBe(feed.scrollHeight);
+    vi.unstubAllGlobals();
   });
 });

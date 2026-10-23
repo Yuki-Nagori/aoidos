@@ -36,11 +36,12 @@ export interface MigrationSnapshot {
   deliveryError?: { code: "app.event-failed"; message: string };
 }
 
-/** 两个持久偏好；新 round 冻结后不受本次写入影响。 */
+/** 持久化的界面与对局偏好；新 round 冻结后不受本次写入影响。 */
 export interface UiPreferences {
   version: 1;
   panelPinned: boolean;
   diceMode: "manual" | "auto";
+  diceSkin: "auto" | "theme" | "obsidian" | "brass" | "jade" | "crystal" | "bone" | "mistbell";
 }
 
 /** 读取首次默认或已持久化偏好。 */
@@ -52,8 +53,9 @@ export function getUiPreferences(): Promise<UiPreferences> {
 export function setUiPreferences(
   panelPinned: boolean,
   diceMode: UiPreferences["diceMode"],
+  diceSkin: UiPreferences["diceSkin"] = "auto",
 ): Promise<UiPreferences> {
-  return invoke("store_set_ui_preferences", { panelPinned, diceMode });
+  return invoke("store_set_ui_preferences", { panelPinned, diceMode, diceSkin });
 }
 
 /** 获取最新 50 项备份；invoke 只透传返回值，不执行运行时校验。 */

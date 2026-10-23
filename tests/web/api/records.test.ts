@@ -35,10 +35,11 @@ it("passes opaque record references and preferences without local rewriting", as
   });
   expect(await getUiPreferences()).toBe(response);
   expect(invoke).toHaveBeenLastCalledWith("store_get_ui_preferences");
-  expect(await setUiPreferences(true, "auto")).toBe(response);
+  expect(await setUiPreferences(true, "auto", "mistbell")).toBe(response);
   expect(invoke).toHaveBeenLastCalledWith("store_set_ui_preferences", {
     panelPinned: true,
     diceMode: "auto",
+    diceSkin: "mistbell",
   });
 });
 
