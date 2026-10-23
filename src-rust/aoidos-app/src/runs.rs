@@ -93,6 +93,27 @@ impl RunLifecycleService {
         session_id: String,
         expected_revision: u64,
     ) -> Result<run_catalog::DeletionOperation, Fault> {
+        self.delete_run_confirmed(
+            product,
+            runtime,
+            operation_id,
+            session_id,
+            expected_revision,
+            false,
+        )
+        .await
+    }
+
+    /// 显式确认可以删除周目全部本地数据后，前向推进一个删除操作。
+    pub async fn delete_run_confirmed(
+        &self,
+        product: &Product,
+        runtime: &Service,
+        operation_id: String,
+        session_id: String,
+        expected_revision: u64,
+        acknowledge_run_data_loss: bool,
+    ) -> Result<run_catalog::DeletionOperation, Fault> {
         let _gate = self.deletion_gate.lock().await;
         let result = self
             .advance_deletion(
@@ -101,6 +122,7 @@ impl RunLifecycleService {
                 operation_id.clone(),
                 session_id.clone(),
                 expected_revision,
+                acknowledge_run_data_loss,
             )
             .await;
         match result {
@@ -154,6 +176,7 @@ impl RunLifecycleService {
                             operation_id.clone(),
                             session_id.clone(),
                             revision,
+                            false,
                         )
                         .await;
                     let updated = match result {
@@ -225,6 +248,7 @@ impl RunLifecycleService {
         operation_id: String,
         session_id: String,
         expected_revision: u64,
+        acknowledge_run_data_loss: bool,
     ) -> Result<run_catalog::DeletionOperation, Fault> {
         let storage = self.storage.clone();
         let op = operation_id.clone();
@@ -232,25 +256,45 @@ impl RunLifecycleService {
         let existing =
             aoidos_engine::blocking::run(move || storage.run_deletion_operation(&op, &session))
                 .await;
+        let effective_acknowledgement = match &existing {
+            Ok(operation) if operation.state == "requested" => {
+                let storage = self.storage.clone();
+                let operation_id = operation_id.clone();
+                let session_id = session_id.clone();
+                match aoidos_engine::blocking::run(move || {
+                    storage.run_deletion_acknowledged(&operation_id, &session_id)
+                })
+                .await
+                {
+                    Ok(acknowledged) => acknowledged,
+                    Err(error) if error.code == "app.not-found" => false,
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) if error.code == "app.not-found" => acknowledge_run_data_loss,
+            Ok(_) | Err(_) => false,
+        };
         let mut operation = match existing {
             Ok(operation) if operation.state != "requested" => operation,
             Ok(_) => {
                 product
-                    .close_and_freeze_run_deletion(
+                    .close_and_freeze_run_deletion_confirmed(
                         runtime,
                         operation_id.clone(),
                         session_id.clone(),
                         expected_revision,
+                        effective_acknowledgement,
                     )
                     .await?
             }
             Err(error) if error.code == "app.not-found" => {
                 product
-                    .close_and_freeze_run_deletion(
+                    .close_and_freeze_run_deletion_confirmed(
                         runtime,
                         operation_id.clone(),
                         session_id.clone(),
                         expected_revision,
+                        effective_acknowledgement,
                     )
                     .await?
             }

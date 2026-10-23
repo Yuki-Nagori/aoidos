@@ -543,7 +543,14 @@ async fn terminal_delivery_failure_keeps_waiting_checkpoint_and_duplicate_cancel
     let service = service(&fixture, DiceMode::Manual);
     let id = fixture.context.publisher.snapshot().state.session_id;
     let round = service.submit_input(&id, "搜索".into()).await.unwrap();
-    let waiting = wait(&service, &id, |state| state.check.is_some()).await;
+    let waiting = wait(&service, &id, |state| {
+        state.phase == Phase::AwaitingCheck
+            && state
+                .check
+                .as_ref()
+                .is_some_and(|check| check.status == CheckStatus::Waiting)
+    })
+    .await;
     fixture.events.fail.store(true, Ordering::SeqCst);
     let first = service.cancel_round(&id, &round.round_id).await.unwrap();
     assert_eq!(first.outcome, Outcome::Cancelled);

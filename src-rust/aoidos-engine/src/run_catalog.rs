@@ -92,6 +92,14 @@ ALTER TABLE session_deletion_progress ADD COLUMN directory_stack BLOB
   CHECK(directory_stack IS NULL OR length(directory_stack) <= 262144);
 "#;
 
+/// 持久化删除本局全部数据的明确授权，使崩溃恢复不推断或扩大用户确认范围。
+pub const DELETION_ACK_MIGRATION: &str = r#"
+CREATE TABLE session_deletion_ack (
+  operation_id TEXT PRIMARY KEY REFERENCES session_deletion_ops(operation_id) ON DELETE CASCADE,
+  acknowledge_run_data_loss INTEGER NOT NULL CHECK(acknowledge_run_data_loss IN (0, 1))
+);
+"#;
+
 /// 为已完成操作建立精简墓碑表；旧墓碑在存储打开后按 session 身份哈希压缩。
 pub const DELETION_RECEIPT_MIGRATION: &str = DELETION_RECEIPT_SCHEMA;
 
@@ -112,7 +120,7 @@ pub(crate) use deletion::{
 pub use deletion::{
     DeletionManifestEntry, DeletionManifestEntryKind, DeletionOperation, RunDeletionCheck,
     clear_active_selection_for_deletion, deletion_check, enumerate_deletion_manifest_entries,
-    operation, pending_operations, request_deletion,
+    operation, pending_operations, request_deletion, request_deletion_with_ack,
 };
 pub(crate) use deletion::{deletion_manifest_target, freeze_deletion_manifest};
 pub(crate) use deletion::{manifest_for_quarantine, mark_files_quarantined};
@@ -544,19 +552,28 @@ pub fn page(
             break;
         }
         let session_id: String = row.get(0).map_err(database)?;
-        let state: String = row.get(6).map_err(database)?;
+        let script_id: String = row.get(1).map_err(database)?;
+        let stored_state = RunState::parse(&row.get::<_, String>(6).map_err(database)?)?;
         let row_revision =
             u64::try_from(row.get::<_, i64>(7).map_err(database)?).map_err(|_| corrupt())?;
+        let memory_run_id: Option<String> = row.get(3).map_err(database)?;
+        let state = refreshed_settlement_state(
+            connection,
+            stored_state,
+            &session_id,
+            &script_id,
+            memory_run_id.as_deref(),
+        )?;
         entries.push(RunSummary {
             active: active_id.as_deref() == Some(&session_id),
             session_id,
-            script_id: row.get(1).map_err(database)?,
+            script_id,
             created_at: row.get(2).map_err(database)?,
-            memory_run_id: row.get(3).map_err(database)?,
+            memory_run_id,
             billing_run_id: row.get(4).map_err(database)?,
             profile_id: row.get(5).map_err(database)?,
             revision: row_revision,
-            state: RunState::parse(&state)?,
+            state,
             deletion_operation_id: row.get(8).map_err(database)?,
         });
     }
@@ -594,6 +611,53 @@ pub fn page(
         pending_deletions_truncated: pending_deletion_count > 128,
         pending_deletions,
     })
+}
+
+/// 旧目录可能持久化了结算待恢复状态；目录读操作按当前账本义务刷新该状态，
+/// 结算完成后不让陈旧状态继续禁用恢复 / 删除入口。
+fn refreshed_settlement_state(
+    connection: &rusqlite::Connection,
+    stored_state: RunState,
+    session_id: &str,
+    script_id: &str,
+    memory_run_id: Option<&str>,
+) -> Result<RunState, Fault> {
+    if stored_state != RunState::SettlementPending {
+        return Ok(stored_state);
+    }
+    let mapping: Option<(String, String, Option<String>)> = connection
+        .query_row(
+            "SELECT sessions.run_id,sessions.session_id,runs.script_id FROM memory_run_sessions sessions LEFT JOIN memory_runs runs ON runs.run_id=sessions.run_id WHERE sessions.session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let mut scopes = vec![session_id];
+    match (memory_run_id, mapping) {
+        (Some(memory_run_id), Some((mapped_run, mapped_session, Some(mapped_script))))
+            if crate::record::format::valid_uuid(memory_run_id)
+                && memory_run_id == mapped_run
+                && mapped_session == session_id
+                && mapped_script == script_id =>
+        {
+            if memory_run_id != session_id {
+                scopes.push(memory_run_id);
+            }
+        }
+        (None, None) => {}
+        _ => return Ok(RunState::NeedsRepair),
+    }
+    let obligations = crate::billing::BillingLedger::deletion_obligations(connection, &scopes)
+        .map_err(|_| Fault::new("store.database", "费用账本检查失败"))?;
+    if obligations.unresolved_request_count != 0 || obligations.pending_settlement_count != 0 {
+        return Ok(RunState::SettlementPending);
+    }
+    if billing_configured(connection, session_id)? {
+        Ok(RunState::Ready)
+    } else {
+        Ok(RunState::BillingNotConfigured)
+    }
 }
 
 /// 读取 SQLite 中的活动周目；兼容文件只作为首次迁移前的回退来源。
@@ -1035,6 +1099,24 @@ pub fn verify_deletion_cleanup_cursor_schema(
     Ok(())
 }
 
+/// 核验删除授权字段；旧 journal 默认未授权。
+pub fn verify_deletion_ack_schema(connection: &rusqlite::Connection) -> Result<(), StoreError> {
+    let actual: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='session_deletion_ack'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(aoidos_store::db::sqlite_error)?;
+    let expected = DELETION_ACK_MIGRATION.trim().trim_end_matches(';');
+    if actual.as_deref().map(normalize_sql) != Some(normalize_sql(expected)) {
+        return Err(StoreError::Corrupt(
+            "deletion acknowledgement schema mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn schema_object_name(statement: &str) -> Option<&str> {
     let mut words = statement.split_whitespace();
     match (words.next()?, words.next()?) {
@@ -1099,6 +1181,7 @@ mod tests {
         connection
             .execute_batch(DELETION_CLEANUP_CURSOR_MIGRATION)
             .unwrap();
+        connection.execute_batch(DELETION_ACK_MIGRATION).unwrap();
         connection.execute_batch(legacy_scan::MIGRATION).unwrap();
         connection
     }
@@ -1185,6 +1268,82 @@ mod tests {
                 .code,
             "app.conflict"
         );
+    }
+
+    #[test]
+    fn settlement_pending_state_refreshes_after_the_billing_obligation_is_resolved() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,0,0,1,'2026-10-21')",
+                [&run.session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE session_catalog SET state='settlement-pending' WHERE session_id=?1",
+                [&run.session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('settlement-price','deepseek','deepseek-v4.1-flash','default','USD',1000000,'1','1','1','v1','manual','2026-10-21','2026-10-21','2026-10-21')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,updated_at) VALUES('pending-request',?1,'turn','test-profile',1,'deepseek','deepseek-v4.1-flash','default','settlement-price','USD','2026-10-21','unconfirmed',1,'2026-10-21')",
+                [&run.session_id],
+            )
+            .unwrap();
+
+        let pending = page(&connection, None, 10).unwrap();
+        assert_eq!(pending.entries[0].state, RunState::SettlementPending);
+
+        connection
+            .execute(
+                "UPDATE billing_physical_requests SET state='settled',actual_nanos=1 WHERE request_id='pending-request'",
+                [],
+            )
+            .unwrap();
+        let settled = page(&connection, None, 10).unwrap();
+        assert_eq!(settled.entries[0].state, RunState::Ready);
+    }
+
+    #[test]
+    fn settlement_pending_with_broken_memory_identity_is_marked_for_repair() {
+        let mut connection = connection();
+        let run = register_test_run(&mut connection);
+        connection
+            .execute(
+                "UPDATE session_catalog SET state='settlement-pending',memory_run_id=NULL WHERE session_id=?1",
+                [&run.session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('settlement-price','deepseek','deepseek-v4.1-flash','default','USD',1000000,'1','1','1','v1','manual','2026-10-21','2026-10-21','2026-10-21')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,0,0,1,'2026-10-21')",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,updated_at) VALUES('legacy-pending-request',?1,'turn','test-profile',1,'deepseek','deepseek-v4.1-flash','default','settlement-price','USD','2026-10-21','unconfirmed',1,'2026-10-21')",
+                [&run.memory_run_id],
+            )
+            .unwrap();
+
+        let page = page(&connection, None, 10).unwrap();
+
+        assert_eq!(page.entries[0].state, RunState::NeedsRepair);
     }
 
     #[test]
@@ -1533,6 +1692,25 @@ mod tests {
                 .unwrap(),
             0
         );
+
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let requested = deletion::request_deletion_with_ack(
+            &mut connection,
+            &operation_id,
+            &run.session_id,
+            1,
+            "2026-10-21T00:03:00Z",
+            true,
+        )
+        .unwrap();
+        assert_eq!(requested.state, "requested");
+        assert!(connection
+            .query_row(
+                "SELECT acknowledge_run_data_loss FROM session_deletion_ack WHERE operation_id=?1",
+                [&operation_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap());
     }
 
     #[test]

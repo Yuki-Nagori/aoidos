@@ -146,6 +146,24 @@ fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_director
                 .unwrap();
             connection
                 .execute(
+                    "INSERT INTO billing_price_versions(version_id,provider_id,model_id,route_policy,currency,unit_tokens,input_uncached_price,input_cached_price,output_price,usage_mapping_version,source_kind,checked_at,effective_from,created_at) VALUES('delete-price','deepseek','deepseek-v4.1-flash','default','USD',1000000,'1','1','1','v1','manual','2026-10-21','2026-10-21','2026-10-21')",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO billing_physical_requests(request_id,run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,dispatch_at,state,reserved_nanos,updated_at,actual_nanos) VALUES('unconfirmed-delete',?1,'turn','test-profile',1,'deepseek','deepseek-v4.1-flash','default','delete-price','USD','2026-10-21','unconfirmed',1,'2026-10-21',NULL),('outbox-delete',?2,'turn','test-profile',1,'deepseek','deepseek-v4.1-flash','default','delete-price','USD','2026-10-21','settled',1,'2026-10-21',1)",
+                    rusqlite::params![session_id, memory_run.run_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO billing_pending_settlements(request_id,input_total,output_total,result_digest,created_at,updated_at) VALUES('outbox-delete',1,1,?1,'2026-10-21','2026-10-21')",
+                    [format!("sha256:{}", "0".repeat(64))],
+                )
+                .unwrap();
+            connection
+                .execute(
                     "INSERT INTO memory_script_cycle_generations(script_id,cycle_gen) VALUES('mistbell',9) ON CONFLICT(script_id) DO UPDATE SET cycle_gen=excluded.cycle_gen",
                     [],
                 )
@@ -218,7 +236,7 @@ fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_director
 
     let operation_id = uuid::Uuid::new_v4().to_string();
     storage
-        .request_run_deletion(&operation_id, &session_id, 1, "2026-10-21T00:00:00Z")
+        .request_run_deletion_confirmed(&operation_id, &session_id, 1, "2026-10-21T00:00:00Z", true)
         .unwrap();
     assert_eq!(
         storage
@@ -356,15 +374,15 @@ fn storage_freezes_manifest_from_registered_run_and_keeps_absent_memory_director
     );
     storage
         .with_database(|connection| {
-            let (catalog_count, run_count, mapping_count, budget_count, mark_count, generation, entity_count, receipt_count, tombstone):
-                (i64, i64, i64, i64, i64, i64, i64, i64, String) = connection
+            let (catalog_count, run_count, mapping_count, budget_count, request_count, outbox_count, mark_count, generation, entity_count, receipt_count, tombstone):
+                (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, String) = connection
                 .query_row(
-                    "SELECT (SELECT count(*) FROM session_catalog WHERE session_id=?1),(SELECT count(*) FROM memory_runs WHERE run_id=?2),(SELECT count(*) FROM memory_run_sessions WHERE session_id=?1),(SELECT count(*) FROM billing_run_budgets WHERE run_id IN (?1,?2)),(SELECT count(*) FROM memory_cycle_marks),(SELECT cycle_gen FROM memory_script_cycle_generations WHERE script_id='mistbell'),(SELECT count(*) FROM entity_registry_entries WHERE session_id=?1),(SELECT count(*) FROM store_applied WHERE id=?3),(SELECT state FROM session_deletion_ops WHERE operation_id=?4)",
+                    "SELECT (SELECT count(*) FROM session_catalog WHERE session_id=?1),(SELECT count(*) FROM memory_runs WHERE run_id=?2),(SELECT count(*) FROM memory_run_sessions WHERE session_id=?1),(SELECT count(*) FROM billing_run_budgets WHERE run_id IN (?1,?2)),(SELECT count(*) FROM billing_physical_requests WHERE run_id IN (?1,?2)),(SELECT count(*) FROM billing_pending_settlements),(SELECT count(*) FROM memory_cycle_marks),(SELECT cycle_gen FROM memory_script_cycle_generations WHERE script_id='mistbell'),(SELECT count(*) FROM entity_registry_entries WHERE session_id=?1),(SELECT count(*) FROM store_applied WHERE id=?3),(SELECT state FROM session_deletion_ops WHERE operation_id=?4)",
                     rusqlite::params![session_id, memory_run.run_id, mutation_id, operation_id],
-                    |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?)),
+                    |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?)),
                 )
                 .map_err(aoidos_store::db::sqlite_error)?;
-            assert_eq!((catalog_count, run_count, mapping_count, budget_count, mark_count, generation, entity_count, receipt_count, tombstone.as_str()), (0, 0, 0, 0, 1, 9, 0, 0, "database-purged"));
+            assert_eq!((catalog_count, run_count, mapping_count, budget_count, request_count, outbox_count, mark_count, generation, entity_count, receipt_count, tombstone.as_str()), (0, 0, 0, 0, 0, 0, 1, 9, 0, 0, "database-purged"));
             Ok(())
         })
         .unwrap();

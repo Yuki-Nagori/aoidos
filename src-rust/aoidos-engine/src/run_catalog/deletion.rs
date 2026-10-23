@@ -255,13 +255,32 @@ pub(super) struct FrozenDeletionEnvelope {
 /// 相同操作重放返回现有状态，不同操作不能并发占用同一周目。
 ///
 /// # Errors
-/// 身份、目录 revision 或账单门禁失效时拒绝登记。
+/// 缺少未结账务的显式确认、身份或目录 revision 不匹配时拒绝登记。
 pub fn request_deletion(
     connection: &mut rusqlite::Connection,
     operation_id: &str,
     session_id: &str,
     expected_revision: u64,
     updated_at: &str,
+) -> Result<DeletionOperation, Fault> {
+    request_deletion_with_ack(
+        connection,
+        operation_id,
+        session_id,
+        expected_revision,
+        updated_at,
+        false,
+    )
+}
+
+/// 登记删除意图；只有显式确认时，才允许连同未结算的本局账务一起删除。
+pub fn request_deletion_with_ack(
+    connection: &mut rusqlite::Connection,
+    operation_id: &str,
+    session_id: &str,
+    expected_revision: u64,
+    updated_at: &str,
+    acknowledge_run_data_loss: bool,
 ) -> Result<DeletionOperation, Fault> {
     if !crate::record::format::valid_uuid(operation_id)
         || !crate::record::format::valid_uuid(session_id)
@@ -332,7 +351,7 @@ pub fn request_deletion(
     }
 
     let check = deletion_check(&transaction, session_id, expected_revision)?;
-    if !check.billing_clear() {
+    if !check.billing_clear() && !acknowledge_run_data_loss {
         return Err(Fault::new(
             "billing.settlement-pending",
             "该周目仍有未完成的费用结算",
@@ -343,6 +362,12 @@ pub fn request_deletion(
         .execute(
             "INSERT INTO session_deletion_ops(operation_id,session_id,state,created_at,updated_at) VALUES(?1,?2,'requested',?3,?3)",
             rusqlite::params![operation_id, session_id, updated_at],
+        )
+        .map_err(database)?;
+    transaction
+        .execute(
+            "INSERT INTO session_deletion_ack(operation_id,acknowledge_run_data_loss) VALUES(?1,?2)",
+            rusqlite::params![operation_id, acknowledge_run_data_loss],
         )
         .map_err(database)?;
     transaction
@@ -897,10 +922,10 @@ pub(crate) fn mark_files_quarantined(
 
 /// 在单个 SQLite 事务中清理已隔离周目的数据库记录，并保留删除墓碑与剧本代数高水位。
 ///
-/// 文件必须已经全部按冻结清单移动到隔离目录；事务再次核对账务义务和三身份映射，
-/// 再按显式外键顺序删除周目数据。任何一步失败都会回滚数据库更改，journal 保持原阶段。
+/// 文件必须已经全部按冻结清单移动到隔离目录；事务再次核对三身份映射，
+/// 再按显式外键顺序删除已确认的周目数据。任何一步失败都会回滚数据库更改，journal 保持原阶段。
 /// # Errors
-/// journal 阶段、manifest、周目身份或费用义务不满足删除条件时失败关闭。
+/// journal 阶段、manifest 或周目身份不满足删除条件时失败关闭。
 pub(crate) fn purge_run_database(
     connection: &mut rusqlite::Connection,
     operation_id: &str,
@@ -999,16 +1024,6 @@ pub(crate) fn purge_run_database(
     if !mapping_valid {
         return Err(Fault::new("app.conflict", "周目的身份关联需要修复"));
     }
-    let scopes = [session_id, memory_run_id.as_str()];
-    let obligations = crate::billing::BillingLedger::deletion_obligations(&transaction, &scopes)
-        .map_err(|_| Fault::new("store.database", "费用账本检查失败"))?;
-    if obligations.unresolved_request_count != 0 || obligations.pending_settlement_count != 0 {
-        return Err(Fault::new(
-            "billing.settlement-pending",
-            "该周目仍有未完成的费用结算",
-        ));
-    }
-
     purge_scoped_data(&transaction, session_id, &memory_run_id, &script_id)?;
     delete_catalog_row(&transaction, session_id)?;
     let changed = transaction

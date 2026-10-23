@@ -283,6 +283,7 @@ async function confirmDelete(): Promise<void> {
       operationId,
       run.sessionId,
       run.revision,
+      !deletion.value && deleteAcknowledged.value,
     );
     if (result.state === "completed") {
       deleteTarget.value = undefined;
@@ -439,6 +440,9 @@ async function previousPage(): Promise<void> {
               <p v-if="run.state === 'settlement-pending'" class="run-catalog-warning">
                 {{ t("runs.deleteBlocked") }}
               </p>
+              <p v-else-if="run.state === 'needs-repair'" class="run-catalog-warning">
+                {{ t("runs.identityRepairRequired") }}
+              </p>
               <ol
                 v-if="pendingDeletions.has(run.sessionId)"
                 class="run-deletion-stages"
@@ -479,13 +483,15 @@ async function previousPage(): Promise<void> {
                 :disabled="Boolean(busyRunId)"
                 @click="restore(run)"
               >
-                {{ t("runs.restore") }}
+                {{
+                  run.state === "settlement-pending" ? t("runs.handleBilling") : t("runs.restore")
+                }}
               </button>
               <button
                 v-if="run.state !== 'deleting'"
                 type="button"
                 class="btn danger"
-                :disabled="Boolean(busyRunId) || run.state === 'settlement-pending'"
+                :disabled="Boolean(busyRunId) || run.state === 'needs-repair'"
                 @click="confirmTarget(run)"
               >
                 {{ t("runs.delete") }}

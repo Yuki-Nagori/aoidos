@@ -688,7 +688,7 @@ async fn handle_selection_key(
                 KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
                     state.delete_confirmation = false;
                     if let Some(run) = state.delete_confirmation_target.take() {
-                        delete_run(app, state, run).await;
+                        delete_run(app, state, run, true).await;
                     }
                 }
                 KeyCode::Char('n' | 'N') | KeyCode::Esc => {
@@ -735,7 +735,7 @@ async fn handle_selection_key(
             }
             KeyCode::Char('d' | 'D') if state.deletion_in_progress.is_some() => {
                 if let Some(operation) = state.deletion_in_progress.clone() {
-                    continue_deletion(app, state, operation).await;
+                    continue_deletion(app, state, operation, false).await;
                 }
             }
             KeyCode::Char('d' | 'D') if state.pending_deletion_selected => {
@@ -745,13 +745,13 @@ async fn handle_selection_key(
                     .cloned()
                 {
                     state.deletion_in_progress = Some(operation.clone());
-                    continue_deletion(app, state, operation).await;
+                    continue_deletion(app, state, operation, false).await;
                 }
             }
             KeyCode::Char('d' | 'D') => {
                 if let Some(run) = state.existing_runs.get(state.existing_run_index) {
                     if run.state == RunState::Deleting && run.deletion_operation_id.is_some() {
-                        delete_run(app, state, run.clone()).await;
+                        delete_run(app, state, run.clone(), false).await;
                     } else {
                         state.delete_confirmation = true;
                         state.delete_confirmation_target = Some(run.clone());
@@ -949,11 +949,11 @@ async fn handle_selection_click(
                 scan_legacy_runs(app, state).await;
             } else if contains(actions[2], x, y) {
                 if let Some(operation) = state.deletion_in_progress.clone() {
-                    continue_deletion(app, state, operation).await;
+                    continue_deletion(app, state, operation, false).await;
                 } else if let Some(run) = state.existing_runs.get(state.existing_run_index).cloned()
                 {
                     if run.state == RunState::Deleting && run.deletion_operation_id.is_some() {
-                        delete_run(app, state, run).await;
+                        delete_run(app, state, run, false).await;
                     } else {
                         state.delete_confirmation = true;
                         state.delete_confirmation_target = Some(run.clone());
@@ -1104,7 +1104,12 @@ async fn open_selected_run(
     Ok(())
 }
 
-async fn delete_run(app: &mut CliApp, state: &mut ViewState, run: RunSummary) {
+async fn delete_run(
+    app: &mut CliApp,
+    state: &mut ViewState,
+    run: RunSummary,
+    acknowledge_run_data_loss: bool,
+) {
     let operation = if let Some(operation) = state
         .deletion_in_progress
         .as_ref()
@@ -1134,19 +1139,31 @@ async fn delete_run(app: &mut CliApp, state: &mut ViewState, run: RunSummary) {
         operation
     };
     state.deletion_in_progress = Some(operation.clone());
-    continue_deletion(app, state, operation).await;
+    continue_deletion(
+        app,
+        state,
+        operation,
+        acknowledge_run_data_loss && run.deletion_operation_id.is_none(),
+    )
+    .await;
 }
 
-async fn continue_deletion(app: &mut CliApp, state: &mut ViewState, operation: DeletionOperation) {
+async fn continue_deletion(
+    app: &mut CliApp,
+    state: &mut ViewState,
+    operation: DeletionOperation,
+    acknowledge_run_data_loss: bool,
+) {
     match app
         .services
         .runs
-        .delete_run(
+        .delete_run_confirmed(
             &app.services.product,
             &app.services.runtime,
             operation.operation_id.clone(),
             operation.session_id.clone(),
             operation.catalog_revision,
+            acknowledge_run_data_loss,
         )
         .await
     {
@@ -1245,7 +1262,7 @@ fn deletion_confirmation_text(run: &RunSummary) -> String {
         .map(|scenario| scenario.title)
         .unwrap_or_else(|_| run.script_id.clone());
     format!(
-        "确认删除「{title}」({})？将删除该局记录、旁车、记忆和账目；全库备份保留。按 Y 确认，N / Esc 取消。",
+        "确认删除「{title}」({})？将永久删除该局全部本地数据，包括未结算费用请求；全库备份保留。按 Y 确认，N / Esc 取消。",
         run.created_at
     )
 }

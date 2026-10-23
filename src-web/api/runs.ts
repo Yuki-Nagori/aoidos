@@ -105,8 +105,14 @@ export function deleteRun(
   operationId: string,
   sessionId: string,
   expectedRevision: number,
+  acknowledgeRunDataLoss: boolean,
 ): Promise<DeletionOperation> {
-  return invoke("run_delete", { operationId, sessionId, expectedRevision });
+  return invoke("run_delete", {
+    operationId,
+    sessionId,
+    expectedRevision,
+    acknowledgeRunDataLoss,
+  });
 }
 
 /** 玩家主动推进一个旧周目发现批次；普通列表读取不会触发扫描。 */
