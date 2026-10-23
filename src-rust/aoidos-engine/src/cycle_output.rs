@@ -25,6 +25,17 @@ struct Response {
     goal: GoalResponse,
     tags: Vec<TagResponse>,
     initial_tasks: Vec<TaskResponse>,
+    guide_npc: Option<GeneratedGuideResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GeneratedGuideResponse {
+    truth: crate::game::assets::CharacterTruth,
+    initial_knowledge: Vec<String>,
+    presentation: crate::game::assets::CharacterPresentation,
+    opening_role: String,
+    opening_relationship: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -118,6 +129,28 @@ pub(crate) struct OpeningContent {
     pub(crate) goal: GoalSnapshot,
     pub(crate) tags: Vec<TagSnapshot>,
     pub(crate) initial_tasks: Vec<TaskSnapshot>,
+    pub(crate) guide: GuideSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) enum GuideSnapshot {
+    Fixed {
+        character_id: String,
+        truth: crate::game::assets::CharacterTruth,
+        initial_knowledge: Vec<String>,
+        presentation: crate::game::assets::CharacterPresentation,
+        opening_role: String,
+        opening_relationship: String,
+    },
+    Generated {
+        character_id: String,
+        truth: crate::game::assets::CharacterTruth,
+        initial_knowledge: Vec<String>,
+        presentation: crate::game::assets::CharacterPresentation,
+        opening_role: String,
+        opening_relationship: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,6 +244,7 @@ pub fn validate_and_normalize(
     if input.version != 1 || input.revision == 0 || input.state_fields.len() > 64 {
         return Err(invalid_output());
     }
+    let guide = normalize_guide(&input, response.guide_npc, session_id, request_id)?;
     let mut fields = BTreeMap::new();
     for field in &input.state_fields {
         if field.id.is_empty()
@@ -337,8 +371,84 @@ pub fn validate_and_normalize(
         },
         tags,
         initial_tasks: tasks,
+        guide,
     })
     .map_err(|_| invalid_output())
+}
+
+fn normalize_guide(
+    input: &crate::game::assets::CycleInputManifest,
+    generated: Option<GeneratedGuideResponse>,
+    session_id: &str,
+    request_id: &str,
+) -> Result<GuideSnapshot, Fault> {
+    let mut fixed_guides = input
+        .characters
+        .iter()
+        .filter(|character| character.is_guide);
+    match (fixed_guides.next(), fixed_guides.next(), generated) {
+        (Some(character), None, None) => Ok(GuideSnapshot::Fixed {
+            character_id: character.character_id.clone(),
+            truth: character.truth.clone(),
+            initial_knowledge: character.initial_knowledge.clone(),
+            presentation: character.presentation.clone(),
+            opening_role: character.opening_role.clone().ok_or_else(invalid_output)?,
+            opening_relationship: character
+                .opening_relationship
+                .clone()
+                .ok_or_else(invalid_output)?,
+        }),
+        (None, None, Some(generated)) => {
+            validate_generated_guide(&generated)?;
+            Ok(GuideSnapshot::Generated {
+                character_id: stable_id("guide-character", session_id, request_id, "guide"),
+                truth: generated.truth,
+                initial_knowledge: generated.initial_knowledge,
+                presentation: generated.presentation,
+                opening_role: generated.opening_role,
+                opening_relationship: generated.opening_relationship,
+            })
+        }
+        _ => Err(invalid_output()),
+    }
+}
+
+fn validate_generated_guide(guide: &GeneratedGuideResponse) -> Result<(), Fault> {
+    for (value, max_bytes) in [
+        (&guide.truth.personal_name, 128),
+        (&guide.truth.background, MAX_DESCRIPTION_BYTES),
+        (&guide.truth.identity, MAX_TITLE_BYTES),
+        (&guide.truth.race, 128),
+        (&guide.truth.age, 128),
+        (&guide.truth.gender, 128),
+        (&guide.presentation.display_name, 128),
+        (&guide.presentation.identity, MAX_TITLE_BYTES),
+        (&guide.presentation.race, 128),
+        (&guide.presentation.age, 128),
+        (&guide.presentation.gender, 128),
+        (&guide.presentation.appearance, MAX_DESCRIPTION_BYTES),
+        (&guide.opening_role, MAX_TITLE_BYTES),
+        (&guide.opening_relationship, MAX_DESCRIPTION_BYTES),
+    ] {
+        validate_text(value, 1, max_bytes)?;
+    }
+    if guide.initial_knowledge.len() > 6
+        || guide.initial_knowledge.iter().any(|field| {
+            !matches!(
+                field.as_str(),
+                "personalName" | "background" | "identity" | "race" | "age" | "gender"
+            )
+        })
+        || guide
+            .initial_knowledge
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != guide.initial_knowledge.len()
+    {
+        return Err(invalid_output());
+    }
+    Ok(())
 }
 
 fn validate_rule(
@@ -565,7 +675,8 @@ mod tests {
                 {"key":"reach-village","title":text("Reach the village","抵达苔泉村"),"description":text("Find the village entrance.","沿山路找到村口。"),"kind":"task","dependsOn":[]},
                 {"key":"ask-luo-wei","title":text("Ask the lamplighter","询问守灯人"),"description":text("Learn about the old tower.","了解旧塔的传闻。"),"kind":"chain-step","chainKey":"tower-inquiry","chainTitle":text("Investigate the tower","追查旧塔"),"chainStep":1,"dependsOn":["reach-village"]},
                 {"key":"inspect-bell","title":text("Inspect the bell","检查铜钟"),"description":text("Look for marks on the bell.","寻找钟体上的痕迹。"),"kind":"chain-step","chainKey":"tower-inquiry","chainTitle":text("Investigate the tower","追查旧塔"),"chainStep":2,"dependsOn":["ask-luo-wei"]}
-            ]
+            ],
+            "guideNpc":null
         })
     }
 
@@ -576,6 +687,23 @@ mod tests {
             REQUEST,
             "zh-Hans",
             &manifest(),
+        )
+    }
+
+    fn normalize_without_fixed_guide(value: &serde_json::Value) -> Result<Vec<u8>, Fault> {
+        let mut input: crate::game::assets::CycleInputManifest =
+            decode_bytes(&manifest(), MAX_OUTPUT_BYTES).unwrap();
+        for character in &mut input.characters {
+            character.is_guide = false;
+            character.opening_role = None;
+            character.opening_relationship = None;
+        }
+        validate_and_normalize(
+            &serde_json::to_vec(value).unwrap(),
+            SESSION,
+            REQUEST,
+            "zh-Hans",
+            &aoidos_json::to_vec(&input).unwrap(),
         )
     }
 
@@ -594,6 +722,7 @@ mod tests {
         assert_eq!(snapshot.initial_tasks[0].state, InitialTaskState::Available);
         assert_eq!(snapshot.initial_tasks[1].state, InitialTaskState::Locked);
         assert_ne!(snapshot.initial_tasks[0].id, "reach-village");
+        assert!(matches!(snapshot.guide, GuideSnapshot::Fixed { .. }));
 
         let second_request = validate_and_normalize(
             &serde_json::to_vec(&valid_response()).unwrap(),
@@ -605,6 +734,67 @@ mod tests {
         .unwrap();
         let second: OpeningContent = decode_bytes(&second_request, MAX_OUTPUT_BYTES).unwrap();
         assert_ne!(snapshot.initial_tasks[0].id, second.initial_tasks[0].id);
+    }
+
+    #[test]
+    fn generated_guide_is_required_only_without_a_fixed_guide_and_gets_engine_id() {
+        let mut value = valid_response();
+        value["guideNpc"] = serde_json::json!({
+            "truth": {
+                "personalName":"Mira", "background":"A village guide.",
+                "identity":"Wayfinder", "race":"Human", "age":"Adult", "gender":"Female"
+            },
+            "initialKnowledge":["background"],
+            "presentation": {
+                "displayName":"Mira", "identity":"Local guide", "race":"Human",
+                "age":"Adult", "gender":"Female", "appearance":"A travel-worn coat."
+            },
+            "openingRole":"Village guide",
+            "openingRelationship":"Introduces the first lead."
+        });
+        assert!(normalize(&value).is_err());
+
+        let first = normalize_without_fixed_guide(&value).unwrap();
+        assert_eq!(first, normalize_without_fixed_guide(&value).unwrap());
+        let snapshot: OpeningContent = decode_bytes(&first, MAX_OUTPUT_BYTES).unwrap();
+        let GuideSnapshot::Generated {
+            character_id,
+            truth,
+            opening_role,
+            ..
+        } = snapshot.guide
+        else {
+            panic!("expected generated guide")
+        };
+        assert_ne!(character_id, "Mira");
+        assert_eq!(truth.personal_name, "Mira");
+        assert_eq!(opening_role, "Village guide");
+
+        let mut missing = valid_response();
+        missing["guideNpc"] = serde_json::Value::Null;
+        assert!(normalize_without_fixed_guide(&missing).is_err());
+    }
+
+    #[test]
+    fn generated_guide_rejects_invalid_knowledge_and_incomplete_profile() {
+        let mut value = valid_response();
+        value["guideNpc"] = serde_json::json!({
+            "truth": {
+                "personalName":"Mira", "background":"A village guide.",
+                "identity":"Wayfinder", "race":"Human", "age":"Adult", "gender":"Female"
+            },
+            "initialKnowledge":["hiddenSecret"],
+            "presentation": {
+                "displayName":"Mira", "identity":"Local guide", "race":"Human",
+                "age":"Adult", "gender":"Female", "appearance":"A travel-worn coat."
+            },
+            "openingRole":"Village guide",
+            "openingRelationship":"Introduces the first lead."
+        });
+        assert!(normalize_without_fixed_guide(&value).is_err());
+        value["guideNpc"]["initialKnowledge"] = serde_json::json!([]);
+        value["guideNpc"]["truth"]["race"] = serde_json::json!("");
+        assert!(normalize_without_fixed_guide(&value).is_err());
     }
 
     #[test]
