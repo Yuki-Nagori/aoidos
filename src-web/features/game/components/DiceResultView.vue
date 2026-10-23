@@ -138,7 +138,6 @@ async function makeScene(
     directionalModule,
     vectorModule,
     colorModule,
-    quaternionModule,
     materialModule,
     textureModule,
     meshModule,
@@ -154,7 +153,6 @@ async function makeScene(
     import("@babylonjs/core/Lights/directionalLight"),
     import("@babylonjs/core/Maths/math.vector"),
     import("@babylonjs/core/Maths/math.color"),
-    import("@babylonjs/core/Maths/math.vector"),
     import("@babylonjs/core/Materials/PBR/pbrMaterial"),
     import("@babylonjs/core/Materials/Textures/dynamicTexture"),
     import("@babylonjs/core/Meshes/mesh"),
@@ -170,7 +168,7 @@ async function makeScene(
   const { TargetCamera } = cameraModule;
   const { HemisphericLight } = lightModule;
   const { DirectionalLight } = directionalModule;
-  const { Vector3, Quaternion } = { ...vectorModule, ...quaternionModule };
+  const { Vector3, Quaternion } = vectorModule;
   const { Color3, Color4 } = colorModule;
   const { PBRMaterial } = materialModule;
   const { DynamicTexture } = textureModule;

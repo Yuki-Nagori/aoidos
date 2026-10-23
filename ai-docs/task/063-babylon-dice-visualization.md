@@ -58,7 +58,7 @@
 
 ## 验收标准
 
-- [ ] 设计基线、来源提交、目标屏幕 / 状态、资产复用与授权结论及视觉差异有可复核记录。
+- [x] 设计基线、来源提交、目标屏幕 / 状态、资产复用与授权结论及视觉差异有可复核记录。
 - [ ] 生产代码使用 Babylon.js；依赖版本、许可证、Tauri WebView 渲染支持和包体增量有证据，WebGPU 优先且 WebGL 是其不可用时的回退，Three.js 代码 / 依赖未进入产品。
 - [ ] 视觉骰值只能来自对应 Rust `dice` 事实，最终结果和关键效果只能来自 Rust `check` 事实；组件和动画没有随机采样、判定分类或提交路径。未知骰式 / 结果安全显示原事实或静态兼容内容，不猜测档位。
 - [ ] 判定托盘的鼠标、键盘与触控行为都只触发既有计划身份提交；动画方向、蓄力值与触控轨迹无法改变 Rust 采样。加载期间防止重复提交并遵守现有 busy / check.status 门禁。
@@ -73,12 +73,15 @@
 
 ## 验证计划与结果
 
-| 日期       | 环境 / 命令                                                                                                                                                                                                                                    | 预期                                                     | 实际结果                                                             |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
-| 2026-10-22 | `bun run typecheck`                                                                                                                                                                                                                            | 前端与脚本类型检查通过                                   | 通过                                                                 |
-| 2026-10-22 | `bun run test -- tests/web/features/game/utils/dice-visual.test.ts tests/web/features/game/components/RecordFeed.test.ts tests/web/features/game/composables/useUiPreferences.test.ts tests/web/app/App.test.ts tests/web/api/records.test.ts` | 覆盖骰式事实映射、皮肤选择、偏好持久化和现有记录视图     | 5 个测试文件、26 个测试通过                                          |
-| 2026-10-23 | `bun run verify`                                                                                                                                                                                                                               | 全量类型、lint、格式、覆盖率、视觉、构建和 Rust 文档门禁 | 通过；Vitest 545 项，Rust workspace 覆盖率 94.72%                    |
-| 2026-10-23 | Playwright WebGL2 设置页烟测                                                                                                                                                                                                                   | 检查视口内九个骰子预览均生成 Babylon 画面                | 通过；无头 Chromium 未提供 WebGPU adapter，尚待桌面 WebView 实机确认 |
+| 日期       | 环境 / 命令                                                                                                                                                                                                                                    | 预期                                                     | 实际结果                                                              |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
+| 2026-10-22 | `bun run typecheck`                                                                                                                                                                                                                            | 前端与脚本类型检查通过                                   | 通过                                                                  |
+| 2026-10-22 | `bun run test -- tests/web/features/game/utils/dice-visual.test.ts tests/web/features/game/components/RecordFeed.test.ts tests/web/features/game/composables/useUiPreferences.test.ts tests/web/app/App.test.ts tests/web/api/records.test.ts` | 覆盖骰式事实映射、皮肤选择、偏好持久化和现有记录视图     | 5 个测试文件、26 个测试通过                                           |
+| 2026-10-23 | `bun run verify`                                                                                                                                                                                                                               | 全量类型、lint、格式、覆盖率、视觉、构建和 Rust 文档门禁 | 通过；Vitest 545 项，Rust workspace 覆盖率 94.72%                     |
+| 2026-10-23 | Playwright WebGL2 设置页烟测                                                                                                                                                                                                                   | 检查视口内九个骰子预览均生成 Babylon 画面                | 通过；无头 Chromium 未提供 WebGPU adapter，尚待桌面 WebView 实机确认  |
+| 2026-10-23 | `bun run verify`（跟进复核）                                                                                                                                                                                                                   | 验证仓库全量检查                                         | 通过；Vitest 546 项，Rust workspace 覆盖率 94.59%                     |
+| 2026-10-23 | `bun run test:native`（macOS arm64）                                                                                                                                                                                                           | 验证真实 Tauri WebView、IPC 与本机平台 fixture           | 通过；fixture 使用隔离临时存储与假数据，不调用外部 Provider           |
+| 2026-10-23 | `bun run tauri -- build --debug --bundles app --no-sign`                                                                                                                                                                                       | 验证 macOS bundle 与 third-party license resources       | 通过；75.87 MiB debug bundle 内含 Babylon LICENSE、NOTICE、Draco 许可 |
 
 ## 风险与回退
 
@@ -90,8 +93,10 @@ WebGL 能力、驱动和可用内存因系统与设备而异；任何初始化�
 - 2026-10-22：采用 Babylon.js 9.31.0，按需加载并优先尝试 WebGPU，初始化失败回退 WebGL；7 套皮肤与自动剧本绑定规则已迁入前端 feature，设置文字在 `locales/`，组件样式在 `src-web/styles/components/dice.css`。
 - 2026-10-22：应用户要求将骰子托盘替换等待判定时的输入区；托盘仍仅触发现有判定提交，手势参数不参与骰值。骰子皮肤加入既有 UI 偏好，并通过 serde 默认值兼容旧文件；未更改骰判协议和规则。
 - 2026-10-23：修正 WebGPU 帧提交顺序。Babylon 的 `endFrame()` 会提交 GPU 命令，必须在从共享 GPU 画布执行 `drawImage()` 前完成；原型 `aoidos-art/assets/dice/dice.js` 也按此顺序实现。现将 begin/render/readiness/endFrame 收拢为可测的帧提交 helper，并添加调用顺序测试。真实 WebGPU adapter 在无头 Chromium 不可用，当前仅完成 WebGL2 九个预览实例的浏览器烟测，待桌面 WebView 实机验收。
+- 2026-10-23：将运行时依赖升级到固定版本 Babylon.js 9.32.0；其 Apache-2.0 LICENSE、NOTICE 和 Draco 许可文件已随 Tauri bundle 提供。Chromium WebGL2 骰子烟测通过，macOS native fixture 与 debug `.app` 打包通过；打包验证确认许可资源位于 app bundle。native fixture 验证的是隔离的 Tauri WebView / IPC，不代表骰子 GPU adapter 已在原生 WebView 验收。
 - 2026-10-23：将骰面 atlas / 静态绘制提取到 `game/utils/dice-canvas.ts`，共享引擎与 RAF / 取消逻辑放在 `game/utils/dice-renderer.ts`；Vue SFC 保留 Babylon 场景编排和交互状态，避免把高耦合场景局部机械拆分。视觉回归脚本同步新增的设置分区顺序。
+- 2026-10-23：复核动态加载器时发现 `@babylonjs/core/Maths/math.vector` 被重复 `import()` 并重复传入 `Promise.all`；移除重复项，继续由同一个模块提供 `Vector3` 与 `Quaternion`。将锁定版本 9.32.0 随包提供的 Apache-2.0 LICENSE、NOTICE 和 Draco 许可文件复制到 `resources/third-party/babylonjs/` 并登记为 Tauri bundle resources，避免发布包只带渲染代码、不带第三方许可文本。`bun run typecheck`、骰子组件 / renderer 13 项定向测试通过；`bun run verify` 全量通过（546 个 Vitest、Rust 覆盖率 94.59%），macOS `bun run test:native` 的真实 WebView / 本地 fixture 烟测通过。该 native smoke 不覆盖骰子在原生 WebView 上的 WebGPU adapter 与辅助技术；Windows / Linux 实机检查按用户要求跳过。
 
 ## 完成摘要
 
-实施进行中。待补完整验证、独立评审、WebGPU/WebGL 目标环境检查和视觉验收证据。
+Babylon.js 骰子实现、许可资源与仓库内验证已完成；仍需补实际骰子在目标桌面 WebView 的 WebGPU / WebGL 与辅助技术验收、性能基线及独立评审。Windows / Linux 实机检查本轮按用户要求跳过，不能以 Chromium 或 macOS 结果代替。

@@ -25,7 +25,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../resources/scripts/": "resources/scripts/"
+      "../resources/scripts/": "resources/scripts/",
+      "../resources/third-party/babylonjs/": "resources/third-party/babylonjs/"
     }
   }
 }
