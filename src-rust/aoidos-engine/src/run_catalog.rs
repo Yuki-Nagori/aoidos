@@ -307,6 +307,7 @@ pub fn open_target(
     if revision != expected_revision {
         return Err(stale_revision());
     }
+    crate::cycle_initialization::require_playable(connection, session_id)?;
     if !matches!(
         RunState::parse(&state)?,
         RunState::Ready
@@ -1184,6 +1185,9 @@ mod tests {
         connection.execute_batch(DELETION_ACK_MIGRATION).unwrap();
         connection.execute_batch(legacy_scan::MIGRATION).unwrap();
         connection
+            .execute_batch(crate::cycle_initialization::SCHEMA)
+            .unwrap();
+        connection
     }
 
     fn insert_memory_mapping(
@@ -1249,6 +1253,38 @@ mod tests {
         assert_eq!(target.script_id, run.script_id);
         assert_eq!(target.memory_run_id, run.memory_run_id);
         assert_eq!(target.profile, run.profile);
+        let snapshot_hash = format!("{:x}", Sha256::digest(b"{}"));
+        connection
+            .execute(
+                "INSERT INTO cycle_initializations(session_id,state,revision,current_request_id,input_snapshot,input_hash,created_at,updated_at) VALUES(?1,'initializing',1,'00000000-0000-4000-8000-000000000091',x'7b7d',?2,'2026-10-21T00:00:00Z','2026-10-21T00:00:00Z')",
+                rusqlite::params![run.session_id, snapshot_hash],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO cycle_initialization_attempts(request_id,session_id,state,created_at,updated_at) VALUES('00000000-0000-4000-8000-000000000091',?1,'pending','2026-10-21T00:00:00Z','2026-10-21T00:00:00Z')",
+                [&run.session_id],
+            )
+            .unwrap();
+        assert_eq!(
+            open_target(&connection, &run.session_id, 1)
+                .unwrap_err()
+                .code,
+            "app.conflict"
+        );
+        connection
+            .execute(
+                "UPDATE cycle_initializations SET state='playable',output_snapshot=x'7b7d',output_hash=?1 WHERE session_id=?2",
+                rusqlite::params![snapshot_hash, run.session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE cycle_initialization_attempts SET state='accepted' WHERE request_id='00000000-0000-4000-8000-000000000091'",
+                [],
+            )
+            .unwrap();
+        assert!(open_target(&connection, &run.session_id, 1).is_ok());
         assert_eq!(
             open_target(&connection, &run.session_id, 2)
                 .unwrap_err()
