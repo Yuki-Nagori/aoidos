@@ -31,7 +31,7 @@
 
 054 的规则快照、严格校验、终局锚点、标签冲突、确定性摘要、AI 文本边界、失败恢复和事务图继续作为安全基线，但实现前需按本任务决策修订其生成来源：功能发布后每个新周目都通过受限的开局生成得到最终目标、标签目录与规则；不再提供作者预置标签 / 规则或静态结果回退。已存在的历史周目不补造开局快照。所有可新建周目的剧本必须提供可登记、可版本化的隐藏状态字段 schema（稳定 ID、类型、范围和允许比较方式）；LLM 只能引用该 schema，不能以 Markdown 描述推断或增添字段。剧本 schema 未就绪时须先完成剧本接入，不能让该剧本绕过生成流程创建无最终目标的新周目。开局生成失败或结果不确定时，周目保持不可玩并给出可恢复错误，不静默降级。
 
-将剧本固定角色表示为 `cycle-input.json` 中的资料，并以 `characterId` 引用实体目录中的 Character。角色 `truth` 是规范个人真值，`initialKnowledge` 表示该角色初始知道哪些真值字段，`presentation` 是角色在玩家交互中的表面资料；它们不能互相覆盖。每个有剧情作用的角色（主角和配角）都必须有 run-scoped 个人档案；作者没有固定主角档案时，开局生成并冻结，不将操作者的控制身份当作角色全知。固定 guide 不能同时是玩家操控的主角。只有 `isGuide: true` 才选为固定引导者；未标记或 `false` 的资料不自动担任引导者，零个固定引导者时由 LLM 生成，多个标记则拒绝剧本。不得运行时搜索正文或让模型猜测人选。资料不随应用 locale 改变，也不授予角色场景在场、真实关系或额外获知权限；这些由可信初始化路径显式处理。开场职责与当前叙事关系分别使用 `openingRole`、`openingRelationship`，不写入永久世界关系。无固定角色时，开局生成 NPC 资料，内部 ID 由引擎创建，并与剧本版本一起冻结为本周目身份。固定和生成角色都必须由可信初始化路径加入初始场景 / 实体注册，不能仅凭对白创建世界实体；脚本固定实体、生成角色与 [045 场景在场与可信获知事件](045-scene-presence-dialogue-impl.md) 的授权和来源边界需保持一致。
+将剧本固定角色表示为 `cycle-input-vN.json` 中的资料，并以 `characterId` 引用实体目录中的 Character。v2 另以 `storyCharacterIds` 明确登记本周目剧情角色；角色 `truth` 是规范个人真值，`initialKnowledge` 表示该角色初始知道哪些真值字段，`presentation` 是角色在玩家交互中的表面资料；它们不能互相覆盖。每个有剧情作用的角色（主角和配角）都必须有 run-scoped 个人档案；作者没有固定主角档案时，开局生成并冻结，不将操作者的控制身份当作角色全知。固定 guide 不能同时是玩家操控的主角。只有 `isGuide: true` 才选为固定引导者；未标记或 `false` 的资料不自动担任引导者，零个固定引导者时由 LLM 生成，多个标记则拒绝剧本。不得运行时搜索正文或让模型猜测人选。资料不随应用 locale 改变，也不授予角色场景在场、真实关系或额外获知权限；这些由可信初始化路径显式处理。开场职责与当前叙事关系分别使用 `openingRole`、`openingRelationship`，不写入永久世界关系。无固定角色时，开局生成 NPC 资料，内部 ID 由引擎创建，并与剧本版本一起冻结为本周目身份。固定和生成角色都必须由可信初始化路径加入初始场景 / 实体注册，不能仅凭对白创建世界实体；脚本固定实体、生成角色与 [045 场景在场与可信获知事件](045-scene-presence-dialogue-impl.md) 的授权和来源边界需保持一致。
 
 主角创建由剧本自己的、版本化的模板决定，不设全局统一的玩家档案问卷。模板可提供完整固定主角，也可针对姓名、性别、年龄、技能、性格等字段配置有限选项或受约束的自定义输入，并支持固定与自定义混合。玩家选择 / 输入经可信代码校验后以 `player-authored` 来源合入主角真值并冻结；开局 LLM 不得代选或改写。模板需明确可见与隐藏字段、允许值、默认项和来源，保证创建 UI 只显示获准字段。此能力不属于当前 cycle-input v1，须通过后续 schema revision 与 run-local 主角身份注册实现，不得将输入混装进 NPC 资料或用 LLM 生成替代玩家自定义。
 
@@ -81,7 +81,9 @@
 
 首个创建 journal 切片的受影响检查已通过：`bun run test:affected`（554 passed、3 ignored）、`bun run format:affected`、`bun run lint:affected`。2026-10-24 当前结构化输出切片通过 `bun scripts/cargo.mts test -p aoidos-engine --lib cycle_output::tests -- --nocapture`（6 passed）及 `bun scripts/cargo.mts check -p aoidos-engine --lib`；独立 6.1-sol 评审未发现阻止提交的问题。提交前 `bun run format:affected`、`bun run test:affected`（engine 560 passed、3 ignored）和 `bun run lint:affected` 均通过。它还没有生成全部角色档案 / guide NPC，也没有接入 Provider、账本、存储或 playable 转换，因此不是完整开局快照，不能用于启用新局入口。仍待验证并实施：固定 / 生成 guide NPC、完整结构化输出与初始化冻结、WorldPort / 周目恢复、027 / 035 物理计费与 unknown 对账、032 单向对接、任务分支投影与回退、跨平台 IPC、Vitest、更多故障注入及完整 `bun run verify`。
 
-2026-10-24 guide 档案校验切片通过 focused 测试（8 passed）、`bun run test:affected`（562 passed、3 ignored）、`bun run format:affected`、`bun run lint:affected` 和 `git diff --check`；独立 `gpt-6.1-sol` 静态评审未发现阻止提交的问题。它确认固定 guide 不可由模型替换、生成档案有界且不接入生产 playable 路径。仍未覆盖其他未登记剧情角色资料，也不接 Provider、账本、存储或 playable 转换。
+2026-10-24 guide 档案校验切片通过 focused 测试（8 passed）、`bun run test:affected`（562 passed、3 ignored）、`bun run format:affected`、`bun run lint:affected` 和 `git diff --check`；独立 `gpt-6.1-sol` 静态评审未发现阻止提交的问题。它确认固定 guide 不可由模型替换、生成档案有界且不接入生产 playable 路径。仍未接 Provider、账本、存储或 playable 转换。
+
+2026-10-24 剧情角色名册切片将 `cycle-input` 升至 v2，使用 `storyCharacterIds` 明确列出本周目所有需要档案的角色；模型响应必须精确覆盖缺少固定档案的 ID，固定档案按名册顺序原样冻结，guide 改为引用唯一档案，避免重复保存真值。Mistbell 登记主角与洛苇。旧 v1 输入作为兼容资源保留，并验证既有当前 v1 script revision 仍可重建实体目录。Focused assets/output 测试与受影响门禁通过；完整 `bun run verify` 通过（Vitest 549 项、Rust workspace 覆盖率 94.51%、其余 typecheck / lint / format / build / docs 门禁通过），独立 `gpt-6.1-sol` 评审无阻断项。该切片仍不接 Provider、账本、存储或 playable 转换；主角模板 / 玩家自定义输入、完整角色信息隐私隔离及旧输入初始化语义仍待实现。
 
 2026-10-24 创建 journal 切片：新增 `session_creation_ops` 保存不可变 operation、header / profile 快照和 hash；通过 header-only inactive record 写入、恢复时幂等补齐 `recovery-required` 目录行。legacy scanner 排除所有 journal 所有的 sessionId。该接口刻意不创建普通 owner、memory run、预算 / 费用预留或 Provider 请求，也尚未切换产品新局入口。恢复窗口和重复创建测试已通过；后续仍需与初始化输入、预算、物理 attempt 和完成后 owner 激活串成一个可恢复 coordinator。
 
@@ -104,7 +106,7 @@
 - 2026-10-24：独立只读评审覆盖当前 diff 并对照 054 / `scenarios.md`；未发现阻止此切片提交的问题。评审特别确认该纯校验器无生产调用点，因此不能形成不完整初始化产物转为 playable 的新路径；未来接线仍须保证输入来自 run 冻结清单、完整角色档案已校验且 attempt 身份匹配。评审为静态审查，未执行测试；验证由主代理完成。
 - 2026-10-24：任务栏视觉与状态流对齐 `aoidos-art` commit `9df5c5c1f4562c2887ffc9b2043ee5f87a6e35fd`，覆盖展开 / 紧凑摘要、主线置顶、任务链、已完成折叠、旧周目空态、开局引导、回退和结局状态；状态内容由 engine 冻结数据驱动。
 - 2026-10-23：继 #215 后继续实现 dispatch 围栏：初始化 attempt 增加持久 `dispatch_started` CAS；初始化预算端口在一次 SQLite `IMMEDIATE` 事务中领取该权并登记同 requestId 的费用预留，避免账本预留的幂等语义意外授权 Provider 重放。当前只完成围栏与事务内 reserve 原语及 focused test；尚未接入完整开局 coordinator、record 创建 journal、初始化恢复流程或产品新局入口，不能启用新流程。
-- 2026-10-23：登记 `cycle-input.json` 并由 engine 严格验证版本、字段数量 / 类型 / 范围 / 比较符、已注册来源及固定 Character 引用；固定角色显式标注 `isGuide: true`，角色档案拆分真值、初始认知、对外呈现和开场职责。每个剧情角色含主角需在 run 冻结资料中有个人档案；无作者固定档案时由开局初始化补齐。Mistbell 固定使用已登记的洛苇，并显式绑定主角实体；不改正文原始字节，避免历史 v1 script revision 变化。唯一已接入状态源从当前有效历史分支派生已结算的角色内回合数，空历史时值缺失。新 script revision 纳入输入资源和修订；旧 v1 revision 仍能重建原实体目录。完整开局请求、不可玩初始化账本和目标 / 标签快照仍待实现。
+- 2026-10-23：登记 `cycle-input-v1.json` 并由 engine 严格验证版本、字段数量 / 类型 / 范围 / 比较符、已注册来源及固定 Character 引用；固定角色显式标注 `isGuide: true`，角色档案拆分真值、初始认知、对外呈现和开场职责。每个剧情角色含主角需在 run 冻结资料中有个人档案；无作者固定档案时由开局初始化补齐。Mistbell 固定使用已登记的洛苇，并显式绑定主角实体；不改正文原始字节，避免历史 v1 script revision 变化。唯一已接入状态源从当前有效历史分支派生已结算的角色内回合数，空历史时值缺失。新 script revision 纳入输入资源和修订；旧 v1 revision 仍能重建原实体目录。完整开局请求、不可玩初始化账本和目标 / 标签快照仍待实现。
 
 ## 完成摘要
 

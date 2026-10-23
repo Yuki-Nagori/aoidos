@@ -25,7 +25,17 @@ struct Response {
     goal: GoalResponse,
     tags: Vec<TagResponse>,
     initial_tasks: Vec<TaskResponse>,
+    character_profiles: Vec<CharacterProfileResponse>,
     guide_npc: Option<GeneratedGuideResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CharacterProfileResponse {
+    character_id: String,
+    truth: crate::game::assets::CharacterTruth,
+    initial_knowledge: Vec<String>,
+    presentation: crate::game::assets::CharacterPresentation,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,7 +130,7 @@ pub(crate) enum InitialTaskState {
     Locked,
 }
 
-/// 已通过可信剧本 schema 校验的目标、标签和任务投影；人物档案和 playable 事务另行接线。
+/// 已通过可信剧本 schema 校验的目标、标签、任务和本周目全部角色档案投影。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct OpeningContent {
@@ -129,28 +139,42 @@ pub(crate) struct OpeningContent {
     pub(crate) goal: GoalSnapshot,
     pub(crate) tags: Vec<TagSnapshot>,
     pub(crate) initial_tasks: Vec<TaskSnapshot>,
+    pub(crate) characters: Vec<CharacterSnapshot>,
     pub(crate) guide: GuideSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
-pub(crate) enum GuideSnapshot {
-    Fixed {
-        character_id: String,
-        truth: crate::game::assets::CharacterTruth,
-        initial_knowledge: Vec<String>,
-        presentation: crate::game::assets::CharacterPresentation,
-        opening_role: String,
-        opening_relationship: String,
-    },
-    Generated {
-        character_id: String,
-        truth: crate::game::assets::CharacterTruth,
-        initial_knowledge: Vec<String>,
-        presentation: crate::game::assets::CharacterPresentation,
-        opening_role: String,
-        opening_relationship: String,
-    },
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CharacterSnapshot {
+    pub(crate) character_id: String,
+    pub(crate) source: CharacterSource,
+    pub(crate) truth: crate::game::assets::CharacterTruth,
+    pub(crate) initial_knowledge: Vec<String>,
+    pub(crate) presentation: crate::game::assets::CharacterPresentation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CharacterSource {
+    Fixed,
+    Generated,
+    GeneratedGuide,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct GuideSnapshot {
+    pub(crate) character_id: String,
+    pub(crate) source: GuideSource,
+    pub(crate) opening_role: String,
+    pub(crate) opening_relationship: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum GuideSource {
+    Fixed,
+    Generated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,6 +239,7 @@ pub fn validate_and_normalize(
     request_id: &str,
     locale: &str,
     cycle_input_snapshot: &[u8],
+    entity_snapshot: &[u8],
 ) -> Result<Vec<u8>, Fault> {
     if bytes.len() > MAX_OUTPUT_BYTES
         || !crate::record::format::valid_uuid(session_id)
@@ -223,14 +248,16 @@ pub fn validate_and_normalize(
     {
         return Err(invalid_output());
     }
-    let input: crate::game::assets::CycleInputManifest =
-        decode_bytes(cycle_input_snapshot, MAX_OUTPUT_BYTES).map_err(|_| invalid_output())?;
+    let (input, registered_entity_ids) =
+        crate::game::assets::validate_cycle_input_snapshot(cycle_input_snapshot, entity_snapshot)
+            .map_err(|_| invalid_output())?;
     let response: Response = decode_bytes(bytes, MAX_OUTPUT_BYTES).map_err(|_| invalid_output())?;
-    if response.version != 1
+    if response.version != 2
         || response.locale != locale
         || response.tags.is_empty()
         || response.tags.len() > MAX_TAGS
         || response.initial_tasks.len() > MAX_TASKS
+        || response.character_profiles.len() > 128
     {
         return Err(invalid_output());
     }
@@ -241,10 +268,22 @@ pub fn validate_and_normalize(
         return Err(invalid_output());
     }
 
-    if input.version != 1 || input.revision == 0 || input.state_fields.len() > 64 {
+    if input.version != 2
+        || input.revision == 0
+        || input.story_character_ids.is_empty()
+        || input.state_fields.len() > 64
+    {
         return Err(invalid_output());
     }
-    let guide = normalize_guide(&input, response.guide_npc, session_id, request_id)?;
+    let mut characters = normalize_characters(&input, response.character_profiles)?;
+    let guide = normalize_guide(
+        &input,
+        response.guide_npc,
+        session_id,
+        request_id,
+        &registered_entity_ids,
+        &mut characters,
+    )?;
     let mut fields = BTreeMap::new();
     for field in &input.state_fields {
         if field.id.is_empty()
@@ -362,7 +401,7 @@ pub fn validate_and_normalize(
         .collect();
     let tasks = normalize_tasks(&response.initial_tasks, session_id, request_id)?;
     to_vec(&OpeningContent {
-        version: 1,
+        version: 2,
         locale: response.locale,
         goal: GoalSnapshot {
             text: response.goal.text,
@@ -371,6 +410,7 @@ pub fn validate_and_normalize(
         },
         tags,
         initial_tasks: tasks,
+        characters,
         guide,
     })
     .map_err(|_| invalid_output())
@@ -381,17 +421,17 @@ fn normalize_guide(
     generated: Option<GeneratedGuideResponse>,
     session_id: &str,
     request_id: &str,
+    registered_entity_ids: &BTreeSet<String>,
+    characters: &mut Vec<CharacterSnapshot>,
 ) -> Result<GuideSnapshot, Fault> {
     let mut fixed_guides = input
         .characters
         .iter()
         .filter(|character| character.is_guide);
     match (fixed_guides.next(), fixed_guides.next(), generated) {
-        (Some(character), None, None) => Ok(GuideSnapshot::Fixed {
+        (Some(character), None, None) => Ok(GuideSnapshot {
             character_id: character.character_id.clone(),
-            truth: character.truth.clone(),
-            initial_knowledge: character.initial_knowledge.clone(),
-            presentation: character.presentation.clone(),
+            source: GuideSource::Fixed,
             opening_role: character.opening_role.clone().ok_or_else(invalid_output)?,
             opening_relationship: character
                 .opening_relationship
@@ -400,11 +440,20 @@ fn normalize_guide(
         }),
         (None, None, Some(generated)) => {
             validate_generated_guide(&generated)?;
-            Ok(GuideSnapshot::Generated {
-                character_id: stable_id("guide-character", session_id, request_id, "guide"),
+            let character_id = stable_id("guide-character", session_id, request_id, "guide");
+            if registered_entity_ids.contains(&character_id) {
+                return Err(invalid_output());
+            }
+            characters.push(CharacterSnapshot {
+                character_id: character_id.clone(),
+                source: CharacterSource::GeneratedGuide,
                 truth: generated.truth,
                 initial_knowledge: generated.initial_knowledge,
                 presentation: generated.presentation,
+            });
+            Ok(GuideSnapshot {
+                character_id,
+                source: GuideSource::Generated,
                 opening_role: generated.opening_role,
                 opening_relationship: generated.opening_relationship,
             })
@@ -413,38 +462,107 @@ fn normalize_guide(
     }
 }
 
+fn normalize_characters(
+    input: &crate::game::assets::CycleInputManifest,
+    generated: Vec<CharacterProfileResponse>,
+) -> Result<Vec<CharacterSnapshot>, Fault> {
+    let fixed: BTreeMap<_, _> = input
+        .characters
+        .iter()
+        .map(|profile| (profile.character_id.as_str(), profile))
+        .collect();
+    let expected: BTreeSet<_> = input
+        .story_character_ids
+        .iter()
+        .filter(|id| !fixed.contains_key(id.as_str()))
+        .cloned()
+        .collect();
+    let mut generated_by_id = BTreeMap::new();
+    for profile in generated {
+        if !expected.contains(&profile.character_id)
+            || generated_by_id
+                .insert(profile.character_id.clone(), profile)
+                .is_some()
+        {
+            return Err(invalid_output());
+        }
+    }
+    if generated_by_id.len() != expected.len() {
+        return Err(invalid_output());
+    }
+
+    input
+        .story_character_ids
+        .iter()
+        .map(|character_id| {
+            if let Some(profile) = fixed.get(character_id.as_str()) {
+                return Ok(CharacterSnapshot {
+                    character_id: character_id.clone(),
+                    source: CharacterSource::Fixed,
+                    truth: profile.truth.clone(),
+                    initial_knowledge: profile.initial_knowledge.clone(),
+                    presentation: profile.presentation.clone(),
+                });
+            }
+            let profile = generated_by_id
+                .get(character_id)
+                .ok_or_else(invalid_output)?;
+            validate_profile(
+                &profile.truth,
+                &profile.initial_knowledge,
+                &profile.presentation,
+            )?;
+            Ok(CharacterSnapshot {
+                character_id: character_id.clone(),
+                source: CharacterSource::Generated,
+                truth: profile.truth.clone(),
+                initial_knowledge: profile.initial_knowledge.clone(),
+                presentation: profile.presentation.clone(),
+            })
+        })
+        .collect()
+}
+
 fn validate_generated_guide(guide: &GeneratedGuideResponse) -> Result<(), Fault> {
+    validate_profile(&guide.truth, &guide.initial_knowledge, &guide.presentation)?;
     for (value, max_bytes) in [
-        (&guide.truth.personal_name, 128),
-        (&guide.truth.background, MAX_DESCRIPTION_BYTES),
-        (&guide.truth.identity, MAX_TITLE_BYTES),
-        (&guide.truth.race, 128),
-        (&guide.truth.age, 128),
-        (&guide.truth.gender, 128),
-        (&guide.presentation.display_name, 128),
-        (&guide.presentation.identity, MAX_TITLE_BYTES),
-        (&guide.presentation.race, 128),
-        (&guide.presentation.age, 128),
-        (&guide.presentation.gender, 128),
-        (&guide.presentation.appearance, MAX_DESCRIPTION_BYTES),
         (&guide.opening_role, MAX_TITLE_BYTES),
         (&guide.opening_relationship, MAX_DESCRIPTION_BYTES),
     ] {
         validate_text(value, 1, max_bytes)?;
     }
-    if guide.initial_knowledge.len() > 6
-        || guide.initial_knowledge.iter().any(|field| {
+    Ok(())
+}
+
+fn validate_profile(
+    truth: &crate::game::assets::CharacterTruth,
+    initial_knowledge: &[String],
+    presentation: &crate::game::assets::CharacterPresentation,
+) -> Result<(), Fault> {
+    for (value, max_bytes) in [
+        (&truth.personal_name, 128),
+        (&truth.background, MAX_DESCRIPTION_BYTES),
+        (&truth.identity, MAX_TITLE_BYTES),
+        (&truth.race, 128),
+        (&truth.age, 128),
+        (&truth.gender, 128),
+        (&presentation.display_name, 128),
+        (&presentation.identity, MAX_TITLE_BYTES),
+        (&presentation.race, 128),
+        (&presentation.age, 128),
+        (&presentation.gender, 128),
+        (&presentation.appearance, MAX_DESCRIPTION_BYTES),
+    ] {
+        validate_text(value, 1, max_bytes)?;
+    }
+    if initial_knowledge.len() > 6
+        || initial_knowledge.iter().any(|field| {
             !matches!(
                 field.as_str(),
                 "personalName" | "background" | "identity" | "race" | "age" | "gender"
             )
         })
-        || guide
-            .initial_knowledge
-            .iter()
-            .collect::<BTreeSet<_>>()
-            .len()
-            != guide.initial_knowledge.len()
+        || initial_knowledge.iter().collect::<BTreeSet<_>>().len() != initial_knowledge.len()
     {
         return Err(invalid_output());
     }
@@ -659,13 +777,30 @@ mod tests {
         aoidos_json::to_vec(&crate::game::assets::cycle_input("mistbell").unwrap()).unwrap()
     }
 
+    fn validate_and_normalize(
+        bytes: &[u8],
+        session_id: &str,
+        request_id: &str,
+        locale: &str,
+        cycle_input_snapshot: &[u8],
+    ) -> Result<Vec<u8>, Fault> {
+        super::validate_and_normalize(
+            bytes,
+            session_id,
+            request_id,
+            locale,
+            cycle_input_snapshot,
+            &crate::game::assets::entity_manifest_snapshot("mistbell").unwrap(),
+        )
+    }
+
     fn text(en: &str, zh: &str) -> serde_json::Value {
         serde_json::json!({"en":en,"zh-Hans":zh})
     }
 
     fn valid_response() -> serde_json::Value {
         serde_json::json!({
-            "version":1, "locale":"zh-Hans",
+            "version":2, "locale":"zh-Hans",
             "goal":{"text":text("Uncover the old tower's secret","揭开旧塔钟声背后的秘密"),"achievedTagKey":"tower-truth","unmetTagKey":"tower-unresolved"},
             "tags":[
                 {"key":"tower-truth","title":text("Tower's truth","旧塔真相"),"description":text("Discover the source of the bell","查明钟声来源"),"visibility":"public","rules":[{"conditions":[{"fieldId":"committed-round-count","operator":"atLeast","value":4}]}]},
@@ -675,6 +810,9 @@ mod tests {
                 {"key":"reach-village","title":text("Reach the village","抵达苔泉村"),"description":text("Find the village entrance.","沿山路找到村口。"),"kind":"task","dependsOn":[]},
                 {"key":"ask-luo-wei","title":text("Ask the lamplighter","询问守灯人"),"description":text("Learn about the old tower.","了解旧塔的传闻。"),"kind":"chain-step","chainKey":"tower-inquiry","chainTitle":text("Investigate the tower","追查旧塔"),"chainStep":1,"dependsOn":["reach-village"]},
                 {"key":"inspect-bell","title":text("Inspect the bell","检查铜钟"),"description":text("Look for marks on the bell.","寻找钟体上的痕迹。"),"kind":"chain-step","chainKey":"tower-inquiry","chainTitle":text("Investigate the tower","追查旧塔"),"chainStep":2,"dependsOn":["ask-luo-wei"]}
+            ],
+            "characterProfiles":[
+                {"characterId":"player","truth":{"personalName":"Player","background":"A traveler who arrived in the village.","identity":"Traveler","race":"Human","age":"Adult","gender":"Unspecified"},"initialKnowledge":["personalName","identity"],"presentation":{"displayName":"Traveler","identity":"Visitor","race":"Human","age":"Adult","gender":"Unspecified","appearance":"A travel-worn cloak."}}
             ],
             "guideNpc":null
         })
@@ -722,7 +860,13 @@ mod tests {
         assert_eq!(snapshot.initial_tasks[0].state, InitialTaskState::Available);
         assert_eq!(snapshot.initial_tasks[1].state, InitialTaskState::Locked);
         assert_ne!(snapshot.initial_tasks[0].id, "reach-village");
-        assert!(matches!(snapshot.guide, GuideSnapshot::Fixed { .. }));
+        assert_eq!(snapshot.characters.len(), 2);
+        assert_eq!(snapshot.characters[0].character_id, "player");
+        assert_eq!(snapshot.characters[0].source, CharacterSource::Generated);
+        assert_eq!(snapshot.characters[1].character_id, "luo-wei");
+        assert_eq!(snapshot.characters[1].source, CharacterSource::Fixed);
+        assert_eq!(snapshot.guide.character_id, "luo-wei");
+        assert_eq!(snapshot.guide.source, GuideSource::Fixed);
 
         let second_request = validate_and_normalize(
             &serde_json::to_vec(&valid_response()).unwrap(),
@@ -757,17 +901,14 @@ mod tests {
         let first = normalize_without_fixed_guide(&value).unwrap();
         assert_eq!(first, normalize_without_fixed_guide(&value).unwrap());
         let snapshot: OpeningContent = decode_bytes(&first, MAX_OUTPUT_BYTES).unwrap();
-        let GuideSnapshot::Generated {
-            character_id,
-            truth,
-            opening_role,
-            ..
-        } = snapshot.guide
-        else {
-            panic!("expected generated guide")
-        };
+        let character_id = snapshot.guide.character_id;
+        let opening_role = snapshot.guide.opening_role;
+        assert_eq!(snapshot.guide.source, GuideSource::Generated);
         assert_ne!(character_id, "Mira");
-        assert_eq!(truth.personal_name, "Mira");
+        assert_eq!(
+            snapshot.characters.last().unwrap().truth.personal_name,
+            "Mira"
+        );
         assert_eq!(opening_role, "Village guide");
 
         let mut missing = valid_response();
@@ -825,6 +966,30 @@ mod tests {
             .unwrap()
             .remove("initialTasks");
         assert!(normalize(&missing_tasks).is_err());
+    }
+
+    #[test]
+    fn requires_exactly_the_missing_story_profiles_and_preserves_fixed_profiles() {
+        let mut missing = valid_response();
+        missing["characterProfiles"] = serde_json::json!([]);
+        assert!(normalize(&missing).is_err());
+
+        let mut extra = valid_response();
+        extra["characterProfiles"][0]["characterId"] = serde_json::json!("luo-wei");
+        assert!(normalize(&extra).is_err());
+
+        let mut duplicate = valid_response();
+        let duplicate_profile = duplicate["characterProfiles"][0].clone();
+        duplicate["characterProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate_profile);
+        assert!(normalize(&duplicate).is_err());
+
+        let normalized = normalize(&valid_response()).unwrap();
+        let snapshot: OpeningContent = decode_bytes(&normalized, MAX_OUTPUT_BYTES).unwrap();
+        assert_eq!(snapshot.characters[1].truth.personal_name, "洛苇");
+        assert_eq!(snapshot.characters[1].source, CharacterSource::Fixed);
     }
 
     #[test]

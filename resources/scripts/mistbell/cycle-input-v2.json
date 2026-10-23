@@ -1,0 +1,45 @@
+{
+  "version": 2,
+  "revision": 2,
+  "protagonistCharacterId": "player",
+  "storyCharacterIds": ["player", "luo-wei"],
+  "characters": [
+    {
+      "characterId": "luo-wei",
+      "isGuide": true,
+      "truth": {
+        "personalName": "洛苇",
+        "background": "苔泉村守灯人，熟悉旧塔、铜钟与山雾的地方传说。",
+        "identity": "苔泉村守灯人；尊重玩家自主选择，不替玩家决定行动。",
+        "race": "人类",
+        "age": "成年，约三十岁",
+        "gender": "女性"
+      },
+      "initialKnowledge": ["personalName", "background", "identity", "race", "age", "gender"],
+      "presentation": {
+        "displayName": "洛苇",
+        "identity": "苔泉村守灯人",
+        "race": "人类",
+        "age": "成年，约三十岁",
+        "gender": "女性",
+        "appearance": "三十岁上下的人类女性，身着守灯人的旧式衣物。"
+      },
+      "openingRole": "守灯人",
+      "openingRelationship": "开局时介绍当地情况并提供行动引导"
+    }
+  ],
+  "stateFields": [
+    {
+      "id": "committed-round-count",
+      "kind": "integer",
+      "source": "engine.committed-round-count.v1",
+      "min": 1,
+      "max": 1000000,
+      "operators": ["equals", "atLeast", "atMost"],
+      "descriptions": {
+        "en": "Number of committed player rounds in the current history branch.",
+        "zh-Hans": "当前有效历史分支中已提交的玩家回合数。"
+      }
+    }
+  ]
+}

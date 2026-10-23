@@ -4,7 +4,7 @@
 
 ## 内容真源与资源
 
-剧本在独立内容仓库维护；Aoidos 将已发布原文放入 `resources/scripts/<scriptId>/`。每个目录保存正文、必要署名 / 许可文件，以及显式登记的 `i18n.json`、`entities.json` 和 `cycle-input.json`；不随应用打包私有仓库地址、提交号或 SOURCE.json，不在构建 / 运行时隐式读取相邻仓库或联网同步。
+剧本在独立内容仓库维护；Aoidos 将已发布原文放入 `resources/scripts/<scriptId>/`。每个目录保存正文、必要署名 / 许可文件，以及显式登记的 `i18n.json`、`entities.json` 和版本化 `cycle-input-vN.json`；不随应用打包私有仓库地址、提交号或 SOURCE.json，不在构建 / 运行时隐式读取相邻仓库或联网同步。
 
 默认资源由 engine 的资源模块显式登记，使用编译期 `include_bytes!` / `include_str!` 嵌入正文、许可和本地化展示元数据。固定路径属于发布资源配置，运行时按 scriptId 选择，不依赖编译机器目录；业务模块不自行拼接文件路径。首版不引入目录扫描或任意剧本包注册。
 
@@ -18,16 +18,20 @@
 
 ### 周目初始化输入与引导角色
 
-每个新周目都使用显式登记的 `cycle-input.json`，不从 Markdown 自然语言推断可执行数值字段。文件声明版本、输入字段 schema 和可选角色资料；不得包含结局标签、结局规则或最终目标。开局模型根据剧本原文、已登记的字段 schema、locale 与输出协议生成目标、标签目录、规则、初始任务及需要补全的 run 角色档案。角色资料用稳定 `characterId` 关联 `entities.json` 中的 Character，并将 `truth`、`initialKnowledge` 与 `presentation` 分开：真值是故事正史，认知声明角色初始知道哪些资料，对外呈现允许角色用另一种表面身份与玩家交互。每个有剧情作用的角色，包括主角，都必须在可玩 run 的冻结快照中有档案；没有剧本固定档案的主角或配角由初始化阶段生成一次。主角控制绑定不能授予玩家查看隐藏真值的权限。是否担任开场引导者由独立的 `isGuide: true` 标记选择，并额外提供 `openingRole` 与 `openingRelationship`。未标记或 `isGuide: false` 的角色资料不会自动成为引导者；零个标记角色时才由 LLM 生成周目专属引导 NPC，多个标记角色使剧本配置无效。固定角色的规范身份和真值由引擎沿用，模型只生成获准的开场对白；生成角色的内部 ID 由引擎分配并通过可信初始化路径注册。角色类型可按剧本写成冒险者公会前台、长期同行伙伴等。不得运行时搜索正文猜测角色。
+每个新周目都使用显式登记的版本化 cycle input，不从 Markdown 自然语言推断可执行数值字段。文件声明版本、输入字段 schema、剧情角色名册和可选固定角色资料；不得包含结局标签、结局规则或最终目标。开局模型根据剧本原文、已登记的字段 schema、locale 与输出协议生成目标、标签目录、规则、初始任务及名册中缺少固定资料的角色档案。角色资料用稳定 `characterId` 关联 `entities.json` 中的 Character，并将 `truth`、`initialKnowledge` 与 `presentation` 分开：真值是故事正史，认知声明角色初始知道哪些资料，对外呈现允许角色用另一种表面身份与玩家交互。每个有剧情作用的角色，包括主角，都必须在可玩 run 的冻结快照中有档案；没有剧本固定档案的主角或配角由初始化阶段生成一次。主角控制绑定不能授予玩家查看隐藏真值的权限。是否担任开场引导者由独立的 `isGuide: true` 标记选择，并额外提供 `openingRole` 与 `openingRelationship`。未标记或 `isGuide: false` 的角色资料不会自动成为引导者；零个标记角色时才由 LLM 生成周目专属引导 NPC，多个标记角色使剧本配置无效。固定角色的规范身份和真值由引擎沿用；模型只生成缺失档案与获准的开场对白。生成角色的内部 ID 由引擎分配并通过可信初始化路径注册。角色类型可按剧本写成冒险者公会前台、长期同行伙伴等。不得运行时搜索正文猜测名册或角色。
 
-`cycle-input.json` 顶层必须且只能包含 `{ "version": 1, "revision": 1, "protagonistCharacterId": "…", "characters": [...], "stateFields": [...] }` 中登记的字段；`protagonistCharacterId` 可省略，但若提供必须引用已登记 Character。每个角色项使用 `characterId`、`truth`、`initialKnowledge`、`presentation`，可选布尔 `isGuide`、`openingRole` 和 `openingRelationship`。`truth` 必须明确给出非空 `personalName`、`background`、`identity`、`race`、`age`、`gender`；已能从剧本确定的值不可填 `null`。当前 v1 不支持尚未设定的真值字段，若确需未知状态须先升级 schema；真值已确定但暂不揭晓时，保留真值并用认知和展示层控制披露。`presentation` 明确给出角色初始对外使用的 `displayName`、`identity`、`race`、`age`、`gender` 和 `appearance`，允许与真值不同。`initialKnowledge` 是上述六类真值字段 ID 的唯一值子集，只声明角色知道什么，不代表玩家已知或角色会主动披露。可选 `isGuide` 缺省等同 `false`；只有 `true` 才表示固定引导者，并且必须提供非空 `openingRole` 和 `openingRelationship`。所有角色项引用完整实体清单中 `kind=character` 的角色，角色 ID 不可重复，最多一个角色可标记引导者；被 `protagonistCharacterId` 指定的角色不得同时标记为 guide。资料注册不意味着角色已在当前场景、与玩家有真实关系或获知其他事实；这些能力仍须由可信初始化流程单独授权。固定人物真值应与剧本文本及作者资料一致。实体目录的 `canonicalName` 必须是可以公开展示的规范称呼，不得用隐藏真名；展示必须经 `presentation` 或获授权的投影，不得回退读取私有真值。字段项必须且只能包含稳定 `id`、`kind`、可执行的可信来源 `source`、整数 `min` / `max`、非空 `operators` 和两种应用 locale 的简短 `descriptions`。source 必须命中 engine 显式注册、由已提交事实确定性派生的状态投影；未知 source、未经注册的字段、重复 ID、非法范围或非法运算符使剧本不可用。当前字段 ID 固定为 `committed-round-count`，对应 `engine.committed-round-count.v1`；模型只能引用已登记字段与运算符，不能创造状态源或读取当前隐藏值。字段描述帮助模型理解游戏语义，不构成执行代码或事实。
+当前 `cycle-input-v2.json` 顶层必须且只能包含 `{ "version": 2, "revision": 2, "protagonistCharacterId": "…", "storyCharacterIds": [...], "characters": [...], "stateFields": [...] }` 中登记的字段。`storyCharacterIds` 是作者显式确定的本周目剧情角色集合；它必须非空、有界、无重复，且每项必须引用完整实体清单中 `kind=character` 的角色。若提供 `protagonistCharacterId`，它必须属于该集合；固定档案角色也必须属于名册。实体目录可包含仅供背景引用的其他 Character，不要求全量纳入名册。模型必须且只能为名册中缺少固定资料的 ID 生成档案，不得漏项、加项、重复或更换 ID。v1 文件不含名册，只保留历史读取语义，不能用于新的完整角色初始化。
+
+角色项使用 `characterId`、`truth`、`initialKnowledge`、`presentation`，可选布尔 `isGuide`、`openingRole` 和 `openingRelationship`。`truth` 必须明确给出非空 `personalName`、`background`、`identity`、`race`、`age`、`gender`；已能从剧本确定的值不可填 `null`。当前 v2 不支持尚未设定的真值字段，若确需未知状态须先升级 schema；真值已确定但暂不揭晓时，保留真值并用认知和展示层控制披露。`presentation` 明确给出角色初始对外使用的 `displayName`、`identity`、`race`、`age`、`gender` 和 `appearance`，允许与真值不同。`initialKnowledge` 是上述六类真值字段 ID 的唯一值子集，只声明角色知道什么，不代表玩家已知或角色会主动披露。可选 `isGuide` 缺省等同 `false`；只有 `true` 才表示固定引导者，并且必须提供非空 `openingRole` 和 `openingRelationship`。最多一个角色可标记引导者；被 `protagonistCharacterId` 指定的角色不得同时标记为 guide。资料注册不意味着角色已在当前场景、与玩家有真实关系或获知其他事实；这些能力仍须由可信初始化流程单独授权。固定人物真值应与剧本文本及作者资料一致。实体目录的 `canonicalName` 必须是可以公开展示的规范称呼，不得用隐藏真名；展示必须经 `presentation` 或获授权的投影，不得回退读取私有真值。字段项必须且只能包含稳定 `id`、`kind`、可执行的可信来源 `source`、整数 `min` / `max`、非空 `operators` 和两种应用 locale 的简短 `descriptions`。source 必须命中 engine 显式注册、由已提交事实确定性派生的状态投影；未知 source、未经注册的字段、重复 ID、非法范围或非法运算符使剧本不可用。当前字段 ID 固定为 `committed-round-count`，对应 `engine.committed-round-count.v1`；模型只能引用已登记字段与运算符，不能创造状态源或读取当前隐藏值。字段描述帮助模型理解游戏语义，不构成执行代码或事实。
 
 示例：
 
 ```json
 {
-  "version": 1,
-  "revision": 1,
+  "version": 2,
+  "revision": 2,
+  "protagonistCharacterId": "player",
+  "storyCharacterIds": ["player", "luo-wei"],
   "characters": [
     {
       "characterId": "luo-wei",
@@ -72,11 +76,11 @@
 
 当前实现上限 128 KiB、64 个字段；字段 ID 为 1–64 个 ASCII 字母、数字、连字符或下划线，描述每语言 1–256 UTF-8 字节。当前已登记来源支持整数 `equals`、`atLeast`、`atMost` 比较，阈值必须落在声明范围内；缺失、未提交、类型不符和越界值不得当作零或跳过条件。无可用状态字段的脚本使用空数组，仍须生成目标和有限标签 / 规则，但规则不能引用未声明字段。
 
-`cycle-input.json` 可选登记 `characters` 资料数组；`isGuide: true` 是复用固定引导角色的唯一显式标记。资料必须引用当前完整实体目录中的 `character`；零个标记角色表示使用 LLM 生成引导 NPC，多个标记角色使资源无效。新增周目输入字段或人物资料需提升 cycle input revision；script revision 的哈希输入包括原文、实体清单和 cycle input 字节及其各自修订。`cycle-input.json` 与实体清单均在构建期显式登记并编译期嵌入，不扫描目录或运行时联网；旧 run 继续使用冻结的 script revision，不补造输入 schema、NPC 或初始化快照。引擎保留原 v1 script revision 的目录读取兼容路径。
+cycle input 使用 `cycle-input-vN.json` 显式命名；新增字段 / 名册语义须提升 schema version 与 cycle input revision。script revision 的哈希输入包括原文、实体清单和 cycle input 字节及其各自修订。当前资源与需要兼容的历史 cycle input 均在构建期显式登记并编译期嵌入，不扫描目录或运行时联网；旧 run 继续使用其冻结的 script revision，不补造角色名册、NPC 或初始化快照。
 
 开局生成结果是 run 私有、版本化、严格白名单校验并冻结的产物，至少包含最终目标、目标状态可引用的标签 ID、tag 目录、受限比较规则、有限的初始任务、所有缺少固定资料的剧情角色档案，以及仅在剧本没有固定 guide NPC 时生成的引导 NPC。人物档案补齐和 guide NPC 的选择是两项独立职责：固定 guide 仍须由 `isGuide` 显式指定，模型不能因为要补全主角或配角资料而把他们选为 guide。引擎自行创建 ID 和顺序，完整结果要通过数量、字符、locale、重复 ID、字段引用、互斥组、阈值、任务依赖和跨字段一致性校验；未知字段或任一部分无效时整份拒绝，不部分应用。应用支持的 locale 必须完整覆盖用户可见目标、任务及公开标签说明。对规范化 JSON 使用 `aoidos-cycle-init-v1\0` 域标签与 64 位大端长度前缀计算 SHA-256，冻结在该 run 初始化快照；规则 hash、终局 resolutionId 与 summaryHash 分别使用 `aoidos-ending-effective-rule-v1\0`、`aoidos-ending-resolution-v1\0`、`aoidos-ending-summary-v1\0` 独立域标签和长度前缀。
 
-当前 engine 纯输出校验阶段已覆盖 guide 分支：有且仅有一个固定 guide 时冻结该档案并拒绝模型再提交 guide；没有固定 guide 时要求模型提交完整有界档案，认知字段必须唯一且属于允许字段，由 engine 派生 run-local ID。这个局部校验不等于完整开局产物，尚未覆盖其余未登记人物档案或可信实体注册。
+当前 engine 纯输出校验阶段覆盖剧情角色档案补齐：有固定档案的角色按名册顺序冻结并拒绝模型覆盖；模型必须精确补齐其余名册 ID，所有档案的认知字段受白名单约束。固定 guide 由唯一 ID 引用；无固定 guide 时才要求模型提交额外完整档案，ID 由 engine 派生。该局部校验不等于完整开局产物，仍未接入可信实体注册、Provider、账本或 playable 转换。
 
 生成请求的物理 requestId、预算和 profile 快照必须先按 027 / 035 持久化。每个新周目先进入不可玩的 initializing 状态，成功校验且完整初始化快照持久化后才变为 playable；失败或 unknown 不自动重发、不换规则、不开放游戏。显式重试使用同一 run / 预算身份和新的物理 requestId。旧存档和明确废弃的初始化 run 沿既有恢复 / 删除协议处理，不静默升级为新周目。
 
@@ -100,7 +104,7 @@
 
 正文解析与执行配置分开：`aoidos-script` 只解析原文 / 校验结构，不依赖 engine / llm / tauri / store；engine 单向消费普通 DTO，并显式登记场景、规则、actor、RNG 和世界解释器。不能把文章中的“职业 / 金钱 / 法术”等文字自动授予数值执行能力。
 
-024 首版只登记最小章节及现有 `2d6-pbta-v1`，不宣称自动运行完整作者稿、多幕计数或 D&D d20。新规则和世界属性须先定稿、登记并验证，缺能力拒绝，不交给模型代填。结局字段输入由 `cycle-input.json` 声明，结局目标、标签和规则按 [054](../task/054-ending-flow-design.md) / [056](../task/056-ending-flow-impl.md) 在开局生成；这不等于现有脚本 schema 已实现或已验证所有结局状态来源。后续格式演进沿独立内容仓库迭代，应用只升级已核验的接入版本。
+024 首版只登记最小章节及现有 `2d6-pbta-v1`，不宣称自动运行完整作者稿、多幕计数或 D&D d20。新规则和世界属性须先定稿、登记并验证，缺能力拒绝，不交给模型代填。结局字段输入由 `cycle-input-vN.json` 声明，结局目标、标签和规则按 [054](../task/054-ending-flow-design.md) / [056](../task/056-ending-flow-impl.md) 在开局生成；这不等于现有脚本 schema 已实现或已验证所有结局状态来源。后续格式演进沿独立内容仓库迭代，应用只升级已核验的接入版本。
 
 ## 两仓库验证
 
