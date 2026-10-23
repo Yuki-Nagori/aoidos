@@ -85,6 +85,7 @@ fn entity_directory_preserves_every_registered_kind_and_manifest_revision() {
             {"id":"term","kind":"term","scope":"global","canonicalName":"Term"}
         ]}"#,
         cycle_input: br#"{"version":1,"revision":1,"protagonistCharacterId":"person","characters":[{"characterId":"person","isGuide":false,"truth":{"personalName":"Person","background":"Background","identity":"Identity","race":"Human","age":"Adult","gender":"Female"},"initialKnowledge":["personalName"],"presentation":{"displayName":"Person","identity":"Identity","race":"Human","age":"Adult","gender":"Female","appearance":"A person"}}],"stateFields":[]}"#,
+        legacy_cycle_input: br#"{"version":1,"revision":1,"stateFields":[]}"#,
         notices: &[],
     };
     let directory = entity_directory_from_raw(&raw).unwrap();
@@ -132,6 +133,7 @@ fn invalid_entity_directory_maps_to_a_safe_not_ready_fault() {
             i18n: "",
             entities,
             cycle_input: br#"{"version":1,"revision":1,"stateFields":[]}"#,
+            legacy_cycle_input: br#"{"version":1,"revision":1,"stateFields":[]}"#,
             notices: &[],
         };
         let fault = entity_directory_from_raw(&raw).err().unwrap();
@@ -178,10 +180,29 @@ fn legacy_script_revision_remains_available_without_binding_new_cycle_input() {
 }
 
 #[test]
+fn previously_current_cycle_input_revision_remains_available_after_schema_upgrade() {
+    let raw = &BUNDLED[0];
+    let entities = decode_entity_manifest(raw.entities).unwrap();
+    let old_input: CycleInputManifest =
+        aoidos_json::decode_bytes(raw.legacy_cycle_input, MAX_CYCLE_INPUT_BYTES).unwrap();
+    let previous = script_revision(
+        raw.body,
+        raw.entities,
+        raw.legacy_cycle_input,
+        entities.revision,
+        old_input.revision,
+    );
+    let directory = entity_directory_for_revision(raw.id, &previous).unwrap();
+    assert_eq!(directory.script_revision(), previous);
+    assert_eq!(directory.revision(), entities.revision);
+}
+
+#[test]
 fn cycle_input_is_bounded_typed_versioned_and_bound_to_a_registered_character() {
     let manifest = decode_entity_manifest(BUNDLED[0].entities).unwrap();
     let input = decode_cycle_input(BUNDLED[0].cycle_input, &manifest).unwrap();
     assert_eq!(input.protagonist_character_id.as_deref(), Some("player"));
+    assert_eq!(input.story_character_ids, ["player", "luo-wei"]);
     let guide = input
         .characters
         .iter()
@@ -222,6 +243,9 @@ fn cycle_input_is_bounded_typed_versioned_and_bound_to_a_registered_character() 
     for source in [
         br#"{"version":2,"revision":1,"characters":[],"stateFields":[]}"#.as_slice(),
         br#"{"version":1,"revision":0,"stateFields":[]}"#,
+        br#"{"version":1,"revision":1,"storyCharacterIds":["player"],"stateFields":[]}"#,
+        br#"{"version":2,"revision":2,"storyCharacterIds":["luo-wei"],"protagonistCharacterId":"player","stateFields":[]}"#,
+        br#"{"version":2,"revision":2,"storyCharacterIds":["luo-wei","luo-wei"],"stateFields":[]}"#,
         br#"{"version":1,"revision":1,"characters":[{"characterId":"missing","isGuide":true,"truth":{"personalName":"P","background":"x","identity":"x","race":"Human","age":"Adult","gender":"Female"},"initialKnowledge":[],"presentation":{"displayName":"P","identity":"x","race":"Human","age":"Adult","gender":"Female","appearance":"A person"},"openingRole":"x","openingRelationship":"x"}],"stateFields":[]}"#,
         br#"{"version":1,"revision":1,"characters":[{"characterId":"taoquan-village","isGuide":true,"truth":{"personalName":"P","background":"x","identity":"x","race":"Human","age":"Adult","gender":"Female"},"initialKnowledge":[],"presentation":{"displayName":"P","identity":"x","race":"Human","age":"Adult","gender":"Female","appearance":"A person"},"openingRole":"x","openingRelationship":"x"}],"stateFields":[]}"#,
         br#"{"version":1,"revision":1,"protagonistCharacterId":"taoquan-village","stateFields":[]}"#,
@@ -239,6 +263,38 @@ fn cycle_input_is_bounded_typed_versioned_and_bound_to_a_registered_character() 
     ] {
         assert_eq!(decode_cycle_input(source, &manifest).unwrap_err().code, "app.not-ready");
     }
+}
+
+#[test]
+fn frozen_cycle_input_rejects_incomplete_or_invalid_entity_snapshots() {
+    let cycle_input = BUNDLED[0].cycle_input;
+    let mut snapshot: serde_json::Value = serde_json::from_slice(BUNDLED[0].entities).unwrap();
+    snapshot["complete"] = serde_json::Value::Bool(false);
+    assert!(
+        validate_cycle_input_snapshot(cycle_input, &serde_json::to_vec(&snapshot).unwrap())
+            .is_err()
+    );
+
+    let mut snapshot: serde_json::Value = serde_json::from_slice(BUNDLED[0].entities).unwrap();
+    let duplicate = snapshot["entities"][0].clone();
+    snapshot["entities"].as_array_mut().unwrap().push(duplicate);
+    assert!(
+        validate_cycle_input_snapshot(cycle_input, &serde_json::to_vec(&snapshot).unwrap())
+            .is_err()
+    );
+
+    let mut snapshot: serde_json::Value = serde_json::from_slice(BUNDLED[0].entities).unwrap();
+    let mut conflicting_kind = snapshot["entities"][0].clone();
+    conflicting_kind["kind"] = serde_json::Value::String("place".into());
+    conflicting_kind["canonicalName"] = serde_json::Value::String("Not a character".into());
+    snapshot["entities"]
+        .as_array_mut()
+        .unwrap()
+        .push(conflicting_kind);
+    assert!(
+        validate_cycle_input_snapshot(cycle_input, &serde_json::to_vec(&snapshot).unwrap())
+            .is_err()
+    );
 }
 
 #[test]

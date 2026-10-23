@@ -8,6 +8,7 @@ struct RawScript {
     i18n: &'static str,
     entities: &'static [u8],
     cycle_input: &'static [u8],
+    legacy_cycle_input: &'static [u8],
     notices: &'static [&'static str],
 }
 // 默认内容属于发布产物，固定路径只用于编译取材，不是运行时文件位置。
@@ -16,7 +17,10 @@ const BUNDLED: &[RawScript] = &[RawScript {
     body: include_bytes!("../../../../../resources/scripts/mistbell/Mistbell.md"),
     i18n: include_str!("../../../../../resources/scripts/mistbell/i18n.json"),
     entities: include_bytes!("../../../../../resources/scripts/mistbell/entities.json"),
-    cycle_input: include_bytes!("../../../../../resources/scripts/mistbell/cycle-input.json"),
+    cycle_input: include_bytes!("../../../../../resources/scripts/mistbell/cycle-input-v2.json"),
+    legacy_cycle_input: include_bytes!(
+        "../../../../../resources/scripts/mistbell/cycle-input-v1.json"
+    ),
     notices: &[
         include_str!("../../../../../resources/scripts/mistbell/LICENSE.md"),
         include_str!("../../../../../resources/scripts/mistbell/SRD-5.2.1.md"),
@@ -38,7 +42,7 @@ struct ScriptI18n {
     display_names: BTreeMap<String, String>,
     suggested_actions: BTreeMap<String, String>,
 }
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EntityManifest {
     version: u32,
@@ -51,6 +55,8 @@ struct EntityManifest {
 pub(crate) struct CycleInputManifest {
     pub(crate) version: u32,
     pub(crate) revision: u64,
+    #[serde(default)]
+    pub(crate) story_character_ids: Vec<String>,
     #[serde(default)]
     pub(crate) protagonist_character_id: Option<String>,
     #[serde(default)]
@@ -102,7 +108,7 @@ pub(crate) struct StateField {
     pub(crate) operators: Vec<String>,
     pub(crate) descriptions: BTreeMap<String, String>,
 }
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EntityEntry {
     id: String,
@@ -110,7 +116,7 @@ struct EntityEntry {
     scope: String,
     canonical_name: String,
 }
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum EntityKind {
     Character,
@@ -145,6 +151,11 @@ pub(crate) fn cycle_input(id: &str) -> Result<CycleInputManifest, Fault> {
     validate_character_profiles(&input, &directory)?;
     Ok(input)
 }
+/// 测试读取与指定剧本配套的原始实体清单字节。
+#[cfg(test)]
+pub(crate) fn entity_manifest_snapshot(id: &str) -> Result<Vec<u8>, Fault> {
+    Ok(find(id)?.entities.to_vec())
+}
 /// 以新剧本版本或历史 v1 版本重建实体目录，确保旧周目不被新输入资源改写。
 /// # Errors
 /// 目标版本不是该已登记剧本的当前或 legacy 修订时拒绝。
@@ -156,7 +167,20 @@ pub(crate) fn entity_directory_for_revision(
     let manifest = decode_entity_manifest(raw.entities)?;
     let legacy_revision = legacy_script_revision(raw.body, raw.entities, manifest.revision);
     let current_revision = revision(id)?;
-    if expected_revision != current_revision && expected_revision != legacy_revision {
+    let previous_input: CycleInputManifest =
+        aoidos_json::decode_bytes(raw.legacy_cycle_input, MAX_CYCLE_INPUT_BYTES)
+            .map_err(|_| invalid_cycle_input())?;
+    let previous_revision = script_revision(
+        raw.body,
+        raw.entities,
+        raw.legacy_cycle_input,
+        manifest.revision,
+        previous_input.revision,
+    );
+    if expected_revision != current_revision
+        && expected_revision != previous_revision
+        && expected_revision != legacy_revision
+    {
         return Err(invalid_entities());
     }
     let full = entity_directory_from_raw(raw)?;
@@ -164,7 +188,7 @@ pub(crate) fn entity_directory_for_revision(
         return Ok(full);
     }
     super::catalog::EntityDirectory::new(
-        legacy_revision,
+        expected_revision.to_owned(),
         full.revision(),
         full.is_complete(),
         full.entries().cloned().collect(),
@@ -182,7 +206,7 @@ fn entity_directory_from_raw(raw: &RawScript) -> Result<super::catalog::EntityDi
     let manifest = decode_entity_manifest(raw.entities)?;
     let directory_revision = manifest.revision;
     let complete = manifest.complete;
-    // New entity snapshots follow the complete script revision, including cycle-input.json.
+    // New entity snapshots follow the complete script revision, including versioned cycle input.
     let cycle_input = decode_cycle_input(raw.cycle_input, &manifest)?;
     let script_revision = script_revision(
         raw.body,
@@ -255,7 +279,14 @@ fn decode_cycle_input(
 ) -> Result<CycleInputManifest, Fault> {
     let manifest: CycleInputManifest = aoidos_json::decode_bytes(source, MAX_CYCLE_INPUT_BYTES)
         .map_err(|_| invalid_cycle_input())?;
-    if manifest.version != 1 || manifest.revision == 0 || manifest.state_fields.len() > 64 {
+    if !matches!(manifest.version, 1 | 2)
+        || manifest.revision == 0
+        || manifest.state_fields.len() > 64
+        || (manifest.version == 1 && !manifest.story_character_ids.is_empty())
+        || (manifest.version == 2
+            && (manifest.story_character_ids.is_empty()
+                || manifest.story_character_ids.len() > 128))
+    {
         return Err(invalid_cycle_input());
     }
     let mut ids = std::collections::BTreeSet::new();
@@ -289,9 +320,21 @@ fn decode_cycle_input(
         return Err(invalid_cycle_input());
     }
     let mut character_ids = std::collections::BTreeSet::new();
+    let mut story_character_ids = std::collections::BTreeSet::new();
     let mut guide_count = 0;
+    for character_id in &manifest.story_character_ids {
+        if !crate::record::format::valid_id(character_id)
+            || !story_character_ids.insert(character_id)
+            || !entities.entities.iter().any(|entity| {
+                entity.id == *character_id && matches!(entity.kind, EntityKind::Character)
+            })
+        {
+            return Err(invalid_cycle_input());
+        }
+    }
     if let Some(protagonist_id) = &manifest.protagonist_character_id
         && (!crate::record::format::valid_id(protagonist_id)
+            || (manifest.version == 2 && !story_character_ids.contains(protagonist_id))
             || !entities.entities.iter().any(|entity| {
                 entity.id == *protagonist_id && matches!(entity.kind, EntityKind::Character)
             }))
@@ -307,6 +350,7 @@ fn decode_cycle_input(
             || !character_ids.insert(&character.character_id)
             || !registered_character
                 .is_some_and(|entity| matches!(entity.kind, EntityKind::Character))
+            || (manifest.version == 2 && !story_character_ids.contains(&character.character_id))
             || character.is_guide
                 && manifest.protagonist_character_id.as_deref()
                     == Some(character.character_id.as_str())
@@ -354,6 +398,45 @@ fn decode_cycle_input(
         return Err(invalid_cycle_input());
     }
     Ok(manifest)
+}
+pub(crate) fn validate_cycle_input_snapshot(
+    cycle_input: &[u8],
+    entity_snapshot: &[u8],
+) -> Result<(CycleInputManifest, std::collections::BTreeSet<String>), Fault> {
+    let entities = decode_entity_manifest(entity_snapshot)?;
+    if !entities.complete {
+        return Err(invalid_cycle_input());
+    }
+    let entries = entities
+        .entities
+        .iter()
+        .map(|entity| super::catalog::CanonicalEntity {
+            id: entity.id.clone(),
+            kind: match entity.kind {
+                EntityKind::Character => super::catalog::EntityKind::Character,
+                EntityKind::Place => super::catalog::EntityKind::Place,
+                EntityKind::Organization => super::catalog::EntityKind::Organization,
+                EntityKind::Item => super::catalog::EntityKind::Item,
+                EntityKind::Term => super::catalog::EntityKind::Term,
+            },
+            scope: entity.scope.clone(),
+            canonical_name: entity.canonical_name.clone(),
+        })
+        .collect();
+    super::catalog::EntityDirectory::new(
+        crate::record::format::hash(b"cycle-input-snapshot-validation"),
+        entities.revision,
+        entities.complete,
+        entries,
+    )
+    .map_err(|_| invalid_cycle_input())?;
+    let input = decode_cycle_input(cycle_input, &entities)?;
+    let entity_ids = entities
+        .entities
+        .into_iter()
+        .map(|entity| entity.id)
+        .collect();
+    Ok((input, entity_ids))
 }
 fn invalid_profile_text(value: &str) -> bool {
     value.trim().is_empty() || value.len() > 4096 || value.chars().any(char::is_control)
