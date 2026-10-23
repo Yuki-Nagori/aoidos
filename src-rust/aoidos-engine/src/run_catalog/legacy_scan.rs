@@ -492,6 +492,17 @@ pub(crate) fn apply_prepared_batch(
                     diagnosed += 1;
                     continue;
                 }
+                let creation_is_owned: bool = transaction
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM session_creation_ops WHERE session_id=?1)",
+                        [&header.session_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(database)?;
+                if creation_is_owned {
+                    // 创建 journal 是该路径的权威来源；不能把 inactive run 导入为 legacy。
+                    continue;
+                }
                 clear_issue(&transaction, &candidate.key)?;
                 if register_legacy(&transaction, &header, &candidate.key)? {
                     discovered += 1;
@@ -857,6 +868,9 @@ mod tests {
             .execute_batch(aoidos_memory::schema::SCHEMA)
             .unwrap();
         connection.execute_batch(super::super::SCHEMA).unwrap();
+        connection
+            .execute_batch(super::super::creation::MIGRATION)
+            .unwrap();
         connection.execute_batch(MIGRATION).unwrap();
         connection
     }

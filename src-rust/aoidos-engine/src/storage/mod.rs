@@ -102,6 +102,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     crate::run_catalog::DELETION_ACK_MIGRATION,
     crate::cycle_initialization::SCHEMA,
     crate::cycle_initialization::DISPATCH_MIGRATION,
+    crate::run_catalog::creation::MIGRATION,
 ];
 
 pub struct Storage {
@@ -150,7 +151,7 @@ impl Storage {
                 .ok()
                 .map(|()| connection)
         });
-        Self {
+        let storage = Self {
             records: Arc::new(Records::new(root.to_owned(), record_events)),
             migration,
             preferences: Arc::new(Preferences::new(root)),
@@ -158,7 +159,55 @@ impl Storage {
             root: root.to_owned(),
             memory: aoidos_memory::repository::Repository::new(root),
             legacy_scan: Mutex::new(crate::run_catalog::legacy_scan::LegacyScanner::new(root)),
+        };
+        let _ = storage.recover_inactive_run_creations();
+        storage
+    }
+
+    /// 新建不可玩的周目占位并可在重启后重放创建意图；不创建 owner、预算预留或模型请求。
+    /// # Errors
+    /// 身份冲突、header 不匹配或任一持久化阶段失败时保留 journal 供恢复。
+    pub fn create_inactive_run(
+        &self,
+        intent: &crate::run_catalog::InactiveRunIntent,
+    ) -> Result<(), Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::begin_inactive_creation(connection, intent)
+        })?;
+        self.records.ensure_inactive_header(&intent.header)?;
+        self.with_database(|connection| {
+            crate::run_catalog::mark_inactive_record_created(
+                connection,
+                &intent.header.session_id,
+                &intent.header,
+            )?;
+            crate::run_catalog::complete_inactive_creation(connection, &intent.header.session_id)
+        })
+    }
+
+    /// 重启时收敛未完成的 inactive run 创建；只重放冻结 intent，不激活周目。
+    /// # Errors
+    /// 任一意图与 record 文件冲突时停止并保留该周目供显式修复。
+    pub fn recover_inactive_run_creations(&self) -> Result<usize, Fault> {
+        let pending = self.with_database(|connection| {
+            crate::run_catalog::pending_inactive_creations(connection)
+        })?;
+        let count = pending.len();
+        for creation in pending {
+            self.records.ensure_inactive_header(&creation.header)?;
+            self.with_database(|connection| {
+                crate::run_catalog::mark_inactive_record_created(
+                    connection,
+                    &creation.header.session_id,
+                    &creation.header,
+                )?;
+                crate::run_catalog::complete_inactive_creation(
+                    connection,
+                    &creation.header.session_id,
+                )
+            })?;
         }
+        Ok(count)
     }
     /// 在会话锁 → 数据库锁内绑定活动场景目录和当前实体快照，再借用记忆仓储。
     /// 回调不能递归取得这两个锁或 await。
