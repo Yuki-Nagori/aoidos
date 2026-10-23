@@ -3,6 +3,7 @@
 pub mod billing;
 pub mod blocking;
 pub mod cycle_initialization;
+pub mod cycle_output;
 pub mod fault;
 pub mod game;
 pub mod ports;
