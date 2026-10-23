@@ -648,7 +648,7 @@ describe("useBilling price selection and registration", () => {
     await state.savePrice();
     expect(registerPrice).toHaveBeenCalledWith(
       expect.objectContaining({
-        schedule: expect.objectContaining({ version: "deepseek-api-utc-weekday-holiday-2026-v1" }),
+        schedule: expect.objectContaining({ version: "deepseek-api-utc-weekday-holiday-2026-v2" }),
       }),
     );
     scope.stop();
@@ -1443,4 +1443,37 @@ describe("useBilling provider balance recovery", () => {
       }
     },
   );
+});
+
+describe("registered price display refresh", () => {
+  it("refreshes metadata and editor fields after confirmation without selecting another price", async () => {
+    const { state, scope } = createState();
+    await waitForLoaded(state);
+    const registered = price({ currency: "USD", versionId: "confirmed-reference" });
+    vi.mocked(getSelectedPrice).mockResolvedValueOnce(registered);
+    await state.refreshSelectedPrice();
+    await nextTick();
+    expect(state.selectedPrice.value).toEqual(registered);
+    expect(state.priceCurrency.value).toBe("USD");
+    expect(state.inputUncached.value).toBe(registered.inputUncached);
+    expect(state.priceReady.value).toBe(true);
+    expect(selectPrice).not.toHaveBeenCalled();
+    scope.stop();
+  });
+  it("ignores a stale display refresh after switching model and reports current read errors", async () => {
+    const { state, modelId, scope } = createState();
+    await waitForLoaded(state);
+    const pending = deferred<PriceVersion | null>();
+    vi.mocked(getSelectedPrice).mockReturnValueOnce(pending.promise);
+    const refreshing = state.refreshSelectedPrice();
+    modelId.value = "model-2";
+    await nextTick();
+    pending.resolve(price());
+    await refreshing;
+    expect(state.selectedPrice.value).toBeNull();
+    vi.mocked(getSelectedPrice).mockRejectedValueOnce(new Error("price lookup unavailable"));
+    await state.refreshSelectedPrice();
+    expect(state.error.value?.message).toBe("price lookup unavailable");
+    scope.stop();
+  });
 });

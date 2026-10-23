@@ -68,7 +68,7 @@ async fn real_command_decoding_preferences_and_frozen_storage_diagnostics() {
     assert_eq!(
         call(
             "store_set_ui_preferences",
-            serde_json::json!({"panelPinned":true,"diceMode":"auto"})
+            serde_json::json!({"panelPinned":true,"diceMode":"auto","diceSkin":"mistbell"})
         )
         .unwrap()["diceMode"],
         "auto"
@@ -76,7 +76,7 @@ async fn real_command_decoding_preferences_and_frozen_storage_diagnostics() {
     assert_eq!(
         call(
             "store_set_ui_preferences",
-            serde_json::json!({"panelPinned":true,"diceMode":"auto","secret":"ignored"})
+            serde_json::json!({"panelPinned":true,"diceMode":"auto","diceSkin":"auto","secret":"ignored"})
         )
         .unwrap_err()["code"],
         "app.bad-request"
@@ -84,7 +84,7 @@ async fn real_command_decoding_preferences_and_frozen_storage_diagnostics() {
     assert_eq!(
         call(
             "store_set_ui_preferences",
-            serde_json::json!({"panelPinned":true,"diceMode":"wrong"})
+            serde_json::json!({"panelPinned":true,"diceMode":"wrong","diceSkin":"auto"})
         )
         .unwrap_err()["code"],
         "app.bad-request"
@@ -164,7 +164,7 @@ async fn real_command_decoding_preferences_and_frozen_storage_diagnostics() {
         ("store_get_ui_preferences", serde_json::json!({})),
         (
             "store_set_ui_preferences",
-            serde_json::json!({"panelPinned":false,"diceMode":"manual"}),
+            serde_json::json!({"panelPinned":false,"diceMode":"manual","diceSkin":"auto"}),
         ),
         (
             "engine_get_record_page",

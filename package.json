@@ -82,6 +82,7 @@
     "vue-tsc": "^3.3.12"
   },
   "dependencies": {
+    "@babylonjs/core": "9.32.0",
     "@tauri-apps/api": "^2.12.1",
     "vue": "^3.5.43",
     "vue-i18n": "^11.4.13"

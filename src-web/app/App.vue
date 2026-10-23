@@ -152,11 +152,13 @@ void preferences.load();
         v-if="product.session.value"
         ref="workspace"
         :session="product.session.value"
+        :history-revision="historyRevision"
         :script-title="sessionScriptTitle"
         :suggested-action="suggestedAction"
         :product-busy="product.busy.value || !billing.ready.value"
         :error-message="errorMessage"
         :preferences="preferences"
+        :script-skin-enabled="!theme.disabled.value"
         @error="gameError = $event as AppFault"
         @history-revision="historyRevision = $event"
         @open-settings="openSettings('appearance', $event)"
@@ -172,6 +174,9 @@ void preferences.load();
             <template v-if="billingChip">
               <span class="sep" />
               <span>{{ billingChip }}</span>
+              <span v-if="billing.period.value?.hasEstimatedRequests" class="tag warn">≈ {{
+                  t("billing.estimated")
+                }}</span>
             </template>
             <span class="sep" />
             <span class="dim">{{ product.model.value }}</span>

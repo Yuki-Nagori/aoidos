@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import PriceTemplateDialog from "../../features/billing/components/PriceTemplateDialog.vue";
 import BillingPanel from "../../features/billing/components/BillingPanel.vue";
 import SettingsSectionHeading from "./SettingsSectionHeading.vue";
 import SettingsSectionIcon from "./SettingsSectionIcon.vue";
 import SelectMenu from "../../shared/components/SelectMenu.vue";
 import KeyboardShortcuts from "./KeyboardShortcuts.vue";
+import DiceSkinPicker from "../../features/game/components/DiceSkinPicker.vue";
+import RunCatalogPanel from "../../features/product/components/RunCatalogPanel.vue";
+import type { OpenedRun } from "../../api/runs";
 import { useI18n } from "vue-i18n";
 import type { useProduct } from "../../features/product/composables/useProduct";
 import type { useTheme } from "../../features/theme/composables/useTheme";
@@ -29,14 +33,33 @@ const selectedPriceTemplate = computed(() =>
 );
 const emit = defineEmits<{ reconnect: []; close: [] }>();
 const panel = ref<HTMLElement>();
+const priceTemplateOpen = ref(false);
+async function openPriceTemplate(): Promise<void> {
+  if (!(await product.prepareBillingCurrency(locale.resolved.value))) return;
+  priceTemplateOpen.value = true;
+}
+async function confirmPriceTemplate(): Promise<void> {
+  await product.confirmBillingPrice();
+  if (!product.error.value) {
+    priceTemplateOpen.value = false;
+    await billing.refreshSelectedPrice();
+  }
+}
+function registerPriceManually(): void {
+  priceTemplateOpen.value = false;
+  activeSection.value = "price";
+}
 const activeSection = ref("appearance");
 const sections = computed(() => [
   { id: "appearance", label: t("settings.sections.appearance") },
   { id: "api", label: t("settings.sections.api") },
   { id: "gameplay", label: t("settings.sections.gameplay") },
+  { id: "dice", label: t("settings.sections.dice") },
   { id: "billing", label: t("settings.sections.billing") },
+  { id: "rates", label: t("rates.title") },
   { id: "price", label: t("settings.sections.price") },
   { id: "balance", label: t("settings.sections.balance") },
+  { id: "runs", label: t("settings.sections.runs") },
   { id: "memory", label: t("settings.sections.memory") },
   { id: "memory-list", label: t("settings.sections.memory-list") },
   { id: "memory-pending", label: t("settings.sections.memory-pending") },
@@ -46,10 +69,14 @@ const sections = computed(() => [
 const activeSectionTitle = computed(
   () => sections.value.find((section) => section.id === activeSection.value)?.label ?? t("settings.title"),
 );
+function restoreRun(run: OpenedRun): void {
+  product.adoptOpenedRun(run);
+  emit("close");
+}
 watch(
   () => open,
   async (isOpen) => {
-    if (!isOpen) return;
+    if (!isOpen) { priceTemplateOpen.value = false; return; }
     activeSection.value = initialSection;
     await nextTick();
     focusableElements()[0]?.focus();
@@ -191,8 +218,8 @@ function themeName(id: string, fallback: string): string {
             :key="section.id"
             type="button"
             :aria-current="activeSection === section.id ? 'page' : undefined"
-            :class="{ 'is-subsection': ['price', 'balance', 'memory-list', 'memory-pending'].includes(section.id) }"
-            :aria-controls="['price', 'balance'].includes(section.id) ? 'billing' : ['memory-list', 'memory-pending'].includes(section.id) ? 'memory-query' : section.id"
+            :class="{ 'is-subsection': ['dice', 'rates', 'price', 'balance', 'memory-list', 'memory-pending'].includes(section.id) }"
+            :aria-controls="['rates', 'price', 'balance'].includes(section.id) ? 'billing' : ['memory-list', 'memory-pending'].includes(section.id) ? 'memory-query' : section.id"
             @click="activeSection = section.id"
           >
             <SettingsSectionIcon :name="section.id" />
@@ -375,22 +402,6 @@ function themeName(id: string, fallback: string): string {
               v-if="product.providerId.value === 'deepseek' && product.model.value === 'deepseek-flash'"
               class="settings-currency-card card"
             >
-              <div class="settings-currency-heading">
-                <span class="settings-skin-copy">
-                  <strong>{{ t("settings.billingCurrency") }}</strong>
-                  <span class="text-sm text-muted">{{ t("settings.billingCurrencyHint") }}</span>
-                </span>
-                <SelectMenu
-                  :model-value="product.billingCurrency.value"
-                  :options="[
-                    { value: 'CNY', label: t('settings.billingCurrencyCny') },
-                    { value: 'USD', label: t('settings.billingCurrencyUsd') },
-                  ]"
-                  :label="t('settings.billingCurrency')"
-                  :disabled="product.busy.value"
-                  @update:model-value="product.setBillingCurrency($event)"
-                />
-              </div>
               <fieldset v-if="selectedPriceTemplate" class="settings-price-preview">
                 <legend>{{ t("settings.pricePreviewTitle") }}</legend>
                 <span
@@ -468,7 +479,7 @@ function themeName(id: string, fallback: string): string {
                 type="button"
                 class="btn primary"
                 :disabled="product.busy.value || !selectedPriceTemplate"
-                @click="product.confirmBillingPrice"
+                @click="openPriceTemplate"
               >
                 {{ t("settings.confirmBillingPrice") }}
               </button>
@@ -597,8 +608,23 @@ function themeName(id: string, fallback: string): string {
             </div>
           </section>
 
+          <section v-show="activeSection === 'dice'" id="dice" class="settings-section">
+            <SettingsSectionHeading
+              :title="t('settings.diceSkinTitle')"
+              @close="emit('close')"
+            />
+            <DiceSkinPicker
+              v-if="activeSection === 'dice'"
+              :selected="preferences.diceSkin.value ?? 'auto'"
+              :disabled="!preferences.ready.value || preferences.saving.value"
+              :script-id="product.scriptId.value"
+              :script-skin-enabled="!theme.disabled.value"
+              @select="preferences.setDiceSkin"
+            />
+          </section>
+
           <section
-            v-show="['billing', 'price', 'balance'].includes(activeSection)"
+            v-show="['billing', 'rates', 'price', 'balance'].includes(activeSection)"
             id="billing"
             class="settings-section"
           >
@@ -617,11 +643,24 @@ function themeName(id: string, fallback: string): string {
               :provider-id="product.providerId.value"
               :provider-label="selectedProviderLabel"
               :model-id="product.model.value"
-              :view="activeSection === 'price' || activeSection === 'balance' ? activeSection : 'billing'"
+              :view="activeSection === 'rates' || activeSection === 'price' || activeSection === 'balance' ? activeSection : 'billing'"
             />
             <p v-if="!product.session.value" class="text-sm text-muted">
               {{ t("settings.billingAfterStart") }}
             </p>
+          </section>
+
+          <section v-show="activeSection === 'runs'" id="runs" class="settings-section">
+            <SettingsSectionHeading :title="t('settings.sections.runs')" @close="emit('close')" />
+            <RunCatalogPanel
+              v-if="activeSection === 'runs'"
+              :open="open"
+              embedded
+              :scripts="product.scripts.value"
+              :profiles="product.profiles.value"
+              :locale="locale.resolved.value"
+              @restore="restoreRun"
+            />
           </section>
 
           <section v-show="activeSection === 'memory'" id="memory" class="settings-section">
@@ -764,4 +803,17 @@ function themeName(id: string, fallback: string): string {
       <p v-if="errorMessage" class="settings-error" role="alert">{{ errorMessage }}</p>
     </section>
   </div>
+  <PriceTemplateDialog
+    v-if="open && priceTemplateOpen"
+    :prices="product.priceTemplates.value"
+    :currency="product.billingCurrency.value"
+    :registered-currency="product.registeredBillingCurrency.value"
+    :locale="locale.resolved.value"
+    :busy="product.busy.value"
+    :error="errorMessage"
+    @currency="product.setBillingCurrency"
+    @close="priceTemplateOpen = false"
+    @manual="registerPriceManually"
+    @confirm="confirmPriceTemplate"
+  />
 </template>

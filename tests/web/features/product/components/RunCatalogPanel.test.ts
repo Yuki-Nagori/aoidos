@@ -59,6 +59,92 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it("embeds run summaries, highlights the active run and blocks deletion until settlement", async () => {
+  api.listRuns.mockResolvedValue(
+    page([
+      { ...run, active: true },
+      { ...run, sessionId: "pending-run", state: "settlement-pending", active: false },
+    ]),
+  );
+  const wrapper = mount(RunCatalogPanel, {
+    props: { open: true, embedded: true, scripts: [script], profiles: [], locale: "en" },
+    global: { plugins: [i18n] },
+  });
+  await vi.waitFor(() => expect(wrapper.findAll(".run-catalog-row")).toHaveLength(2));
+  expect(wrapper.find(".run-catalog-backdrop").exists()).toBe(false);
+  expect(wrapper.get(".run-catalog-dialog").attributes("role")).toBe("region");
+  expect(wrapper.find(".run-catalog-row.active").exists()).toBe(true);
+  const pending = wrapper.findAll(".run-catalog-row")[1]!;
+  expect(pending.get(".danger").attributes("disabled")).toBeDefined();
+  expect(pending.find(".run-catalog-warning").exists()).toBe(true);
+  await wrapper.findAll(".run-catalog-filter button")[1]!.trigger("click");
+  expect(wrapper.findAll(".run-catalog-row")).toHaveLength(1);
+  expect(wrapper.find(".run-catalog-row.active").exists()).toBe(false);
+  expect(api.deleteRun).not.toHaveBeenCalled();
+  wrapper.unmount();
+});
+
+it("shows an empty-state message when the attention filter excludes every ready run", async () => {
+  api.listRuns.mockResolvedValue({
+    ...page([run]),
+    nextCursor: { catalogRevision: 7, afterCreatedAt: run.createdAt, afterSessionId: "next-run" },
+  });
+  const wrapper = mount(RunCatalogPanel, {
+    props: { open: true, embedded: true, scripts: [script], profiles: [], locale: "en" },
+    global: { plugins: [i18n] },
+  });
+  await vi.waitFor(() => expect(wrapper.findAll(".run-catalog-row")).toHaveLength(1));
+
+  await wrapper.findAll(".run-catalog-filter button")[1]!.trigger("click");
+
+  expect(wrapper.findAll(".run-catalog-row")).toHaveLength(0);
+  expect(wrapper.get(".run-catalog-empty").text()).toBe("No runs on this page need attention.");
+  expect(
+    wrapper.findAll(".run-catalog-footer button").at(-1)?.attributes("disabled"),
+  ).toBeUndefined();
+  wrapper.unmount();
+});
+
+it("requires both a selected profile and explicit acknowledgement before binding a legacy save", async () => {
+  api.listRuns.mockResolvedValue(
+    page([{ ...run, profileId: null, state: "needs-profile-binding" }]),
+  );
+  api.bindRunProfile.mockResolvedValue(5);
+  const wrapper = mount(RunCatalogPanel, {
+    props: {
+      open: true,
+      embedded: true,
+      scripts: [script],
+      profiles: [
+        {
+          profileId: "saved-profile",
+          providerId: "deepseek",
+          model: "deepseek-chat",
+          mode: "chat",
+          thinking: false,
+          sampling: { temperature: 1, maxTokens: 1024 },
+          proxy: { mode: "system" },
+        },
+      ],
+      locale: "en",
+    },
+    global: { plugins: [i18n] },
+  });
+  await vi.waitFor(() => expect(wrapper.find(".run-catalog-row").exists()).toBe(true));
+  await wrapper.get(".run-catalog-row .primary").trigger("click");
+  const modal = wrapper.get(".run-delete-confirm");
+  expect(modal.get(".primary").attributes("disabled")).toBeDefined();
+  await modal.get('input[type="radio"]').setValue(true);
+  expect(modal.get(".primary").attributes("disabled")).toBeDefined();
+  await modal.get('input[type="checkbox"]').setValue(true);
+  await modal.get(".primary").trigger("click");
+  await vi.waitFor(() =>
+    expect(api.bindRunProfile).toHaveBeenCalledWith("session-1", 4, "saved-profile"),
+  );
+  expect(wrapper.find(".run-delete-confirm").exists()).toBe(false);
+  wrapper.unmount();
+});
+
 it("keeps a partially completed deletion visible and resumes it with the same operation ID", async () => {
   vi.stubGlobal("crypto", { randomUUID: () => "delete-op-1" });
   api.listRuns.mockResolvedValueOnce(page([run])).mockResolvedValue(page([]));
@@ -92,6 +178,9 @@ it("keeps a partially completed deletion visible and resumes it with the same op
   await vi.waitFor(() => expect(api.listRuns).toHaveBeenCalledTimes(1));
 
   await buttonNamed("Delete").click();
+  expect(buttonNamed("Confirm deletion").disabled).toBe(true);
+  (document.body.querySelector(".run-acknowledgement input") as HTMLInputElement).click();
+  await vi.waitFor(() => expect(buttonNamed("Confirm deletion").disabled).toBe(false));
   await buttonNamed("Confirm deletion").click();
   await vi.waitFor(() => expect(api.deleteRun).toHaveBeenCalledTimes(1));
   expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-1", "session-1", 4);
@@ -133,6 +222,8 @@ it("retries a pre-journal deletion failure with the run revision, not the catalo
   await wrapper.setProps({ open: true });
   await vi.waitFor(() => expect(api.listRuns).toHaveBeenCalledTimes(1));
   await buttonNamed("Delete").click();
+  (document.body.querySelector(".run-acknowledgement input") as HTMLInputElement).click();
+  await vi.waitFor(() => expect(buttonNamed("Confirm deletion").disabled).toBe(false));
   await buttonNamed("Confirm deletion").click();
   await vi.waitFor(() => expect(api.deleteRun).toHaveBeenCalledTimes(1));
   expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-retry", "session-1", 4);

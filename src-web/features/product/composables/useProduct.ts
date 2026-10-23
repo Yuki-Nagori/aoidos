@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref, shallowRef, watch } from "vue";
+import { nextTick, computed, onScopeDispose, ref, shallowRef, watch } from "vue";
 import type { LlmProfile, KeyStatus } from "../../../api/llm";
 import { getKeyStatus, listProfiles, saveProfile, setKey } from "../../../api/llm";
 import type { OpenedSession, ScriptInfo } from "../../../api/engine";
@@ -196,6 +196,8 @@ export function useProduct(transport: Transport = defaults) {
   let keyStatusRequest = 0;
   let selectedPriceRequest = 0;
   let registeredPriceRequest = 0;
+  let selectedPriceLookup: Promise<void> | undefined;
+  let selectedPriceLookupFailed = false;
   watch(
     providerId,
     (provider) => {
@@ -235,34 +237,47 @@ export function useProduct(transport: Transport = defaults) {
   const busy = ref(false);
   const error = shallowRef<{ code: string; message: string }>();
   let disposed = false;
+  function refreshRegisteredCurrency(
+    provider: string,
+    selectedModel: string,
+    selectedProfile: string,
+  ): void {
+    const request = ++selectedPriceRequest;
+    const registrationRequest = ++registeredPriceRequest;
+    billingCurrency.value = "CNY";
+    registeredBillingCurrency.value = undefined;
+    selectedPriceLookup = undefined;
+    selectedPriceLookupFailed = false;
+    if (provider !== "deepseek" || !selectedProfile) return;
+    selectedPriceLookup = transport
+      .selectedPrice(selectedProfile, provider, selectedModel, "direct")
+      .then((price) => {
+        if (
+          !disposed &&
+          registrationRequest === registeredPriceRequest &&
+          providerId.value === provider &&
+          model.value === selectedModel &&
+          profileId.value === selectedProfile
+        ) {
+          const registeredCurrency =
+            price?.currency === "CNY" || price?.currency === "USD" ? price.currency : undefined;
+          registeredBillingCurrency.value = registeredCurrency;
+          if (request === selectedPriceRequest && registeredCurrency) {
+            billingCurrency.value = registeredCurrency;
+          }
+        }
+      })
+      .catch((failure) => {
+        if (!disposed && registrationRequest === registeredPriceRequest) {
+          selectedPriceLookupFailed = true;
+          error.value = safeError(failure, "价格币种读取失败");
+        }
+      });
+  }
   watch(
     [providerId, model, profileId],
-    ([provider, selectedModel, selectedProfile]) => {
-      const request = ++selectedPriceRequest;
-      const registrationRequest = ++registeredPriceRequest;
-      billingCurrency.value = "CNY";
-      registeredBillingCurrency.value = undefined;
-      if (provider !== "deepseek" || !selectedProfile) return;
-      void transport
-        .selectedPrice(selectedProfile, provider, selectedModel, "direct")
-        .then((price) => {
-          if (
-            !disposed &&
-            registrationRequest === registeredPriceRequest &&
-            providerId.value === provider &&
-            model.value === selectedModel &&
-            profileId.value === selectedProfile
-          ) {
-            const registeredCurrency =
-              price?.currency === "CNY" || price?.currency === "USD" ? price.currency : undefined;
-            registeredBillingCurrency.value = registeredCurrency;
-            if (request === selectedPriceRequest && registeredCurrency) {
-              billingCurrency.value = registeredCurrency;
-            }
-          }
-        })
-        .catch(() => {});
-    },
+    ([provider, selectedModel, selectedProfile]) =>
+      refreshRegisteredCurrency(provider, selectedModel, selectedProfile),
     { flush: "post" },
   );
   onScopeDispose(() => {
@@ -355,6 +370,22 @@ export function useProduct(transport: Transport = defaults) {
       }
     });
   }
+  /** 等待已登记币种读取完毕，确认没有旧选择后才应用界面语言默认值。 */
+  async function prepareBillingCurrency(locale: string): Promise<boolean> {
+    await nextTick();
+    if (selectedPriceLookupFailed) {
+      error.value = undefined;
+      refreshRegisteredCurrency(providerId.value, model.value, profileId.value);
+    }
+    let lookup: Promise<void> | undefined;
+    do {
+      lookup = selectedPriceLookup;
+      await lookup;
+    } while (lookup !== selectedPriceLookup);
+    if (disposed || selectedPriceLookupFailed) return false;
+    if (!registeredBillingCurrency.value) setBillingCurrency(locale === "zh-Hans" ? "CNY" : "USD");
+    return true;
+  }
   function setBillingCurrency(currency: BillingCurrency): void {
     selectedPriceRequest += 1;
     billingCurrency.value = currency;
@@ -387,6 +418,7 @@ export function useProduct(transport: Transport = defaults) {
   }
   function adoptOpenedRun(opened: OpenedRun): void {
     const profile = opened.profile;
+    scriptId.value = opened.session.scriptId;
     providerId.value = profile.providerId;
     model.value = profile.model;
     profileId.value = profile.profileId;
@@ -412,6 +444,7 @@ export function useProduct(transport: Transport = defaults) {
     billingCurrency,
     registeredBillingCurrency,
     setBillingCurrency,
+    prepareBillingCurrency,
     keyStatusLoading,
     credentialRevision,
     busy,

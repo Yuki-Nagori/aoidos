@@ -267,12 +267,12 @@ stateEpoch 在每次打开 session 时生成 UUID；phaseRevision 初始 0，每
 
 ## 界面偏好（008 设计，022 已实现）
 
-| 命令                     | 参数                        | 成功返回                                       |
-| ------------------------ | --------------------------- | ---------------------------------------------- |
-| store_get_ui_preferences | 无                          | UiPreferences                                  |
-| store_set_ui_preferences | `{ panelPinned, diceMode }` | 已持久化确认的 UiPreferences；完整替换两个偏好 |
+| 命令                     | 参数                                  | 成功返回                                       |
+| ------------------------ | ------------------------------------- | ---------------------------------------------- |
+| store_get_ui_preferences | 无                                    | UiPreferences                                  |
+| store_set_ui_preferences | `{ panelPinned, diceMode, diceSkin }` | 已持久化确认的 UiPreferences；完整替换三个偏好 |
 
-UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "auto" }`，首次默认为 false / manual；未知枚举、额外可写字段为 app.bad-request，持久化失败为对应 store.*。Rust 拥有持久化，前端不写文件。偏好修改不改变当前 round 的冻结值；任务 022 接入存储，023 在接纳时使用，025 界面实施消费该类型。源 schema / 配置升级由存储规范约束，不能把焦点、草稿或凭据塞进偏好。
+UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "auto", diceSkin: "auto" | "theme" | "obsidian" | "brass" | "jade" | "crystal" | "bone" | "mistbell" }`，首次默认为 false / manual / auto。旧版 v1 文件缺少 `diceSkin` 时读取为 `auto`；未知枚举、额外可写字段为 app.bad-request，持久化失败为对应 store.*。Rust 拥有持久化，前端不写文件。偏好修改不改变当前 round 的冻结值；任务 022 接入存储，023 在接纳时使用，025 界面实施消费该类型，063 添加骰子皮肤偏好。源 schema / 配置升级由存储规范约束，不能把焦点、草稿或凭据塞进偏好。
 
 ## 主题与皮肤命令（009 设计，026 实施中）
 
@@ -494,3 +494,9 @@ else showGenericError(err);
 记录 page / view / body 与 UI 偏好写入通过完整 camelCase DTO 解码请求对象；字段类型错误、额外字段、非 JSON 请求返回 `app.bad-request`，不透传框架字符串错误。命令只适配解码、ready 门禁、业务调用及 CmdError；磁盘工作由共享 blocking 边界处理。迁移诊断在业务存储不可用时仍可读取，不触发新迁移。
 
 自动请求因 Token 估算需要重新标定而暂停时返回 `engine.invalid-phase`；其语义属于自动请求门禁，不使用费用 `budget.exceeded`。实时主动取消仍不使用 `engine.interrupted`，后者只用于重开恢复的中断正文记录。
+
+### 计费冻结时段与估算投影
+
+`budget_list_requests` 的每个物理请求新增 `priceTier: "regular" | "peak" | "off"` 与 `estimated: boolean`，均从该请求持久化的不可变 priceVersionId / dispatchAt 在 Rust 投影，不引用当前选中价目。
+
+`budget_get_period` 新增 `tierItems: { currency, tier, settledAmount, reservedAmount, requestCount, estimatedRequests }[]` 和 `hasEstimatedRequests: boolean`；金额仍是原币十进制字符串，汇总覆盖本局全部请求而非当前明细页。普通固定价格归 regular，v2 日历覆盖范围外的峰时保守估算归 peak 且 estimated=true。v1 历史保持原语义；不重算 actualAmount。

@@ -2,6 +2,7 @@ import type { Ref } from "vue";
 import { computed, onScopeDispose, ref, watch } from "vue";
 import type {
   BudgetSettings,
+  PriceVersion,
   BillingCurrency,
   RunPeriod,
   MonthlyPeriod,
@@ -73,6 +74,7 @@ export function useBilling(
   const backfillingRequestId = ref<string>();
   const providerBalance = ref<ProviderBalanceSnapshot>();
   const balanceBusy = ref(false);
+  const selectedPrice = ref<PriceVersion | null>(null);
   const priceCurrency = ref<BillingCurrency>("CNY");
   const cnyLimit = ref("");
   const usdLimit = ref("");
@@ -147,6 +149,7 @@ export function useBilling(
       providerBalance.value = undefined;
       balanceBusy.value = false;
       priceReady.value = false;
+      selectedPrice.value = null;
       busy.value = false;
       unitTokens.value = "1000000";
       inputUncached.value = "";
@@ -178,6 +181,7 @@ export function useBilling(
         cnyLimit.value = savedSettings?.cnyLimit ?? "10";
         usdLimit.value = savedSettings?.usdLimit ?? "5";
         if (savedPrice && selectionAtLoad === priceSelectionGeneration) {
+          selectedPrice.value = savedPrice;
           suppressNextCurrencySelection = savedPrice.currency !== priceCurrency.value;
           priceCurrency.value = savedPrice.currency;
           unitTokens.value = String(savedPrice.unitTokens);
@@ -245,6 +249,7 @@ export function useBilling(
         currency === priceCurrency.value;
       try {
         priceReady.value = false;
+        selectedPrice.value = null;
         const price = await getPrice(provider, model, route, currency);
         if (!isCurrent()) return;
         if (!price) {
@@ -262,6 +267,7 @@ export function useBilling(
         );
         if (!(await selectionRequest) || !isCurrent()) return;
         priceReady.value = true;
+        selectedPrice.value = price;
         unitTokens.value = String(price.unitTokens);
         inputUncached.value = price.inputUncached;
         inputCached.value = price.inputCached;
@@ -333,7 +339,7 @@ export function useBilling(
     const checkedAt = new Date().toISOString();
     const hasGoPeakPrice = requiresScheduledPrice.value;
     try {
-      await registerPrice({
+      const registeredPrice = await registerPrice({
         versionId: crypto.randomUUID(),
         providerId: provider,
         modelId: model,
@@ -347,7 +353,7 @@ export function useBilling(
         schedule: hasGoPeakPrice
           ? {
               version: isDeepseekApiSchedule.value
-                ? "deepseek-api-utc-weekday-holiday-2026-v1"
+                ? "deepseek-api-utc-weekday-holiday-2026-v2"
                 : "opencode-go-deepseek-utc-weekday-v1",
               peak: {
                 inputUncached: peakInputUncached.value,
@@ -373,11 +379,46 @@ export function useBilling(
         () => undefined,
         () => undefined,
       );
-      if ((await selectionRequest) && isCurrent()) priceReady.value = true;
+      if ((await selectionRequest) && isCurrent()) {
+        priceReady.value = true;
+        selectedPrice.value = registeredPrice;
+      }
     } catch (failure) {
       if (isCurrent()) error.value = normalizeError(failure);
     } finally {
       if (!disposed && current === generation) busy.value = false;
+    }
+  }
+
+  async function refreshSelectedPrice(): Promise<void> {
+    const current = generation;
+    const selection = priceSelectionGeneration;
+    const profile = profileId.value;
+    const provider = providerId.value;
+    const model = modelId.value;
+    const route = routePolicy.value;
+    try {
+      const price = await getSelectedPrice(profile, provider, model, route);
+      if (disposed || current !== generation || selection !== priceSelectionGeneration) return;
+      selectedPrice.value = price;
+      priceReady.value = price !== null;
+      if (price) {
+        suppressNextCurrencySelection = price.currency !== priceCurrency.value;
+        priceCurrency.value = price.currency;
+        unitTokens.value = String(price.unitTokens);
+        inputUncached.value = price.inputUncached;
+        inputCached.value = price.inputCached;
+        inputCachedWrite.value = price.inputCachedWrite ?? "";
+        output.value = price.output;
+        peakInputUncached.value = price.schedule?.peak.inputUncached ?? "";
+        peakInputCached.value = price.schedule?.peak.inputCached ?? "";
+        peakInputCachedWrite.value = price.schedule?.peak.inputCachedWrite ?? "";
+        peakOutput.value = price.schedule?.peak.output ?? "";
+        sourceUrl.value = price.sourceUrl ?? "";
+      }
+    } catch (failure) {
+      if (!disposed && current === generation && selection === priceSelectionGeneration)
+        error.value = normalizeError(failure);
     }
   }
 
@@ -572,6 +613,7 @@ export function useBilling(
     cnyLimit,
     usdLimit,
     priceCurrency,
+    selectedPrice,
     unitTokens,
     inputUncached,
     inputCached,
@@ -590,6 +632,7 @@ export function useBilling(
     error,
     saveSettings,
     savePrice,
+    refreshSelectedPrice,
     loadPeriod,
     loadMonthly,
     loadRequests,

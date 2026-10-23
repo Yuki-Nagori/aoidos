@@ -6,6 +6,7 @@ import type { OpenedSession } from "../../../../../src-web/api/engine";
 import type { useUiPreferences } from "../../../../../src-web/features/game/composables/useUiPreferences";
 import ActionComposer from "../../../../../src-web/features/game/components/ActionComposer.vue";
 import GameWorkspace from "../../../../../src-web/features/game/components/GameWorkspace.vue";
+import RecordFeed from "../../../../../src-web/features/game/components/RecordFeed.vue";
 import { i18n } from "../../../../../src-web/i18n/index";
 
 const { useWorkspaceMock } = vi.hoisted(() => ({ useWorkspaceMock: vi.fn() }));
@@ -22,6 +23,7 @@ beforeEach(() => {
 
 describe("GameWorkspace", () => {
   it("装配开局后的舞台、输入、对话记录和历史修订通知", async () => {
+    vi.useFakeTimers();
     const session = {
       sessionId: "session-1",
       scriptId: "mistbell",
@@ -54,12 +56,14 @@ describe("GameWorkspace", () => {
     const prefs = {
       panelPinned: ref(false),
       diceMode: ref<"manual" | "auto">("manual"),
+      diceSkin: ref<"auto">("auto"),
       ready: ref(true),
       saving: ref(false),
       saveError: ref(undefined),
       loadError: ref(undefined),
       setPanelPinned: vi.fn(),
       setDiceMode: vi.fn(),
+      setDiceSkin: vi.fn(),
       load: vi.fn(),
     } as unknown as ReturnType<typeof useUiPreferences>;
     const panel = {
@@ -77,6 +81,12 @@ describe("GameWorkspace", () => {
       close: vi.fn(),
     };
     const records = { state: ref({ body: undefined, recovering: false }), loadBody: vi.fn() };
+    const activeTurnId = ref<string>();
+    const turnPreview = ref<{
+      turnId: string;
+      text: string;
+      outcome?: "completed";
+    }>();
     const fixture = {
       session: computed(() => session),
       t: (key: string, values?: Record<string, string>) => i18n.global.t(key, values ?? {}),
@@ -106,6 +116,7 @@ describe("GameWorkspace", () => {
       unreadRecords: ref(false),
       panelProtected: ref(false),
       confirmation,
+      rewindSelectorOpen: ref(false),
       slashMenuDismissed: ref(false),
       panel,
       orderedRecords,
@@ -114,9 +125,14 @@ describe("GameWorkspace", () => {
       composerSubmitLabel: "行动",
       scenePath: "第一幕 · 塔门",
       olderCursor: undefined,
-      game: { historyPending: ref(false), recover: vi.fn() },
+      game: {
+        historyPending: ref(false),
+        latestPublicRecord: ref(undefined),
+        recover: vi.fn(),
+      },
       generation: undefined,
-      preview: undefined,
+      preview: turnPreview,
+      activeTurnId,
       hasTextSelection: () => false,
       updateFollowState: vi.fn(),
       onReadingPointerDown: vi.fn(),
@@ -125,6 +141,8 @@ describe("GameWorkspace", () => {
       interruptDraft: vi.fn(),
       submitComposer: vi.fn(),
       confirmOperation: vi.fn(),
+      requestRegenerate: vi.fn(),
+      selectRewindTarget: vi.fn(),
       chooseSlashCommand: vi.fn(),
       closePanel: vi.fn(),
       loadOlder: vi.fn(),
@@ -145,7 +163,22 @@ describe("GameWorkspace", () => {
         errorMessage: "No price is registered for this model.",
         preferences: prefs,
       },
-      global: { plugins: [i18n], stubs: { RecordFeed: true, ActionComposer: true } },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          RecordFeed: {
+            props: ["items", "preview", "onRequestRewind", "rewindSelectorOpen"],
+            emits: ["rewind"],
+            template:
+              '<div class="record-feed-probe" :data-preview="preview?.text ?? \'\'" :data-narration-count="items.filter((item) => item.kind === \'narration\').length" />',
+          },
+          CheckDiceTray: {
+            emits: ["presentationSettled"],
+            template: '<button class="check-dice-probe" @click="$emit(\'presentationSettled\')" />',
+          },
+          ActionComposer: true,
+        },
+      },
     });
     await wrapper.vm.$nextTick();
 
@@ -159,10 +192,22 @@ describe("GameWorkspace", () => {
     expect(wrapper.get('[role="alert"]').text()).toContain(i18n.global.t("common.reconnect"));
     await wrapper.get('[role="alert"] button').trigger("click");
     expect(fixture.reconnect).toHaveBeenCalledOnce();
-    expect(wrapper.get(".work").element.tagName).toBe("DIV");
-    expect(wrapper.get(".work").text()).toContain(i18n.global.t("game.workProcess"));
-    expect(wrapper.get(".work").text()).not.toContain("第一幕 · 塔门");
+    expect(wrapper.find(".work").exists()).toBe(false);
+    const feed = wrapper.findComponent(RecordFeed);
+    expect(feed.props("onRequestRewind")).toBeTypeOf("function");
+    feed.props("onRequestRewind")?.();
+    await nextTick();
+    expect(fixture.rewindSelectorOpen.value).toBe(true);
+    feed.vm.$emit("rewind", 1);
+    expect(fixture.selectRewindTarget).toHaveBeenCalledWith(1);
+    fixture.rewindSelectorOpen.value = false;
+    expect(wrapper.find(".dialogue-panel-history > .record-feed").exists()).toBe(true);
+    expect(wrapper.find(".dialogue-panel-composer").exists()).toBe(true);
     expect(wrapper.text()).not.toContain(i18n.global.t("game.diceMode"));
+    panel.state.value = "hover";
+    await nextTick();
+    expect(wrapper.findComponent(ActionComposer).exists()).toBe(true);
+    expect(wrapper.find(".work").exists()).toBe(false);
     current.value = { ...current.value, scene: undefined };
     await nextTick();
     expect(wrapper.get(".scene-empty-state h2").text()).toBe("Mistbell Cellar");
@@ -191,7 +236,7 @@ describe("GameWorkspace", () => {
       phase: "awaitingCheck",
       check: {
         planId: "plan-1",
-        status: "waiting",
+        status: "rolling",
         mode: "manual",
         ruleId: "probe",
         actorId: "player",
@@ -199,10 +244,40 @@ describe("GameWorkspace", () => {
         modifierTotal: 1,
       },
     };
+    activeTurnId.value = "turn-1";
+    turnPreview.value = {
+      turnId: "turn-1",
+      text: "The tower answers.",
+      outcome: "completed",
+    };
+    orderedRecords.value = [
+      {
+        recordSeq: 2,
+        createdAt: "2026-10-10T00:00:01Z",
+        kind: "narration",
+        turnId: "turn-1",
+        body: {
+          text: "The tower answers.",
+          turnId: "turn-1",
+          outcome: "completed",
+          finishReason: "stop",
+        },
+      },
+    ];
     await nextTick();
-    expect(wrapper.find(".work details").exists()).toBe(false);
-    expect(wrapper.find('.work [role="status"]').exists()).toBe(true);
-    expect(wrapper.get(".work").text()).not.toContain("2d6+1");
+    expect(wrapper.find(".work").exists()).toBe(false);
+    expect(wrapper.get(".record-feed-probe").attributes("data-preview")).toBe("");
+    expect(wrapper.get(".record-feed-probe").attributes("data-narration-count")).toBe("0");
+    await wrapper.get(".check-dice-probe").trigger("click");
+    await nextTick();
+    expect(wrapper.get(".record-feed-probe").attributes("data-preview")).toBe("");
+    await vi.advanceTimersByTimeAsync(45);
+    expect(wrapper.get(".record-feed-probe").attributes("data-preview")).toBe("T");
+    await vi.advanceTimersByTimeAsync(45);
+    expect(wrapper.get(".record-feed-probe").attributes("data-preview")).toBe("Th");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(wrapper.get(".record-feed-probe").attributes("data-preview")).toBe("The tower answers.");
+    expect(wrapper.get(".record-feed-probe").attributes("data-narration-count")).toBe("1");
     current.value = { ...current.value, phase: "idle", check: undefined };
     await nextTick();
 
@@ -214,5 +289,7 @@ describe("GameWorkspace", () => {
     expect(wrapper.findComponent(ActionComposer).props("availableCommands")).toContain(
       "regenerate",
     );
+    wrapper.unmount();
+    vi.useRealTimers();
   });
 });

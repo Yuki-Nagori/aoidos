@@ -8,13 +8,36 @@ const MAX_ID_BYTES: usize = 128;
 const MAX_SOURCE_URL_BYTES: usize = 2_048;
 const OPENCODE_GO_DEEPSEEK_SCHEDULE: &str = "opencode-go-deepseek-utc-weekday-v1";
 const DEEPSEEK_API_SCHEDULE: &str = "deepseek-api-utc-weekday-holiday-2026-v1";
+const DEEPSEEK_API_SCHEDULE_V2: &str = "deepseek-api-utc-weekday-holiday-2026-v2";
+
+/// 请求发送时按不可变日历版本确定的时段，普通价目不归入峰谷。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PriceTier {
+    Regular,
+    Peak,
+    Off,
+}
+
+/// 仅 v2 对日历未覆盖的日期采用全天峰时保守估算；v1 历史语义保持不变。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingContext {
+    pub tier: PriceTier,
+    pub estimated: bool,
+}
 
 impl RecurringPriceSchedule {
     fn is_peak_at(&self, timestamp: &str) -> Result<bool, PriceError> {
         let utc = parse_timestamp(timestamp)?.to_offset(time::UtcOffset::UTC);
-        if self.version == DEEPSEEK_API_SCHEDULE {
+        if self.version == DEEPSEEK_API_SCHEDULE || self.version == DEEPSEEK_API_SCHEDULE_V2 {
             let china_offset =
                 time::UtcOffset::from_hms(8, 0, 0).map_err(|_| PriceError::InvalidSchedule)?;
+            if self.version == DEEPSEEK_API_SCHEDULE_V2
+                && utc.to_offset(china_offset).year() != 2026
+            {
+                return Ok(true);
+            }
             if chinese_public_holiday_2026(utc.to_offset(china_offset)) {
                 return Ok(false);
             }
@@ -27,7 +50,7 @@ impl RecurringPriceSchedule {
     }
 }
 
-/// 2026 年国务院公布的中国公众假日；未覆盖年份不授予假日折扣，按峰价保守估算。
+/// 2026 年国务院公布的中国公众假日；是否允许未覆盖年份沿用旧时段由日历版本决定。
 fn chinese_public_holiday_2026(timestamp: OffsetDateTime) -> bool {
     let date = timestamp.date();
     if date.year() != 2026 {
@@ -91,6 +114,30 @@ pub struct PeakPriceTier {
 }
 
 impl PriceVersion {
+    /// 冻结时段仅由该价格版本及已持久化的发送时刻决定，不使用当前选中的价目。
+    ///
+    /// # Errors
+    /// 发送时刻无法解析或时区参数无效时返回错误。
+    pub fn pricing_context_at(&self, timestamp: &str) -> Result<PricingContext, PriceError> {
+        let Some(schedule) = &self.schedule else {
+            return Ok(PricingContext {
+                tier: PriceTier::Regular,
+                estimated: false,
+            });
+        };
+        let china_offset =
+            time::UtcOffset::from_hms(8, 0, 0).map_err(|_| PriceError::InvalidSchedule)?;
+        let estimated = schedule.version == DEEPSEEK_API_SCHEDULE_V2
+            && parse_timestamp(timestamp)?.to_offset(china_offset).year() != 2026;
+        Ok(PricingContext {
+            tier: if schedule.is_peak_at(timestamp)? {
+                PriceTier::Peak
+            } else {
+                PriceTier::Off
+            },
+            estimated,
+        })
+    }
     /// Validates bounded, non-empty identity fields and a usable effective interval.
     pub fn validate(&self) -> Result<(), PriceError> {
         for value in [
@@ -125,7 +172,7 @@ impl PriceVersion {
                                 | "deepseek-v4-flash-vision-exp"
                         )
                 }
-                DEEPSEEK_API_SCHEDULE => {
+                DEEPSEEK_API_SCHEDULE | DEEPSEEK_API_SCHEDULE_V2 => {
                     self.provider_id == "deepseek"
                         && matches!(self.model_id.as_str(), "deepseek-flash" | "deepseek-v4-pro")
                 }
@@ -649,6 +696,49 @@ mod tests {
         assert_eq!(
             PriceError::InvalidSchedule.to_string(),
             "invalid recurring price schedule"
+        );
+    }
+    #[test]
+    fn v2_estimates_uncovered_dates_at_peak_without_repricing_v1() {
+        let mut current = crate::providers::deepseek::flash_prices().remove(0);
+        let timestamp = "2027-01-03T04:30:00Z";
+        assert_eq!(
+            current.pricing_context_at(timestamp).unwrap(),
+            PricingContext {
+                tier: PriceTier::Peak,
+                estimated: true
+            }
+        );
+        assert_eq!(
+            current.token_prices_at(timestamp, 0).unwrap().output,
+            &current.schedule.as_ref().unwrap().peak.output
+        );
+        assert_eq!(
+            current.pricing_context_at("2026-10-01T01:30:00Z").unwrap(),
+            PricingContext {
+                tier: PriceTier::Off,
+                estimated: false
+            }
+        );
+        current.schedule.as_mut().unwrap().version = DEEPSEEK_API_SCHEDULE.into();
+        assert_eq!(
+            current.pricing_context_at(timestamp).unwrap(),
+            PricingContext {
+                tier: PriceTier::Off,
+                estimated: false
+            }
+        );
+        assert_eq!(
+            current.token_prices_at(timestamp, 0).unwrap().output,
+            &current.output
+        );
+        current.schedule = None;
+        assert_eq!(
+            current.pricing_context_at(timestamp).unwrap(),
+            PricingContext {
+                tier: PriceTier::Regular,
+                estimated: false
+            }
         );
     }
 }

@@ -58,7 +58,7 @@ CREATE TABLE point_allocations (
 
 数据根由装配层调用 Tauri `app_data_dir()` 取得，当前应用标识为 `com.yuki.aoidos`，没有自定义目录覆盖。默认 macOS 为 `~/Library/Application Support/com.yuki.aoidos/`，Windows 为 `%APPDATA%\com.yuki.aoidos\`，Linux 为 `$XDG_DATA_HOME/com.yuki.aoidos/`（未设置时使用 `~/.local/share/com.yuki.aoidos/`），不使用 `~/.aoidos`。实际系统重定向由 Tauri 解析，不在业务层拼接用户主目录。
 
-`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `aoidos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。对话记录及两字段 UI 偏好已由 022 实现；029 实现会话记忆版本目录，批次结果由 030 接入。020 的调试正文仅存内存，产品持久化使用独立 OutputWriter。
+`llm/profiles.json` 保存配置；密钥优先进入 OS 凭据库（service 为 `aoidos`，user 为 providerId），`llm/credentials.json` 保存后端指针 / 墓碑及私有权限降级值，降级值当前以明文保存，仅使用文件权限保护，没有应用层文件加密；OS 后端正常时文件只保留指针等元数据。对话记录与 UI 偏好已由 022 实现；029 实现会话记忆版本目录，批次结果由 030 接入。020 的调试正文仅存内存，产品持久化使用独立 OutputWriter。
 
 ```text
 <app-data>/                       # tauri PathResolver::app_data_dir，注入业务 crate
@@ -139,7 +139,7 @@ CREATE TABLE point_allocations (
 
 043 的 `entity_registry_runs` / `entity_registry_entries` 由 engine 持有 schema 和迁移。周目身份、动态 entityRevision、源 mutation / hash / recordSeq 与 `store_applied` 回执在同一 SQLite 事务写入；JSONL 的 `settlementPlanned` 仍是意图事实源，SQLite 注册行是已应用状态。启动恢复只重放原 mutation；记忆入口在 session → 数据库锁顺序下审计源记录、应用回执及有效分支，再生成有界只读快照。分支回退不会删除身份审计行，但外分支身份不会进入当前快照。
 
-`ui-preferences.json` 在系统应用数据根保存版本 1 的 `panelPinned` / `diceMode`。文件缺失返回默认值，坏格式或未知版本明确拒绝，不静默覆盖；单文件上限 4 KiB，保存经原子写成功才确认。主题和语言偏好仍遵循各自架构，不扩充这两个字段。
+`ui-preferences.json` 在系统应用数据根保存版本 1 的 `panelPinned` / `diceMode` / `diceSkin`。文件缺失返回默认值；旧版 v1 文件缺少 `diceSkin` 时默认 `auto`；坏格式或未知版本明确拒绝，不静默覆盖。单文件上限 4 KiB，保存经原子写成功才确认。主题和语言偏好仍遵循各自架构。
 
 `locale_preference` 是 `storage.sqlite` 中独立的单行表，由 `aoidos-locale` 定义 schema，engine 的统一迁移 / 连接负责建立与核验。缺行表示 `system`，读取不隐式写入；显式选择通过 SQLite IMMEDIATE 事务原子替换。它不占用或扩展 `ui-preferences.json`，损坏记录报 `store.corrupt` 且不会自动覆盖。
 

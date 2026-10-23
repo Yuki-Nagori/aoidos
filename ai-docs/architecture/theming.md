@@ -70,7 +70,7 @@
 
 ## 应用主题偏好与防闪
 
-应用级偏好保存一个平级 `ThemeId`，内置选项包括 `dark`、`light`、`light-purple`；当前剧本显式登记的主题也进入同一选择列表。默认 `dark`，不跟随系统，不使用 localStorage 或浏览器探测决定主题。026 拥有 ThemePreference 的 Rust 读写，SQLite 在实例锁内按 011 规则迁移；它是独立配置项，写主题不完整替换 022 的 panelPinned / diceMode。UiPreferences 的现有两字段契约保持不变。非法格式 / 损坏值为 `store.corrupt`；语法合法但当前未登记或不可用的 ID 视为 `themeUnavailable`，保留已确认偏好，当前视图临时使用 `dark`，不得回写降级值。用户设置新偏好时只接受当前主题目录登记的 ID。
+应用级偏好保存一个平级 `ThemeId`，内置选项包括 `dark`、`light`、`light-purple`；当前剧本显式登记的主题也进入同一选择列表。默认 `dark`，不跟随系统，不使用 localStorage 或浏览器探测决定主题。026 拥有 ThemePreference 的 Rust 读写，SQLite 在实例锁内按 011 规则迁移；它是独立配置项，写主题不完整替换 UiPreferences 的 `panelPinned` / `diceMode` / `diceSkin`。UiPreferences 由 task 063 扩展至三个字段；旧 v1 文件缺少 `diceSkin` 时默认 `auto`。非法格式 / 损坏值为 `store.corrupt`；语法合法但当前未登记或不可用的 ID 视为 `themeUnavailable`，保留已确认偏好，当前视图临时使用 `dark`，不得回写降级值。用户设置新偏好时只接受当前主题目录登记的 ID。
 
 首窗创建顺序如下，026 与 025 的窗口状态插件复用同一个 main 构建入口，不创建第二个主窗口：
 

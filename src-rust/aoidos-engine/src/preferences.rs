@@ -1,4 +1,4 @@
-//! 两字段 UI 偏好；只在持久化成功后确认，不保存焦点或输入草稿。
+//! UI 外观与交互偏好；只在持久化成功后确认，不保存焦点或输入草稿。
 
 use crate::{
     fault::Fault,
@@ -14,6 +14,21 @@ pub struct UiPreferences {
     pub version: u32,
     pub panel_pinned: bool,
     pub dice_mode: DiceMode,
+    #[serde(default)]
+    pub dice_skin: DiceSkin,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiceSkin {
+    #[default]
+    Auto,
+    Theme,
+    Obsidian,
+    Brass,
+    Jade,
+    Crystal,
+    Bone,
+    Mistbell,
 }
 impl Default for UiPreferences {
     fn default() -> Self {
@@ -21,6 +36,7 @@ impl Default for UiPreferences {
             version: 1,
             panel_pinned: false,
             dice_mode: DiceMode::Manual,
+            dice_skin: DiceSkin::Auto,
         }
     }
 }
@@ -57,10 +73,15 @@ impl Preferences {
         }
         Ok(preferences)
     }
-    /// 完整替换两个可写偏好；未知字段由命令参数解码拒绝。
+    /// 完整替换偏好；未知字段由命令参数解码拒绝。
     /// # Errors
     /// 保存前核验既有版本；原子发布失败不返回成功值。
-    pub fn set(&self, panel_pinned: bool, dice_mode: DiceMode) -> Result<UiPreferences, Fault> {
+    pub fn set(
+        &self,
+        panel_pinned: bool,
+        dice_mode: DiceMode,
+        dice_skin: DiceSkin,
+    ) -> Result<UiPreferences, Fault> {
         let _guard = self
             .gate
             .lock()
@@ -70,6 +91,7 @@ impl Preferences {
             version: 1,
             panel_pinned,
             dice_mode,
+            dice_skin,
         };
         let bytes = aoidos_json::to_vec(&preferences).map_err(corrupt)?;
         aoidos_store::atomic::write_atomic(&self.path, &bytes).map_err(store_fault)?;
@@ -88,15 +110,28 @@ mod tests {
         let service = Preferences::new(&dir);
         assert!(!service.get().unwrap().panel_pinned);
         assert!(!dir.exists());
-        let saved = service.set(true, DiceMode::Auto).unwrap();
+        let saved = service
+            .set(true, DiceMode::Auto, DiceSkin::Mistbell)
+            .unwrap();
         assert!(saved.panel_pinned);
+        assert_eq!(saved.dice_skin, DiceSkin::Mistbell);
         assert!(service.get().unwrap().panel_pinned);
+        std::fs::write(
+            &service.path,
+            "{\"version\":1,\"panelPinned\":false,\"diceMode\":\"manual\"}",
+        )
+        .unwrap();
+        assert_eq!(service.get().unwrap().dice_skin, DiceSkin::Auto);
         std::fs::write(
             &service.path,
             "{\"version\":2,\"panelPinned\":false,\"diceMode\":\"manual\"}",
         )
         .unwrap();
-        assert!(service.set(false, DiceMode::Manual).is_err());
+        assert!(
+            service
+                .set(false, DiceMode::Manual, DiceSkin::Auto)
+                .is_err()
+        );
         assert!(service.get().is_err());
         std::fs::write(&service.path, "bad").unwrap();
         assert!(service.get().is_err());

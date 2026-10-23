@@ -7,7 +7,7 @@ use aoidos_billing::{money::NanoMoney, price::PriceVersion};
 use aoidos_engine::{
     billing::{
         BackfillPreview, BillingError, BillingLedger, BudgetSettings, BudgetWarning,
-        LedgerBudgetPort, ModelUsageSummary, RequestPage, SuggestedLimits,
+        LedgerBudgetPort, ModelUsageSummary, RequestPage, SuggestedLimits, TierUsageSummary,
     },
     fault::Fault,
 };
@@ -80,6 +80,8 @@ pub struct RunPeriod {
     pub run_id: String,
     pub items: Vec<ModelUsageSummary>,
     pub warnings: Vec<BudgetWarning>,
+    pub tier_items: Vec<TierUsageSummary>,
+    pub has_estimated_requests: bool,
 }
 
 #[derive(Deserialize)]
@@ -205,16 +207,21 @@ pub(crate) async fn budget_get_period(
     state.ready()?;
     let storage = state.storage.clone();
     storage_job(move || {
-        let items = storage.with_database(|connection| {
-            BillingLedger::run_summary(connection, &args.run_id).map_err(app_billing_fault)
-        })?;
-        let warnings = storage.with_database(|connection| {
-            BillingLedger::warnings(connection, &args.run_id).map_err(app_billing_fault)
+        let (items, warnings, tier_items) = storage.with_database(|connection| {
+            let items =
+                BillingLedger::run_summary(connection, &args.run_id).map_err(app_billing_fault)?;
+            let warnings =
+                BillingLedger::warnings(connection, &args.run_id).map_err(app_billing_fault)?;
+            let tier_items = BillingLedger::run_tier_summary(connection, &args.run_id)
+                .map_err(app_billing_fault)?;
+            Ok((items, warnings, tier_items))
         })?;
         Ok(RunPeriod {
             run_id: args.run_id,
             items,
             warnings,
+            has_estimated_requests: tier_items.iter().any(|item| item.estimated_requests > 0),
+            tier_items,
         })
     })
     .await

@@ -7,6 +7,7 @@ import type { useBilling } from "../composables/useBilling";
 import { summarizeRunUsage, usageProgressPercent } from "../utils/run-usage";
 import { billingErrorDescriptor } from "../utils/billing-error";
 import { formatPeakSchedule } from "../utils/price-schedule";
+import BillingRates from "./BillingRates.vue";
 import SelectMenu from "../../../shared/components/SelectMenu.vue";
 
 const { t } = useI18n();
@@ -17,7 +18,7 @@ const props = defineProps<{
   providerId: string;
   providerLabel?: string;
   modelId?: string;
-  view?: "all" | "billing" | "price" | "balance";
+  view?: "all" | "billing" | "price" | "balance" | "rates";
 }>();
 const billing = computed(() => props.billing);
 const locale = computed(() => props.locale);
@@ -296,6 +297,12 @@ const billingErrorMessage = computed(() => {
               })
             }}
           </p>
+          <p v-if="item.priceTier" class="text-sm">
+            <span class="tag">{{
+              item.priceTier === 'peak' ? t("rates.peak") : item.priceTier === 'off' ? t("rates.offPeak") : t("settings.priceRegularPeriod")
+            }}</span>
+            <span v-if="item.estimated" class="tag warn">{{ t("billing.estimated") }}</span>
+          </p>
           <p>
             {{ t("billing.labeledValue", { label: t("billing.requestState"), value: item.state }) }}
           </p>
@@ -521,6 +528,14 @@ const billingErrorMessage = computed(() => {
         </article>
       </section>
     </template>
+    <BillingRates
+      v-if="view === 'rates'"
+      :price="billing.selectedPrice?.value"
+      :usage="billing.period.value?.tierItems"
+      :locale="locale"
+      :time-zone="billing.monthly.value?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone"
+      :provider-label="props.providerLabel ?? providerId"
+    />
     <template v-if="view === 'all' || view === 'price'">
       <div class="billing-price-context">
         <div class="billing-price-identity">

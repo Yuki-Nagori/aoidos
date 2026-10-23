@@ -1,0 +1,535 @@
+@layer components {
+  .dice-appearance {
+    @apply min-w-0;
+  }
+
+  .dice-section-heading {
+    @apply text-xs font-semibold text-ink;
+  }
+
+  .dice-preview-section {
+    @apply min-w-0;
+  }
+
+  .dice-preview {
+    @apply mt-2.5 grid min-w-0 grid-cols-[180px_minmax(0,1fr)] items-center gap-3.5;
+  }
+
+  .dice-preview-stage {
+    @apply relative grid h-35 min-w-0 place-items-center overflow-hidden rounded-xl;
+    background: radial-gradient(
+      120% 90% at 50% 30%,
+      color-mix(in srgb, var(--accent) 14%, var(--field-surface)),
+      var(--field-surface) 70%
+    );
+    box-shadow: inset 0 0 0 1px var(--hairline);
+  }
+
+  .dice-preview-visual {
+    @apply block h-full w-full;
+  }
+
+  .record-dice-canvas {
+    @apply absolute inset-0 size-full;
+  }
+
+  .dice-preview-controls {
+    @apply flex min-w-0 flex-col justify-center gap-2;
+  }
+
+  .dice-preview-formulas {
+    @apply flex gap-0.75 rounded-[9px] border border-hairline p-[3px];
+    background: var(--field-surface);
+  }
+
+  .dice-preview-formulas button {
+    @apply flex-1 whitespace-nowrap rounded-md px-2 py-1.25 text-xs text-muted transition;
+  }
+
+  .dice-preview-formulas button:hover {
+    @apply text-ink;
+    background: color-mix(in srgb, var(--panel) 86%, var(--accent) 14%);
+  }
+
+  .dice-preview-formulas button.is-selected {
+    @apply font-semibold text-accent;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
+  .dice-preview-actions {
+    @apply flex flex-wrap gap-1.5;
+  }
+
+  .dice-preview-actions .btn {
+    @apply h-7.5 min-h-0 px-2.75 py-0 text-xs;
+  }
+
+  .dice-preview-note {
+    @apply text-[11.5px] leading-[1.55] text-muted;
+  }
+
+  .dice-skin-picker {
+    @apply mt-5 min-w-0 border-0 p-0;
+  }
+
+  .dice-skin-picker > legend {
+    @apply mb-2.5 text-xs font-semibold text-ink;
+  }
+
+  .dice-skin-grid {
+    @apply grid grid-cols-[repeat(auto-fill,minmax(min(118px,100%),1fr))] gap-2;
+  }
+
+  .dice-skin-card {
+    @apply relative grid min-w-0 justify-items-center gap-0.5 rounded-xl border border-hairline px-1.5 pb-2 pt-1.5 text-center transition;
+    background: color-mix(in srgb, var(--ink) 4%, transparent);
+  }
+
+  .dice-skin-card:hover:not(:disabled) {
+    @apply border-accent/60;
+    background: color-mix(in srgb, var(--panel) 86%, var(--accent) 14%);
+  }
+
+  .dice-skin-card:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  .dice-skin-card.is-selected {
+    @apply border-accent ring-2 ring-accent/25;
+  }
+
+  .dice-skin-card:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  .dice-skin-preview {
+    @apply relative block h-18.5 w-23 max-w-full overflow-visible border-0 bg-transparent p-0;
+  }
+
+  .dice-skin-preview .record-dice-canvas {
+    @apply absolute inset-0 size-full;
+  }
+
+  .dice-skin-copy {
+    @apply flex min-w-0 flex-col items-center gap-0.5;
+  }
+
+  .dice-skin-copy strong {
+    @apply max-w-full truncate text-[11.5px] font-normal text-ink;
+  }
+
+  .dice-skin-copy small {
+    @apply max-w-full truncate text-xs text-muted;
+  }
+
+  .dice-skin-description {
+    @apply mt-2.5 text-[11.5px] leading-[1.55] text-muted;
+  }
+
+  .record-dice-visual {
+    @apply relative inline-flex h-10 min-w-10 items-center justify-center gap-1 overflow-hidden rounded-lg border border-hairline bg-panel/70 px-1;
+    /* 图集数字不再占 DOM 布局；按颗数保留记录行宽度，避免异步首帧改变相机比例。 */
+    min-width: calc(var(--dice-count, 1) * 2rem);
+  }
+
+  .record-dice-visual[data-renderer="pending"] {
+    opacity: 0;
+  }
+
+  .dice-preview-visual.record-dice-visual {
+    @apply relative block h-full w-full min-w-0 overflow-hidden rounded-none border-0 bg-transparent p-0;
+  }
+
+  .dice-skin-preview.record-dice-visual {
+    @apply relative block h-18.5 w-23 max-w-full min-w-0 overflow-visible rounded-none border-0 bg-transparent p-0;
+  }
+
+  .record-dice-value {
+    @apply relative z-10 min-w-6 rounded-md border border-hairline bg-panel/80 px-1.5 py-0.5 text-center text-xs font-bold text-ink shadow-sm;
+  }
+
+  .dice-number-pop {
+    @apply pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap text-[22px] font-bold leading-none opacity-0;
+    font-family: "Cinzel", Georgia, serif;
+    color: var(--dice-pop-ink, var(--ink));
+    text-shadow:
+      0 1px 0 rgb(0 0 0 / 45%),
+      0 0 14px var(--glow, transparent);
+  }
+
+  .dice-number-pop.on {
+    opacity: 1;
+    animation: dice-number-pop 420ms cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  }
+
+  .dice-number-pop.dim {
+    opacity: 0.45;
+    animation: none;
+  }
+
+  @keyframes dice-number-pop {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -60%) scale(0.5);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, -100%) scale(1);
+    }
+  }
+
+  /* 记录行的公式、骰值标签与总值按同一个中心线排布，避免标签边框拉低数字。 */
+  .record-machine:has(> .record-dice-value) {
+    align-items: center;
+    column-gap: 0.375rem;
+    row-gap: 0.25rem;
+  }
+
+  .record-machine > .record-dice-value {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-hairline px-1 py-0 text-xs leading-none shadow-none;
+    vertical-align: middle;
+  }
+
+  .dice-preview-visual .record-dice-value,
+  .dice-skin-preview .record-dice-value {
+    @apply absolute left-1/2 top-1/2 grid size-8 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-lg border border-hairline bg-panel/90 p-0 text-sm;
+  }
+
+  .dice-preview-visual .record-dice-value:nth-of-type(1):nth-last-of-type(2) {
+    left: calc(50% - 1rem);
+  }
+
+  .dice-preview-visual .record-dice-value:nth-of-type(2):last-of-type {
+    left: calc(50% + 1rem);
+  }
+
+  .check-dice-visual.record-dice-visual {
+    @apply absolute inset-0 block h-full w-full min-w-0 max-w-none overflow-hidden rounded-none border-0 bg-transparent p-0;
+  }
+
+  .record-dice-pending {
+    @apply relative z-10 grid size-12 place-items-center rounded-xl border-2 border-accent/60 bg-panel/80 font-mono text-sm font-semibold text-muted shadow-md;
+    transform: rotate(-8deg);
+  }
+
+  .dice-interactive {
+    cursor: grab;
+  }
+
+  .dice-interactive:active {
+    cursor: grabbing;
+  }
+
+  .dice-charge-meter {
+    @apply absolute inset-x-3 bottom-2 z-20 h-1 overflow-hidden rounded-full bg-panel/70;
+  }
+
+  .dice-charge-meter::after {
+    @apply block h-full origin-left rounded-full bg-accent transition-transform;
+    content: "";
+    transform: scaleX(var(--charge, 0));
+  }
+
+  /* 特效已经在各实例画布中按骰子位置合成；宿主滤镜会连矩形底板一起发光。 */
+  .check-dice-card {
+    @apply relative grid min-w-0 gap-2 rounded-[14px] border px-3 py-2.5;
+    background: color-mix(in srgb, var(--ink) 4%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--hairline));
+    box-shadow: 0 10px 30px -18px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+
+  .check-dice-header {
+    @apply flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1;
+  }
+
+  .check-dice-label {
+    @apply text-[10.5px] font-semibold uppercase tracking-wide text-muted;
+  }
+
+  .check-dice-action {
+    @apply min-w-0 text-[13.5px] font-semibold leading-[1.3] text-ink;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .check-dice-auto {
+    @apply rounded-full bg-panel px-2 py-0.5 text-[10px] font-medium text-muted;
+  }
+
+  .check-dice-formula {
+    @apply inline-flex h-5.5 shrink-0 items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 font-mono text-xs text-accent;
+  }
+
+  .check-dice-body {
+    @apply grid min-w-0 grid-cols-[112px_minmax(0,1fr)] items-stretch gap-2.5;
+  }
+
+  .check-dice-tray {
+    @apply relative grid min-h-28 min-w-0 place-items-center overflow-hidden rounded-xl border-0 p-0;
+    background: radial-gradient(
+      120% 90% at 50% 30%,
+      color-mix(in srgb, var(--accent) 16%, var(--field-surface)),
+      var(--field-surface) 70%
+    );
+    box-shadow:
+      inset 0 0 0 1px var(--hairline),
+      inset 0 -18px 30px -18px rgb(0 0 0 / 45%);
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .check-dice-tray:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  .check-dice-tray:active:not(:disabled) {
+    cursor: grabbing;
+  }
+
+  :where(.check-dice-card[data-state="rolling"]) .check-dice-tray,
+  .check-dice-card[data-state="rolling"] .dice-interactive {
+    cursor: progress;
+  }
+
+  .check-dice-card[data-state="settled"] {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline));
+  }
+
+  .check-dice-tray-disabled {
+    cursor: default;
+  }
+
+  .check-dice-visual {
+    @apply absolute inset-0 block h-full w-full;
+    max-width: none;
+  }
+
+  .check-dice-visual .record-dice-value {
+    @apply absolute bottom-2 left-2 grid size-8 place-items-center rounded-lg border border-hairline bg-panel/90 p-0 text-sm;
+  }
+
+  .record-dice-visual[data-renderer="babylon"] .record-dice-value {
+    @apply opacity-0;
+  }
+
+  .check-dice-visual[data-renderer="babylon"] .record-dice-value {
+    @apply opacity-0;
+  }
+
+  .check-dice-visual .record-dice-pending {
+    @apply absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2;
+  }
+
+  .check-dice-info {
+    @apply grid min-w-0 content-start gap-1;
+  }
+
+  .check-dice-kv {
+    @apply grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-2 text-[11.5px] leading-[1.45];
+  }
+
+  .check-dice-kv dt {
+    @apply shrink-0 whitespace-nowrap text-muted;
+  }
+
+  .check-dice-kv dd {
+    @apply m-0 min-w-0 text-ink;
+  }
+
+  .check-dice-odds {
+    @apply mt-0.5 grid min-w-0 gap-1;
+  }
+
+  .check-dice-odds-bar {
+    @apply flex h-4 min-w-0 gap-px overflow-hidden rounded-[5px] bg-hairline text-[9.5px] font-semibold text-white;
+  }
+
+  .check-dice-odds-bar > span {
+    @apply grid min-w-max place-items-center whitespace-nowrap px-1;
+    text-shadow: 0 1px 1px rgb(0 0 0 / 35%);
+  }
+
+  .odds-failure,
+  .check-dice-odds-legend i.odds-failure {
+    background: var(--diff-remove);
+  }
+
+  .odds-costlySuccess,
+  .check-dice-odds-legend i.odds-costlySuccess {
+    background: var(--accent-violet);
+  }
+
+  .odds-success,
+  .check-dice-odds-legend i.odds-success {
+    background: var(--diff-add);
+  }
+
+  .check-dice-odds-legend {
+    @apply flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10.5px] text-muted;
+  }
+
+  .check-dice-odds-legend > span {
+    @apply inline-flex items-center gap-1 whitespace-nowrap;
+  }
+
+  .check-dice-odds-legend i {
+    @apply size-1.75 rounded-sm;
+  }
+
+  .check-dice-critical-note {
+    @apply text-[10.5px] leading-[1.35] text-muted;
+  }
+
+  .check-dice-footer {
+    @apply grid min-w-0 gap-1.5;
+  }
+
+  .check-dice-ready {
+    @apply flex min-w-0 flex-1 items-center justify-between gap-2;
+  }
+
+  .check-dice-hint,
+  .check-dice-rolling {
+    @apply min-w-0 text-xs leading-[1.35] text-muted;
+  }
+
+  .check-dice-hint {
+    @apply flex-1;
+  }
+
+  .check-dice-rolling {
+    @apply flex min-h-8.5 items-center gap-2;
+  }
+
+  .check-dice-submit {
+    @apply inline-flex min-h-8.5 shrink-0 items-center gap-2 rounded-xl bg-accent px-3.5 py-1.5 text-xs font-semibold text-on-accent transition;
+  }
+
+  .check-dice-submit:hover:not(:disabled) {
+    @apply brightness-110;
+  }
+
+  .check-dice-submit:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  .check-dice-submit:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  .check-dice-submit kbd {
+    @apply rounded-md border border-on-accent/30 px-1.5 py-0.5 font-mono text-[10px];
+  }
+
+  .check-dice-settlement {
+    @apply flex min-h-8.5 min-w-0 flex-wrap items-center gap-1.5;
+  }
+
+  .check-dice-equation {
+    @apply font-mono text-sm font-semibold text-ink;
+  }
+
+  .check-dice-equation strong {
+    @apply text-[22px] leading-none;
+  }
+
+  .check-dice-lock {
+    @apply flex min-w-0 items-center gap-1.5 border-t border-hairline pt-1.5 text-[11.5px] text-muted;
+  }
+
+  .check-dice-lock-hidden {
+    visibility: hidden;
+  }
+
+  .check-dice-collapsed {
+    @apply absolute bottom-3.5 left-1/2 z-20 w-[min(600px,calc(100%-2rem))] -translate-x-1/2;
+  }
+
+  .check-dice-card.check-dice-collapsed {
+    @apply grid grid-cols-[132px_minmax(0,1fr)] gap-x-3.5 gap-y-1.5 py-2.5 pl-2.5 pr-3.5;
+    grid-template-areas: "tray head" "tray info" "tray foot" "tray lock";
+  }
+
+  .check-dice-collapsed .check-dice-header {
+    grid-area: head;
+  }
+
+  .check-dice-collapsed .check-dice-info {
+    grid-area: info;
+  }
+
+  .check-dice-collapsed .check-dice-lock {
+    grid-area: lock;
+  }
+
+  .check-dice-collapsed .check-dice-body {
+    @apply contents;
+  }
+
+  .check-dice-collapsed .check-dice-tray {
+    @apply min-h-33;
+    grid-area: tray;
+  }
+
+  .check-dice-collapsed .check-dice-footer {
+    grid-area: foot;
+  }
+
+  @container app-shell (max-width: 720px) {
+    .dice-preview {
+      @apply grid-cols-1;
+    }
+
+    .dice-preview-stage {
+      @apply h-27.5;
+    }
+
+    .check-dice-body {
+      @apply grid-cols-[96px_minmax(0,1fr)];
+    }
+
+    .check-dice-tray {
+      @apply min-h-24;
+    }
+
+    .check-dice-hint,
+    .check-dice-critical-note,
+    .check-dice-lock,
+    .check-dice-odds-legend,
+    .check-dice-label {
+      @apply hidden;
+    }
+
+    .check-dice-ready {
+      @apply justify-end;
+    }
+
+    .check-dice-collapsed {
+      @apply bottom-2.5 w-[calc(100%-1.5rem)];
+    }
+
+    .check-dice-card.check-dice-collapsed {
+      @apply grid-cols-[104px_minmax(0,1fr)];
+    }
+
+    .check-dice-collapsed .check-dice-tray {
+      @apply min-h-26;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dice-number-pop.on {
+      animation: none;
+    }
+
+    .dice-preview-formulas button,
+    .dice-skin-card,
+    .check-dice-submit,
+    .dice-charge-meter::after {
+      transition: none;
+    }
+  }
+}

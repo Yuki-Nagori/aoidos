@@ -145,6 +145,8 @@ export function useGameWorkspace(ports: Options) {
       : records.state.value.view?.nextCursor,
   );
   let focusBeforeConfirmation: HTMLElement | null = null;
+  let feedResizeObserver: ResizeObserver | undefined;
+  let followFrame = 0;
   function hasTextSelection(): boolean {
     return Boolean(window.getSelection()?.toString());
   }
@@ -152,13 +154,15 @@ export function useGameWorkspace(ports: Options) {
     return hasTextSelection() || records.state.value.body !== undefined || readingDrag.value;
   }
   function canAutoFollow(): boolean {
-    return (
-      followLatest &&
-      panel.isOpen.value &&
-      document.hasFocus() &&
-      document.visibilityState === "visible" &&
-      !readingIsProtected()
-    );
+    return followLatest && panel.isOpen.value && !readingIsProtected();
+  }
+  function scheduleFollowLatest(feed = recordsFeed.value): void {
+    if (!feed || !canAutoFollow() || typeof requestAnimationFrame === "undefined") return;
+    if (followFrame) cancelAnimationFrame(followFrame);
+    followFrame = requestAnimationFrame(() => {
+      followFrame = 0;
+      if (feed === recordsFeed.value && canAutoFollow()) feed.scrollTop = feed.scrollHeight;
+    });
   }
   function updateFollowState(): void {
     const feed = recordsFeed.value;
@@ -183,7 +187,19 @@ export function useGameWorkspace(ports: Options) {
     window.removeEventListener("pointerup", onReadingPointerEnd);
     window.removeEventListener("pointercancel", onReadingPointerEnd);
     window.removeEventListener("blur", onReadingPointerEnd);
+    feedResizeObserver?.disconnect();
+    if (followFrame) cancelAnimationFrame(followFrame);
   });
+  watch(
+    recordsFeed,
+    (feed) => {
+      feedResizeObserver?.disconnect();
+      if (!feed || typeof ResizeObserver === "undefined") return;
+      feedResizeObserver = new ResizeObserver(() => scheduleFollowLatest(feed));
+      feedResizeObserver.observe(feed);
+    },
+    { flush: "post", immediate: true },
+  );
   function jumpToLatest(): void {
     const feed = recordsFeed.value;
     if (!feed) return;
@@ -219,12 +235,25 @@ export function useGameWorkspace(ports: Options) {
     const accepted = await controls.control("interrupt", text);
     if (accepted) input.clearDraftIfCurrent(ticket);
   }
+  function requestRegenerate(): void {
+    if (
+      current.value?.phase !== "idle" ||
+      current.value.needsRecovery ||
+      !current.value.lastOperation?.roundId
+    ) {
+      return;
+    }
+    confirmation.value = { kind: "regenerate" };
+  }
+
   async function submitComposer(): Promise<void> {
     if (composerSubmitDisabled.value || input.composing.value || input.tooLarge.value) return;
     const raw = input.draft.value;
     const preview = composerPreview.value;
     if (preview.slashActive || preview.invalidSlash || preview.contentRequired) return;
     if (!preview.command) {
+      followLatest = true;
+      unreadRecords.value = false;
       await input.send();
       return;
     }
@@ -238,13 +267,7 @@ export function useGameWorkspace(ports: Options) {
     else if (name === "stop") accepted = await controls.control("cancel");
     else if (name === "resume") accepted = await controls.control("resume");
     else if (name === "regenerate") {
-      if (
-        current.value?.phase !== "idle" ||
-        current.value.needsRecovery ||
-        !current.value.lastOperation?.roundId
-      )
-        return;
-      confirmation.value = { kind: "regenerate" };
+      requestRegenerate();
       return;
     } else if (name === "rewind") {
       rewindSelectorOpen.value = true;
@@ -303,16 +326,18 @@ export function useGameWorkspace(ports: Options) {
       ? undefined
       : turn.view.value.snapshot,
   );
+  const activeTurnId = computed(() => turn.view.value.snapshot?.turnId);
   watch(
     () => {
       const view = records.state.value.view;
       return [sessionId.value, view?.sessionId, view?.viewEpoch, view?.lastRecordSeq] as const;
     },
     (currentView, previousView) => {
+      const shouldFollow = canAutoFollow();
       void nextTick(() => {
         const feed = recordsFeed.value;
         if (!feed) return;
-        if (canAutoFollow()) feed.scrollTop = feed.scrollHeight;
+        if (shouldFollow) scheduleFollowLatest(feed);
         else if (
           currentView[1] === currentView[0] &&
           currentView[1] === previousView[1] &&
@@ -329,9 +354,10 @@ export function useGameWorkspace(ports: Options) {
   watch(
     () => [records.state.value.body, preview.value?.text] as const,
     () => {
+      const shouldFollow = canAutoFollow();
       void nextTick(() => {
         const feed = recordsFeed.value;
-        if (feed && canAutoFollow()) feed.scrollTop = feed.scrollHeight;
+        if (feed && shouldFollow) scheduleFollowLatest(feed);
         else if (preview.value?.text) unreadRecords.value = true;
       });
     },
@@ -421,6 +447,7 @@ export function useGameWorkspace(ports: Options) {
     scenePath,
     olderCursor,
     preview,
+    activeTurnId,
     hasTextSelection,
     updateFollowState,
     onReadingPointerDown,
@@ -429,6 +456,7 @@ export function useGameWorkspace(ports: Options) {
     interruptDraft,
     submitComposer,
     confirmOperation,
+    requestRegenerate,
     selectRewindTarget,
     chooseSlashCommand,
     closePanel,

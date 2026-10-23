@@ -1,5 +1,5 @@
 import { mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RecordItem } from "../../../../../src-web/api/records";
 import RecordFeed from "../../../../../src-web/features/game/components/RecordFeed.vue";
 import { i18n } from "../../../../../src-web/i18n/index";
@@ -7,6 +7,55 @@ import { i18n } from "../../../../../src-web/i18n/index";
 describe("RecordFeed", () => {
   beforeEach(() => {
     i18n.global.locale.value = "en";
+  });
+
+  it("copies a failed request code and delegates recovery to the existing host actions", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const retry = vi.fn();
+    const rewind = vi.fn();
+    const wrapper = mount(RecordFeed, {
+      props: {
+        items: [],
+        loadingOlder: false,
+        preview: {
+          text: "Partial narration",
+          outcome: "failed",
+          error: { code: "provider.timeout", message: "Timed out" },
+        },
+        onRetry: retry,
+        onRequestRewind: rewind,
+        actionsBusy: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    const card = wrapper.get(".record-failure");
+    expect(wrapper.text()).toContain("Partial narration");
+    expect(card.text()).toContain("Timed out");
+    expect(
+      card
+        .findAll(".record-failure-actions button")
+        .every((button) => button.attributes("disabled") !== undefined),
+    ).toBe(true);
+    await wrapper.setProps({ actionsBusy: false });
+    await card.get(".record-failure-code button").trigger("click");
+    expect(writeText).toHaveBeenCalledWith("provider.timeout");
+    await card.get(".record-failure-actions .primary").trigger("click");
+    await card.get(".record-failure-actions .ghost").trigger("click");
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(rewind).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
+
+  it("does not render trailing blank lines while narration is still streaming", () => {
+    const wrapper = mount(RecordFeed, {
+      props: { items: [], loadingOlder: false, preview: { text: "First line.\n\n\n" } },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.get(".record-live").element.textContent).toBe("First line.");
+    wrapper.unmount();
   });
 
   it("renders typed rows and forwards bounded history actions", async () => {
@@ -96,6 +145,11 @@ describe("RecordFeed", () => {
     });
     expect(wrapper.text()).toContain("Open the door.");
     expect(wrapper.text()).toContain("17");
+    expect(
+      wrapper.findAll(".record-machine .record-dice-value").map((value) => value.text()),
+    ).toEqual(["17"]);
+    expect(wrapper.find("canvas").exists()).toBe(false);
+    expect(wrapper.find(".record-dice-visual").exists()).toBe(false);
     expect(wrapper.text()).toContain("Lantern keeper");
     expect(wrapper.text()).toContain("The lamp leans toward the door.");
     expect(wrapper.text()).not.toContain("DC 9");
@@ -116,7 +170,7 @@ describe("RecordFeed", () => {
     wrapper.unmount();
   });
 
-  it("renders preview and an empty state without terminal metadata", () => {
+  it("renders a live preview without a misleading empty state", () => {
     const wrapper = mount(RecordFeed, {
       props: {
         items: [],
@@ -126,8 +180,9 @@ describe("RecordFeed", () => {
       },
       global: { plugins: [i18n] },
     });
-    expect(wrapper.text()).toContain("No records yet");
+    expect(wrapper.text()).not.toContain("No records yet");
     expect(wrapper.text()).toContain("partial");
+    expect(wrapper.get(".record-list").find(".record-live-row").exists()).toBe(true);
     expect(wrapper.text()).toContain("expanded");
     expect(wrapper.findAll(".record-terminal")).toHaveLength(0);
     wrapper.unmount();

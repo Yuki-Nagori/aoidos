@@ -4,7 +4,7 @@
 
 结局规则生成（仅采用 LLM 时）和可选 AI 结局叙事都是独立的物理请求，必须复用 027 / 035 的预留、结算和 unknown 恢复；固定事实摘要与周目封存不依赖叙事请求成功。叙事的显式重试是新的物理尝试，unknown 不自动重发；订阅费用不进入 Aoidos 账本。完整流程见[结局架构](ending-flow.md)，由 056 接入。
 
-061 已接入 DeepSeek Flash CNY / USD 内置价目及 GUI / TUI 共用的登记服务。当前价目快照唯一位于 `aoidos-billing/providers/deepseek`；`aoidos-llm/providers` 只维护协议、能力与模型上限。app 只读发布模板供 GUI / TUI 预览，不另存价格目录。DeepSeek 新 profile 的币种默认预选为 CNY，玩家可在 API 配置时改为 USD；默认预选不会登记价格或自动放行请求，必须先查看缓存命中 / 未命中 / 写入、输出与峰谷费率、核验日期和来源，再明确确认。模板更新不改写账本中已冻结的历史版本。
+061 已接入 DeepSeek Flash CNY / USD 内置价目及 GUI / TUI 共用的登记服务。当前价目快照唯一位于 `aoidos-billing/providers/deepseek`；`aoidos-llm/providers` 只维护协议、能力与模型上限。app 只读发布模板供 GUI / TUI 预览，不另存价格目录。DeepSeek 官方价目确认先等待读取该配置已登记的币种，读取失败时显示错误而不假定没有登记；确实从未登记时才按界面语言预选（中文 CNY、英文 USD），玩家仍须核对并显式确认；默认预选不会登记价格或自动放行请求，必须先查看缓存命中 / 未命中 / 写入、输出与峰谷费率、核验日期和来源，再明确确认。模板更新不改写账本中已冻结的历史版本。
 
 ## 控制单位与默认额度
 
@@ -42,7 +42,7 @@ DeepSeek 官方 usage 与价格只区分缓存命中 / 未命中，没有独立�
 
 PriceVersion 可附 IANA 时区、星期、半开时间窗、时段单价与版本化节假日表；跨午夜拆窗，重叠、空价和非法时区拒绝。优先级为显式日期覆盖 → 星期 / 时间窗 → 基准价。日历声明覆盖年份及调整工作日策略；未覆盖 / 无法确定采用可适用最高价并标 estimated，不默认为假日优惠。内置日历随版本更新，手动覆盖明确来源；不自动推断节假日。
 
-DeepSeek API 的 [USD 价格](https://api-docs.deepseek.com/quick_start/pricing/)与[人民币价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)均有峰谷价：周一至周五 UTC 01:00–04:00 / 06:00–10:00（北京时间 09:00–12:00 / 14:00–18:00），中国公众假日全天非峰时，谷价为峰价一半。2026 年公众假日表依据[国务院办公厅通知](https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm)，价格日历版本为 `deepseek-api-utc-weekday-holiday-2026-v1`；未覆盖年份不推断假日折扣，峰时按较高价格保守预留，官方新日历发布后新增版本。OpenCode Go 对 DeepSeek V4.1 Flash / V4 Pro / V4 Flash / Vision Exp 列出独立峰谷费率；其官方时段相同，但只明确周末全天非峰时，不排除中国公众假日。两种接入分别登记独立费率和日历版本。每笔按 `dispatchAt` 选择单价并冻结版本；预留覆盖可适用最高费率。设置界面以本周为基准，将官方 UTC 窗口转换到已选报表时区；这只改变说明文字，不改变费率判定时区。
+DeepSeek API 的 [USD 价格](https://api-docs.deepseek.com/quick_start/pricing/)与[人民币价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)均有峰谷价：周一至周五 UTC 01:00–04:00 / 06:00–10:00（北京时间 09:00–12:00 / 14:00–18:00），中国公众假日全天非峰时，谷价为峰价一半。2026 年公众假日表依据[国务院办公厅通知](https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm)，新登记价格日历版本为 `deepseek-api-utc-weekday-holiday-2026-v2`；未覆盖年份的日期全天采用峰时费率并标记 estimated，官方新日历发布后新增版本。旧 `deepseek-api-utc-weekday-holiday-2026-v1` 保留原有工作日时段算法，不改写已冻结价格版本、不重算历史 actual_nanos；重新确认内置价目产生新的 v3 价格版本，后续请求才使用 v2 日历。OpenCode Go 对 DeepSeek V4.1 Flash / V4 Pro / V4 Flash / Vision Exp 列出独立峰谷费率；其官方时段相同，但只明确周末全天非峰时，不排除中国公众假日。两种接入分别登记独立费率和日历版本。每笔按 `dispatchAt` 选择单价并冻结版本；预留覆盖可适用最高费率。设置界面以本周为基准，将官方 UTC 窗口转换到已选报表时区；这只改变说明文字，不改变费率判定时区。
 
 ## 金额、原币与单局分币种额度
 
@@ -130,3 +130,9 @@ DeepSeek 以外的供应商余额尚未接入；这不表示供应商永久不�
 [059 周目管理设计](../task/059-run-management-design.md)确认，canonical `billingRunId` 为 `sessionId`，不对应独立生成的 `memoryRunId`。当前新会话及私有记忆请求均使用 `sessionId` 作为账本范围；目录会将经 `memory_run_sessions` 精确核实的 `memoryRunId` legacy 预算 / 请求标记为待 reconciliation，不误报为未配置。预留事务再次检查该 legacy scope；只要仍存在预算、物理请求或预算变更审计，就以 `budget.reconciliation-required` 拒绝新请求。engine 已提供目录 revision 与身份映射校验下的原子迁移：请求及其 settlement outbox 保持 requestId，预算更新审计保持 operationId，提醒合并后只要任一来源未读便仍未读；两边预算冲突时必须提交玩家明确选定的最终 CNY / USD 上限，否则事务无写入。共享 app service、Tauri / Web typed API 与 CLI/TUI 周目目录均已接通迁移流程。目录显式保存并核验 canonical `billingRunId`；清理还须覆盖迁移前的已验证 legacy scope，不依赖外键级联或猜测 UUID 映射。没有预算和请求属于尚未配置，不是账本损坏。
 
 本局存在 `reserved` / `unconfirmed` 物理请求或 `billing_pending_settlements` outbox 时拒绝删除，须先解决费用义务。已有完整持久 usage 的请求可走本地结算恢复；当前没有任意费用核销入口，`unconfirmed` 若缺完整 usage 且无供应商回执等可核验证据，只能保留，不能手动改为 settled 或删除。删除不能把未知用量当零或从月报隐去未确认请求。所有请求已结算后，玩家显式确认才一并清除本局预算、预警、请求明细与可精确归属的本地账单审计：仅清理 target 明确关联到已核验周目 scope 的预算 / warning 操作，以及其已核验物理请求的结算审计；价格登记、模型选择和归属不明记录保留。共享价格版本、profile 价格选择及供应商侧账单不受影响。该清除不保证从全库 SQLite 备份物理擦除字节。
+
+### 冻结时段投影与本局费用拆分
+
+物理请求已保存不可变 priceVersionId 和 dispatchAt。请求页由 Rust 根据该版本固定的日历算法返回 priceTier（regular / peak / off）和 estimated，不能套用当前选择的价目、前端时区或新日历。日历算法更新必须使用新版本 ID。既有字段足以确定冻结时段，因此本次不新增数据库列或迁移，也不修改旧请求、预留或结算金额。
+
+本局报表返回 tierItems，按原币种和冻结时段汇总全部请求的 settledAmount、reservedAmount、requestCount 与 estimatedRequests；hasEstimatedRequests 供顶栏标记估算。该汇总独立于请求明细分页，预留不冒充已结算花费，币种之间不换算或合计。旧日历 v1 的请求按原规则展示，并在价目页说明其兼容语义。
