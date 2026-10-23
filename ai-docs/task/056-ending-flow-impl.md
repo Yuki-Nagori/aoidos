@@ -79,7 +79,7 @@
 
 ## 验证计划与结果
 
-首个创建 journal 切片的受影响检查已通过：`bun run test:affected`（554 passed、3 ignored）、`bun run format:affected`、`bun run lint:affected`。仍待验证并实施：新周目开局生成、固定 / 生成 guide NPC、受限结构化输出 schema、WorldPort / 周目恢复、027 / 035 物理计费与 unknown 对账、032 单向对接、任务分支投影与回退、跨平台 IPC、Vitest、更多故障注入及完整 `bun run verify`。
+首个创建 journal 切片的受影响检查已通过：`bun run test:affected`（554 passed、3 ignored）、`bun run format:affected`、`bun run lint:affected`。2026-10-24 当前结构化输出切片通过 `bun scripts/cargo.mts test -p aoidos-engine --lib cycle_output::tests -- --nocapture`（6 passed）及 `bun scripts/cargo.mts check -p aoidos-engine --lib`；独立 6.1-sol 评审未发现阻止提交的问题。提交前 `bun run format:affected`、`bun run test:affected`（engine 560 passed、3 ignored）和 `bun run lint:affected` 均通过。它还没有生成全部角色档案 / guide NPC，也没有接入 Provider、账本、存储或 playable 转换，因此不是完整开局快照，不能用于启用新局入口。仍待验证并实施：固定 / 生成 guide NPC、完整结构化输出与初始化冻结、WorldPort / 周目恢复、027 / 035 物理计费与 unknown 对账、032 单向对接、任务分支投影与回退、跨平台 IPC、Vitest、更多故障注入及完整 `bun run verify`。
 
 2026-10-24 创建 journal 切片：新增 `session_creation_ops` 保存不可变 operation、header / profile 快照和 hash；通过 header-only inactive record 写入、恢复时幂等补齐 `recovery-required` 目录行。legacy scanner 排除所有 journal 所有的 sessionId。该接口刻意不创建普通 owner、memory run、预算 / 费用预留或 Provider 请求，也尚未切换产品新局入口。恢复窗口和重复创建测试已通过；后续仍需与初始化输入、预算、物理 attempt 和完成后 owner 激活串成一个可恢复 coordinator。
 
@@ -97,6 +97,8 @@
 - 2026-10-23：首个 engine 持久化切片新增独立 `cycle_initializations` / `cycle_initialization_attempts` 表、受限状态与 revision/requestId CAS，持久化输入 hash、attempt 历史、失败 / unknown、显式 retry、可重入 finalize 和放弃状态；初始化必须在已有 profile 与双币预算可用后才能登记。`open_target` 对显式初始化行做 fail-closed 门禁，legacy 无记录周目不受影响。此切片尚未切换新局创建入口，也未接入 Provider 预留、结构化输出校验、owner / scene 注册或恢复 UI；后续必须将目录、预算、初始化行和物理计费身份原子接线，并封闭所有活跃 owner 入口后方可启用。
 - 2026-10-23：新增 LLM 调度原语 `run_generation_once_with_output`，复用调用方持久化的规范 requestId，并强制单次物理调用、不重试、不升温；测试覆盖失败时仅预留 / 调用 / 结算一次，以及无效 requestId 在预留前拒绝。该原语尚未接入初始化账本与真实 Provider 创建入口。
 - 2026-10-24：增加可恢复的新局创建 journal。存储在写 header 前持久化 intent，header-only record 按冻结身份幂等检查；启动恢复能把中断阶段收敛为 `recovery-required` 目录登记，未结束的创建 journal 也会被 legacy scanner 跳过。该阶段不切换活动周目、不注册 owner 或开始计费 / 模型调用；后续 coordinator 负责将其推进为完整初始化 run。
+- 2026-10-24：新增纯开局输出校验器，严格解析 v1 目标、标签规则和初始任务，拒绝重复 JSON key / 未知字段 / 未登记或矛盾规则 / 非法互斥组和依赖，并由 engine 以 session + request + 类别 + key 派生稳定 ID。空规则列表明确表示永不命中。它只校验目标 / 标签 / 任务投影，不包含缺失角色档案或 guide NPC，不读取 run ledger、不触碰 Provider 或存储，也不激活周目；完整冻结前必须扩展输出并与初始化账本原子接线。
+- 2026-10-24：独立只读评审覆盖当前 diff 并对照 054 / `scenarios.md`；未发现阻止此切片提交的问题。评审特别确认该纯校验器无生产调用点，因此不能形成不完整初始化产物转为 playable 的新路径；未来接线仍须保证输入来自 run 冻结清单、完整角色档案已校验且 attempt 身份匹配。评审为静态审查，未执行测试；验证由主代理完成。
 - 2026-10-24：任务栏视觉与状态流对齐 `aoidos-art` commit `9df5c5c1f4562c2887ffc9b2043ee5f87a6e35fd`，覆盖展开 / 紧凑摘要、主线置顶、任务链、已完成折叠、旧周目空态、开局引导、回退和结局状态；状态内容由 engine 冻结数据驱动。
 - 2026-10-23：继 #215 后继续实现 dispatch 围栏：初始化 attempt 增加持久 `dispatch_started` CAS；初始化预算端口在一次 SQLite `IMMEDIATE` 事务中领取该权并登记同 requestId 的费用预留，避免账本预留的幂等语义意外授权 Provider 重放。当前只完成围栏与事务内 reserve 原语及 focused test；尚未接入完整开局 coordinator、record 创建 journal、初始化恢复流程或产品新局入口，不能启用新流程。
 - 2026-10-23：登记 `cycle-input.json` 并由 engine 严格验证版本、字段数量 / 类型 / 范围 / 比较符、已注册来源及固定 Character 引用；固定角色显式标注 `isGuide: true`，角色档案拆分真值、初始认知、对外呈现和开场职责。每个剧情角色含主角需在 run 冻结资料中有个人档案；无作者固定档案时由开局初始化补齐。Mistbell 固定使用已登记的洛苇，并显式绑定主角实体；不改正文原始字节，避免历史 v1 script revision 变化。唯一已接入状态源从当前有效历史分支派生已结算的角色内回合数，空历史时值缺失。新 script revision 纳入输入资源和修订；旧 v1 revision 仍能重建原实体目录。完整开局请求、不可玩初始化账本和目标 / 标签快照仍待实现。
