@@ -246,24 +246,22 @@ pub fn finish_attempt(
         )
         .optional()
         .map_err(database)?
-    {
-        if state_now == state.as_str()
+        && state_now == state.as_str()
             && u64::try_from(revision_now).map_err(|_| corrupt())? == next
             && request_now == request_id
-        {
-            let attempt_matches: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state=?3)",
-                    rusqlite::params![request_id, session_id, state.as_str()],
-                    |row| row.get(0),
-                )
-                .map_err(database)?;
-            if attempt_matches {
-                transaction.commit().map_err(database)?;
-                return Ok(next);
-            }
-            return Err(corrupt());
+    {
+        let attempt_matches: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state=?3)",
+                rusqlite::params![request_id, session_id, state.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(database)?;
+        if attempt_matches {
+            transaction.commit().map_err(database)?;
+            return Ok(next);
         }
+        return Err(corrupt());
     }
     let changed = transaction
         .execute(
@@ -318,23 +316,22 @@ pub fn retry(
         )
         .optional()
         .map_err(database)?
-    {
-        if state_now == "initializing"
+        && state_now == "initializing"
             && u64::try_from(revision_now).map_err(|_| corrupt())? == next
             && request_now == request_id
-        {
-            let pending: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state='pending')",
-                    rusqlite::params![request_id, session_id],
-                    |row| row.get(0),
-                )
-                .map_err(database)?;
-            if pending {
-                transaction.commit().map_err(database)?;
-                return Ok(next);
+            && {
+                let pending: bool = transaction
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state='pending')",
+                        rusqlite::params![request_id, session_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(database)?;
+                pending
             }
-        }
+    {
+        transaction.commit().map_err(database)?;
+        return Ok(next);
     }
     let changed = transaction
         .execute(
@@ -386,26 +383,24 @@ pub fn finalize(
         )
         .optional()
         .map_err(database)?
-    {
-        if state_now == "playable"
+        && state_now == "playable"
             && u64::try_from(revision_now).map_err(|_| corrupt())? == next
             && request_now == request_id
             && output_now.as_deref() == Some(output_snapshot)
             && hash_now.as_deref() == Some(output_hash.as_str())
-        {
-            let attempt_accepted: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state='accepted')",
-                    rusqlite::params![request_id, session_id],
-                    |row| row.get(0),
-                )
-                .map_err(database)?;
-            if attempt_accepted {
-                transaction.commit().map_err(database)?;
-                return Ok(next);
-            }
-            return Err(corrupt());
+    {
+        let attempt_accepted: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state='accepted')",
+                rusqlite::params![request_id, session_id],
+                |row| row.get(0),
+            )
+            .map_err(database)?;
+        if attempt_accepted {
+            transaction.commit().map_err(database)?;
+            return Ok(next);
         }
+        return Err(corrupt());
     }
     let changed = transaction
         .execute(
@@ -456,11 +451,11 @@ pub fn abandon(
         )
         .optional()
         .map_err(database)?
+        && state_now == "abandoned"
+        && u64::try_from(revision_now).map_err(|_| corrupt())? == next
     {
-        if state_now == "abandoned" && u64::try_from(revision_now).map_err(|_| corrupt())? == next {
-            transaction.commit().map_err(database)?;
-            return Ok(next);
-        }
+        transaction.commit().map_err(database)?;
+        return Ok(next);
     }
     let changed = transaction
         .execute(
