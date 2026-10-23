@@ -7,4 +7,4 @@ pub use ledger::{
     DeletionObligations, LegacyScopeMerge, ModelUsageSummary, PendingSettlement, RequestItem,
     RequestPage, Reservation, Settlement, SettlementResult, SuggestedLimits, TierUsageSummary,
 };
-pub use port::LedgerBudgetPort;
+pub use port::{InitializationBudgetPort, LedgerBudgetPort};

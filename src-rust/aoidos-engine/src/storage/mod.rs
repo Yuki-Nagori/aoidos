@@ -101,6 +101,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     crate::run_catalog::DELETION_CLEANUP_CURSOR_MIGRATION,
     crate::run_catalog::DELETION_ACK_MIGRATION,
     crate::cycle_initialization::SCHEMA,
+    crate::cycle_initialization::DISPATCH_MIGRATION,
 ];
 
 pub struct Storage {

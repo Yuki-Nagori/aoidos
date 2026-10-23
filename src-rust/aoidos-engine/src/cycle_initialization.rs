@@ -32,6 +32,12 @@ CREATE INDEX cycle_initialization_attempts_by_session
   ON cycle_initialization_attempts(session_id, created_at, request_id);
 "#;
 
+/// 标记开局 attempt 是否已取得唯一 dispatch 权；迁移旧初始化记录时默认未领取。
+pub const DISPATCH_MIGRATION: &str = r#"
+ALTER TABLE cycle_initialization_attempts
+  ADD COLUMN dispatch_started INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_started IN (0,1));
+"#;
+
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +291,37 @@ pub fn finish_attempt(
     Ok(next)
 }
 
+/// 在调用方的 IMMEDIATE 事务内领取唯一 dispatch 权。
+///
+/// 调用方应在同一事务中写入物理费用预留，然后提交后才允许访问 Provider。
+/// 重复或并发领取一律冲突，即使账本预留本身可以幂等，也不能据此再次发送。
+pub(crate) fn claim_dispatch_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    expected_revision: u64,
+    request_id: &str,
+    updated_at: &str,
+) -> Result<(), Fault> {
+    if !crate::record::format::valid_uuid(session_id)
+        || !crate::record::format::valid_uuid(request_id)
+        || expected_revision == 0
+        || updated_at.is_empty()
+        || updated_at.len() > 64
+    {
+        return Err(Fault::bad_request());
+    }
+    let claimed = transaction
+        .execute(
+            "UPDATE cycle_initialization_attempts SET dispatch_started=1,updated_at=?1 WHERE request_id=?2 AND session_id=?3 AND state='pending' AND dispatch_started=0 AND EXISTS(SELECT 1 FROM cycle_initializations WHERE session_id=?3 AND state='initializing' AND revision=?4 AND current_request_id=?2)",
+            rusqlite::params![updated_at, request_id, session_id, expected_revision],
+        )
+        .map_err(database)?;
+    if claimed != 1 {
+        return Err(Fault::new("app.conflict", "开局请求已发送或状态已变化"));
+    }
+    Ok(())
+}
+
 /// 显式重试沿用冻结输入 / run / budget，仅产生新的物理 requestId。
 pub fn retry(
     connection: &mut rusqlite::Connection,
@@ -391,7 +428,7 @@ pub fn finalize(
     {
         let attempt_accepted: bool = transaction
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state='accepted')",
+                "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state='accepted' AND dispatch_started=1)",
                 rusqlite::params![request_id, session_id],
                 |row| row.get(0),
             )
@@ -401,6 +438,16 @@ pub fn finalize(
             return Ok(next);
         }
         return Err(corrupt());
+    }
+    let dispatch_claimed: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state='pending' AND dispatch_started=1)",
+            rusqlite::params![request_id, session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if !dispatch_claimed {
+        return Err(Fault::new("app.conflict", "开局请求尚未完成派发"));
     }
     let changed = transaction
         .execute(
@@ -413,7 +460,7 @@ pub fn finalize(
     }
     let changed = transaction
         .execute(
-            "UPDATE cycle_initialization_attempts SET state='accepted',updated_at=?1 WHERE request_id=?2 AND session_id=?3 AND state='pending'",
+            "UPDATE cycle_initialization_attempts SET state='accepted',updated_at=?1 WHERE request_id=?2 AND session_id=?3 AND state='pending' AND dispatch_started=1",
             rusqlite::params![updated_at, request_id, session_id],
         )
         .map_err(database)?;
@@ -505,9 +552,28 @@ pub fn verify(connection: &rusqlite::Connection) -> Result<(), aoidos_store::err
             )
             .optional()
             .map_err(aoidos_store::db::sqlite_error)?;
-        if actual.as_deref().map(normalize_sql) != Some(normalize_sql(statement)) {
+        let expected = if name == "cycle_initialization_attempts" {
+            format!(
+                "{}, dispatch_started INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_started IN (0,1)))",
+                statement.strip_suffix(')').ok_or_else(schema_mismatch)?
+            )
+        } else {
+            statement.to_owned()
+        };
+        if actual.as_deref().map(normalize_sql) != Some(normalize_sql(&expected)) {
             return Err(schema_mismatch());
         }
+    }
+    let dispatch_column: Option<(String, i64, Option<String>)> = connection
+        .query_row(
+            "SELECT type,\"notnull\",dflt_value FROM pragma_table_info('cycle_initialization_attempts') WHERE name='dispatch_started'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(aoidos_store::db::sqlite_error)?;
+    if dispatch_column != Some(("INTEGER".into(), 1, Some("0".into()))) {
+        return Err(schema_mismatch());
     }
     Ok(())
 }
@@ -598,6 +664,7 @@ mod tests {
             .execute_batch(crate::run_catalog::SCHEMA)
             .unwrap();
         connection.execute_batch(SCHEMA).unwrap();
+        connection.execute_batch(DISPATCH_MIGRATION).unwrap();
         connection
     }
 
@@ -711,6 +778,37 @@ mod tests {
         );
         assert_eq!(load(&connection, session_id).unwrap().input_snapshot, input);
 
+        assert_eq!(
+            finalize(
+                &mut connection,
+                session_id,
+                retry_revision,
+                retry_id,
+                output,
+                "2026-10-23T00:00:02Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
+        );
+        assert_eq!(
+            load(&connection, session_id).unwrap().state,
+            State::Initializing
+        );
+
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        claim_dispatch_in_transaction(
+            &transaction,
+            session_id,
+            retry_revision,
+            retry_id,
+            "2026-10-23T00:00:02Z",
+        )
+        .unwrap();
+        transaction.commit().unwrap();
+
         let final_revision = finalize(
             &mut connection,
             session_id,
@@ -766,6 +864,76 @@ mod tests {
                 )
                 .unwrap(),
             2
+        );
+    }
+
+    #[test]
+    fn dispatch_claim_is_single_use_and_rolls_back_with_its_transaction() {
+        let mut connection = connection();
+        let session_id = "00000000-0000-4000-8000-000000000041";
+        let request_id = "00000000-0000-4000-8000-000000000042";
+        ready_run(&connection, session_id);
+        begin(
+            &mut connection,
+            &Begin {
+                session_id: session_id.into(),
+                expected_catalog_revision: 1,
+                request_id: request_id.into(),
+                input_snapshot: br#"{"script":"mistbell","schema":"v1"}"#.to_vec(),
+                created_at: "2026-10-23T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            claim_dispatch_in_transaction(
+                &transaction,
+                session_id,
+                1,
+                request_id,
+                "2026-10-23T00:00:01Z",
+            )
+            .unwrap();
+            // Dropping before commit proves the fence rolls back atomically with reservation work.
+        }
+        let started: i64 = connection
+            .query_row(
+                "SELECT dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1",
+                [request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(started, 0);
+
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        claim_dispatch_in_transaction(
+            &transaction,
+            session_id,
+            1,
+            request_id,
+            "2026-10-23T00:00:02Z",
+        )
+        .unwrap();
+        transaction.commit().unwrap();
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        assert_eq!(
+            claim_dispatch_in_transaction(
+                &transaction,
+                session_id,
+                1,
+                request_id,
+                "2026-10-23T00:00:03Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
         );
     }
 
