@@ -9,6 +9,7 @@ use aoidos_memory::{
     },
     repository::{BatchSnapshot, Span},
 };
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Default)]
@@ -66,6 +67,55 @@ fn test_profile() -> aoidos_llm::config::LlmProfile {
     }
 }
 
+fn prepared_intent() -> crate::run_catalog::InactiveRunIntent {
+    let header = crate::game::builtin::header("mistbell").unwrap();
+    let profile = test_profile();
+    let profile_snapshot = aoidos_json::to_vec(&profile).unwrap();
+    let profile_snapshot_hash = format!("{:x}", Sha256::digest(&profile_snapshot));
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let snapshots = crate::game::assets::initialization_asset_snapshots(
+        &header.script_id,
+        &header.script_revision,
+    )
+    .unwrap();
+    crate::run_catalog::InactiveRunIntent {
+        operation_id: operation_id.clone(),
+        header: header.clone(),
+        profile,
+        preparation: Some(crate::run_catalog::InitializationPreparation {
+            version: 1,
+            request_id,
+            input: crate::run_catalog::FrozenInitializationInput {
+                version: 1,
+                operation_id,
+                session_id: header.session_id.clone(),
+                script_id: header.script_id.clone(),
+                script_revision: header.script_revision.clone(),
+                profile_id: "test-profile".into(),
+                profile_snapshot_hash,
+                locale: "zh-Hans".into(),
+                prompt_version: "init-v1".into(),
+                output_schema_version: 2,
+                script_snapshot: snapshots.script,
+                entity_snapshot: snapshots.entities,
+                cycle_input_snapshot: snapshots.cycle_input,
+                provider_request: serde_json::json!({"model":"deepseek-v4.1-flash","messages":[]}),
+            },
+            cny_limit: aoidos_billing::money::NanoMoney::parse("10").unwrap(),
+            usd_limit: aoidos_billing::money::NanoMoney::parse("5").unwrap(),
+        }),
+    }
+}
+
+struct PreparedRunRows {
+    catalog: (String, Option<String>, Option<String>),
+    budget: (i64, i64, i64),
+    initialization: (String, String, Vec<u8>, String),
+    attempt: (String, i64),
+    counts: (i64, i64, i64, i64),
+}
+
 #[test]
 fn inactive_run_creation_journal_survives_record_before_catalog_crash_and_blocks_legacy_import() {
     let root =
@@ -81,6 +131,7 @@ fn inactive_run_creation_journal_survives_record_before_catalog_crash_and_blocks
             operation_id: uuid::Uuid::new_v4().to_string(),
             header: header.clone(),
             profile: test_profile(),
+            preparation: None,
         };
         storage
             .with_database(|connection| {
@@ -163,6 +214,7 @@ fn inactive_run_creation_is_idempotent_and_does_not_set_active_selection() {
         operation_id: uuid::Uuid::new_v4().to_string(),
         header: crate::game::builtin::header("mistbell").unwrap(),
         profile: test_profile(),
+        preparation: None,
     };
     storage.create_inactive_run(&intent).unwrap();
     storage.create_inactive_run(&intent).unwrap();
@@ -192,6 +244,243 @@ fn inactive_run_creation_is_idempotent_and_does_not_set_active_selection() {
 }
 
 #[test]
+fn prepared_inactive_run_atomically_freezes_budget_request_and_pending_attempt() {
+    let root =
+        std::env::temp_dir().join(format!("aoidos-prepared-inactive-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let events = Arc::new(Events::default());
+    let record_events = Arc::new(test_support::Events::default());
+    let storage = Storage::new(&root, events.clone(), record_events.clone());
+    let intent = prepared_intent();
+    storage.create_inactive_run(&intent).unwrap();
+    drop(storage);
+    let storage = Storage::new(&root, events, record_events);
+    storage.create_inactive_run(&intent).unwrap();
+
+    let preparation = intent.preparation.as_ref().unwrap();
+    let input_snapshot = aoidos_json::to_vec(&preparation.input).unwrap();
+    let rows = storage
+        .with_database(|connection| {
+            Ok(PreparedRunRows {
+                catalog: connection
+                    .query_row(
+                        "SELECT state,billing_run_id,memory_run_id FROM session_catalog WHERE session_id=?1",
+                        [&intent.header.session_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap(),
+                budget: connection
+                    .query_row(
+                        "SELECT cny_limit_nanos,usd_limit_nanos,revision FROM billing_run_budgets WHERE run_id=?1",
+                        [&intent.header.session_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap(),
+                initialization: connection
+                    .query_row(
+                        "SELECT state,current_request_id,input_snapshot,input_hash FROM cycle_initializations WHERE session_id=?1",
+                        [&intent.header.session_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .unwrap(),
+                attempt: connection
+                    .query_row(
+                        "SELECT state,dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1",
+                        [&preparation.request_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap(),
+                counts: connection
+                    .query_row(
+                        "SELECT (SELECT count(*) FROM billing_audit WHERE target_id=?1),(SELECT count(*) FROM billing_physical_requests WHERE request_id=?2),(SELECT count(*) FROM active_session WHERE session_id=?1),(SELECT count(*) FROM cycle_initialization_attempts WHERE session_id=?1)",
+                        rusqlite::params![intent.header.session_id, preparation.request_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .unwrap(),
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        rows.catalog,
+        (
+            "recovery-required".into(),
+            Some(intent.header.session_id.clone()),
+            None
+        )
+    );
+    assert_eq!(
+        rows.budget,
+        (
+            preparation.cny_limit.nanos(),
+            preparation.usd_limit.nanos(),
+            1
+        )
+    );
+    assert_eq!(rows.initialization.0, "initializing");
+    assert_eq!(rows.initialization.1, preparation.request_id);
+    assert_eq!(rows.initialization.2, input_snapshot);
+    assert_eq!(
+        rows.initialization.3,
+        format!("{:x}", Sha256::digest(&input_snapshot))
+    );
+    assert_eq!(rows.attempt, ("pending".into(), 0));
+    assert_eq!(
+        rows.counts,
+        (1, 0, 0, 1),
+        "replay must not duplicate audit or attempt rows"
+    );
+    let open_gate =
+        storage
+            .with_database(|connection| {
+                Ok(crate::cycle_initialization::require_playable(
+                    connection,
+                    &intent.header.session_id,
+                )
+                .unwrap_err()
+                .code)
+            })
+            .unwrap();
+    assert_eq!(
+        open_gate, "app.conflict",
+        "preparation must remain non-playable"
+    );
+    assert!(
+        matches!(
+            storage.records.get(&intent.header.session_id),
+            Err(error) if error.code == "app.not-found"
+        ),
+        "prepared run must not acquire a record owner"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn prepared_inactive_run_rolls_back_every_registration_write_when_attempt_insert_fails() {
+    let root =
+        std::env::temp_dir().join(format!("aoidos-prepared-rollback-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let intent = prepared_intent();
+    storage
+        .with_database(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER reject_prepared_attempt BEFORE INSERT ON cycle_initialization_attempts BEGIN SELECT RAISE(ABORT,'injected'); END;",
+                )
+                .map_err(|_| Fault::new("store.database", "trigger setup failed"))
+        })
+        .unwrap();
+    assert!(storage.create_inactive_run(&intent).is_err());
+    let preparation = intent.preparation.as_ref().unwrap();
+    let counts: (i64, i64, i64, i64, i64, String) = storage
+        .with_database(|connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT (SELECT count(*) FROM session_catalog WHERE session_id=?1),(SELECT count(*) FROM billing_run_budgets WHERE run_id=?1),(SELECT count(*) FROM billing_audit WHERE target_id=?1),(SELECT count(*) FROM cycle_initializations WHERE session_id=?1),(SELECT count(*) FROM cycle_initialization_attempts WHERE session_id=?1),(SELECT state FROM session_creation_ops WHERE session_id=?1)",
+                    [&intent.header.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                )
+                .unwrap())
+        })
+        .unwrap();
+    assert_eq!(counts, (0, 0, 0, 0, 0, "record-created".into()));
+    storage
+        .with_database(|connection| {
+            connection
+                .execute_batch("DROP TRIGGER reject_prepared_attempt;")
+                .map_err(|_| Fault::new("store.database", "trigger cleanup failed"))
+        })
+        .unwrap();
+
+    // Replaying the exact intent after the transient DB fault completes the same preparation.
+    storage.create_inactive_run(&intent).unwrap();
+    let final_state: (String, String, i64) = storage
+        .with_database(|connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT c.state,i.current_request_id,a.dispatch_started FROM session_catalog c JOIN cycle_initializations i USING(session_id) JOIN cycle_initialization_attempts a ON a.session_id=c.session_id WHERE c.session_id=?1",
+                    [&intent.header.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap())
+        })
+        .unwrap();
+    assert_eq!(
+        final_state,
+        (
+            "recovery-required".into(),
+            preparation.request_id.clone(),
+            0
+        )
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn preparation_rejects_unavailable_locale_schema_and_unbound_script_snapshots() {
+    let root = std::env::temp_dir().join(format!(
+        "aoidos-prepared-validation-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Storage::new(
+        &root,
+        Arc::new(Events::default()),
+        Arc::new(test_support::Events::default()),
+    );
+    let intent = prepared_intent();
+    let mut invalid_locale = intent.clone();
+    invalid_locale.preparation.as_mut().unwrap().input.locale = "fr".into();
+    let mut invalid_schema = intent.clone();
+    invalid_schema
+        .preparation
+        .as_mut()
+        .unwrap()
+        .input
+        .output_schema_version = 999;
+    let mut tampered_script = intent.clone();
+    tampered_script
+        .preparation
+        .as_mut()
+        .unwrap()
+        .input
+        .script_snapshot[0] ^= 1;
+
+    for candidate in [&invalid_locale, &invalid_schema, &tampered_script] {
+        assert_eq!(
+            storage.create_inactive_run(candidate).unwrap_err().code,
+            "app.bad-request"
+        );
+    }
+    let journal_rows: i64 = storage
+        .with_database(|connection| {
+            Ok(connection
+                .query_row("SELECT count(*) FROM session_creation_ops", [], |row| {
+                    row.get(0)
+                })
+                .unwrap())
+        })
+        .unwrap();
+    assert_eq!(
+        journal_rows, 0,
+        "invalid preparations must fail before journaling or writing a record"
+    );
+    assert!(
+        !root
+            .join(format!(
+                "workspaces/{}/transcript/{}.jsonl",
+                intent.header.script_id, intent.header.session_id
+            ))
+            .exists()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn inactive_creation_rejects_a_tampered_identity_snapshot_before_writing_any_file() {
     let root =
         std::env::temp_dir().join(format!("aoidos-inactive-tampered-{}", uuid::Uuid::new_v4()));
@@ -204,6 +493,7 @@ fn inactive_creation_rejects_a_tampered_identity_snapshot_before_writing_any_fil
         operation_id: uuid::Uuid::new_v4().to_string(),
         header: original.clone(),
         profile: test_profile(),
+        preparation: None,
     };
     storage
         .with_database(|connection| {
@@ -262,7 +552,7 @@ fn inactive_creation_rejects_a_tampered_identity_snapshot_before_writing_any_fil
 }
 
 #[test]
-fn creation_journal_migration_appends_after_the_previous_storage_version() {
+fn preparation_migration_appends_after_the_previous_storage_version() {
     let root =
         std::env::temp_dir().join(format!("aoidos-migration-append-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
@@ -270,7 +560,7 @@ fn creation_journal_migration_appends_after_the_previous_storage_version() {
     let previous_migrations = STORAGE_MIGRATIONS
         .iter()
         .copied()
-        .filter(|migration| *migration != crate::run_catalog::creation::MIGRATION)
+        .filter(|migration| *migration != crate::run_catalog::creation::PREPARATION_MIGRATION)
         .collect::<Vec<_>>();
     let migration = Migration::new(Arc::new(Events::default()));
     let old_connection = migration.open(&path, &previous_migrations).unwrap();
@@ -285,10 +575,18 @@ fn creation_journal_migration_appends_after_the_previous_storage_version() {
         1,
         "the existing database must already have applied the dispatch migration"
     );
+    let old_operation = uuid::Uuid::new_v4().to_string();
+    let old_session = uuid::Uuid::new_v4().to_string();
+    old_connection
+        .execute(
+            "INSERT INTO session_creation_ops(operation_id,session_id,script_id,header_snapshot,header_hash,profile_snapshot,profile_hash,state,created_at,updated_at) VALUES(?1,?2,'mistbell',x'7b7d',?3,x'7b7d',?3,'needs-repair','created','updated')",
+            rusqlite::params![old_operation, old_session, "0".repeat(64)],
+        )
+        .unwrap();
     assert_eq!(
         old_connection
             .query_row(
-                "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='session_creation_ops'",
+                "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='session_creation_preparations'",
                 [],
                 |row| row.get::<_, i64>(0),
             )
@@ -322,13 +620,21 @@ fn creation_journal_migration_appends_after_the_previous_storage_version() {
             assert_eq!(
                 connection
                     .query_row(
-                        "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='session_creation_ops'",
+                        "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='session_creation_preparations'",
                         [],
                         |row| row.get::<_, i64>(0),
                     )
                     .unwrap(),
                 1
             );
+            let preserved: (String, i64) = connection
+                .query_row(
+                    "SELECT state,(SELECT count(*) FROM session_creation_preparations WHERE operation_id=?1) FROM session_creation_ops WHERE operation_id=?1",
+                    [&old_operation],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(preserved, ("needs-repair".into(), 0));
             Ok(())
         })
         .unwrap();

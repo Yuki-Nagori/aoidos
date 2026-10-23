@@ -10,7 +10,8 @@
 
 ```text
 validated script + frozen profile / budget identity
-  → persist initializing run and physical request identity
+  → create a non-playable record/header and durable creation journal
+  → atomically persist recovery-required catalog + confirmed budget + frozen input + pending request identity
   → request a structured initialization snapshot
   → validate the complete response against registered schemas
   → atomically persist snapshot + hash and mark run playable
@@ -24,13 +25,13 @@ validated script + frozen profile / budget identity
 
 `session_catalog.state` 继续表示 profile、预算、账务对账和修复状态，不与初始化状态做笛卡尔组合。目录摘要可以单独返回初始化状态。普通 `open_target` / session owner 激活与只读恢复 profile 的路径分离：初始化未完成时，普通 owner、行动、普通模型请求及回合恢复都必须拒绝；初始化专用读取只返回已冻结的 profile、剧本输入和明确的初始化 attempt，不提供普通回合能力。服务端的门禁必须覆盖 `Product::open`、`open_selected`、CLI/TUI、已注册 coordinator 和 `ProfileFactory` 的普通冻结入口，不能只靠前端按钮隐藏。
 
-新局创建前先完成 profile、模型能力、双币预算和脚本输入预检；预算尚未配置时，应在创建 run / 产生任何物理请求之前要求用户设置并确认，不创建一个无法继续的半成品 run。初始化专用 `aoidos_llm::schedule::run_generation_once_with_output` 接收已持久化的规范 UUID `requestId`，并强制 `transport_retries=0`、温度 ladder 置空、`max_requests=1`；预算预留、Provider 调用和费用结算沿用同一 requestId。该接口只提供“每次调用最多一个物理请求”的调度原语，不保证相同身份的重复 / 并发调用幂等；调用方须先持久化并原子领取初始化 attempt，防止同一 attempt 被重复派发，重启时将已开始或 unknown 的请求转入恢复而非再次调用。调用方也负责失败 / unknown 状态恢复。玩家显式重试沿用原 run / profile / budget，分配新 requestId，旧 attempt 与费用记录保留。
+新局创建前先完成 profile、模型能力、双币预算和脚本输入预检；预算尚未配置时，应在创建 run / 产生任何物理请求之前要求用户设置并确认，不创建一个无法继续的半成品 run。创建 journal 现在可携带版本化初始化准备快照：它冻结 script body、entity manifest、cycle-input 原始字节及 hash 所绑定的 script revision；只接受当前 locale (`zh-Hans` / `en`)、prompt version `init-v1` 与响应 schema version `2`。provider request 当前仅作为待后续 coordinator 验证的不可变草稿保存，不能据此直接 dispatch。先写 header-only record，再在单个 SQLite `IMMEDIATE` 事务中登记 `recovery-required` catalog、canonical billing runId、初始双币预算及审计、`cycle_initializations` 输入和未 dispatch attempt，并关闭创建 journal。该提交不注册 owner、不设置活动周目、不预留费用、不领取 dispatch 权，也不访问 Provider；旧 journal 没有准备快照时继续保留原恢复语义。此准备阶段尚未接入产品新局入口或 provider coordinator。初始化专用 `aoidos_llm::schedule::run_generation_once_with_output` 接收已持久化的规范 UUID `requestId`，并强制 `transport_retries=0`、温度 ladder 置空、`max_requests=1`；预算预留、Provider 调用和费用结算沿用同一 requestId。该接口只提供“每次调用最多一个物理请求”的调度原语，不保证相同身份的重复 / 并发调用幂等；调用方须先持久化并原子领取初始化 attempt，防止同一 attempt 被重复派发，重启时将已开始或 unknown 的请求转入恢复而非再次调用。调用方也负责失败 / unknown 状态恢复。玩家显式重试沿用原 run / profile / budget，分配新 requestId，旧 attempt 与费用记录保留。
 
 dispatch 围栏由初始化专用预算端口实现：它在单个 SQLite `IMMEDIATE` 事务内 CAS 领取当前 attempt 的 `dispatch_started` 权，并写入同一 `requestId` 的物理费用预留；价格、额度或结算队列校验失败时两者一起回滚。重复或并发提交同一身份无法再次领取，即使物理账本对相同预留幂等，也不能重新访问 Provider。只有事务提交确认后才可调用 one-shot scheduler。进程在权已领取后退出时，恢复按可能已发送处理，不自动重放；费用预留继续承担原有对账义务。显式 retry 创建新 requestId 和未领取 attempt。
 
 records 文件和 SQLite 不是同一事务。先创建不可玩的 record/header，再持久登记 canonical run、profile / 输入快照、预算身份和初始化状态；崩溃留下的未激活 record 必须可识别并恢复或显式放弃，不能被 legacy scanner 当作可玩旧局。物理请求身份和冻结输入必须在调用 Provider 前持久化。响应整体校验后，以同一 SQLite 事务 CAS 当前 run revision / requestId，保存规范化快照与 hash 并标记 `playable`；失败不得部分写入，也不得先注册普通 owner。成功冻结与 owner 注册之间若发生崩溃，恢复从冻结快照建立 owner，不再调用 Provider。
 
-首个创建阶段以 `session_creation_ops` 持久保存 operationId、session/header、公开 profile 快照及 hash。写入顺序为 intent → header-only transcript → 单个 SQLite 事务登记 `recovery-required` 目录行并结束创建 journal。每一步可按相同快照重放；应用启动会恢复未结束的 intent。创建 journal 持有的 sessionId 对 legacy scanner 是排除项，因此扫描即使先于目录登记，也不能将 header 导入成历史可玩周目。该阶段不注册 `Records` owner、不更改 `active_session`、不创建记忆 run / 预算、不预留费用或访问 Provider；只有后续初始化 coordinator 原子接好全部冻结身份和恢复门禁后，才能继续初始化与激活。
+首个创建阶段以 `session_creation_ops` 持久保存 operationId、session/header、公开 profile 快照及 hash；可选 `session_creation_preparations` 以有界、版本化内容保存初始化 requestId、完整 provider input、双币上限及校验 hash。写入顺序为 intent → header-only transcript → 单个 SQLite 事务登记目录、预算 / 审计、初始化快照 / pending attempt 并结束创建 journal。每一步可按完全相同快照重放；应用启动会恢复未结束的 intent。创建 journal 持有的 sessionId 对 legacy scanner 是排除项，因此扫描即使先于目录登记，也不能将 header 导入成历史可玩周目。该准备事务不注册 `Records` owner、不更改 `active_session`、不创建记忆 run、不预留费用、不领取 dispatch 权或访问 Provider；新迁移给旧 journal 保留“无初始化快照”的旧行为。只有后续初始化 coordinator 接好费用 dispatch、响应校验 / 冻结、恢复门禁和 owner 激活后，才能开放产品新局入口。
 
 持久化接口应由 engine 内的初始化 repository 提供 begin / load / prepare-attempt / finish-attempt / finalize 等窄操作；状态跃迁以 runId、requestId 和 revision 作 CAS，重复同结果调用幂等，冲突或旧身份拒绝。跨多表的预算与 attempt 原子写入需抽取 `BillingLedger` 的事务内 helper；不能把会自行开启 SQLite 事务的公开 API 嵌套进外层事务。首个存储契约提交可先只对测试显式构造的初始化 run 启用门禁；在所有入口具备恢复与预算设置能力前，不得切换现有新局入口。
 

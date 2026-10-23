@@ -25,7 +25,7 @@
 
 开局模型接收当前剧本文本、受限字段 schema、输出版本和应用 locale；不接收本局状态数值。一个有限的结构化响应同时包含最终目标、目标完成 / 未完成时可引用的标签 ID、标签说明和可见性、以白名单字段和比较运算符构成的规则、初始任务以及按需生成 NPC 资料。ID 与顺序由 engine 创建；响应必须整体通过大小 / 数量 / 文本 / locale / ID 唯一性 / 引用 / 互斥组 / 阈值 / 任务依赖等校验，任一字段无效就整体拒绝。
 
-当前实现仍处于分阶段建设：engine 中的纯输出校验器覆盖目标、标签、规则、初始任务，并按可信 `cycle-input` 选择并冻结固定 guide，或在没有固定 guide 时校验完整生成 guide 档案并派生 run-local ID。它仍未补齐所有其他剧情角色档案，不访问账本或 Provider，也不会把 run 转为 playable。此投影不得被误用作完整初始化快照；接入新局入口前须补齐全部必需产物并在同一可信初始化流程中校验、冻结。
+当前实现仍处于分阶段建设：engine 中的纯输出校验器覆盖目标、标签、规则、初始任务，并按可信 `cycle-input-v2.json` 的 `storyCharacterIds` 精确补齐并冻结所有缺少固定资料的剧情角色；它同时选择并冻结固定 guide，或在没有固定 guide 时校验完整生成 guide 档案并派生 run-local ID。它仍不接入可信实体注册、账本或 Provider，也不会把 run 转为 playable。此投影不得被误用作完整初始化快照；接入新局入口前须补齐全部必需产物并在同一可信初始化流程中校验、冻结。
 
 冻结快照绑定 runId、schema / prompt / locale 版本、scriptId / scriptRevision、输入 schema hash、profile revision、物理 requestId、标准化完整输出及其 hash。预算与 run 身份在发请求前保存；成功结果只在一个 SQLite 事务中从 initializing 进入 playable。未知或失败保留原费用记录和待处理义务；显式 retry 使用新 requestId，不能重复创建 run / 预算。放弃初始化只停止该 run 并保留费用审计；玩家显式确认完整删除时，沿既有删除 journal 清理该局全部本地数据，包括未结请求和结算 outbox，仍须校验账务身份范围。
 

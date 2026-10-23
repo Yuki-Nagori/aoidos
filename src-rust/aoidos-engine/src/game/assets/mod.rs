@@ -151,6 +151,36 @@ pub(crate) fn cycle_input(id: &str) -> Result<CycleInputManifest, Fault> {
     validate_character_profiles(&input, &directory)?;
     Ok(input)
 }
+/// Captures the exact resources a new initialization must later validate against.
+#[cfg(test)]
+pub(crate) struct InitializationAssetSnapshots {
+    pub(crate) script: Vec<u8>,
+    pub(crate) entities: Vec<u8>,
+    pub(crate) cycle_input: Vec<u8>,
+}
+#[cfg(test)]
+pub(crate) fn initialization_asset_snapshots(
+    id: &str,
+    expected_revision: &str,
+) -> Result<InitializationAssetSnapshots, Fault> {
+    let raw = find(id)?;
+    let directory = entity_directory_from_raw(raw)?;
+    if directory.script_revision() != expected_revision {
+        return Err(invalid_cycle_input());
+    }
+    validate_frozen_initialization_assets(
+        id,
+        expected_revision,
+        raw.body,
+        raw.entities,
+        raw.cycle_input,
+    )?;
+    Ok(InitializationAssetSnapshots {
+        script: raw.body.to_vec(),
+        entities: raw.entities.to_vec(),
+        cycle_input: raw.cycle_input.to_vec(),
+    })
+}
 /// 测试读取与指定剧本配套的原始实体清单字节。
 #[cfg(test)]
 pub(crate) fn entity_manifest_snapshot(id: &str) -> Result<Vec<u8>, Fault> {
@@ -437,6 +467,37 @@ pub(crate) fn validate_cycle_input_snapshot(
         .map(|entity| entity.id)
         .collect();
     Ok((input, entity_ids))
+}
+/// Verifies frozen initialization resources without consulting the currently installed script.
+pub(crate) fn validate_frozen_initialization_assets(
+    script_id: &str,
+    expected_revision: &str,
+    body: &[u8],
+    entity_snapshot: &[u8],
+    cycle_input_snapshot: &[u8],
+) -> Result<(), Fault> {
+    if !aoidos_script::valid_id(script_id) || !crate::record::format::valid_hash(expected_revision)
+    {
+        return Err(invalid_cycle_input());
+    }
+    let manifest = decode_entity_manifest(entity_snapshot)?;
+    let (input, _) = validate_cycle_input_snapshot(cycle_input_snapshot, entity_snapshot)?;
+    // New initialization snapshots must use the current cycle-input schema. Historical v1
+    // inputs remain readable through the compatibility path, but cannot seed new runs.
+    if input.version != 2 {
+        return Err(invalid_cycle_input());
+    }
+    let computed = script_revision(
+        body,
+        entity_snapshot,
+        cycle_input_snapshot,
+        manifest.revision,
+        input.revision,
+    );
+    if computed != expected_revision {
+        return Err(invalid_cycle_input());
+    }
+    Ok(())
 }
 fn invalid_profile_text(value: &str) -> bool {
     value.trim().is_empty() || value.len() > 4096 || value.chars().any(char::is_control)

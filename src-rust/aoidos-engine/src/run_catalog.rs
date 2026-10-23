@@ -112,7 +112,9 @@ pub(crate) mod legacy_scan;
 pub use legacy_scan::LegacyScanResult;
 pub(crate) mod creation;
 mod deletion;
-pub use creation::{InactiveRunCreation, InactiveRunIntent};
+pub use creation::{
+    FrozenInitializationInput, InactiveRunCreation, InactiveRunIntent, InitializationPreparation,
+};
 pub(crate) use creation::{
     begin_inactive_creation, complete_inactive_creation, mark_inactive_record_created,
     pending_inactive_creations,
@@ -1031,6 +1033,7 @@ pub fn verify(connection: &rusqlite::Connection) -> Result<(), StoreError> {
     for statement in SCHEMA
         .split(';')
         .chain(creation::MIGRATION.split(';'))
+        .chain(creation::PREPARATION_MIGRATION.split(';'))
         .map(str::trim)
         .filter(|sql| sql.starts_with("CREATE "))
     {
@@ -1181,6 +1184,9 @@ mod tests {
             .unwrap();
         connection.execute_batch(SCHEMA).unwrap();
         connection.execute_batch(creation::MIGRATION).unwrap();
+        connection
+            .execute_batch(creation::PREPARATION_MIGRATION)
+            .unwrap();
         connection
             .execute_batch(DELETION_CLEANUP_MIGRATION)
             .unwrap();

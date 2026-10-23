@@ -33,7 +33,7 @@
 
 将剧本固定角色表示为 `cycle-input-vN.json` 中的资料，并以 `characterId` 引用实体目录中的 Character。v2 另以 `storyCharacterIds` 明确登记本周目剧情角色；角色 `truth` 是规范个人真值，`initialKnowledge` 表示该角色初始知道哪些真值字段，`presentation` 是角色在玩家交互中的表面资料；它们不能互相覆盖。每个有剧情作用的角色（主角和配角）都必须有 run-scoped 个人档案；作者没有固定主角档案时，开局生成并冻结，不将操作者的控制身份当作角色全知。固定 guide 不能同时是玩家操控的主角。只有 `isGuide: true` 才选为固定引导者；未标记或 `false` 的资料不自动担任引导者，零个固定引导者时由 LLM 生成，多个标记则拒绝剧本。不得运行时搜索正文或让模型猜测人选。资料不随应用 locale 改变，也不授予角色场景在场、真实关系或额外获知权限；这些由可信初始化路径显式处理。开场职责与当前叙事关系分别使用 `openingRole`、`openingRelationship`，不写入永久世界关系。无固定角色时，开局生成 NPC 资料，内部 ID 由引擎创建，并与剧本版本一起冻结为本周目身份。固定和生成角色都必须由可信初始化路径加入初始场景 / 实体注册，不能仅凭对白创建世界实体；脚本固定实体、生成角色与 [045 场景在场与可信获知事件](045-scene-presence-dialogue-impl.md) 的授权和来源边界需保持一致。
 
-主角创建由剧本自己的、版本化的模板决定，不设全局统一的玩家档案问卷。模板可提供完整固定主角，也可针对姓名、性别、年龄、技能、性格等字段配置有限选项或受约束的自定义输入，并支持固定与自定义混合。玩家选择 / 输入经可信代码校验后以 `player-authored` 来源合入主角真值并冻结；开局 LLM 不得代选或改写。模板需明确可见与隐藏字段、允许值、默认项和来源，保证创建 UI 只显示获准字段。此能力不属于当前 cycle-input v1，须通过后续 schema revision 与 run-local 主角身份注册实现，不得将输入混装进 NPC 资料或用 LLM 生成替代玩家自定义。
+主角创建由剧本自己的、版本化的模板决定，不设全局统一的玩家档案问卷。模板可提供完整固定主角，也可针对姓名、性别、年龄、技能、性格等字段配置有限选项或受约束的自定义输入，并支持固定与自定义混合。玩家选择 / 输入经可信代码校验后以 `player-authored` 来源合入主角真值并冻结；开局 LLM 不得代选或改写。模板需明确可见与隐藏字段、允许值、默认项和来源，保证创建 UI 只显示获准字段。此能力不属于当前 cycle-input v2，须通过后续 schema revision 与 run-local 主角身份注册实现，不得将输入混装进 NPC 资料或用 LLM 生成替代玩家自定义。
 
 开局目标与 UI 任务属于引导状态，不是新的世界事实或终局判定器。最终目标应描述本周目的核心方向，并在结构化快照中声明可由哪些生成标签表示达成、未达成或未定；这些标签的状态仍由引擎根据已提交事实和冻结规则判定。主线目标文本、NPC 交代和任务栏都来自同一份冻结的初始化结果，NPC 对白可以润色但不能改变目标含义。仅当 `endingResolved` 已 applied，任务栏才依据冻结结果把主线标为已达成或未达成；LLM 不能直接完成主线。普通 / 连续任务可以帮助玩家分解过程，但任务自身的完成、未完成或模型措辞不得独立结束周目。
 
@@ -87,6 +87,10 @@
 
 2026-10-24 创建 journal 切片：新增 `session_creation_ops` 保存不可变 operation、header / profile 快照和 hash；通过 header-only inactive record 写入、恢复时幂等补齐 `recovery-required` 目录行。legacy scanner 排除所有 journal 所有的 sessionId。该接口刻意不创建普通 owner、memory run、预算 / 费用预留或 Provider 请求，也尚未切换产品新局入口。恢复窗口和重复创建测试已通过；后续仍需与初始化输入、预算、物理 attempt 和完成后 owner 激活串成一个可恢复 coordinator。
 
+2026-10-24 初始化准备切片：`session_creation_preparations` 保存版本化、限长的冻结 script body / entity manifest / cycle-input 快照、profile / script revision 绑定、requestId 和用户确认的双币预算。provider request body 作为不可变草稿保存，但在专用 coordinator 完成协议校验前不得 dispatch；locale、prompt version 和输出 schema version 限定为当前实现值。header-only record 写入后，单个 SQLite `IMMEDIATE` 事务登记 `recovery-required` catalog、canonical billing runId、预算及审计、initializing 快照和 pending attempt，再关闭创建 journal；事务故意不 dispatch、不预留费用、不创建 owner / memory run、不激活周目。旧 journal 经新迁移后仍无 preparation，保留原恢复语义。精确重启重放、无效快照拒绝与 attempt 插入故障注入证明幂等和跨表回滚；该切片尚未接入 Provider / 账本 dispatch coordinator 或产品新局入口。
+
+同日独立只读评审指出原草稿没有随 run 冻结可独立校验的 cycle-input / entity 资源，且 locale / schema 只做了宽松格式检查；按建议补齐脚本原始快照与 script revision 重算校验，将 locale 限定为当前支持的两种、prompt 固定为 `init-v1`、输出 schema 固定为 `2`，并明确草稿不能 dispatch。评审建议的注册后实际 product open / provider gate 仍由现有 `require_playable` 门禁覆盖；准备测试现已明确断言 initializing preparation 被拒绝。独立评审未发现事务原子性、旧 journal 恢复或误开放 playable 的阻断问题。
+
 ## 风险与回退
 
 开局生成的规则、最终目标、任务初始态和生成 NPC 都是本周目的不可变初始化输入；剧本、模型、提示词或 schema 更新不能漂移既有周目。模型可能产出结构合法但语义不合理的目标 / 标签，因此要把可验证规则限制为白名单状态比较，并在发布前用剧本样例验收可达性和叙事一致性。任务提议属于可回退的引导投影，不升级为正史；如果模型把任务标记错误，修复只能提交新的有效分支任务状态，不得改写旧提交记录。生成或存储失败时保留不可玩初始化状态与费用义务，提供明确恢复 / 放弃路径；不能通过旧流程静默绕过最终目标。
@@ -107,6 +111,7 @@
 - 2026-10-24：任务栏视觉与状态流对齐 `aoidos-art` commit `9df5c5c1f4562c2887ffc9b2043ee5f87a6e35fd`，覆盖展开 / 紧凑摘要、主线置顶、任务链、已完成折叠、旧周目空态、开局引导、回退和结局状态；状态内容由 engine 冻结数据驱动。
 - 2026-10-23：继 #215 后继续实现 dispatch 围栏：初始化 attempt 增加持久 `dispatch_started` CAS；初始化预算端口在一次 SQLite `IMMEDIATE` 事务中领取该权并登记同 requestId 的费用预留，避免账本预留的幂等语义意外授权 Provider 重放。当前只完成围栏与事务内 reserve 原语及 focused test；尚未接入完整开局 coordinator、record 创建 journal、初始化恢复流程或产品新局入口，不能启用新流程。
 - 2026-10-23：登记 `cycle-input-v1.json` 并由 engine 严格验证版本、字段数量 / 类型 / 范围 / 比较符、已注册来源及固定 Character 引用；固定角色显式标注 `isGuide: true`，角色档案拆分真值、初始认知、对外呈现和开场职责。每个剧情角色含主角需在 run 冻结资料中有个人档案；无作者固定档案时由开局初始化补齐。Mistbell 固定使用已登记的洛苇，并显式绑定主角实体；不改正文原始字节，避免历史 v1 script revision 变化。唯一已接入状态源从当前有效历史分支派生已结算的角色内回合数，空历史时值缺失。新 script revision 纳入输入资源和修订；旧 v1 revision 仍能重建原实体目录。完整开局请求、不可玩初始化账本和目标 / 标签快照仍待实现。
+- 2026-10-24：继续初始化准备事务切片，并按 #223 同步角色档案 / 结局架构 / 本任务文档的 v2 语义。新 preparation 只接受 `cycle-input-v2.json`，历史 v1 仍可恢复旧 script revision；新增匹配历史 hash 的 v1 拒绝测试。当前资源已采用显式 `cycle-input-v1.json` / `cycle-input-v2.json` 文件名，代码无无版本 `cycle-input.json` 引用。#219 所需 crate 清单、更新日期和 JSON 共用能力锚点已在基线解决。
 
 ## 完成摘要
 

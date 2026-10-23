@@ -1904,11 +1904,32 @@ impl BillingLedger {
         expected_revision: Option<u64>,
         updated_at: &str,
     ) -> Result<BudgetSettings, BillingError> {
-        validate_text(run_id, 128)?;
-        validate_text(updated_at, 64)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
+        let settings = Self::set_settings_in_transaction(
+            &transaction,
+            run_id,
+            cny_limit,
+            usd_limit,
+            expected_revision,
+            updated_at,
+        )?;
+        transaction.commit().map_err(storage)?;
+        Ok(settings)
+    }
+
+    /// Writes normal mutable run settings inside a transaction owned by a coordinating workflow.
+    pub(crate) fn set_settings_in_transaction(
+        transaction: &Transaction<'_>,
+        run_id: &str,
+        cny_limit: NanoMoney,
+        usd_limit: NanoMoney,
+        expected_revision: Option<u64>,
+        updated_at: &str,
+    ) -> Result<BudgetSettings, BillingError> {
+        validate_text(run_id, 128)?;
+        validate_text(updated_at, 64)?;
         let current: Option<(i64, i64, i64)> = transaction
             .query_row(
                 "SELECT cny_limit_nanos, usd_limit_nanos, revision FROM billing_run_budgets WHERE run_id=?1",
@@ -1934,7 +1955,7 @@ impl BillingLedger {
             )
             .map_err(storage)?;
         insert_audit(
-            &transaction,
+            transaction,
             &format!("settings:{run_id}:{next_revision}"),
             "run-budget-update",
             run_id,
@@ -1947,15 +1968,66 @@ impl BillingLedger {
             updated_at,
         )?;
         for (currency, cap) in [(Currency::Cny, cny_limit), (Currency::Usd, usd_limit)] {
-            maybe_warn(&transaction, run_id, currency, cap, updated_at)?;
+            maybe_warn(transaction, run_id, currency, cap, updated_at)?;
         }
-        bump_revision(&transaction)?;
-        transaction.commit().map_err(storage)?;
+        bump_revision(transaction)?;
         Ok(BudgetSettings {
             run_id: run_id.to_owned(),
             cny_limit,
             usd_limit,
             revision: next_revision,
+        })
+    }
+
+    /// Creates the first confirmed budget as part of the inactive initialization transaction.
+    /// Existing budget or ledger state is a conflict; this path never overwrites user data.
+    pub(crate) fn initialize_settings_in_transaction(
+        transaction: &Transaction<'_>,
+        run_id: &str,
+        cny_limit: NanoMoney,
+        usd_limit: NanoMoney,
+        updated_at: &str,
+    ) -> Result<BudgetSettings, BillingError> {
+        validate_text(run_id, 128)?;
+        validate_text(updated_at, 64)?;
+        let configured: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM billing_run_budgets WHERE run_id=?1)",
+                [run_id],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        if configured || Self::has_run_scope_data(transaction, run_id)? {
+            return Err(BillingError::Conflict);
+        }
+        transaction
+            .execute(
+                "INSERT INTO billing_run_budgets(run_id,cny_limit_nanos,usd_limit_nanos,revision,updated_at) VALUES(?1,?2,?3,1,?4)",
+                params![run_id, cny_limit.nanos(), usd_limit.nanos(), updated_at],
+            )
+            .map_err(storage)?;
+        insert_audit(
+            transaction,
+            &format!("settings:{run_id}:1"),
+            "run-budget-update",
+            run_id,
+            &serde_json::json!({
+                "revision": 1,
+                "cnyLimit": cny_limit.to_decimal_string(),
+                "usdLimit": usd_limit.to_decimal_string(),
+            })
+            .to_string(),
+            updated_at,
+        )?;
+        for (currency, cap) in [(Currency::Cny, cny_limit), (Currency::Usd, usd_limit)] {
+            maybe_warn(transaction, run_id, currency, cap, updated_at)?;
+        }
+        bump_revision(transaction)?;
+        Ok(BudgetSettings {
+            run_id: run_id.to_owned(),
+            cny_limit,
+            usd_limit,
+            revision: 1,
         })
     }
 
