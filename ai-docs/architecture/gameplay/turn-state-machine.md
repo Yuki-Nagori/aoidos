@@ -1,8 +1,8 @@
 # 回合与阶段状态机
 
-更新日期：2026-10-19。[task 012](../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/aoidos/issues/10)，实现由 [023](../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](ipc-contract.md)为准。LLM 请求策略归 [005](llm.md)，记录持久化及世界状态双写归 [006](record-engine.md)。
+更新日期：2026-10-19。[task 012](../../task/012-turn-state-machine-design.md) 的设计定稿，承接 [issue #10](https://github.com/Yuki-Nagori/aoidos/issues/10)，实现由 [023](../../task/023-turn-state-machine-impl.md) 承接，已实现并验收。本文维护转移、判定与恢复规则；精确 IPC 类型以[通信契约](../core/ipc-contract.md)为准。LLM 请求策略归 [005](../ai/llm.md)，记录持久化及世界状态双写归 [006](../data/record-engine.md)。
 
-实现位于 `aoidos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](README.md#阶段机基础链路)，验证证据见 [023](../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
+实现位于 `aoidos-engine::game`，串行 actor 通过共享协调器执行记录、生成、判定与恢复，Tauri 适配八个产品命令。前端阶段消费与恢复链路见[架构总览](../README.md#阶段机基础链路)，验证证据见 [023](../../task/023-turn-state-machine-impl.md)。世界 / 请求端口由可信 Rust 域初始化，实际剧本与界面接线由 024 / 025 承接。
 
 ## 边界与身份
 
@@ -141,7 +141,7 @@ dice 包含 `planId`、`rng`、`modifiers`；check 包含 `planId`，result 包�
 
 sceneAdvanced / sessionEnded 的世界变更只允许对应注册类型，沿用 006 mutationId / applied 协议；上述表不建立世界属性 schema。completedSteps 固定来自 proposal / check / narration / settlement / advance，不接收模型任意字符串；它是派生的审计摘要，读取时与对应记录引用核验，不能单靠它越过缺失事实。恢复 roundAccepted 的 target 沿用检查点，profile 是新操作冻结值。
 
-`endingResolved` 只在 enabled run 的 `sessionEnded` 已 applied 后追加；同一终局锚点及冻结规则恢复出同一 resolutionId。无规则 sidecar 的新 run 与缺少 endingMode 的旧 run 保持原有 sessionEnded 终态，不进入结局解析补交流程。完整规则冻结、结束摘要及恢复顺序见[结局架构](ending-flow.md)。
+`endingResolved` 只在 enabled run 的 `sessionEnded` 已 applied 后追加；同一终局锚点及冻结规则恢复出同一 resolutionId。无规则 sidecar 的新 run 与缺少 endingMode 的旧 run 保持原有 sessionEnded 终态，不进入结局解析补交流程。完整规则冻结、结束摘要及恢复顺序见[结局架构](cycle/ending-flow.md)。
 
 054 / 056 另行登记 `endingResolved` system.code，仅用于 `endingMode=enabled`；data 固定包含 resolutionId、terminal anchor、冻结 rule / tag provenance、公开事实、summaryLocale、模板版本、规范摘要与 summaryHash，AI 叙事不写入此记录。
 
@@ -237,7 +237,7 @@ SceneCatalog 是可信剧本注册域；023 负责交付 SceneRuleView 及登记
 
 ## IPC、错误与消费
 
-engine_get_phase 可独立重绘阶段、场景、活动 round / 可公开 turn、暂停检查点、最近 operation 结果；正文从 llm_get_turn / 记录 view 获取，不把整份历史放阶段快照。精确字段、命令、阶段 / 场景 / 操作终态四个事件见[通信契约](ipc-contract.md)。内部提议省略 inFlight.turnId。启动公开叙事时先创建可读的空 turn 快照，再确认 inFlight.turnId 并发 engine:phase:changed，之后才启动网络流；即使 phase 未变也须通知。前端收到身份后按 021 的“先订阅、再快照”流程接入正文。
+engine_get_phase 可独立重绘阶段、场景、活动 round / 可公开 turn、暂停检查点、最近 operation 结果；正文从 llm_get_turn / 记录 view 获取，不把整份历史放阶段快照。精确字段、命令、阶段 / 场景 / 操作终态四个事件见[通信契约](../core/ipc-contract.md)。内部提议省略 inFlight.turnId。启动公开叙事时先创建可读的空 turn 快照，再确认 inFlight.turnId 并发 engine:phase:changed，之后才启动网络流；即使 phase 未变也须通知。前端收到身份后按 021 的“先订阅、再快照”流程接入正文。
 
 phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件单调递增；各事件 seq 仍独立计数，不能用 revision 替代缺口检测。scene 变更与对应阶段变更在一次短临界区确认，同一 revision 可以出现在不同事件名；快照原子读状态与四基线。stateEpoch 为打开 session 的新 UUID，重开改变，旧响应不能覆盖新 epoch。发布顺序仍为准备 / 预留 → 提交事实 / applied → 确认状态与基线 → 投递；阶段的纯内存转移无新事实时直接确认再投递。投递失败不回滚事实、不启动新请求。
 
@@ -247,7 +247,7 @@ phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件
 
 ## 周目结局边界（054 已定稿，056 待实现）
 
-结局规则快照在新周目进入可玩状态前由 engine 校验并冻结；终局触发是独立于五个对话 phase 的生命周期事件，不增加第六种回合 phase。engine 仅在可信终局条件已提交后，按该周目锁定的规则对已提交隐藏状态求值，冻结标签和规范事实摘要。恢复、历史回退和重试沿用原规则快照与终局锚点，不因剧本更新重新计算；AI 叙事失败不撤销权威终态。实现状态、事件与失败恢复由 [054 / 056](ending-flow.md) 及对应 task 定义。
+结局规则快照在新周目进入可玩状态前由 engine 校验并冻结；终局触发是独立于五个对话 phase 的生命周期事件，不增加第六种回合 phase。engine 仅在可信终局条件已提交后，按该周目锁定的规则对已提交隐藏状态求值，冻结标签和规范事实摘要。恢复、历史回退和重试沿用原规则快照与终局锚点，不因剧本更新重新计算；AI 叙事失败不撤销权威终态。实现状态、事件与失败恢复由 [054 / 056](cycle/ending-flow.md) 及对应 task 定义。
 
 ## 对接与实现验收
 
@@ -260,7 +260,7 @@ phaseRevision 是本次打开 session 的确认状态修订号，跨四种事件
 | 023 → 032         | 交付 SceneRuleView / SceneRuleMatch 的只读内部端口；032 维护派生计数及提示，不反向改场景条件                        |
 | src-tauri → 前端  | 适配普通载荷发 main 窗口，TS 与 Rust 同型；025 按 008 设计区分骰判行、正文、暂停恢复与脱敏失败                      |
 
-007 的[工程协议 v1](memory.md)要求 completed 钩子只幂等登记素材与逻辑时钟；当前 032 / 033 已将场内完成事件接入本地持久恢复队列，幂等更新逻辑时钟和节点进度。历史分叉若保留尚未消费的完成事件，只补记有效来源对应的逻辑时钟，不把旧修订的节点进度写入新分支。033 的 engine / IPC 已提供场景提示入口，TypeScript 与界面也已接入；玩家显式请求时重新读取当前场景和 applied 世界，求值登记条件并领取固定提示，不轮询、不调用模型。内置场景尚无提示规则，因此实际提示要等剧本登记后才会显示。显式记忆批次（收集、冻结、发送与完成）及候选操作已由 033 接入；生产参数、真实样本和长对局验收仍待完成。收费处理仍须在回合释放 lease 后作为独立授权批次运行，保持本回合最多三个逻辑调用。记忆回退 / 恢复依赖本节有效路径和记录回执，不把后台候选直接送入阶段 reducer。
+007 的[工程协议 v1](../data/memory.md)要求 completed 钩子只幂等登记素材与逻辑时钟；当前 032 / 033 已将场内完成事件接入本地持久恢复队列，幂等更新逻辑时钟和节点进度。历史分叉若保留尚未消费的完成事件，只补记有效来源对应的逻辑时钟，不把旧修订的节点进度写入新分支。033 的 engine / IPC 已提供场景提示入口，TypeScript 与界面也已接入；玩家显式请求时重新读取当前场景和 applied 世界，求值登记条件并领取固定提示，不轮询、不调用模型。内置场景尚无提示规则，因此实际提示要等剧本登记后才会显示。显式记忆批次（收集、冻结、发送与完成）及候选操作已由 033 接入；生产参数、真实样本和长对局验收仍待完成。收费处理仍须在回合释放 lease 后作为独立授权批次运行，保持本回合最多三个逻辑调用。记忆回退 / 恢复依赖本节有效路径和记录回执，不把后台候选直接送入阶段 reducer。
 
 023 用表驱动测试全部合法 / 非法转移，专项覆盖以下边界：
 

@@ -13,7 +13,7 @@
 
 ## 必读
 
-[阶段机](../architecture/turn-state-machine.md)、[存储](../architecture/storage.md)、[职责边界](../architecture/ts-rust-boundary.md)、[测试](../standards/testing.md)、[提交](../standards/commits.md)。
+[阶段机](../architecture/gameplay/turn-state-machine.md)、[存储](../architecture/data/storage.md)、[职责边界](../architecture/core/ts-rust-boundary.md)、[测试](../standards/testing.md)、[提交](../standards/commits.md)。
 
 ## 前置与实施
 

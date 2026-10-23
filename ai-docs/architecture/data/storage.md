@@ -1,6 +1,6 @@
 # 存储与文件基建
 
-更新日期：2026-10-22。设计稿 v1（[task 011](../task/011-storage-design.md) 已定稿，[task 013](../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；032 增加轮回刻痕来源与节点进度 / 提示迁移；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。周目目录与删除协议由 [059](../task/059-run-management-design.md) 定稿，060 已实现。导入导出另行推进。工程纪律见[职责边界](ts-rust-boundary.md)。
+更新日期：2026-10-22。设计稿 v1（[task 011](../../task/011-storage-design.md) 已定稿，[task 013](../../task/013-storage-impl.md) 已实现存储基建）。对话记录、受控追加与 UI 偏好已由 022 实现；034 将语言偏好表并入 engine 的共享 SQLite 迁移；029 已实现记忆 manifest / 正文存储与恢复，030 接入批次状态；032 增加轮回刻痕来源与节点进度 / 提示迁移；043 将权威实体身份及 applied 回执放入共享 SQLite，并从 JSONL 因果记录恢复。周目目录与删除协议由 [059](../../task/059-run-management-design.md) 定稿，060 已实现。导入导出另行推进。工程纪律见[职责边界](../core/ts-rust-boundary.md)。
 
 ## 选型决策
 
@@ -11,7 +11,7 @@
 | 对局记录（JSONL，append-only）            | 文件                    | 天然顺序写读，崩溃恢复语义简单（截到上一完整行）；导出 / 同步就是拷文件 |
 | 记忆 manifest、世界状态、剧本库索引       | SQLite                  | 需要查询、聚合、事务与部分更新                                          |
 | 剧本包资产（立绘 / theme.css / 设定文本） | 文件（只读）            | 随剧本包分发，不进库                                                    |
-| 密钥                                      | OS 凭据库，否则私有文件 | 不落 SQLite；权限与 hint 见[通信契约](ipc-contract.md)                  |
+| 密钥                                      | OS 凭据库，否则私有文件 | 不落 SQLite；权限与 hint 见[通信契约](../core/ipc-contract.md)          |
 
 决策依据：rusqlite（bundled feature，免系统依赖）+ 手写迁移，不引 ORM / 查询构建器——桌面单机规模下重量依赖只有成本。**翻转条件**：当记录需要随机访问查询（跨局检索）时，把记录索引进 SQLite（FTS），记录文件本身仍是事实源——文件格式不变，迁移只加索引。
 
@@ -52,7 +52,7 @@ CREATE TABLE point_allocations (
 - Schema 迁移：`PRAGMA user_version` + 按版本号排列的内嵌 SQL 切片；每次迁移用 IMMEDIATE 事务，执行或提交失败由 RAII 回滚，`user_version` 与 schema 同事务推进。SQL 不得自行 BEGIN / COMMIT / ROLLBACK；每个迁移配套回填测试。
 - 业务 crate 不依赖 tauri：数据根路径由装配层（src-tauri）解析后注入。
 
-`current_version` 使用 READ_ONLY 打开读取已持久化版本，缺失库或父目录为 0，不创建数据目录 / 库。缺失分支检查现存祖先是否为目录，避免 Windows 把文件挡住父路径的 NotFound 当成新安装。读取与迁移打开共用路径归一化和 busy 预算。`open_with_progress` 在每步事务提交成功后回调 `{ from, to }`，失败步骤不回调；之前成功步骤不撤销，无需迁移时无回调。回调是同步纯数据出口，迁移事件 / 运行期快照协议见[记录引擎](record-engine.md)与[通信契约](ipc-contract.md)，命令层发送及状态保存由 [022](../task/022-record-engine-impl.md) 按 006 定稿协议落地。备份的 IPC 字段与限制统一见[通信契约](ipc-contract.md)。
+`current_version` 使用 READ_ONLY 打开读取已持久化版本，缺失库或父目录为 0，不创建数据目录 / 库。缺失分支检查现存祖先是否为目录，避免 Windows 把文件挡住父路径的 NotFound 当成新安装。读取与迁移打开共用路径归一化和 busy 预算。`open_with_progress` 在每步事务提交成功后回调 `{ from, to }`，失败步骤不回调；之前成功步骤不撤销，无需迁移时无回调。回调是同步纯数据出口，迁移事件 / 运行期快照协议见[记录引擎](record-engine.md)与[通信契约](../core/ipc-contract.md)，命令层发送及状态保存由 [022](../../task/022-record-engine-impl.md) 按 006 定稿协议落地。备份的 IPC 字段与限制统一见[通信契约](../core/ipc-contract.md)。
 
 ## 目录与路径规范
 
@@ -81,7 +81,7 @@ CREATE TABLE point_allocations (
     └── storage-v<N>-<stamp>.sqlite  # SQLite 迁移备份；最近 3 份
 ```
 
-`script-id` 是剧本注册时冻结的权威身份，遵循[剧本格式规范](../standards/scenarios.md)的合法值约束，不由显示标题重新消毒、截断或静默改名。`script_id_from_name` 只供尚未冻结身份的命名候选使用；已登记资源与存档路径必须验证原身份。
+`script-id` 是剧本注册时冻结的权威身份，遵循[剧本格式规范](../../standards/scenarios.md)的合法值约束，不由显示标题重新消毒、截断或静默改名。`script_id_from_name` 只供尚未冻结身份的命名候选使用；已登记资源与存档路径必须验证原身份。
 
 - **路径规则**：装配层注入系统数据根，业务相对路径由 `join_under_root` 拼装——拒绝 `..`、分隔符、盘符，消毒 Windows 非法字符与保留名。该工具只校验组件文本，不解析符号链接；数据根及子目录必须由应用控制。不可信剧本包的完整解包防护与 Windows 长路径前缀尚未实现。`normalize` 只在 Windows 转换正斜杠，保留操作系统原始编码；Unix 反斜杠是合法文件名字符。
 
@@ -100,7 +100,7 @@ CREATE TABLE point_allocations (
 ## 原子写工具（全仓唯一实现）
 
 - API：`write_atomic(path, bytes)` / `write_text_atomic(path, text)`（UTF-8）。普通文件覆写经此二函数；凭据使用 `write_atomic_private`，在空 tmp 阶段经平台权限函数确认后才写正文，共用原子发布 / 清理 / fsync 管线。SQLite 事务与在线备份、实例锁文件、JSONL 受控追加 / 尾行截断由各自模块原地写，不经这里。JSONL 追加原语已由 022 在 store 中实现，全仓复用，不在 engine 再写一套 IO。
-- 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。重试次数与退避见[通信契约](ipc-contract.md)看门狗表。三端的 `WouldBlock`、`ResourceBusy`、`ExecutableFileBusy` 进入退避。Windows 上原始码 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）同样算占用；Unix 上同号是 EIO / EPIPE，保持 `io`，不重试。目录目标三端立即 `io`，不进入退避：Windows 把「文件 rename 到目录」也报成 ACCESS_DENIED，若先按占用重试，目录会在 Windows 上等满退避。耗尽报 `locked` 并清理本次 tmp。父目录同步只吞掉 `PermissionDenied`、`InvalidInput`、`Unsupported`；其它同步错误在 rename 已经发布后仍返回，调用方不能把该错误当成「目标未更新」。
+- 步骤：同目录唯一临时名 `<name>.<pid>.<counter>.tmp` → 排他创建 + 写入 + fsync → `rename` 覆盖目标 → 同步父目录。临时名冲突时既有文件不被覆盖或清理。重试次数与退避见[通信契约](../core/ipc-contract.md)看门狗表。三端的 `WouldBlock`、`ResourceBusy`、`ExecutableFileBusy` 进入退避。Windows 上原始码 5（ACCESS_DENIED）和 32（SHARING_VIOLATION）同样算占用；Unix 上同号是 EIO / EPIPE，保持 `io`，不重试。目录目标三端立即 `io`，不进入退避：Windows 把「文件 rename 到目录」也报成 ACCESS_DENIED，若先按占用重试，目录会在 Windows 上等满退避。耗尽报 `locked` 并清理本次 tmp。父目录同步只吞掉 `PermissionDenied`、`InvalidInput`、`Unsupported`；其它同步错误在 rename 已经发布后仍返回，调用方不能把该错误当成「目标未更新」。
 - 自愈：读取目录时清理残留 `.tmp`；JSONL 尾行不完整时截断到上一完整行；完整行仍须校验 JSON / 身份，中间损坏不得删。partial 不是 .tmp，不由通用临时清理删除；保留已提交前文并封中断块的恢复及 buffered / high 耐久边界见[记录引擎](record-engine.md)。
 - 并发与锁：单写者约定；打开数据库前持有数据根 `storage.lock` 上的 `InstanceLock`。OS 独占锁阻止多开写入，PID 仅作诊断，不用于存活判断；进程退出自动释放，释放时不删除锁文件。同一目录只放一个业务库，备份共用 `backups/`。
 - 有界文本读取：`read::read_text_bounded` 先以字节读取上限 + 1，检查长度后才解码 UTF-8；超限及非法 UTF-8 均为 `store.corrupt`，不输出文件正文。真正缺失返回 `None`；与 SQLite 共用现存祖先目录检查，父路径被文件占据时显式报错，不当首次安装。profile 与凭据各自解析 JSON / 版本，读取上限均为 512 KiB。
@@ -122,12 +122,12 @@ CREATE TABLE point_allocations (
 
 ## 错误与对接
 
-- 裸码由 `StoreError::code()` 返回。IPC 的 `store.` 前缀、中文 `message` 与 `detail` 见[通信契约](ipc-contract.md)。磁盘满、权限、锁定超时、损坏、路径非法各占独立码。
-- 对接：006 用原子写 + JSONL 截断恢复；029 已实现 007 的 SQLite manifest、不可变文件正文与恢复，产品记忆流程尚未接入；cycle 与依赖式清理边界见[记忆设计](memory.md)。SQLite 迁移备份与文件覆写备份遵守本文约定；019 的配置及私有凭据文件使用 `llm/`，schema 与权威后端规则见[通信契约](ipc-contract.md#工程纪律可检查版)。
+- 裸码由 `StoreError::code()` 返回。IPC 的 `store.` 前缀、中文 `message` 与 `detail` 见[通信契约](../core/ipc-contract.md)。磁盘满、权限、锁定超时、损坏、路径非法各占独立码。
+- 对接：006 用原子写 + JSONL 截断恢复；029 已实现 007 的 SQLite manifest、不可变文件正文与恢复，产品记忆流程尚未接入；cycle 与依赖式清理边界见[记忆设计](memory.md)。SQLite 迁移备份与文件覆写备份遵守本文约定；019 的配置及私有凭据文件使用 `llm/`，schema 与权威后端规则见[通信契约](../core/ipc-contract.md#工程纪律可检查版)。
 
 ## 实现状态与后续范围
 
-- 已标定（task 013）：WAL，备份保留最近 3 份，OS 独占实例锁。rename 的重试预算见[通信契约](ipc-contract.md)看门狗表，013 已按该表实现。记录 append 已由 022 实现；业务 schema 与导入导出随相应任务实现。
+- 已标定（task 013）：WAL，备份保留最近 3 份，OS 独占实例锁。rename 的重试预算见[通信契约](../core/ipc-contract.md)看门狗表，013 已按该表实现。记录 append 已由 022 实现；业务 schema 与导入导出随相应任务实现。
 
 ## 删除恢复边界
 

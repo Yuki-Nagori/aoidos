@@ -15,7 +15,7 @@
 
 ## 产出物
 
-`ai-docs/architecture/theming.md`（规则与结构文档），需敲定：
+`ai-docs/architecture/interface/theming.md`（规则与结构文档），需敲定：
 
 1. Token 全目录（首版既有具名项及状态色名称：按 C / T / S / R / E / M / Z 分域，未登记域不猜测放行），作为 Tailwind `@theme inline` 映射的唯一来源。
 2. 主题切换数据流：`data-theme` 由谁写、持久化在哪、默认主题的初始化时序（防闪色）；主题 ID 平级，不按明暗模式分层。
@@ -62,4 +62,4 @@ token 目录一次定全容易过度设计——允许首版只收 ui.md 已具�
 
 ## 完成摘要
 
-设计完成，规则见[主题与剧本皮肤](../architecture/theming.md)；009 与索引保持 done。2026-10-10 补充所有主题使用平级 ThemeId 的决策；026 已开始实施并负责更新运行时协议与验收证据。
+设计完成，规则见[主题与剧本皮肤](../architecture/interface/theming.md)；009 与索引保持 done。2026-10-10 补充所有主题使用平级 ThemeId 的决策；026 已开始实施并负责更新运行时协议与验收证据。

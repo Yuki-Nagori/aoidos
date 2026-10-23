@@ -12,10 +12,10 @@
 ## 必读
 
 - [Rust / Web 依赖分层](../standards/layering.md)
-- [Repository layout](../architecture/repository-layout.md)
-- [LLM 架构](../architecture/llm.md)
-- [存储架构](../architecture/storage.md)
-- [国际化架构](../architecture/i18n.md)
+- [Repository layout](../architecture/core/repository-layout.md)
+- [LLM 架构](../architecture/ai/llm.md)
+- [存储架构](../architecture/data/storage.md)
+- [国际化架构](../architecture/interface/i18n.md)
 - [凭据与代理实现](019-llm-profile-credentials-impl.md)
 - [Rust 规范](../standards/rust.md)
 - [测试规范](../standards/testing.md)

@@ -11,11 +11,11 @@
 
 ## 必读
 
-[职责边界](../architecture/ts-rust-boundary.md) · [通信契约](../architecture/ipc-contract.md) · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [006 对局记录设计](006-record-design.md)（块语法与追加时机） · [记录引擎](../architecture/record-engine.md)（中断、双写 pending 与有损投影）· [005 LLM 设计](005-llm-design.md)（调用点与护栏）· [UI 规范](../standards/ui.md)（机器行呈现）。
+[职责边界](../architecture/core/ts-rust-boundary.md) · [通信契约](../architecture/core/ipc-contract.md) · [016 事件基建](016-ipc-events-infra.md)（发送端依赖） · [006 对局记录设计](006-record-design.md)（块语法与追加时机） · [记录引擎](../architecture/data/record-engine.md)（中断、双写 pending 与有损投影）· [005 LLM 设计](005-llm-design.md)（调用点与护栏）· [UI 规范](../standards/ui.md)（机器行呈现）。
 
 ## 产出物
 
-`ai-docs/architecture/turn-state-machine.md`（规则与结构文档），需敲定：
+`ai-docs/architecture/gameplay/turn-state-machine.md`（规则与结构文档），需敲定：
 
 1. 阶段模型：回合 / 节拍的阶段定义（玩家输入 → LLM 生成 → 骰判 → 结算 → 推进 → 场景切换），场景 / 幕 / 章的层级关系。
 2. 状态机形态：显式状态枚举 + 转移表（可直译为 Rust enum + match）；单回合不变量（同一时刻至多一个在飞回合）。对外拒绝第二个在飞回合只用命令层 `app.busy`，不另设公开错误码。
@@ -62,4 +62,4 @@
 
 ## 完成摘要
 
-设计完成，规则与结构见[回合与阶段状态机](../architecture/turn-state-machine.md)。已复核 issue 初稿与现有契约冲突：partial 保留、不自动收费、costlySuccess、提议通道与因果控制均有明确口径；023 仍 planned，本次没有实现运行时。
+设计完成，规则与结构见[回合与阶段状态机](../architecture/gameplay/turn-state-machine.md)。已复核 issue 初稿与现有契约冲突：partial 保留、不自动收费、costlySuccess、提议通道与因果控制均有明确口径；023 仍 planned，本次没有实现运行时。

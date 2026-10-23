@@ -18,7 +18,7 @@ AI 驱动的剧情跑团桌面应用。你不是在和 AI 聊天，而是在和�
 
 ## 状态与记忆的构想
 
-对话历史全量进 LLM 上下文，会随剧情推进线性变贵、变慢。Aoidos 的构想是在本地维护世界状态库（属性、关系、事件）与一组对局文档，LLM 每轮按索引读取「现状与下一步」，而不是回放全部对话缓存，让上下文占用与对局时长解耦。当前 v1 采用固定前缀、recap 与近期窗口的[记录投影设计](ai-docs/architecture/record-engine.md)，已由 022 实现；检索式方案保留接口位置，后续按记忆任务推进，完整构想见[构想索引](ai-docs/ideas/README.md)。
+对话历史全量进 LLM 上下文，会随剧情推进线性变贵、变慢。Aoidos 的构想是在本地维护世界状态库（属性、关系、事件）与一组对局文档，LLM 每轮按索引读取「现状与下一步」，而不是回放全部对话缓存，让上下文占用与对局时长解耦。当前 v1 采用固定前缀、recap 与近期窗口的[记录投影设计](ai-docs/architecture/data/record-engine.md)，已由 022 实现；检索式方案保留接口位置，后续按记忆任务推进，完整构想见[构想索引](ai-docs/ideas/README.md)。
 
 ## 当前状态
 
@@ -26,7 +26,7 @@ AI 驱动的剧情跑团桌面应用。你不是在和 AI 聊天，而是在和�
 
 目前只登记最小探索章节与 PbtA 2d6 判定，原文中的完整多幕玩法与 D&D d20 尚未实现。完整界面、剧本导入、角色记忆和费用控制按[任务索引](ai-docs/task-index.md)继续推进；上面的产品愿景不表示这些能力已经上线。024 已完成本地正式链路验证，三平台 CI 在推送后复验，真实模型叙事质量未标定。
 
-`bun run verify` 包含十三项质量检查，覆盖双端类型、lint、格式、测试、覆盖率、死代码、基准、构建与 Rust 文档。运行期数据使用系统应用数据目录，凭据优先存入 OS 凭据库；实际路径和回退规则见[存储设计](ai-docs/architecture/storage.md)与[LLM 设计](ai-docs/architecture/llm.md)。
+`bun run verify` 包含十三项质量检查，覆盖双端类型、lint、格式、测试、覆盖率、死代码、基准、构建与 Rust 文档。运行期数据使用系统应用数据目录，凭据优先存入 OS 凭据库；实际路径和回退规则见[存储设计](ai-docs/architecture/data/storage.md)与[LLM 设计](ai-docs/architecture/ai/llm.md)。
 
 ## 快速开始
 
@@ -53,7 +53,7 @@ $ bun run dev            # 或：浏览器界面预览（无桌面 IPC，不能�
 
 ## 文档
 
-完整文档入口是 [AGENTS.md](AGENTS.md)，体系在 [ai-docs/](ai-docs/)：`architecture/` 说明结构与技术栈，`standards/` 是编码与提交规范，`task/` 承载工作记录。开发验证与打包见[构建与开发](ai-docs/architecture/build-and-development.md)。
+完整文档入口是 [AGENTS.md](AGENTS.md)，体系在 [ai-docs/](ai-docs/)：`architecture/` 说明结构与技术栈，`standards/` 是编码与提交规范，`task/` 承载工作记录。开发验证与打包见[构建与开发](ai-docs/architecture/core/build-and-development.md)。
 
 ## License
 

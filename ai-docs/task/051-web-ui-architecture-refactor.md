@@ -11,7 +11,7 @@
 
 ## 必读
 
-[前端规范](../standards/frontend.md) · [UI 风格](../standards/ui.md) · [UI 架构](../architecture/ui-shell.md) · [目录规划](../architecture/repository-layout.md) · [分层规范](../standards/layering.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md) · [提交规范](../standards/commits.md)。
+[前端规范](../standards/frontend.md) · [UI 风格](../standards/ui.md) · [UI 架构](../architecture/interface/ui-shell.md) · [目录规划](../architecture/core/repository-layout.md) · [分层规范](../standards/layering.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md) · [提交规范](../standards/commits.md)。
 
 ## 范围与非目标
 
@@ -35,7 +35,7 @@
 
 ## 预计改动
 
-将前端组合拆为 `src-web/app/`、`src-web/features/<feature>/` 与 `src-web/shared/`，按职责迁移原组件、composable、utility 和镜像测试。共享层仅保留跨 feature 能力；应用层组合设置与记忆面板，对局工作区持有游戏界面生命周期。同步 `ai-docs/standards/frontend.md`、`ai-docs/standards/layering.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/repository-layout.md`、`ai-docs/architecture/ui-shell.md`、`ai-docs/architecture/i18n.md`、CI selector、coverage 口径与入口测试文档路径。
+将前端组合拆为 `src-web/app/`、`src-web/features/<feature>/` 与 `src-web/shared/`，按职责迁移原组件、composable、utility 和镜像测试。共享层仅保留跨 feature 能力；应用层组合设置与记忆面板，对局工作区持有游戏界面生命周期。同步 `ai-docs/standards/frontend.md`、`ai-docs/standards/layering.md`、`ai-docs/architecture/README.md`、`ai-docs/architecture/core/repository-layout.md`、`ai-docs/architecture/interface/ui-shell.md`、`ai-docs/architecture/interface/i18n.md`、CI selector、coverage 口径与入口测试文档路径。
 
 ## 验收标准
 

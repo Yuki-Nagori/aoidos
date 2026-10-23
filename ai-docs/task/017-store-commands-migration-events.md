@@ -11,7 +11,7 @@
 
 ## 必读
 
-[通信契约](../architecture/ipc-contract.md) · [存储基建](../architecture/storage.md) · [016 事件基建](016-ipc-events-infra.md) · [注释规范](../standards/comments.md)。
+[通信契约](../architecture/core/ipc-contract.md) · [存储基建](../architecture/data/storage.md) · [016 事件基建](016-ipc-events-infra.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 

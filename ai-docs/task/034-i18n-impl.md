@@ -7,11 +7,11 @@
 
 ## 目标与背景
 
-按 [i18n 架构](../architecture/i18n.md)交付 zh-Hans / en 底座与原生界面。实现、十三项本地 verify、独立评审及 PR #107 的 macOS / Ubuntu / Windows CI 均已通过。025 接完整界面文案，031 接记忆设置，035 消费精确格式化。
+按 [i18n 架构](../architecture/interface/i18n.md)交付 zh-Hans / en 底座与原生界面。实现、十三项本地 verify、独立评审及 PR #107 的 macOS / Ubuntu / Windows CI 均已通过。025 接完整界面文案，031 接记忆设置，035 消费精确格式化。
 
 ## 必读
 
-[国际化架构](../architecture/i18n.md) · [主题架构](../architecture/theming.md) · [通信契约](../architecture/ipc-contract.md) · [前端规范](../standards/frontend.md) · [Rust 规范](../standards/rust.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。库官方依据和查阅日期见架构，实现时核验锁定版本。
+[国际化架构](../architecture/interface/i18n.md) · [主题架构](../architecture/interface/theming.md) · [通信契约](../architecture/core/ipc-contract.md) · [前端规范](../standards/frontend.md) · [Rust 规范](../standards/rust.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。库官方依据和查阅日期见架构，实现时核验锁定版本。
 
 ## 范围与非目标
 

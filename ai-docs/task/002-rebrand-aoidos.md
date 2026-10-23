@@ -11,7 +11,7 @@
 
 ## 必读
 
-[架构总览](../architecture/README.md) · [目录规划](../architecture/repository-layout.md) · [构建与开发](../architecture/build-and-development.md) · [提交规范](../standards/commits.md)。
+[架构总览](../architecture/README.md) · [目录规划](../architecture/core/repository-layout.md) · [构建与开发](../architecture/core/build-and-development.md) · [提交规范](../standards/commits.md)。
 
 ## 范围与非目标
 

@@ -13,7 +13,7 @@
 
 ## 必读
 
-- [LLM 架构](../architecture/llm.md)、[回合状态机](../architecture/turn-state-machine.md)、[Rust 规范](../standards/rust.md)、[测试规范](../standards/testing.md)。
+- [LLM 架构](../architecture/ai/llm.md)、[回合状态机](../architecture/gameplay/turn-state-machine.md)、[Rust 规范](../standards/rust.md)、[测试规范](../standards/testing.md)。
 
 ## 范围与非目标
 

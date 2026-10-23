@@ -11,7 +11,7 @@
 
 ## 必读
 
-[UI 风格规范](../standards/ui.md) · [主题架构](../architecture/theming.md) · [前端约定](../standards/frontend.md) · [测试规范](../standards/testing.md) · [构建与开发](../architecture/build-and-development.md)。
+[UI 风格规范](../standards/ui.md) · [主题架构](../architecture/interface/theming.md) · [前端约定](../standards/frontend.md) · [测试规范](../standards/testing.md) · [构建与开发](../architecture/core/build-and-development.md)。
 
 ## 范围与非目标
 

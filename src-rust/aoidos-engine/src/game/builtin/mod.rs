@@ -232,7 +232,59 @@ impl Domain for BuiltinDomain {
     }
     fn confirmed(&self, session: &Session) -> Result<ConfirmedWorldView, Fault> {
         self.storage.ready()?;
-        ConfirmedWorldView::capture(session, &self.revision, BTreeMap::new())
+        let mut facts = BTreeMap::new();
+        let path = session.path_at(session.history_revision())?;
+        let mut accepted_rounds = std::collections::BTreeSet::new();
+        let mut committed_round_count = 0_usize;
+        let mut latest_evidence = None;
+        for seq in path {
+            let record = session.read(seq).map_err(Fault::from)?;
+            let Some(record_body) = record.body.map(|record| record.body) else {
+                continue;
+            };
+            let format::Body::System { code, data, .. } = record_body else {
+                continue;
+            };
+            match code.as_str() {
+                "roundAccepted" => {
+                    if let Fact::RoundAccepted {
+                        identity,
+                        mode: format::InputMode::InCharacter,
+                        ..
+                    } = Fact::decode(&code, &data).map_err(Fault::from)?
+                    {
+                        accepted_rounds.insert(identity.round_id);
+                    }
+                }
+                "roundSettled" => {
+                    let Fact::RoundSettled { identity, .. } =
+                        Fact::decode(&code, &data).map_err(Fault::from)?
+                    else {
+                        continue;
+                    };
+                    if !accepted_rounds.remove(&identity.round_id) {
+                        continue;
+                    }
+                    committed_round_count += 1;
+                    latest_evidence = Some(EvidenceRef::Record {
+                        session_id: session.header().session_id.clone(),
+                        record_seq: seq,
+                        content_hash: format::hash(record.raw.as_bytes()),
+                    });
+                }
+                _ => {}
+            }
+        }
+        if let Some(evidence) = latest_evidence {
+            facts.insert(
+                "committed-round-count".into(),
+                WorldFact {
+                    value: serde_json::json!(committed_round_count),
+                    evidence_refs: vec![evidence],
+                },
+            );
+        }
+        ConfirmedWorldView::capture(session, &self.revision, facts)
     }
     fn context(&self, _: &ConfirmedWorldView) -> Result<String, Fault> {
         Ok("当前登记为最小探索章节，玩家身份 player，场景身份 entry，规则 pbta-explore-v1。原文提供背景，未登记的多幕计数、结局与数值不具备执行权。没有出口条件，场景提议输出合法 stay。".into())
@@ -284,7 +336,13 @@ pub async fn open(
         .script_id
         .clone();
     let original = super::assets::scenario(&id)?;
-    let entity_directory = super::assets::entity_directory(&id)?;
+    let expected_revision = session
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .header()
+        .script_revision
+        .clone();
+    let entity_directory = super::assets::entity_directory_for_revision(&id, &expected_revision)?;
     let revision = entity_directory.script_revision().to_owned();
     let expected_prefix = prefix(&id)?;
     {

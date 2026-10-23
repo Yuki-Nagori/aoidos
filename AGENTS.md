@@ -6,25 +6,16 @@ Aoidos 是基于 Bun、Vue 3、TypeScript 和 Tauri 2 的 AI 剧情跑团桌面�
 
 ### 架构与工程
 
-| 主题                                     | 文档                                                                                           |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| 架构总览、模块关系与设计实施映射         | [ai-docs/architecture/README.md](ai-docs/architecture/README.md)                               |
-| 技术选型、版本、IPC 通道与 CI            | [ai-docs/architecture/tech-stack.md](ai-docs/architecture/tech-stack.md)                       |
-| 目录结构、模块归属与命名                 | [ai-docs/architecture/repository-layout.md](ai-docs/architecture/repository-layout.md)         |
-| TypeScript / Rust 职责边界与工程纪律     | [ai-docs/architecture/ts-rust-boundary.md](ai-docs/architecture/ts-rust-boundary.md)           |
-| Rust / Web / 测试依赖方向                | [ai-docs/standards/layering.md](ai-docs/standards/layering.md)                                 |
-| 命令、事件与错误码契约                   | [ai-docs/architecture/ipc-contract.md](ai-docs/architecture/ipc-contract.md)                   |
-| 数据目录、SQLite、实例锁、原子写入与迁移 | [ai-docs/architecture/storage.md](ai-docs/architecture/storage.md)                             |
-| Provider、请求策略、护栏与凭据           | [ai-docs/architecture/llm.md](ai-docs/architecture/llm.md)                                     |
-| 模型计价、额度、账本与预算周期           | [ai-docs/architecture/billing.md](ai-docs/architecture/billing.md)                             |
-| 记录块、投影预算、持久化与恢复           | [ai-docs/architecture/record-engine.md](ai-docs/architecture/record-engine.md)                 |
-| 记忆三域、门控、回写与待决策项           | [ai-docs/architecture/memory.md](ai-docs/architecture/memory.md)                               |
-| 记忆算法、正确性约束与标定实验           | [ai-docs/architecture/memory-algorithms.md](ai-docs/architecture/memory-algorithms.md)         |
-| 回合阶段、骰判、场景推进与因果回退       | [ai-docs/architecture/turn-state-machine.md](ai-docs/architecture/turn-state-machine.md)       |
-| 舞台、面板状态、输入与骰判交互           | [ai-docs/architecture/ui-shell.md](ai-docs/architecture/ui-shell.md)                           |
-| 界面语言、原生文案、偏好与格式化         | [ai-docs/architecture/i18n.md](ai-docs/architecture/i18n.md)                                   |
-| 主题 token、偏好防闪、皮肤校验与回退     | [ai-docs/architecture/theming.md](ai-docs/architecture/theming.md)                             |
-| 命令、verify、覆盖率、打包与图标         | [ai-docs/architecture/build-and-development.md](ai-docs/architecture/build-and-development.md) |
+| 主题                               | 文档                                                             |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| 架构总览与领域导航                 | [ai-docs/architecture/README.md](ai-docs/architecture/README.md) |
+| 核心工程、模块边界、IPC 与构建     | [core](ai-docs/architecture/core/README.md)                      |
+| 存储、记录与记忆                   | [data](ai-docs/architecture/data/README.md)                      |
+| Provider、提示输入与计费           | [AI 与计费](ai-docs/architecture/ai/README.md)                   |
+| 周目、任务、回合和角色             | [游戏规则](ai-docs/architecture/gameplay/README.md)              |
+| 角色真值、认知、表面身份与引导 NPC | [角色架构](ai-docs/architecture/gameplay/characters/README.md)   |
+| 界面结构、主题、快捷键与语言       | [用户界面](ai-docs/architecture/interface/README.md)             |
+| Rust / Web / 测试依赖方向          | [分层规范](ai-docs/standards/layering.md)                        |
 
 ### 开发规范
 

@@ -231,8 +231,11 @@ impl Storage {
             &crate::game::catalog::EntityDirectory,
         ) -> aoidos_memory::error::Result<T>,
     ) -> aoidos_memory::error::Result<T> {
-        let seed = crate::game::assets::entity_directory(&session.header().script_id)
-            .map_err(memory_context_error)?;
+        let seed = crate::game::assets::entity_directory_for_revision(
+            &session.header().script_id,
+            &session.header().script_revision,
+        )
+        .map_err(memory_context_error)?;
         let mut database = self
             .database
             .lock()
@@ -779,17 +782,21 @@ impl Storage {
                 .map_err(memory_config_error)
         })?;
         let session = self.records.get(&run.session_id)?;
-        let session_script = session
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .header()
-            .script_id
-            .clone();
+        let (session_script, script_revision) = {
+            let session = session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (
+                session.header().script_id.clone(),
+                session.header().script_revision.clone(),
+            )
+        };
         if session_script != run.script_id {
             return Err(memory_config_error(aoidos_memory::error::Error::Corrupt));
         }
         let scenario = crate::game::assets::scenario(&run.script_id)?;
-        let entities = crate::game::assets::entity_directory(&run.script_id)?;
+        let entities =
+            crate::game::assets::entity_directory_for_revision(&run.script_id, &script_revision)?;
         let catalog = crate::game::builtin::memory_scene_catalog(scenario.title, entities)?;
         Ok((run, catalog))
     }

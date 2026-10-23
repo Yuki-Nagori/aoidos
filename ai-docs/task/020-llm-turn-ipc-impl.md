@@ -11,7 +11,7 @@
 
 ## 必读
 
-[LLM 规则与结构](../architecture/llm.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
+[LLM 规则与结构](../architecture/ai/llm.md) · [通信契约](../architecture/core/ipc-contract.md) · [职责边界](../architecture/core/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
 
 ## 范围与非目标
 
@@ -33,7 +33,7 @@
 
 ## 实施安排
 
-依赖图及端口归属见[职责边界](../architecture/ts-rust-boundary.md#回合协调与端口依赖)。先建立与 Tauri 无关的协调器和 lease；序号预留、输出提交、快照确认及平台投递分步执行。调度器增加输出提交确认端口，确保首交付与重试边界由接纳结果决定；提交中的写入由串行所有者完成，不被用户取消丢弃。预算端口为每次物理尝试登记身份，尚未有 035 账本时仅运行本地夹具。然后接同型 Rust / TS 命令及真实主窗口烟测，最后整体复核和十三项验证。
+依赖图及端口归属见[职责边界](../architecture/core/ts-rust-boundary.md#回合协调与端口依赖)。先建立与 Tauri 无关的协调器和 lease；序号预留、输出提交、快照确认及平台投递分步执行。调度器增加输出提交确认端口，确保首交付与重试边界由接纳结果决定；提交中的写入由串行所有者完成，不被用户取消丢弃。预算端口为每次物理尝试登记身份，尚未有 035 账本时仅运行本地夹具。然后接同型 Rust / TS 命令及真实主窗口烟测，最后整体复核和十三项验证。
 
 ## 改动范围
 

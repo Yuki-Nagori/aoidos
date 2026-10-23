@@ -14,12 +14,12 @@ CLI/TUI 与桌面端需要共用已开周目的浏览、选择 / 恢复和删除
 ## 必读
 
 - [分层规范](../standards/layering.md)
-- [Repository layout](../architecture/repository-layout.md)
-- [存储架构](../architecture/storage.md)
-- [记录引擎](../architecture/record-engine.md)
-- [回合状态机](../architecture/turn-state-machine.md)
-- [计费架构](../architecture/billing.md)
-- [记忆架构](../architecture/memory.md)
+- [Repository layout](../architecture/core/repository-layout.md)
+- [存储架构](../architecture/data/storage.md)
+- [记录引擎](../architecture/data/record-engine.md)
+- [回合状态机](../architecture/gameplay/turn-state-machine.md)
+- [计费架构](../architecture/ai/billing.md)
+- [记忆架构](../architecture/data/memory.md)
 - [CLI / TUI 实现](058-cli-tui-shared-game-runtime.md)
 
 ## 核对后的现状

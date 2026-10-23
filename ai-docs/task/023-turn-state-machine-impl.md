@@ -11,7 +11,7 @@
 
 ## 必读
 
-[阶段机定稿](../architecture/turn-state-machine.md) · [LLM 规则与结构](../architecture/llm.md) · [通信契约](../architecture/ipc-contract.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
+[阶段机定稿](../architecture/gameplay/turn-state-machine.md) · [LLM 规则与结构](../architecture/ai/llm.md) · [通信契约](../architecture/core/ipc-contract.md) · [职责边界](../architecture/core/ts-rust-boundary.md) · [Rust 规范](../standards/rust.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。依赖任务及后续设计定稿文档从[任务索引](../task-index.md)查阅；规则数值以架构 / 契约原文为准，不在 task 重写。
 
 ## 范围与非目标
 

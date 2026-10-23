@@ -1,6 +1,6 @@
 //! 增量 UTF-8 解码：按任意字节边界喂入网络分片，扣留不完整的多字节尾部。
 //!
-//! 异常 EOF 时扣留的尾部不得合成为 U+FFFD 交付（设计见 ai-docs/architecture/llm.md 跨分片算法），
+//! 异常 EOF 时扣留的尾部不得合成为 U+FFFD 交付（设计见 ai-docs/architecture/ai/llm.md 跨分片算法），
 //! [`IncrementalUtf8::finish`] 对残留尾部报 [`InvalidUtf8`]，由上层归入 `llm.bad-response`。
 
 /// 字节序列不是合法 UTF-8；截断的最后字符不会以替换符交付。

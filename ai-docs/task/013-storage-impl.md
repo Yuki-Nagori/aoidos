@@ -7,11 +7,11 @@
 
 ## 目标与背景
 
-[存储基建设计](../architecture/storage.md)已定稿（011 done）。本任务按设计落地首个业务 crate `src-rust/aoidos-store`（不依赖 tauri），提供全仓复用的持久化基座：原子写、路径消毒、迁移 runner、多开锁与错误码。设计中标定的参数在此落定初值。
+[存储基建设计](../architecture/data/storage.md)已定稿（011 done）。本任务按设计落地首个业务 crate `src-rust/aoidos-store`（不依赖 tauri），提供全仓复用的持久化基座：原子写、路径消毒、迁移 runner、多开锁与错误码。设计中标定的参数在此落定初值。
 
 ## 必读
 
-[存储基建](../architecture/storage.md) · [职责边界](../architecture/ts-rust-boundary.md) · [Rust 约定](../standards/rust.md) · [测试规范](../standards/testing.md)。
+[存储基建](../architecture/data/storage.md) · [职责边界](../architecture/core/ts-rust-boundary.md) · [Rust 约定](../standards/rust.md) · [测试规范](../standards/testing.md)。
 
 ## 范围与非目标
 

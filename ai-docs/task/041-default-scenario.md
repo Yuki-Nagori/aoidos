@@ -11,7 +11,7 @@
 
 ## 必读
 
-[SRD 调查](../research/002-dnd-srd.md)、[阶段机](../architecture/turn-state-machine.md)、[测试规范](../standards/testing.md)。
+[SRD 调查](../research/002-dnd-srd.md)、[阶段机](../architecture/gameplay/turn-state-machine.md)、[测试规范](../standards/testing.md)。
 
 ## 实施与验收
 

@@ -19,10 +19,10 @@
 
 ## 立项结论
 
-- 载体：JSONL 是会话因果事实源，SQLite 是可重建的当前状态投影；基建见[存储设计](../architecture/storage.md)，业务提交 / 恢复见[记录引擎](../architecture/record-engine.md)。v1 不定义完整世界属性表 schema，留给后续世界状态设计。
-- 格式与粒度：[文件与块结构](../architecture/record-engine.md#文件与块结构)及正式 prompt / 护栏已由 006 冻结，实现由 022 承接。
-- 投影与检索：[方案 A](../architecture/record-engine.md#投影预算与-recap)已定稿；检索方案 B 保留 Projector / WorldView 接口位置，007 v1 不接投影检索热路径或引入向量。
-- 状态写回 / 记忆：[007](../task/007-memory-design.md) 已定稿，事实与角色认知、门控、回退及版本提交见[记忆设计](../architecture/memory.md)，实施由 029–033 承接。
+- 载体：JSONL 是会话因果事实源，SQLite 是可重建的当前状态投影；基建见[存储设计](../architecture/data/storage.md)，业务提交 / 恢复见[记录引擎](../architecture/data/record-engine.md)。v1 不定义完整世界属性表 schema，留给后续世界状态设计。
+- 格式与粒度：[文件与块结构](../architecture/data/record-engine.md#文件与块结构)及正式 prompt / 护栏已由 006 冻结，实现由 022 承接。
+- 投影与检索：[方案 A](../architecture/data/record-engine.md#投影预算与-recap)已定稿；检索方案 B 保留 Projector / WorldView 接口位置，007 v1 不接投影检索热路径或引入向量。
+- 状态写回 / 记忆：[007](../task/007-memory-design.md) 已定稿，事实与角色认知、门控、回退及版本提交见[记忆设计](../architecture/data/memory.md)，实施由 029–033 承接。
 
 ## 关联
 

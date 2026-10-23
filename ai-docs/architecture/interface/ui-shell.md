@@ -1,6 +1,6 @@
 # 界面结构与交互
 
-更新日期：2026-10-20；官方资料核验日期：2026-10-10。[task 008](../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。页面视觉与状态样例以用户维护的 `aoidos-art` 为准，先由 [051](../task/051-web-ui-architecture-refactor.md) 整理 Vue 结构，再由 [052](../task/052-aoidos-art-vue-port.md) 移植；静态 HTML 只作为设计输入，不进入产品运行时。色板、字体与玻璃表面以 [UI 风格](../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](record-engine.md)，阶段及骰判归 [012](turn-state-machine.md)，跨端类型归[通信契约](ipc-contract.md)。
+更新日期：2026-10-20；官方资料核验日期：2026-10-10。[task 008](../../task/008-ui-shell-design.md) 的设计定稿，承接 [issue #11](https://github.com/Yuki-Nagori/aoidos/issues/11)；完整验收由 [025](../../task/025-ui-shell-impl.md) 跟踪。舞台、四态面板、有界记录视图、composer 基础命令、偏好及窗口恢复已接通，本机 `bun run verify` 通过；真实 WebView、辅助技术、DPI 与三平台实测尚未完成。页面视觉与状态样例以用户维护的 `aoidos-art` 为准，先由 [051](../../task/051-web-ui-architecture-refactor.md) 整理 Vue 结构，再由 [052](../../task/052-aoidos-art-vue-port.md) 移植；静态 HTML 只作为设计输入，不进入产品运行时。色板、字体与玻璃表面以 [UI 风格](../../standards/ui.md)为准，主题 / 皮肤及首窗初始化归[主题架构](theming.md)，本文维护布局、面板状态与操作规则。记录事实归 [006](../data/record-engine.md)，阶段及骰判归 [012](../gameplay/turn-state-machine.md)，跨端类型归[通信契约](../core/ipc-contract.md)。
 
 ## 舞台与覆盖层
 
@@ -22,11 +22,11 @@ Vue 页面按窗口级顶栏、铺满可用舞台区和右侧浮动面板组合�
 
 舞台内容根据可用容器尺寸计算；不支持容器查询时用 ResizeObserver 更新可用矩形。不把浏览器页面缩放值当设备像素比。默认窗口为 960 × 640，最小客户区为 640 × 480 CSS 像素；舞台始终填满顶栏以下区域，插画按比例 cover，窄屏同样占满可用纵向空间。
 
-当前 `app/App.vue` 组合产品、主题、语言、费用、记忆偏好和页面状态；无会话时由 `app/components/WelcomeScreen.vue` 按 `aoidos-art/screens/welcome.html` 的双栏层级展示介绍、只读剧本 / 模型摘要与开局操作，开局必须由用户显式触发，且需要真实密钥状态为已设置。顶栏齿轮打开 `app/components/SetupPanel.vue` 右侧设置抽屉，密钥状态经 `llm_get_key_status` 查询；读取失败保持未知并阻止开局，不将失败误报为缺少密钥。设置区按设计稿分组，导航图标标识页签、导航只负责切换；当前内容标题提供关闭操作，并通过插槽承载记忆设置和查询。抽屉打开时只聚焦当前可见页的控件，焦点循环跳过隐藏页；关闭时返回实际触发元素，Escape 不抢占 IME 组字。记忆设置直接进入内容区，应用默认值与剧本覆盖各自折叠，不再在抽屉标题下增加重复的总折叠层；记忆列表和待确认页也直接呈现，不嵌套无可见标题的原生折叠控件。记忆详情按条目内联展开，只请求玩家选中的已提交版本；条目状态、主体类型、记忆维度、态度和变更类型按 locale 映射，不显示协议枚举原文，并呈现真实摘要、来源与证据。记忆列表页提供已接通的素材收集与显式批次处理，查询页复用现有问题确认和记忆记录 API；跨页完整检索已由 [053](../task/053-memory-query-search-design.md) 定稿，实现由 055 承接；不在已加载页中制造不完整搜索。对局中尚未提交的命令错误显示为即时告警，不伪装成已提交记录；连接错误提供显式重连，且不显示 API 未提供的同步时间或重试次数。持久终态仍以 Rust 快照 / 记录为准。费用视图由 `features/billing/components/BillingPanel.vue` 持有，活动会话内按原币显示本局 CNY / USD 用量和各自上限，并提供请求明细、月报及供应商余额；金额汇总复用账本用量函数，不进行跨币换算。价格登记视图展示当前 provider、model、币种及价格状态，价格版本继续按既有不可变登记规则保存。尚未开始会话时显示不可用说明。剧本署名视图只展示 `engine_list_scripts` 提供的本地化名称、剧本 ID 和署名正文，不推断作者、许可证或资源元数据。结局叙事生成和周目落幕已由 [054](../task/054-ending-flow-design.md) 定义权威状态及恢复边界，实现由 056 承接；设计稿的固定选项只作视觉参考，不代表玩家选择结局的产品语义。`features/game/components/GameWorkspace.vue` 管理对局内状态和交互；记忆查询仅在用户打开设置抽屉后挂载。`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览位于 game feature 的 utils，定时器与偏好写入由 composables 管理。052 按设计 HTML 的主要 DOM / 布局逐项复现，再将静态示例替换为真实数据与已有操作；不得以自由改版替代视觉移植，也不展示设计稿演示数据或把缺失服务伪装为可用状态。
+当前 `app/App.vue` 组合产品、主题、语言、费用、记忆偏好和页面状态；无会话时由 `app/components/WelcomeScreen.vue` 按 `aoidos-art/screens/welcome.html` 的双栏层级展示介绍、只读剧本 / 模型摘要与开局操作，开局必须由用户显式触发，且需要真实密钥状态为已设置。顶栏齿轮打开 `app/components/SetupPanel.vue` 右侧设置抽屉，密钥状态经 `llm_get_key_status` 查询；读取失败保持未知并阻止开局，不将失败误报为缺少密钥。设置区按设计稿分组，导航图标标识页签、导航只负责切换；当前内容标题提供关闭操作，并通过插槽承载记忆设置和查询。抽屉打开时只聚焦当前可见页的控件，焦点循环跳过隐藏页；关闭时返回实际触发元素，Escape 不抢占 IME 组字。记忆设置直接进入内容区，应用默认值与剧本覆盖各自折叠，不再在抽屉标题下增加重复的总折叠层；记忆列表和待确认页也直接呈现，不嵌套无可见标题的原生折叠控件。记忆详情按条目内联展开，只请求玩家选中的已提交版本；条目状态、主体类型、记忆维度、态度和变更类型按 locale 映射，不显示协议枚举原文，并呈现真实摘要、来源与证据。记忆列表页提供已接通的素材收集与显式批次处理，查询页复用现有问题确认和记忆记录 API；跨页完整检索已由 [053](../../task/053-memory-query-search-design.md) 定稿，实现由 055 承接；不在已加载页中制造不完整搜索。对局中尚未提交的命令错误显示为即时告警，不伪装成已提交记录；连接错误提供显式重连，且不显示 API 未提供的同步时间或重试次数。持久终态仍以 Rust 快照 / 记录为准。费用视图由 `features/billing/components/BillingPanel.vue` 持有，活动会话内按原币显示本局 CNY / USD 用量和各自上限，并提供请求明细、月报及供应商余额；金额汇总复用账本用量函数，不进行跨币换算。价格登记视图展示当前 provider、model、币种及价格状态，价格版本继续按既有不可变登记规则保存。尚未开始会话时显示不可用说明。剧本署名视图只展示 `engine_list_scripts` 提供的本地化名称、剧本 ID 和署名正文，不推断作者、许可证或资源元数据。结局叙事生成和周目落幕已由 [054](../../task/054-ending-flow-design.md) 定义权威状态及恢复边界，实现由 056 承接；设计稿的固定选项只作视觉参考，不代表玩家选择结局的产品语义。`features/game/components/GameWorkspace.vue` 管理对局内状态和交互；记忆查询仅在用户打开设置抽屉后挂载。`GameStage.vue` 持有舞台、面板与可访问触发入口，`RecordFeed.vue` 呈现有界记录 / 预览，`ActionComposer.vue` 管理输入框、IME 与 slash 提示；纯状态转换和输入预览位于 game feature 的 utils，定时器与偏好写入由 composables 管理。052 按设计 HTML 的主要 DOM / 布局逐项复现，再将静态示例替换为真实数据与已有操作；不得以自由改版替代视觉移植，也不展示设计稿演示数据或把缺失服务伪装为可用状态。
 
 计费页的服务商余额只查询当前已接通的供应商；目前仅 DeepSeek 返回真实余额快照。界面按快照展示服务状态、查询时间、缓存过期提示和各原币账户，不把账户余额与本地账单估算混为一谈，也不为未接通的供应商模拟结果。
 
-053 已定稿记忆全库有界检索和共享 `SearchInput`：共享组件只提供受控输入、可访问名称与清除，memory feature 管理防抖、筛选、游标、迟到响应和状态；[055](../task/055-memory-search-impl.md) 接入检索服务。054 定稿的结局 UI 区分引擎规范事实摘要与非权威 AI 叙事，不提供固定结局选项；[056](../task/056-ending-flow-impl.md) 接入终态和显式叙事恢复。
+053 已定稿记忆全库有界检索和共享 `SearchInput`：共享组件只提供受控输入、可访问名称与清除，memory feature 管理防抖、筛选、游标、迟到响应和状态；[055](../../task/055-memory-search-impl.md) 接入检索服务。054 定稿的结局 UI 区分引擎规范事实摘要与非权威 AI 叙事，不提供固定结局选项；[056](../../task/056-ending-flow-impl.md) 接入终态和显式叙事恢复。
 
 ## 统一设置与输入选择器
 
@@ -75,7 +75,7 @@ prefers-reduced-motion 时取消位移动画，使用 120ms 淡入淡出；LED �
 
 面板是非模态 aside，有可读标题；按钮提供 aria-expanded / aria-controls，钉住按钮提供 aria-pressed。Tab 在可见界面自然行进，不为面板锁焦点；需要确认破坏性回退时才使用模态并恢复原焦点。新记录不自动抢焦点；状态提示用简短 polite live region，正文流不逐 token 朗读。错误和三档结果同时有文字 / 图标，不只靠颜色区分。
 
-键盘打开面板用 Ctrl+Shift+M（macOS 为 Cmd+Shift+M）；Escape 优先级为 IME → 指令菜单 / 上下文菜单 → 模态 → 非钉住面板。焦点处于 input、textarea、select、contenteditable 或模态时，舞台快捷键全部停用；菜单触发箭头键只由菜单处理。全局动作分发、改键和平台菜单接线尚未实现；052 已提供只读速查与设置视觉层，真实接线由 [057](../task/057-keyboard-shortcuts-impl.md) 承接。设计基线 `aoidos-art` 提交 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde` 已明确完整键位与保留键边界。实现必须让 IME 组字优先、保留系统编辑键、不为付费或破坏性操作提供快捷键，并在组件卸载时移除全局监听。
+键盘打开面板用 Ctrl+Shift+M（macOS 为 Cmd+Shift+M）；Escape 优先级为 IME → 指令菜单 / 上下文菜单 → 模态 → 非钉住面板。焦点处于 input、textarea、select、contenteditable 或模态时，舞台快捷键全部停用；菜单触发箭头键只由菜单处理。全局动作分发、改键和平台菜单接线尚未实现；052 已提供只读速查与设置视觉层，真实接线由 [057](../../task/057-keyboard-shortcuts-impl.md) 承接。设计基线 `aoidos-art` 提交 `1f19504ebc7390b7d9954b1c597fc3d98b6b7fde` 已明确完整键位与保留键边界。实现必须让 IME 组字优先、保留系统编辑键、不为付费或破坏性操作提供快捷键，并在组件卸载时移除全局监听。
 
 文档层（`html` / `body`）固定视口并禁用滚动与 overscroll，避免 macOS WKWebView 整页橡皮筋回弹；页面滚动只发生在明确的内部内容区。记录滚动区使用 overscroll-behavior: contain；不要在 window 上统一 preventDefault。面板外滚轮归舞台，面板 / 菜单内滚轮不穿透；面板的非滚动 chrome 消费其区域滚轮，避免操作标题时舞台缩放。键盘 / 指针捕获以及全局快捷键监听在卸载时释放。
 
@@ -183,13 +183,13 @@ v1 普通历史项用 content-visibility: auto + contain-intrinsic-size 降低�
 
 ## 偏好、依赖与实施边界
 
-`UiPreferences` 已由 Rust 持有，version=1，默认 `panelPinned=false`、`diceMode=manual`、`diceSkin=auto`；旧版 v1 文件缺少 `diceSkin` 时读取为 `auto`。只保存这三个产品偏好，不持久化焦点 / 滚动 DOM / 草稿。`store_get_ui_preferences` / `store_set_ui_preferences` 通过薄命令读写，数据存于应用数据根的 `ui-preferences.json`，读取有 4 KiB 上限并通过 `write_atomic` 原子替换；未知版本按 `store.corrupt` 失败关闭。实现细节见[存储架构](storage.md)与[通信契约](ipc-contract.md)。偏好写入使用应用级单队列，发送时合并三个字段的最新意图，至多一个请求在飞，防止完整替换覆盖另一次设置。响应按设置代次处理，失败保留上次确认值并提示，不把乐观状态当已保存；钉住保存失败撤回至已确认偏好，但不清草稿。初始化恢复只应用一次，迟到快照不得覆盖用户已操作的状态。
+`UiPreferences` 已由 Rust 持有，version=1，默认 `panelPinned=false`、`diceMode=manual`、`diceSkin=auto`；旧版 v1 文件缺少 `diceSkin` 时读取为 `auto`。只保存这三个产品偏好，不持久化焦点 / 滚动 DOM / 草稿。`store_get_ui_preferences` / `store_set_ui_preferences` 通过薄命令读写，数据存于应用数据根的 `ui-preferences.json`，读取有 4 KiB 上限并通过 `write_atomic` 原子替换；未知版本按 `store.corrupt` 失败关闭。实现细节见[存储架构](../data/storage.md)与[通信契约](../core/ipc-contract.md)。偏好写入使用应用级单队列，发送时合并三个字段的最新意图，至多一个请求在飞，防止完整替换覆盖另一次设置。响应按设置代次处理，失败保留上次确认值并提示，不把乐观状态当已保存；钉住保存失败撤回至已确认偏好，但不清草稿。初始化恢复只应用一次，迟到快照不得覆盖用户已操作的状态。
 
 窗口位置 / 尺寸复用 026 的受控 main 构建入口，使用 tauri-plugin-window-state 的 Rust 装配，插件只负责窗口，不负责面板钉住；恢复到已断开的显示器时约束到当前可见工作区。无须为保存窗口状态把文件权限开放给 Webview，确需 JS 插件命令时按官方权限单独登记。[官方插件文档](https://v2.tauri.app/plugin/window-state/)
 
 ts-rs 仅是未来同型类型生成候选，当前 Rust Serialize 与手写 TS 类型仍同次维护；issue 的“继续 ts-rs”不表示仓库已有它。引入时通过根 Cargo workspace / 锁文件与 CI 验证，不能把生成工具当运行时校验。贴底、IME、hover / 输入预览纯逻辑放 utils 配单测；监听和生命周期放 composable，组件负责编排，不引入全局状态库或组件库。
 
-008 完成设计，[025 界面实现](../task/025-ui-shell-impl.md)承接舞台容器、面板、记录展示、composer 与窗口状态。004 提供样式与 token 底座；021 / 022 / 023 分别提供正文恢复、记录消费与阶段 / 骰判契约，024 验证产品链路；026 提供主题 / 皮肤与首窗 bootstrap；025 消费这些能力，不重复实现恢复、持久化、主题校验或判定。025 的设置视图消费 026；立绘、地图与主题皮肤制作 / 校验不属于 025。
+008 完成设计，[025 界面实现](../../task/025-ui-shell-impl.md)承接舞台容器、面板、记录展示、composer 与窗口状态。004 提供样式与 token 底座；021 / 022 / 023 分别提供正文恢复、记录消费与阶段 / 骰判契约，024 验证产品链路；026 提供主题 / 皮肤与首窗 bootstrap；025 消费这些能力，不重复实现恢复、持久化、主题校验或判定。025 的设置视图消费 026；立绘、地图与主题皮肤制作 / 校验不属于 025。
 
 ## 实现验收矩阵
 

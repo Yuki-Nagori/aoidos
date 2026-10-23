@@ -1,6 +1,6 @@
 # 对局记录与上下文引擎
 
-更新日期：2026-10-20；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](llm.md)，跨端载荷以[通信契约](ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。已开周目目录、恢复选择与删除语义由 [059](../task/059-run-management-design.md) 定稿，060 待实现。阶段决策归 [012](../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../task/045-scene-presence-dialogue-impl.md) 承接。
+更新日期：2026-10-20；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](../ai/llm.md)，跨端载荷以[通信契约](../core/ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。已开周目目录、恢复选择与删除语义由 [059](../../task/059-run-management-design.md) 定稿，060 待实现。阶段决策归 [012](../../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../../task/045-scene-presence-dialogue-impl.md) 承接。
 
 ## 方案与边界
 
@@ -60,7 +60,7 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 | tombstone       | targetSeq、reason                                                                      | 格式预留；v1 不创建、不执行                                                                        |
 | supersede       | supersedes、replacement、reason                                                        | 格式预留；v1 不创建、不执行                                                                        |
 
-`rolls` 为 `{ sides, value }[]`，sides / value 正整数且 value <= sides；expression 保存规范表达式，total 是规则解释器计算结果，source 为 `{ kind, id }`，不能信任模型提供的骰子值。diceSeq 必须同会话、早于 check 且指向 dice；DC 是有限数值，PbtA 省略 dc，DC 注册规则必有；分档及 critical 扩展以[阶段机](turn-state-machine.md)为准。dice / check 的 planId 均必有且同值，必须关联有效 CheckPlan；rng / modifiers 类型与算术语义按 012 定型，可选公共 branchSeq 表示有效分支。当前产品存档尚不存在，不保留缺 planId 的兼容写法；022 同步类型化读写，023 执行规则。v1 rewind 使用注册 system/historyFork 的因果控制协议，待 023 实现后才能执行；tombstone / supersede 仍只读，不把格式预留当作已启用撤回。
+`rolls` 为 `{ sides, value }[]`，sides / value 正整数且 value <= sides；expression 保存规范表达式，total 是规则解释器计算结果，source 为 `{ kind, id }`，不能信任模型提供的骰子值。diceSeq 必须同会话、早于 check 且指向 dice；DC 是有限数值，PbtA 省略 dc，DC 注册规则必有；分档及 critical 扩展以[阶段机](../gameplay/turn-state-machine.md)为准。dice / check 的 planId 均必有且同值，必须关联有效 CheckPlan；rng / modifiers 类型与算术语义按 012 定型，可选公共 branchSeq 表示有效分支。当前产品存档尚不存在，不保留缺 planId 的兼容写法；022 同步类型化读写，023 执行规则。v1 rewind 使用注册 system/historyFork 的因果控制协议，待 023 实现后才能执行；tombstone / supersede 仍只读，不把格式预留当作已启用撤回。
 
 一个业务块可包含多段落，text 中 LF 在 JSON 行里转义为 `\n`；UI 分层不是拆记录的理由。v1 每个 text 上限沿用 LLM 正文限制，其他文本型块同样有界；正式行最大 2 MiB，header 最大 2 MiB，sidecar 行最大 64 KiB。超限拒绝，读取按行有界扫描，不先读完整大文件进内存；具体正文 / event / chunk 上限仍见 005。
 
@@ -72,7 +72,7 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 
 ### 阶段因果事实与有效路径
 
-012 注册的 roundAccepted / checkPlanned / checkSkipped / settlementPlanned / roundSettled / roundEnded、sceneAdvanced / sceneStayed / sessionEnded、abandonCheckpoint 与 historyFork 均为类型化 system.code，具体 data 和控制顺序以[阶段机](turn-state-machine.md)为准。054 设计新增的 `endingResolved` 仅用于 `endingMode=enabled` 的周目，须在 056 实施时登记完整 data schema；disabled 与缺少 mode 的旧存档不生成该记录。未知 system.code / 不支持的 data.version 可能承载控制含义，按未知 kind 只读处理，不继续投影生成或修改世界；诊断行也须登记，不接纳任意日志码。
+012 注册的 roundAccepted / checkPlanned / checkSkipped / settlementPlanned / roundSettled / roundEnded、sceneAdvanced / sceneStayed / sessionEnded、abandonCheckpoint 与 historyFork 均为类型化 system.code，具体 data 和控制顺序以[阶段机](../gameplay/turn-state-machine.md)为准。054 设计新增的 `endingResolved` 仅用于 `endingMode=enabled` 的周目，须在 056 实施时登记完整 data schema；disabled 与缺少 mode 的旧存档不生成该记录。未知 system.code / 不支持的 data.version 可能承载控制含义，按未知 kind 只读处理，不继续投影生成或修改世界；诊断行也须登记，不接纳任意日志码。
 
 公共 branchSeq 省略表示根路径，存在时须引用此前已 applied historyFork。rewind 不删除旧行，不复用物理 seq；投影 / record page 读取当前有效路径，历史导出保留原行。fork applied 后更换 viewEpoch，淘汰旧 cursor / bodyRef / 请求；lastRecordSeq 仍为物理最高 seq。recap 仅在覆盖范围仍有效且 sourceHash 匹配时进入 prompt，不能把已回退后果带回来。022 提供受控读写 / 重放基础，023 接入控制执行及世界解释器；解释器缺失必须拒绝，不能先启用命令。
 
@@ -80,7 +80,7 @@ v1 采用方案 A：会话冻结静态前缀、追加 recap、保留近期逐字
 
 ## 正式 prompt 语法与 GuardSpec
 
-v1 grammar 用明确的保留标记，显示文本、记录 JSON 与 prompt 文本是三个不同层。静态指令、角色定义来自可信剧本，玩家输入和历史正文是数据，不可升级为 system 指令。正文生成一次只填充一个由引擎选定的旁白或角色块，模型不能自行选择块 kind、角色、骰判或世界状态补丁。012 的[内部提议通道](turn-state-machine.md#判定提议通道与请求预算)使用同源 GrammarSpec 登记独立目标，只解析类型化候选，不作为正文块 / partial。
+v1 grammar 用明确的保留标记，显示文本、记录 JSON 与 prompt 文本是三个不同层。静态指令、角色定义来自可信剧本，玩家输入和历史正文是数据，不可升级为 system 指令。正文生成一次只填充一个由引擎选定的旁白或角色块，模型不能自行选择块 kind、角色、骰判或世界状态补丁。012 的[内部提议通道](../gameplay/turn-state-machine.md#判定提议通道与请求预算)使用同源 GrammarSpec 登记独立目标，只解析类型化候选，不作为正文块 / partial。
 
 | 输入来源              | prompt 标记                                           |
 | --------------------- | ----------------------------------------------------- |
@@ -178,11 +178,11 @@ sidecar 首行包含 sessionId / turnId、预留 recordSeq、kind / speakerId、
 
 因果记录先于 SQLite 当前状态。v1 不引入世界状态表 schema，本节冻结交付协议：012 发出类型化 WorldMutation，store 负责实际 SQL；操作必须有不可复用 mutationId、基于旧状态的条件与可重放的结果。既定骰结果写入记录，不在恢复时重新掷骰。
 
-WorldMutation 是类型化变更载荷，不是独立 system.code。结算变更随 012 注册的 settlementPlanned 保存有序 mutationId / 版本化 data，场景切换 / 结束变更由 sceneAdvanced / sessionEnded 的登记类型和 mutationId 承载；关联 seq 与字段以[阶段机的因果事实表](turn-state-machine.md#因果事实与重启投影)为准。记录 message 使用中性的变更意图说明，不先宣称成功；SQLite 事务同时更新窄表与 applied mutation 标记。具体属性键 / 数据 schema 由后续世界状态设计定义，未定义的操作不得写入；LLM 正文不会自动解析成 SQL / 状态补丁。
+WorldMutation 是类型化变更载荷，不是独立 system.code。结算变更随 012 注册的 settlementPlanned 保存有序 mutationId / 版本化 data，场景切换 / 结束变更由 sceneAdvanced / sessionEnded 的登记类型和 mutationId 承载；关联 seq 与字段以[阶段机的因果事实表](../gameplay/turn-state-machine.md#因果事实与重启投影)为准。记录 message 使用中性的变更意图说明，不先宣称成功；SQLite 事务同时更新窄表与 applied mutation 标记。具体属性键 / 数据 schema 由后续世界状态设计定义，未定义的操作不得写入；LLM 正文不会自动解析成 SQL / 状态补丁。
 
-043 将 `entityCreated` 接入 023 的同一意图 / 恢复协议：intent 必须引用可信 `SceneCatalog` 中的创建规则，Rust 在追加前校验整个 mutation 组并生成不依赖名称的动态 ID。应用时，在一笔 SQLite 事务内写实体行、推进 `entityRevision` 并写入 `store_applied`；JSONL 的 `settlementPlanned` 仍为意图事实源。未确认或待恢复会话不能向记忆提供实体快照；恢复按记录中的原 ID / hash 重放。回退保留外分支注册记录供审计，`EntityRegistry` 只把当前有效路径上的身份并入只读快照，见[记忆协议](memory.md)与[043 实施](../task/043-rust-entity-registry-impl.md)。
+043 将 `entityCreated` 接入 023 的同一意图 / 恢复协议：intent 必须引用可信 `SceneCatalog` 中的创建规则，Rust 在追加前校验整个 mutation 组并生成不依赖名称的动态 ID。应用时，在一笔 SQLite 事务内写实体行、推进 `entityRevision` 并写入 `store_applied`；JSONL 的 `settlementPlanned` 仍为意图事实源。未确认或待恢复会话不能向记忆提供实体快照；恢复按记录中的原 ID / hash 重放。回退保留外分支注册记录供审计，`EntityRegistry` 只把当前有效路径上的身份并入只读快照，见[记忆协议](memory.md)与[043 实施](../../task/043-rust-entity-registry-impl.md)。
 
-045 沿用同一版本化 `WorldMutation` / applied 边界，注册 `scenePresenceChanged`、`observed` 与 `rumorDelivered`。绑定 `scriptRevision` 的 `SceneCatalog` presence policy 提供初始成员及每个场景的 entry rule；后续成员变更随 settlement 意图持久提交并 applied。presence 按当前有效路径重建，即使所在回合随后 failed / cancelled 也不回滚。获知事件须经完整成功回合、applied 回执和有效路径共同确认；只读扫描每次最多读取最近有效路径的 4096 条记录 / 16 MiB，传闻链最多 8 跳，来源和父链必须位于同一预算窗口内。快照最多 512 名角色 / 256 KiB，revision 是基于 session、有效历史、场景、成员和最后 mutation 的 opaque CAS token。030 只能只读消费事件，不能写入在场或获知状态；046 再接入快照 IPC 与角色选择。协议和实现分别见 [044](../task/044-scene-presence-dialogue-design.md)、[045](../task/045-scene-presence-dialogue-impl.md) 和 [030](../task/030-memory-gates-batches-impl.md)。
+045 沿用同一版本化 `WorldMutation` / applied 边界，注册 `scenePresenceChanged`、`observed` 与 `rumorDelivered`。绑定 `scriptRevision` 的 `SceneCatalog` presence policy 提供初始成员及每个场景的 entry rule；后续成员变更随 settlement 意图持久提交并 applied。presence 按当前有效路径重建，即使所在回合随后 failed / cancelled 也不回滚。获知事件须经完整成功回合、applied 回执和有效路径共同确认；只读扫描每次最多读取最近有效路径的 4096 条记录 / 16 MiB，传闻链最多 8 跳，来源和父链必须位于同一预算窗口内。快照最多 512 名角色 / 256 KiB，revision 是基于 session、有效历史、场景、成员和最后 mutation 的 opaque CAS token。030 只能只读消费事件，不能写入在场或获知状态；046 再接入快照 IPC 与角色选择。协议和实现分别见 [044](../../task/044-scene-presence-dialogue-design.md)、[045](../../task/045-scene-presence-dialogue-impl.md) 和 [030](../../task/030-memory-gates-batches-impl.md)。
 
 ```text
 准备带 mutationId 的事实块和事件载荷
@@ -196,7 +196,7 @@ WorldMutation 是类型化变更载荷，不是独立 system.code。结算变更
 
 这里的“同成败”是成功对外确认之前两边均已完成，故障期间允许有明确 pending 状态并阻止后续游戏推进；不是跨文件事务。如果 SQLite 提交后进程崩溃，重开读取 applied 标记即可结束，不重复加点。JSONL fsync 错误导致状态不确定时冻结并重新核验，也不先写 SQLite。
 
-记录 API 在 pending 世界意图存在时不把该意图渲染成“变更成功”；恢复快照标明 needsRecovery，产品提交拒绝 engine.invalid-phase（触发条件见[阶段机的错误映射](turn-state-machine.md#ipc错误与消费)）。SQLite 当前状态失配时以有序事实和幂等标记核验 / 修复，热路径不做全量回放，SQLite 的 applied 游标保存最后确认的 mutation 位置；它不是 012 的暂停 checkpoint（stage / throughSeq），pending 世界意图未修复时仍省略暂停 checkpoint。未知或无重放解释器的 mutation 不自动执行。
+记录 API 在 pending 世界意图存在时不把该意图渲染成“变更成功”；恢复快照标明 needsRecovery，产品提交拒绝 engine.invalid-phase（触发条件见[阶段机的错误映射](../gameplay/turn-state-machine.md#ipc错误与消费)）。SQLite 当前状态失配时以有序事实和幂等标记核验 / 修复，热路径不做全量回放，SQLite 的 applied 游标保存最后确认的 mutation 位置；它不是 012 的暂停 checkpoint（stage / throughSeq），pending 世界意图未修复时仍省略暂停 checkpoint。未知或无重放解释器的 mutation 不自动执行。
 
 ## 投影、预算与 recap
 
@@ -227,7 +227,7 @@ recap 追加的 fromSeq..throughSeq 为此前未覆盖的连续逻辑区间（�
 
 超过 compressionTrigger 只产生 CompressionNeeded 计划，不在 project 内部自动烧 quota。后台 recap 默认关闭；未授权时可在用户本次推进前提示需压缩，允许用户确认压缩费用后再单独请求，或者明确接受历史裁剪 / 调整预算。超过硬上限且未有可用计划时拒绝开始生成，不把压缩当无预算的额外请求。
 
-若用户显式启用后台压缩，默认门槛为闲置 60s、距上次尝试 300s、至少 16 个未覆盖封口块且估算至少 4096 token，并满足 compressionTrigger；五项同时成立才启动。用户返回在请求边界让位，取消和请求数遵循 005；recap 不抢占产品回合，必须与 020 同一请求门禁协调。连续 3 次失败后停用本会话自动压缩，用户主动恢复后再试；不隐藏重复探测请求。后台尝试用量按任务记录以便诊断，但共同计入 [005 的统一调用预算](llm.md#统一调用预算与任务优先级)，不设置独立费用额度；叙事回合的物理请求次数上限仍按既有规则执行。统一预算耗尽时，必要请求暂停推进，可选后台跳过；不把所有记忆整理当作必需前置步骤。
+若用户显式启用后台压缩，默认门槛为闲置 60s、距上次尝试 300s、至少 16 个未覆盖封口块且估算至少 4096 token，并满足 compressionTrigger；五项同时成立才启动。用户返回在请求边界让位，取消和请求数遵循 005；recap 不抢占产品回合，必须与 020 同一请求门禁协调。连续 3 次失败后停用本会话自动压缩，用户主动恢复后再试；不隐藏重复探测请求。后台尝试用量按任务记录以便诊断，但共同计入 [005 的统一调用预算](../ai/llm.md#统一调用预算与任务优先级)，不设置独立费用额度；叙事回合的物理请求次数上限仍按既有规则执行。统一预算耗尽时，必要请求暂停推进，可选后台跳过；不把所有记忆整理当作必需前置步骤。
 
 压缩失败或候选非法时不追加 recap，不推进覆盖游标；保留原记录并显示可重试失败。已有内容仍在硬限内可由用户继续，超过硬限必须明确处理。recap 是模型摘要，不是可重放的事实 / 世界状态；007 检索可在后续任务替换投影策略，不能在 v1 把有损摘要当状态真相。
 
@@ -245,11 +245,11 @@ recap 追加的 fromSeq..throughSeq 为此前未覆盖的连续逻辑区间（�
 
 ## 记录视图、分页与事件恢复
 
-精确字段见[通信契约](ipc-contract.md)。记录追加事件为 engine:record:appended，流标识 sessionId，表示正式业务块完成提交；正在生成的安全 delta 使用 llm:turn:chunk，不把每 token 当作一个记录块。记录事件和 LLM 事件可能同时到达，UI 按 turnId + recordSeq 将流式预览替换为封口块，不能渲染两份正文。
+精确字段见[通信契约](../core/ipc-contract.md)。记录追加事件为 engine:record:appended，流标识 sessionId，表示正式业务块完成提交；正在生成的安全 delta 使用 llm:turn:chunk，不把每 token 当作一个记录块。记录事件和 LLM 事件可能同时到达，UI 按 turnId + recordSeq 将流式预览替换为封口块，不能渲染两份正文。
 
 打开时扫描文件建立 seq → offset / length 的内存索引，仅保存索引与有界视图，不复制所有正文。默认按新到旧取块视图，页 response 的 lastSeq 是一致读取边界的记录事件信封基线，另有 lastRecordSeq 表示块位置。cursor 编码版本、sessionId、固定读边界、下一位置、方向和本进程 viewEpoch；前端不解析。分页期间新追加不混入旧 cursor，坏 / 跨会话 / 过期 cursor 为 app.bad-request，重启后重新取第一页；limit 仍遵循公共契约。
 
-一页的完整 JSON 载荷限制 512 KiB；即使没达到 limit，也在完整块边界返回 nextCursor。单块加封装超过页预算时返回摘要行和 bodyRef，由 engine_get_record_body 受限分段读取完整正文；原样导出从 Rust 文件完成，不向 IPC 发整文件。bodyRef 不含磁盘路径，绑定 sessionId / seq / 内容 hash；错误码以[通信契约](ipc-contract.md)为准：有效引用指向不存在的 recordSeq 为 app.not-found，引用无效 / 跨会话 / hash 失配 / 身份过期为 app.bad-request；分段界限为有效 UTF-8 边界，每段最多 32 KiB。
+一页的完整 JSON 载荷限制 512 KiB；即使没达到 limit，也在完整块边界返回 nextCursor。单块加封装超过页预算时返回摘要行和 bodyRef，由 engine_get_record_body 受限分段读取完整正文；原样导出从 Rust 文件完成，不向 IPC 发整文件。bodyRef 不含磁盘路径，绑定 sessionId / seq / 内容 hash；错误码以[通信契约](../core/ipc-contract.md)为准：有效引用指向不存在的 recordSeq 为 app.not-found，引用无效 / 跨会话 / hash 失配 / 身份过期为 app.bad-request；分段界限为有效 UTF-8 边界，每段最多 32 KiB。
 
 普通 page 的 lastSeq 不足以恢复已加载面板中的所有缺失块。engine_get_record_view 返回 items（最新窗口）、lastRecordSeq、needsRecovery、inFlight? 和 record 事件基线，窗口受同一页字节 / 条数上限；UI 以它替换“最新窗口”，保留旧页缓存但标记为旧边界，按 seq 合并，不把窗口外历史当丢失。先订阅并有界缓存事件，再取 view，再按基线消费；缺口取 view，不把 engine_get_phase 当记录快照。
 
@@ -267,11 +267,11 @@ from / to 在 progress 中表示该步版本，在 done / 快照中表示整个�
 
 store_get_migration 运行期快照包含 migrationId、phase、from?、to、current?、lastStep?、failedStep?、seq { progress, done, failed } 、error? 和 deliveryError?，字段详见契约。新流先注册监听再取当前快照，跨 migrationId 用新快照替换；迁移提交已经先于回调发生：回调同步准备 / 预留事件、更新 current 与基线，窗口投递排队到事务外；不套用记录增量的“预留后写盘”顺序，投递失败不重跑迁移。快照保存当前流和最近终态，不做事件重放；终态生产者退出后再清退旧 migrationId 的 seq，不复用 id。
 
-数据库打开 / 迁移错误必须收尾 failed 并更新快照；平台载荷准备、序号或投递失败记录 deliveryError=app.event-failed，保留数据库真实 completed / failed 状态，不把已提交迁移伪装为回滚失败。序号不可用时仍保存 current / 终态并释放门禁，不能谎报未提交版本。真实迁移失败导致业务库不开放，所需业务存储的后续命令按[通信契约](ipc-contract.md)报 app.not-ready；只读迁移诊断快照仍可查询，前端主动取快照展示失败，不持续轮询。最终事件全部丢失的检测限制沿用 IPC 契约，窗口重连 / 主动恢复可重新取快照，不暗加轮询。
+数据库打开 / 迁移错误必须收尾 failed 并更新快照；平台载荷准备、序号或投递失败记录 deliveryError=app.event-failed，保留数据库真实 completed / failed 状态，不把已提交迁移伪装为回滚失败。序号不可用时仍保存 current / 终态并释放门禁，不能谎报未提交版本。真实迁移失败导致业务库不开放，所需业务存储的后续命令按[通信契约](../core/ipc-contract.md)报 app.not-ready；只读迁移诊断快照仍可查询，前端主动取快照展示失败，不持续轮询。最终事件全部丢失的检测限制沿用 IPC 契约，窗口重连 / 主动恢复可重新取快照，不暗加轮询。
 
 ## 周目结局记录边界（054 已定稿，056 待实现）
 
-结局规则快照与结局 resolution 是类型化的产品事实，绑定 run、script revision / hash、`endingRulesHash`、有效历史锚点及已应用回执，使用 022 的持久化 / 恢复协议。结局规范摘要属于权威记录；AI 结局叙事是绑定 `resolutionId` 的独立展示产物，不注册为普通 narration，不进入正文、因果投影或 033 可收集素材。重试只能复用已冻结摘要，不能重新求值标签或重复提交终态。规则与记录的具体状态机由 [结局架构](ending-flow.md) 和 056 实施。
+结局规则快照与结局 resolution 是类型化的产品事实，绑定 run、script revision / hash、`endingRulesHash`、有效历史锚点及已应用回执，使用 022 的持久化 / 恢复协议。结局规范摘要属于权威记录；AI 结局叙事是绑定 `resolutionId` 的独立展示产物，不注册为普通 narration，不进入正文、因果投影或 033 可收集素材。重试只能复用已冻结摘要，不能重新求值标签或重复提交终态。规则与记录的具体状态机由 [结局架构](../gameplay/cycle/ending-flow.md) 和 056 实施。
 
 ## UI 映射与验收
 
@@ -287,7 +287,7 @@ store_get_migration 运行期快照包含 migrationId、phase、from?、to、cur
 | 生成中预览                        | 人声 / 机器活动态                         | 取 llm 快照，封口后按身份替换      |
 | cancelled / failed / orphan       | 正文保留 + 机器状态说明                   | 不伪装正常完成，不默认进入正常投影 |
 
-与现有 [UI 规范](../standards/ui.md) 双 register 一致；008 已定稿，[界面结构](ui-shell.md)维护视觉细节、输入模式、交互 / 焦点，025 承接实现；设计 done 不表示运行界面已完成。本 task 的互校是类型不缺项、粒度不冲突。
+与现有 [UI 规范](../../standards/ui.md) 双 register 一致；008 已定稿，[界面结构](../interface/ui-shell.md)维护视觉细节、输入模式、交互 / 焦点，025 承接实现；设计 done 不表示运行界面已完成。本 task 的互校是类型不缺项、粒度不冲突。
 
 | 验收领域    | 必须覆盖的证据                                                                                        |
 | ----------- | ----------------------------------------------------------------------------------------------------- |
@@ -300,7 +300,7 @@ store_get_migration 运行期快照包含 migrationId、phase、from?、to、cur
 | 迁移        | 多步 / 无步骤 / 第一步前失败 / 中途失败 / 投递失败，current 与真实 user_version 一致，终态与 seq 清退 |
 | 标定        | 混合语料 / usage 缺失 / 高偏差，模型 / 形态分桶与估算版本更新                                         |
 
-022 复用 serde / serde_json / store，并引入 SHA-256、HMAC 和 RFC3339 时间库，依赖版本口径见[技术栈](tech-stack.md)。不引入 ORM 或事件溯源框架。022 实现时每次提交同步跨端类型、注释与架构现状，并在最终状态通过 bun run verify。
+022 复用 serde / serde_json / store，并引入 SHA-256、HMAC 和 RFC3339 时间库，依赖版本口径见[技术栈](../core/tech-stack.md)。不引入 ORM 或事件溯源框架。022 实现时每次提交同步跨端类型、注释与架构现状，并在最终状态通过 bun run verify。
 
 ## 实现边界与运行链路
 

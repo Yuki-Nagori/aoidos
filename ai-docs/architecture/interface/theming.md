@@ -1,6 +1,6 @@
 # 主题与剧本皮肤
 
-更新 / 官方资料核验日期：2026-10-10。[009](../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/aoidos/issues/12)；实现由 [026](../task/026-theming-impl.md) 交付，PR #105 三平台 CI 与本机验收通过。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](ipc-contract.md)，存储与路径规则归[存储基建](storage.md)。
+更新 / 官方资料核验日期：2026-10-10。[009](../../task/009-theming-design.md) 的设计定稿，承接 [issue #12](https://github.com/Yuki-Nagori/aoidos/issues/12)；实现由 [026](../../task/026-theming-impl.md) 交付，PR #105 三平台 CI 与本机验收通过。本文维护 token 目录、主题偏好与皮肤校验 / 应用管线。颜色与视觉默认值归 [UI 风格](../../standards/ui.md)，布局和交互归 [界面结构](ui-shell.md)，精确命令 / 错误形状归[通信契约](../core/ipc-contract.md)，存储与路径规则归[存储基建](../data/storage.md)。
 
 ## 分层与真源
 
@@ -10,7 +10,7 @@
 
 每个主题文件是唯一默认值真源；文件名（不含扩展名）是稳定 ThemeId，首行注释提供目录回退显示名，根块声明 `color-scheme` 和完整 token。内置主题的用户可见名称按 ThemeId 从界面 locale 资源读取，不能依赖 CSS 注释的语言；未知主题 ID 才回退到目录名称。Bun 生成器检查 slug、唯一 ID、token 集合并生成运行 CSS；Rust 目录再按封闭 token 类型校验每个内置值，并从同一目录导出动态主题选项，不在 TS 或命令层维护主题枚举。新增主题只需添加符合格式的 CSS 文件并通过生成检查和 Rust 校验。剧本 `theme.css` 只覆盖可写 token，不定义基础主题、不区分 light / dark，也不能自行创建 ThemeId。任意剧本包导入仍在本任务范围之外。
 
-004 实现应用默认 token 与映射；026 的 Rust 业务 crate `aoidos-theme` 维护目录元数据、类型化校验与规范输出，存储操作通过 store 访问，不能直接持有 SQL 连接。前端只应用 Rust 交出的值、维护显示代次，不读取 `theme.css` 或补一套解析器。实现状态以 [026](../task/026-theming-impl.md) 的验收记录为准。
+004 实现应用默认 token 与映射；026 的 Rust 业务 crate `aoidos-theme` 维护目录元数据、类型化校验与规范输出，存储操作通过 store 访问，不能直接持有 SQL 连接。前端只应用 Rust 交出的值、维护显示代次，不读取 `theme.css` 或补一套解析器。实现状态以 [026](../../task/026-theming-impl.md) 的验收记录为准。
 
 实现时语义 token 目录逐项列出 name、域编号、valueKind、skinWritable、alias?，Rust 用封闭目录表；主题 CSS 与它做集合互校。内置色板不复制到聚合 JSON；Rust 构建时自动嵌入源文件，Web 样式由根 Bun 脚本从同一文件夹生成，`theme:defaults:check` 检查生成物新鲜度。默认值必须是可独立解析的常量，不依赖 Tailwind 生成或运行时网络。
 

@@ -1,6 +1,6 @@
 # LLM 接入与护栏
 
-更新日期：2026-10-22；能力资料核验日期：2026-10-05；模型目录核验日期：2026-10-11。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/aoidos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；023 已交付阶段机和产品提交入口，024 已完成最小正式剧本 / 配置入口，PR #88 已合并且 main CI 三平台通过。035 已接入价格、账本、预算端口、费用 IPC 与基础 UI，仍在完成历史补价、供应商余额及三平台人工验收；042 已完成 OpenCode 模型目录与多协议 Provider 接入。真实模型质量与费用标定仍待后续工作；实际能力与验证证据见「实现承接」及[任务索引](../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](ipc-contract.md)为唯一来源。
+更新日期：2026-10-22；能力资料核验日期：2026-10-05；模型目录核验日期：2026-10-11。task 005 的已评审设计，依据 [issue #8](https://github.com/Yuki-Nagori/aoidos/issues/8) 补齐边界后定稿。018 / 019 已实现供应商适配、护栏、调度、配置、凭据与代理；020 / 021 已接入回合协调、本地夹具 IPC 与前端恢复；022 已实现记录持久化及投影，已通过最终验收；023 已交付阶段机和产品提交入口，024 已完成最小正式剧本 / 配置入口，PR #88 已合并且 main CI 三平台通过。035 已接入价格、账本、预算端口、费用 IPC 与基础 UI，仍在完成历史补价、供应商余额及三平台人工验收；042 已完成 OpenCode 模型目录与多协议 Provider 接入。真实模型质量与费用标定仍待后续工作；实际能力与验证证据见「实现承接」及[任务索引](../../task-index.md)。跨端载荷、错误码和公共预算以[通信契约](../core/ipc-contract.md)为唯一来源。
 
 ## 架构与职责
 
@@ -132,7 +132,7 @@ GuardSpec 是按优先级排序的规则集合；编译时建立匹配所需状�
 
 “流式 == 落库”指拼接生成端成功接纳的 chunk.delta 后，与该回合已提交的生成正文逐字节相同；漏事件窗口在按契约恢复快照后对齐，不承诺投递失败时窗口即时一致；不包含 reasoning、keep-alive、usage、标签或护栏扣住的尾部。它不承诺崩溃前未持久化的输出已经落盘。
 
-产品路径先由 006 的记录写入方接纳并持久化安全增量，再更新内存快照和发送事件，所有者串行处理同一 turn。006 的[记录引擎](record-engine.md)定义安全文本批次、partial sidecar、封口和崩溃恢复；该批提交前不发送对应 chunk，不要求逐 token 写盘。写入失败不发送对应 chunk，回合以 store.* 错误终止；已提交的前文保留。调试路径明确为内存模式，不冒充对局持久化。增量写入和失败收尾遵循 006 / 022 协议，不能由 LLM crate 越过引擎直接写记录。
+产品路径先由 006 的记录写入方接纳并持久化安全增量，再更新内存快照和发送事件，所有者串行处理同一 turn。006 的[记录引擎](../data/record-engine.md)定义安全文本批次、partial sidecar、封口和崩溃恢复；该批提交前不发送对应 chunk，不要求逐 token 写盘。写入失败不发送对应 chunk，回合以 store.* 错误终止；已提交的前文保留。调试路径明确为内存模式，不冒充对局持久化。增量写入和失败收尾遵循 006 / 022 协议，不能由 LLM crate 越过引擎直接写记录。
 
 快照文本、终态和三种事件的 seq 基线必须是一致副本。一次增量按以下顺序提交：
 
@@ -200,7 +200,7 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 ### 计价币种与分币种额度（已确认）
 
-费用始终按实际服务商 / 模型的原币种计价和保留，首版支持 CNY / USD。若供应商账户有多币种价格，模型登记时选择与实际扣款口径对应的价格版本。每局分别设置 CNY 与 USD 上限；请求只消耗其原币种上限，不换算、不互借。全应用月报按服务商和原币统计，模型作为下钻明细；不设月度上限，也不产生跨币总额。界面语言 / 报表时区分别保存，语言变化不改价格币种、额度或剧情语言。[国际化](i18n.md)负责精确格式化；[计价架构](billing.md)定义原币账本、分币种上限和月报。
+费用始终按实际服务商 / 模型的原币种计价和保留，首版支持 CNY / USD。若供应商账户有多币种价格，模型登记时选择与实际扣款口径对应的价格版本。每局分别设置 CNY 与 USD 上限；请求只消耗其原币种上限，不换算、不互借。全应用月报按服务商和原币统计，模型作为下钻明细；不设月度上限，也不产生跨币总额。界面语言 / 报表时区分别保存，语言变化不改价格币种、额度或剧情语言。[国际化](../interface/i18n.md)负责精确格式化；[计价架构](billing.md)定义原币账本、分币种上限和月报。
 
 ### 默认金额与计价（027 已评审；035 核心接入中）
 
@@ -208,17 +208,17 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 价格配置登记后缓存 / 持久恢复，凭据仍由 019 管理。历史未计价可按明确范围补价，不改原始 usage 或已结算请求。用户同时看费用和 Token，按服务商、模型、币种及单局 / 月报范围查明细；每局 80% 提示按 CNY、USD 两个上限分别去重，未知 / 预留单列。月报只按服务商和原币统计。参考默认值、不可变版本、精确计算、时段、分币种上限、恢复和可选余额的唯一细则见[计价与预算](billing.md)。
 
-[027](../task/027-llm-cost-control-design.md) 已完成设计。035 已接入统一预算端口、价格登记、物理请求预留 / 结算、费用设置 / 明细与月报；030 / 033 仍等待 035 完成。每次成功预留对应唯一 requestId / turnId，正常终结显式结算；Future 异常丢弃按取消且用量未知结算一次。仅当取消在 `provider.start` 调用前被观察到，才以 `notDispatched` 释放预留；进入 Provider 调用后，usage 缺失或只报告部分字段均保留未知，不能伪造零消耗，明确报告的零值与未知区分。当前账本适配器尚未向有界诊断面暴露结算失败，修复前不得把 reserved 误认为结算成功。基础接入由本地夹具验证，不等同于真实供应商账单对账。历史补价、供应商余额和三平台人工验收仍未完成，不能据此宣称 035 整体验收通过。
+[027](../../task/027-llm-cost-control-design.md) 已完成设计。035 已接入统一预算端口、价格登记、物理请求预留 / 结算、费用设置 / 明细与月报；030 / 033 仍等待 035 完成。每次成功预留对应唯一 requestId / turnId，正常终结显式结算；Future 异常丢弃按取消且用量未知结算一次。仅当取消在 `provider.start` 调用前被观察到，才以 `notDispatched` 释放预留；进入 Provider 调用后，usage 缺失或只报告部分字段均保留未知，不能伪造零消耗，明确报告的零值与未知区分。当前账本适配器尚未向有界诊断面暴露结算失败，修复前不得把 reserved 误认为结算成功。基础接入由本地夹具验证，不等同于真实供应商账单对账。历史补价、供应商余额和三平台人工验收仍未完成，不能据此宣称 035 整体验收通过。
 
-记忆的有界批次策略与待标定项见[记忆设计](memory.md)。
+记忆的有界批次策略与待标定项见[记忆设计](../data/memory.md)。
 
 ## 内部提议与游戏回合
 
-012 的[阶段机](turn-state-machine.md)区分 roundId 与单次 LLM turnId。020 的同一协调器支持 public 正文输出和 private 提议输出；private 复用 Provider / 护栏 / 唯一重试调度器及首交付定义，收集器有界，不创建公开 turn ring、不发 llm:turn:*、不写正文 partial。解析 / 规则校验归引擎，Provider 不采骰、不选世界补丁。现有 TurnSnapshot 与事件字段无需增加 purpose；前端只消费 public 输出。
+012 的[阶段机](../gameplay/turn-state-machine.md)区分 roundId 与单次 LLM turnId。020 的同一协调器支持 public 正文输出和 private 提议输出；private 复用 Provider / 护栏 / 唯一重试调度器及首交付定义，收集器有界，不创建公开 turn ring、不发 llm:turn:*、不写正文 partial。解析 / 规则校验归引擎，Provider 不采骰、不选世界补丁。现有 TurnSnapshot 与事件字段无需增加 purpose；前端只消费 public 输出。
 
 游戏回合持有共享 lease，内部提议 / 叙事子调用借用它并分别分配新 turnId；不能对子调用再次获取门禁，不能让后台任务插入回合间隙。内部 JSON 被收集器接纳后同样禁止自动重发；schema 失败不触发额外纠错请求。012 冻结提议目标、上限与每游戏回合调用预算；单次物理请求、超时、空输出 finishReason 仍唯一遵循通信契约。以下正文快照 / 事件规则描述 public 输出，private 失败由引擎操作终态和脱敏诊断收尾。
 
-007 的[记忆工程协议 v1](memory.md)复用 private 通道处理独立授权批次；不是游戏回合的第四次子调用，不创建另一套重试、费用账本或公开 turn ring。该协议已评审，记忆请求尚未实现。
+007 的[记忆工程协议 v1](../data/memory.md)复用 private 通道处理独立授权批次；不是游戏回合的第四次子调用，不创建另一套重试、费用账本或公开 turn ring。该协议已评审，记忆请求尚未实现。
 
 ## IPC 与回合生命周期
 
@@ -256,7 +256,7 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 如果最后所有事件都投递失败且没有下一条事件，seq 缺口本身无法唤醒监听者。窗口恢复 / 重新连接或用户主动恢复时重新取快照，不宣称“没有下一条事件也能自动检测”；首个实际发送方必须测试这一平台失败场景，不能靠隐藏的持续轮询补齐契约。
 
-关闭应用时触发进程级取消，等待写入方完成已开始的原子提交后释放门禁；不承诺所有窗口仍能收到最终事件。重启不恢复旧 turnId，006 按[记录引擎](record-engine.md)从 partial 保留完整安全增量、封中断块并写 orphan 说明，并要求用户主动开始新回合；没有自动收费的续跑。
+关闭应用时触发进程级取消，等待写入方完成已开始的原子提交后释放门禁；不承诺所有窗口仍能收到最终事件。重启不恢复旧 turnId，006 按[记录引擎](../data/record-engine.md)从 partial 保留完整安全增量、封中断块并写 orphan 说明，并要求用户主动开始新回合；没有自动收费的续跑。
 
 ## 代理、密钥与网络配置
 
@@ -264,9 +264,9 @@ reqwest 当前默认会重试协议 NACK，因此必须显式配置 retry(never(
 
 代理模式 system / none / manual：system 使用启动时形成的环境代理快照（不隐式读环境）；none 显式禁用；manual 使用显式 HTTP(S) 或 SOCKS5 代理并禁用自动系统代理叠加（由构造方式保证：客户端统一经 `proxy::build_client` 显式组装，全程不让 reqwest 隐式读环境），客户端已启用 reqwest 的 `socks` feature。代理三模式、CONNECT 隧道、禁用重定向与经代理的 TLS 分类已由本地代理夹具验证（019）。生产 endpoint 必须 HTTPS，禁止 URL 内嵌凭据，禁止自动重定向携带请求（redirect none）；仅测试 / 用户明确配置的回环本地服务可 HTTP。代理用户名 / 密码由 Rust 凭据引用取出，不存进 URL、普通配置、日志或 CmdError.detail；关闭原始 HTTP trace。端点和代理错误仅返回脱敏类别，不输出 response body、请求头或完整 prompt。
 
-`llm_set_key` 由 Tauri 入口在 Rust 原生窗口中输入密钥，命令 / 快照只返回状态；取消保留旧值。`src-tauri/src/native_prompt/` 以同型接口提供 Windows CredUI、macOS AppKit 与 Linux GTK 密码控件，命令经 UI 主线程调度，无桌面会话显式报错；`aoidos-llm` 只负责 keyring、Vault 与凭据数据语义，不依赖 GUI 库。macOS 安全输入框使用原生 Edit 菜单的 Paste / Select All，并在弹窗打开时取得焦点；Windows CredUI 与 GTK Entry 使用各自平台的密码输入控件。三平台真实确认 / 取消与 OS 凭据读写清已有验证，环境、提交及最终复验结果以 [019](../task/019-llm-profile-credentials-impl.md) 为准。
+`llm_set_key` 由 Tauri 入口在 Rust 原生窗口中输入密钥，命令 / 快照只返回状态；取消保留旧值。`src-tauri/src/native_prompt/` 以同型接口提供 Windows CredUI、macOS AppKit 与 Linux GTK 密码控件，命令经 UI 主线程调度，无桌面会话显式报错；`aoidos-llm` 只负责 keyring、Vault 与凭据数据语义，不依赖 GUI 库。macOS 安全输入框使用原生 Edit 菜单的 Paste / Select All，并在弹窗打开时取得焦点；Windows CredUI 与 GTK Entry 使用各自平台的密码输入控件。三平台真实确认 / 取消与 OS 凭据读写清已有验证，环境、提交及最终复验结果以 [019](../../task/019-llm-profile-credentials-impl.md) 为准。
 
-OS 凭据库由 keyring 的三平台后端承担；macOS Keychain 的授权弹窗由系统 ACL 与应用签名身份控制，选择“始终允许”后，同一可信应用身份可在后续请求中读取而不重复确认；“仅允许一次”会在下次读取时再次询问。Windows Credential Manager 与 Linux Secret Service 也可能受系统凭据库锁定状态或策略影响，不能宣称跨平台无条件免授权。不得为隐藏系统授权而把密钥转入明文 UI / 日志或绕过 OS ACL；降级文件采用 Windows 受保护 DACL / Unix 0600。权威后端指针、删除墓碑、私有发布与 hint 的唯一规则见[通信契约](ipc-contract.md#工程纪律可检查版)；读取不凭 OS 旧值推断文件值过期。`SecretString` 管理密钥生命周期，脱敏 Debug 仍不能代替 OS 权限。若将来允许设置表单处理密钥，须先修订职责边界与通信契约。
+OS 凭据库由 keyring 的三平台后端承担；macOS Keychain 的授权弹窗由系统 ACL 与应用签名身份控制，选择“始终允许”后，同一可信应用身份可在后续请求中读取而不重复确认；“仅允许一次”会在下次读取时再次询问。Windows Credential Manager 与 Linux Secret Service 也可能受系统凭据库锁定状态或策略影响，不能宣称跨平台无条件免授权。不得为隐藏系统授权而把密钥转入明文 UI / 日志或绕过 OS ACL；降级文件采用 Windows 受保护 DACL / Unix 0600。权威后端指针、删除墓碑、私有发布与 hint 的唯一规则见[通信契约](../core/ipc-contract.md#工程纪律可检查版)；读取不凭 OS 旧值推断文件值过期。`SecretString` 管理密钥生命周期，脱敏 Debug 仍不能代替 OS 权限。若将来允许设置表单处理密钥，须先修订职责边界与通信契约。
 
 ## 错误分类与标定
 
@@ -292,30 +292,30 @@ SSE adapter 需要接受 content / reasoning 分离、usage-only chunk 和合法
 | 凭据 / 代理 / TLS | 三平台权限与 hint、取消设置保留旧值、代理 fixture、TLS source 分类，无明文日志                                      |
 | 模型质量          | 两候选模型、两调用形态、固定黄金剧本；记录格式违规率、人设一致性、首字符延迟和账单用量                              |
 
-TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地（自签名证书、连接拒绝、中途断连、异常 EOF、字节级分片重放）；019 的凭据与代理已落地并夹具验证（含三平台原生输入与 OS 凭据实测，证据归 019），模型质量（024）仍为待标定项，上表给出方法；失败必须修正 adapter / profile 或显式拒绝能力，不以未经证实的降级掩盖。006 的[记录引擎](record-engine.md)承接 GuardSpec / 输出写入方约束并定义正式记录语法，012 定义引擎阶段与产品输入规则。
+TLS source 分类、SSE 解析器兼容性已由 018 的本地夹具标定落地（自签名证书、连接拒绝、中途断连、异常 EOF、字节级分片重放）；019 的凭据与代理已落地并夹具验证（含三平台原生输入与 OS 凭据实测，证据归 019），模型质量（024）仍为待标定项，上表给出方法；失败必须修正 adapter / profile 或显式拒绝能力，不以未经证实的降级掩盖。006 的[记录引擎](../data/record-engine.md)承接 GuardSpec / 输出写入方约束并定义正式记录语法，012 定义引擎阶段与产品输入规则。
 
 ## 实现承接
 
-实现顺序与状态以[任务索引](../task-index.md)为准。018 已交付 `aoidos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy`）及对应命令；原生输入由 `src-tauri/src/native_prompt/` 承接；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `aoidos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 已交付阶段机与产品提交入口，024 已接真实 Provider 与内置原文，PR #88 已合并且 main CI 三平台通过；042 已接入 OpenCode Zen / Go 模型目录与多协议 Provider，动态上游路由能力不作实机保证。真实模型质量与用量标定仍由后续工作承接。
+实现顺序与状态以[任务索引](../../task-index.md)为准。018 已交付 `aoidos-llm` crate（`providers/` 适配层 + `guard` / `schedule` / `sse` / `decode` / `error`，不依赖 tauri，本地夹具全覆盖、行覆盖 100%）；019 已落地配置 / 凭据 / 代理（`config` / `credentials` / `proxy`）及对应命令；原生输入由 `src-tauri/src/native_prompt/` 承接；三平台原生能力验证与最终复验状态见任务记录。020 已实现纯 Rust `aoidos-engine` 协调器、提交确认端口、public / private 共享 lease 和真实主 Webview 夹具；最终验收状态见 020。021 已交付纯消费规则、注入式恢复协调和 Vue 监听生命周期，实际产品消费者由真实 Webview 夹具验证；验收状态见 021，022 已实现持久化与估算诊断；023 已交付阶段机与产品提交入口，024 已接真实 Provider 与内置原文，PR #88 已合并且 main CI 三平台通过；042 已接入 OpenCode Zen / Go 模型目录与多协议 Provider，动态上游路由能力不作实机保证。真实模型质量与用量标定仍由后续工作承接。
 
-| 任务                                                          | 承接边界                                                      |
-| ------------------------------------------------------------- | ------------------------------------------------------------- |
-| [018 Provider 与护栏](../task/018-llm-provider-guard-impl.md) | 单次传输、协议解析、安全输出、唯一请求策略                    |
-| [019 配置与凭据](../task/019-llm-profile-credentials-impl.md) | 冻结 profile、Rust 原生输入、代理与凭据版本                   |
-| [020 回合协调与 IPC](../task/020-llm-turn-ipc-impl.md)        | 共享门禁、终态、事件准备 / 投递、有限快照；先用内存调试写入方 |
-| [021 前端恢复](../task/021-llm-web-recovery-impl.md)          | 同型 API、订阅与快照消费、缺口 / 旧响应处理                   |
-| [022 记录引擎](../task/022-record-engine-impl.md)             | 006 定稿后的持久化写入方、投影和迁移运行期协议                |
-| [023 阶段机](../task/023-turn-state-machine-impl.md)          | 012 定稿后的阶段流转、骰判和产品提交入口                      |
-| [024 产品联调](../task/024-llm-engine-integration.md)         | 真实窗口、持久记录与失败恢复的三平台验证                      |
-| [035 计价与费用控制](../task/035-llm-cost-control-impl.md)    | 计价、统一预算端口与费用设置 / 明细（018 已预留可注入端口）   |
+| 任务                                                             | 承接边界                                                      |
+| ---------------------------------------------------------------- | ------------------------------------------------------------- |
+| [018 Provider 与护栏](../../task/018-llm-provider-guard-impl.md) | 单次传输、协议解析、安全输出、唯一请求策略                    |
+| [019 配置与凭据](../../task/019-llm-profile-credentials-impl.md) | 冻结 profile、Rust 原生输入、代理与凭据版本                   |
+| [020 回合协调与 IPC](../../task/020-llm-turn-ipc-impl.md)        | 共享门禁、终态、事件准备 / 投递、有限快照；先用内存调试写入方 |
+| [021 前端恢复](../../task/021-llm-web-recovery-impl.md)          | 同型 API、订阅与快照消费、缺口 / 旧响应处理                   |
+| [022 记录引擎](../../task/022-record-engine-impl.md)             | 006 定稿后的持久化写入方、投影和迁移运行期协议                |
+| [023 阶段机](../../task/023-turn-state-machine-impl.md)          | 012 定稿后的阶段流转、骰判和产品提交入口                      |
+| [024 产品联调](../../task/024-llm-engine-integration.md)         | 真实窗口、持久记录与失败恢复的三平台验证                      |
+| [035 计价与费用控制](../../task/035-llm-cost-control-impl.md)    | 计价、统一预算端口与费用设置 / 明细（018 已预留可注入端口）   |
 
-018 的 GuardSpec 使用测试夹具验证匹配机制；产品语法使用 006 的[正式 GrammarSpec](record-engine.md#正式-prompt-语法与-guardspec)，由 022 的 grammar 同源实现，023 已消费，024 的最小入口接实际剧本 / 配置，不能把样例标记当默认协议。020 的内存调试仅验证协调机制，产品路径必须接入 022 的持久化写入方。007 记忆与 008 完整游戏 UI 各自另有设计任务，不混入本轮 LLM 接线验收。
+018 的 GuardSpec 使用测试夹具验证匹配机制；产品语法使用 006 的[正式 GrammarSpec](../data/record-engine.md#正式-prompt-语法与-guardspec)，由 022 的 grammar 同源实现，023 已消费，024 的最小入口接实际剧本 / 配置，不能把样例标记当默认协议。020 的内存调试仅验证协调机制，产品路径必须接入 022 的持久化写入方。007 记忆与 008 完整游戏 UI 各自另有设计任务，不混入本轮 LLM 接线验收。
 
 ### 模型窗口与估算诊断
 
 `ProviderCapabilities.context_limit` 是当前 Provider / 模型公布的上下文窗口总量，未知值返回 None 并拒绝投影；最大输出独立按端点能力限制。DeepSeek 已登记型号、OpenCode Zen 与 Go 模型均逐型号登记上下文和最大输出，不跨供应商推断同名型号相同。OpenCode 的 catalog 取自 [Models.dev provider metadata](https://models.dev/api.json)；Qwen3.7 Max / Plus 补用 [Alibaba Cloud Model Studio 型号页](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen3-7-max)。这些是集成目录公布值，OpenCode 动态路由的实际后端仍可能有更低限额。切换模型须重新冻结预算，不沿用前一个模型窗口。DeepSeek 直连型号按[官方能力与价格](https://api-docs.deepseek.com/quick_start/pricing/)登记。
 
-PreparedGeneration 的估算诊断包装真实 BudgetPort，每次物理请求记录冻结估算与真实 usage，重装包装不会重复统计。缺失 usage 不补零，自动暂停与恢复规则见[记录引擎](record-engine.md)。当前调试 IPC 使用 local-fixture provider 标识；024 正式入口按实际 providerId 统计供应商诊断，费用账本由 035 注入，不把夹具用量当真实费用。
+PreparedGeneration 的估算诊断包装真实 BudgetPort，每次物理请求记录冻结估算与真实 usage，重装包装不会重复统计。缺失 usage 不补零，自动暂停与恢复规则见[记录引擎](../data/record-engine.md)。当前调试 IPC 使用 local-fixture provider 标识；024 正式入口按实际 providerId 统计供应商诊断，费用账本由 035 注入，不把夹具用量当真实费用。
 
 ### 最小正式产品入口（024）
 

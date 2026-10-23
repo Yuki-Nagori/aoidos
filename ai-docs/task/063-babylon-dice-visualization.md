@@ -16,7 +16,7 @@
 ## 必读
 
 - [依赖分层规范](../standards/layering.md)、[前端规范](../standards/frontend.md)、[UI 规范](../standards/ui.md)、[测试规范](../standards/testing.md)。
-- [界面结构与交互](../architecture/ui-shell.md)、[TS / Rust 边界](../architecture/ts-rust-boundary.md)、[回合状态机](../architecture/turn-state-machine.md)、[记录引擎](../architecture/record-engine.md)、[主题架构](../architecture/theming.md)、[通信契约](../architecture/ipc-contract.md)。
+- [界面结构与交互](../architecture/interface/ui-shell.md)、[TS / Rust 边界](../architecture/core/ts-rust-boundary.md)、[回合状态机](../architecture/gameplay/turn-state-machine.md)、[记录引擎](../architecture/data/record-engine.md)、[主题架构](../architecture/interface/theming.md)、[通信契约](../architecture/core/ipc-contract.md)。
 - 实施前核对 Babylon.js 官方文档与选定版本的 WebGL / WebGPU 支持、包体、许可证和 Tauri WebView 支持；将版本、日期与核对结论记入本 task，不引入未核验的运行时依赖。
 
 ## 范围与非目标
@@ -53,7 +53,7 @@
 - `src-web/features/game/assets/`：确需保留且许可明确的静态纹理 / 材质资源；若无需外部位图则不新增资源。
 - `package.json`、`bun.lock`：仅在评估通过后登记固定版本 Babylon.js 依赖。
 - `tests/web/features/game/` 与 `tests/visual/`：载荷映射、生命周期、静态回退、reduced-motion 和布局验收。
-- 按实际职责同步 `ai-docs/architecture/ui-shell.md`、`ai-docs/architecture/ts-rust-boundary.md`、`ai-docs/architecture/repository-layout.md` 与本文；若跨层规则需要变化，先更新对应架构 / 分层文档。
+- 按实际职责同步 `ai-docs/architecture/interface/ui-shell.md`、`ai-docs/architecture/core/ts-rust-boundary.md`、`ai-docs/architecture/core/repository-layout.md` 与本文；若跨层规则需要变化，先更新对应架构 / 分层文档。
 - 不修改 Rust 引擎、Tauri IPC、骰判规则、`aoidos-art` 设计仓库或 Three.js 运行时依赖；发现必须修改时先拆分 / 更新设计任务与依赖关系。
 
 ## 验收标准

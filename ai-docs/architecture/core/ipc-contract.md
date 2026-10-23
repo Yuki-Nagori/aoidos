@@ -1,8 +1,8 @@
 # 通信契约（IPC）
 
-更新日期：2026-10-22。设计稿 v1（[task 010](../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
+更新日期：2026-10-22。设计稿 v1（[task 010](../../task/010-ipc-contract-design.md) 产出，评审意见已回写）。适用范围：`src-tauri` 命令层 ↔ `src-web`。职责边界见[分层约定](ts-rust-boundary.md)；错误形状、事件信封与公共预算以本文为准。
 
-实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../task/035-llm-cost-control-impl.md)。060 已接入共享周目目录、Tauri / Web 与 CLI/TUI 列表 / 扫描 / 恢复 / 删除，以及启动前向恢复；本地验收、独立评审和三平台 PR CI 均已通过，见 [task 060](../task/060-run-management-impl.md)。053 已定稿记忆检索命令契约，具体命令尚未实现；054 已定稿结局快照与操作接口方向，精确 DTO 随 056 实现设计确认。下文分别标明已实现接口与设计接口。
+实现状态：015–017 已提供命令错误、事件信封及 store 命令；018 / 019 已提供 LLM 基础与配置 / 凭据命令；020–023 已接入回合 / 阶段链路；024 已完成最小正式窗口，PR #88 已合并且 main CI 三平台通过。026 已接入主题命令；034 已实现语言命令和本地化，[PR #107](https://github.com/Yuki-Nagori/aoidos/pull/107) 的本机 verify、独立评审与三平台 CI 均通过。031 已接入记忆配置、查询、确认及周目初始化；033 在此基础上接入素材收集、批次冻结、显式处理与本地完成 / 恢复命令，算法生产参数和实测仍见对应 task。035 已接入费用设置、价格登记 / 选择、预留 / 结算、周期摘要、分页明细、历史补记和 DeepSeek 显式余额查询；真实供应商账单核对仍未交付，见 [task 035](../../task/035-llm-cost-control-impl.md)。060 已接入共享周目目录、Tauri / Web 与 CLI/TUI 列表 / 扫描 / 恢复 / 删除，以及启动前向恢复；本地验收、独立评审和三平台 PR CI 均已通过，见 [task 060](../../task/060-run-management-impl.md)。053 已定稿记忆检索命令契约，具体命令尚未实现；054 已定稿结局快照与操作接口方向，精确 DTO 随 056 实现设计确认。下文分别标明已实现接口与设计接口。
 
 ## 总则
 
@@ -24,7 +24,7 @@
 
 ## 语言偏好命令（028 已评审，034 已实现）
 
-`locale_get_preference {}` / `locale_set_preference { preference }` 已注册；同型载荷、nativeStatus 与失败语义见[国际化架构](i18n.md)。`preference` 为 `{ version: 1, locale: "system" | "zh-Hans" | "en" }`；返回 `{ preference, resolvedLocale, nativeStatus }`，其中 `resolvedLocale` 为 `zh-Hans | en`，`nativeStatus` 为 `applied | pending`。单项写入不替换主题 / UiPreferences；非法参数为 `app.bad-request`，持久化 / 迁移沿用 `store.*` / `app.not-ready`。原生应用失败返回 pending，不冒充持久保存失败。
+`locale_get_preference {}` / `locale_set_preference { preference }` 已注册；同型载荷、nativeStatus 与失败语义见[国际化架构](../interface/i18n.md)。`preference` 为 `{ version: 1, locale: "system" | "zh-Hans" | "en" }`；返回 `{ preference, resolvedLocale, nativeStatus }`，其中 `resolvedLocale` 为 `zh-Hans | en`，`nativeStatus` 为 `applied | pending`。单项写入不替换主题 / UiPreferences；非法参数为 `app.bad-request`，持久化 / 迁移沿用 `store.*` / `app.not-ready`。原生应用失败返回 pending，不冒充持久保存失败。
 
 ## 费用与预算接口（027 已评审，035 已实现）
 
@@ -128,7 +128,7 @@ interface TurnSnapshot {
 
 text 仅包含护栏后的已接纳正文。产品模式已持久化后再更新快照和投递；调试模式为内存结果。缓存只含进行中与最近已结束回合，容量与驱逐规则见 llm.md；驱逐后的旧 turnId 为 app.not-found，持久记录归 006，不靠本命令跨进程恢复。
 
-021 的 `useLlmTurn` 消费上述载荷；读取错误保存在独立 recoveryError，不改写回合 error。subscribe / snapshot 竞态、终态补正文和最后全事件丢失的实际边界见 [LLM 恢复规则](llm.md)。
+021 的 `useLlmTurn` 消费上述载荷；读取错误保存在独立 recoveryError，不改写回合 error。subscribe / snapshot 竞态、终态补正文和最后全事件丢失的实际边界见 [LLM 恢复规则](../ai/llm.md)。
 
 ## 剧本与活动会话（024 最小正式入口）
 
@@ -175,15 +175,15 @@ Web API 位于 `src-web/api/runs.ts`。目录命令只操作共享生命周期�
 
 `OpenedRun.profile` 是该局冻结、无凭据的 `LlmProfile`。TUI 的普通重开与目录恢复都读取该快照，并以此执行费用预检和回合请求，因此修改或删除当前 profile 不会改变已开周目的模型参数。`DeletionOperation` 包含 operationId、sessionId、state、catalogRevision 和 diagnosticCode；Tauri / Web 与 TUI 的删除入口共用生命周期服务，未完成 journal 可用相同 operation ID 续跑，diagnosticCode 暴露最近一次稳定恢复错误。
 
-scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-found；不接受文件路径、正文、endpoint 或密钥。`displayNames` 从该资源目录的 `i18n.json` 读取，只本地化界面展示名，不改变原文 `title` 或存档身份。原文、实体目录、格式或本地化元数据不可用为 app.not-ready；实体目录规则见[剧本格式规范](../standards/scenarios.md)。`scriptRevision` 绑定原文与实体清单版本，重新打开时不接受版本漂移。配置、凭据与存储错误按公开码返回。startNew=true 创建新周目；false 重开同剧本的已保存活动周目，没有活动选择时首次创建。活动 profile 可显式切换，已生成记录不改写。
+scriptId 只能指向 Rust 显式登记的内嵌资源，未登记为 app.not-found；不接受文件路径、正文、endpoint 或密钥。`displayNames` 从该资源目录的 `i18n.json` 读取，只本地化界面展示名，不改变原文 `title` 或存档身份。原文、实体目录、格式或本地化元数据不可用为 app.not-ready；实体目录规则见[剧本格式规范](../../standards/scenarios.md)。`scriptRevision` 绑定原文与实体清单版本，重新打开时不接受版本漂移。配置、凭据与存储错误按公开码返回。startNew=true 创建新周目；false 重开同剧本的已保存活动周目，没有活动选择时首次创建。活动 profile 可显式切换，已生成记录不改写。
 
 打开只预检配置，不启动 HTTP。回合持有共享 lease 时切换 / 新建返回 app.busy；同配置同剧本的已登记会话允许只读重载，不重新读取凭据或占门禁。重开会话恢复持久检查点，生成只能由显式输入 / resume 接纳。窗口不能覆盖已有计划骰值、规则或世界状态。
 
 ## 引擎命令与阶段快照（012 设计，023 已实现）
 
-规则以[阶段机](turn-state-machine.md)为准，023 实现；phase、场景和操作终态事件均用 sessionId 分流。roundId 是游戏回合，turnId 是单次 LLM 调用；内部提议不发 llm:turn:*，不出现在公开 llm_get_turn，旁白 / 角色仍沿用上节。
+规则以[阶段机](../gameplay/turn-state-machine.md)为准，023 实现；phase、场景和操作终态事件均用 sessionId 分流。roundId 是游戏回合，turnId 是单次 LLM 调用；内部提议不发 llm:turn:*，不出现在公开 llm_get_turn，旁白 / 角色仍沿用上节。
 
-下列命令已由串行驱动实现，Rust / TS 同型；阶段发布、四事件消费与恢复的验证证据见 [023](../task/023-turn-state-machine-impl.md)。可信场景、世界解释器与配置由 Rust 域登记；前端只提交用户意图或请求已登记结果，不提交规则匹配结果。
+下列命令已由串行驱动实现，Rust / TS 同型；阶段发布、四事件消费与恢复的验证证据见 [023](../../task/023-turn-state-machine-impl.md)。可信场景、世界解释器与配置由 Rust 域登记；前端只提交用户意图或请求已登记结果，不提交规则匹配结果。
 
 | 命令                      | 参数                                                                    | 成功返回 / 接纳                                                                                                                                                                                           |
 | ------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -276,7 +276,7 @@ UiPreferences 为 `{ version: 1, panelPinned: boolean, diceMode: "manual" | "aut
 
 ## 主题与皮肤命令（009 设计，026 实施中）
 
-[主题架构](theming.md)维护加载、目录、预算和防闪，026 落地命令注册。所有返回与 Rust 类型同型。
+[主题架构](../interface/theming.md)维护加载、目录、预算和防闪，026 落地命令注册。所有返回与 Rust 类型同型。
 
 | 命令                 | 参数                 | 成功返回                                   |
 | -------------------- | -------------------- | ------------------------------------------ |
@@ -330,7 +330,7 @@ ThemeBootstrap 由 026 在窗口创建前注入，包含已登记主题 ID 与 `
 
 ## 记录命令与运行期迁移快照（006 设计，022 已实现）
 
-规则与磁盘结构见[记录引擎](record-engine.md)，实现由 022 承接；以下载荷已由 022 同步实现 Rust / TS API；产品记录创建与阶段决策仍由 023 接入。
+规则与磁盘结构见[记录引擎](../data/record-engine.md)，实现由 022 承接；以下载荷已由 022 同步实现 Rust / TS API；产品记录创建与阶段决策仍由 023 接入。
 
 | 命令                   | 参数                              | 成功返回                                                                                                       |
 | ---------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -430,7 +430,7 @@ else showGenericError(err);
 ```
 
 - 前端分支**反例**：`err.message.includes("rate")`（文案漂移即坏）；`switch (err.code)` 不写 default。
-- 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../standards/comments.md) 为映射器补直测（参照 `aoidos-store` 的 `err_*` + stage_mappers 模式）。
+- 新增码的流程：先在本目录登记（域 + 语义 + 触发条件），再在映射器中实现，并按 [注释规范](../../standards/comments.md) 为映射器补直测（参照 `aoidos-store` 的 `err_*` + stage_mappers 模式）。
 
 ### 记忆配置、查询与批次命令（031 / 033 / 053）
 
@@ -460,13 +460,13 @@ else showGenericError(err);
 
 以下为已评审的 IPC 方向，当前尚无结局命令或 DTO 实现；精确命令名、字段类型与错误映射由 056 实现设计登记。`EndingSnapshot` 由引擎从当前有效周目与持久化结局记录构造，供界面读取：包含周目结局模式与生命周期阶段、规则就绪状态、是否满足可信终局条件、已冻结结局事实 / 公开标签，以及独立的 AI 叙事状态、可选文本和白名单诊断码。未生成或未应用的事实不得伪装成已完成快照；隐藏属性原值、私有标签、提示词和供应商原始响应不进入 UI DTO。
 
-界面只读取权威快照，不能提交自选结局 ID，也不能直接宣布周目结束。引擎仅在可信终局事实已提交后按周目冻结规则求值；规范摘要与 `endingResolved` 应用后才进入 ended。AI 叙事重试是显式操作，绑定原 `resolutionId` 与 `summaryHash`，为新的物理请求分配新 `requestId`；不得重新判定标签、改写规范摘要或重复提交终态。查询与恢复不隐式请求模型、不重试供应商调用；具体恢复状态遵循 [结局规则与周目落幕](ending-flow.md) 与 054 的冻结协议。
+界面只读取权威快照，不能提交自选结局 ID，也不能直接宣布周目结束。引擎仅在可信终局事实已提交后按周目冻结规则求值；规范摘要与 `endingResolved` 应用后才进入 ended。AI 叙事重试是显式操作，绑定原 `resolutionId` 与 `summaryHash`，为新的物理请求分配新 `requestId`；不得重新判定标签、改写规范摘要或重复提交终态。查询与恢复不隐式请求模型、不重试供应商调用；具体恢复状态遵循 [结局规则与周目落幕](../gameplay/cycle/ending-flow.md) 与 054 的冻结协议。
 
 ## 工程纪律（可检查版）
 
-每条 = 怎么做 + 怎么检查；动机见[职责边界](ts-rust-boundary.md)与 [Herta 调查](../research/001-herta.md)。预算数字只维护在本节。
+每条 = 怎么做 + 怎么检查；动机见[职责边界](ts-rust-boundary.md)与 [Herta 调查](../../research/001-herta.md)。预算数字只维护在本节。
 
-1. **原子写**：普通文件覆写只用 `write_atomic` / `write_text_atomic`。步骤、哪些错误进入退避、目录目标，以及父目录同步失败时目标可能已经更新，以[存储基建](storage.md)为准。原地写例外及 JSONL 受控追加 / 截断的唯一原语，以[存储基建的原子写工具](storage.md#原子写工具全仓唯一实现)为准。检查：全仓搜索写目标文件的路径，普通文件覆写必须调用上述 API，原地写必须属于该清单并复用对应原语；`atomic` 单测覆盖成功、占用耗尽、目录目标。
+1. **原子写**：普通文件覆写只用 `write_atomic` / `write_text_atomic`。步骤、哪些错误进入退避、目录目标，以及父目录同步失败时目标可能已经更新，以[存储基建](../data/storage.md)为准。原地写例外及 JSONL 受控追加 / 截断的唯一原语，以[存储基建的原子写工具](../data/storage.md#原子写工具全仓唯一实现)为准。检查：全仓搜索写目标文件的路径，普通文件覆写必须调用上述 API，原地写必须属于该清单并复用对应原语；`atomic` 单测覆盖成功、占用耗尽、目录目标。
 2. **看门狗预算表**：
 
 | 阶段                                                       | 预算                 | 超时动作                                                                 |
@@ -485,9 +485,9 @@ else showGenericError(err);
 
 已在本文冻结的预算、错误形状、信封、密钥规则和取消分界，下游任务只引用，不另写一套。
 
-- **005**：[task 005 — LLM 接入与护栏](../task/005-llm-design.md)：规则与结构见 [LLM 已评审设计](llm.md)；本文集中维护每个 llm.* 的触发条件和 IPC 载荷，模式 / 护栏与重试例外见该文档。
-- **006**：[task 006 — 对局记录与上下文](../task/006-record-design.md)：定义记录追加事件、记录 page / body 与有界 view 恢复，以及 engine.interrupted 的持久记录触发。它们不是阶段快照。存储迁移流的 progress / done / failed、流标识、阶段、失败上下文和 store_get_migration 每事件 seq 基线已定稿；实际发送与运行期状态由 [022](../task/022-record-engine-impl.md) 实现。
-- **012**：[task 012 — 回合与阶段状态机](../task/012-turn-state-machine-design.md)：冻结 `engine.no-scene`、`engine.invalid-phase` 的触发条件，阶段事件的 data，以及 `engine_get_phase` 的快照载荷。单回合拒绝码用本文的 `app.busy`。
+- **005**：[task 005 — LLM 接入与护栏](../../task/005-llm-design.md)：规则与结构见 [LLM 已评审设计](../ai/llm.md)；本文集中维护每个 llm.* 的触发条件和 IPC 载荷，模式 / 护栏与重试例外见该文档。
+- **006**：[task 006 — 对局记录与上下文](../../task/006-record-design.md)：定义记录追加事件、记录 page / body 与有界 view 恢复，以及 engine.interrupted 的持久记录触发。它们不是阶段快照。存储迁移流的 progress / done / failed、流标识、阶段、失败上下文和 store_get_migration 每事件 seq 基线已定稿；实际发送与运行期状态由 [022](../../task/022-record-engine-impl.md) 实现。
+- **012**：[task 012 — 回合与阶段状态机](../../task/012-turn-state-machine-design.md)：冻结 `engine.no-scene`、`engine.invalid-phase` 的触发条件，阶段事件的 data，以及 `engine_get_phase` 的快照载荷。单回合拒绝码用本文的 `app.busy`。
 
 ### 记录命令的完整参数校验
 

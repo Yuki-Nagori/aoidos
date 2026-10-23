@@ -13,11 +13,11 @@
 
 - [059 已开周目管理设计](059-run-management-design.md)
 - [Rust / Web / 测试依赖方向](../standards/layering.md)
-- [存储架构](../architecture/storage.md)
-- [记录引擎](../architecture/record-engine.md)
-- [回合状态机](../architecture/turn-state-machine.md)
-- [计费架构](../architecture/billing.md)
-- [记忆架构](../architecture/memory.md)
+- [存储架构](../architecture/data/storage.md)
+- [记录引擎](../architecture/data/record-engine.md)
+- [回合状态机](../architecture/gameplay/turn-state-machine.md)
+- [计费架构](../architecture/ai/billing.md)
+- [记忆架构](../architecture/data/memory.md)
 - [Rust 规范](../standards/rust.md)
 - [测试规范](../standards/testing.md)
 

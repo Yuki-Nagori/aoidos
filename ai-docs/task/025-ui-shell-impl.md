@@ -11,7 +11,7 @@
 
 ## 必读
 
-[界面结构与交互](../architecture/ui-shell.md) · [UI 风格](../standards/ui.md) · [主题架构](../architecture/theming.md) · [通信契约](../architecture/ipc-contract.md) · [记录引擎](../architecture/record-engine.md) · [阶段机](../architecture/turn-state-machine.md) · [职责边界](../architecture/ts-rust-boundary.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。行为数值以架构文档为准，不在任务中维护副本。
+[界面结构与交互](../architecture/interface/ui-shell.md) · [UI 风格](../standards/ui.md) · [主题架构](../architecture/interface/theming.md) · [通信契约](../architecture/core/ipc-contract.md) · [记录引擎](../architecture/data/record-engine.md) · [阶段机](../architecture/gameplay/turn-state-machine.md) · [职责边界](../architecture/core/ts-rust-boundary.md) · [前端规范](../standards/frontend.md) · [注释规范](../standards/comments.md) · [测试规范](../standards/testing.md) · [提交规范](../standards/commits.md)。行为数值以架构文档为准，不在任务中维护副本。
 
 ## 范围与非目标
 

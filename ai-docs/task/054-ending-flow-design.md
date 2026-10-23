@@ -11,7 +11,9 @@
 
 ## 必读
 
-[回合与阶段状态机](../architecture/turn-state-machine.md) · [记录引擎](../architecture/record-engine.md) · [记忆架构](../architecture/memory.md) · [剧本格式](../standards/scenarios.md) · [052 界面移植](052-aoidos-art-vue-port.md) · [通信契约](../architecture/ipc-contract.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
+本任务的周目冻结还必须包含所有有剧情作用角色（含主角）的 run-scoped 个人真值档案。真值、角色自身的初始认知、对外表面身份 / 主张和玩家已获知事实属于不同数据域；角色可对外使用假身份而不改写真值，主角可不知道自己的秘密，玩家操控主角也不自动全知。初始化按最小权限向各类 LLM 请求提供资料，不能把秘密和公开叙事放进同一个无筛选的通用上下文。实现边界与角色 schema 由[角色架构](../architecture/gameplay/characters/README.md)维护；完整的揭露 / 更正事件及公开策略仍需单独细化并纳入实现验收。
+
+[回合与阶段状态机](../architecture/gameplay/turn-state-machine.md) · [记录引擎](../architecture/data/record-engine.md) · [记忆架构](../architecture/data/memory.md) · [剧本格式](../standards/scenarios.md) · [052 界面移植](052-aoidos-art-vue-port.md) · [通信契约](../architecture/core/ipc-contract.md) · [测试规范](../standards/testing.md) · [注释规范](../standards/comments.md)。
 
 ## 范围与非目标
 
@@ -67,7 +69,7 @@
 - 2026-10-19：从 052 的页面映射登记。当前无结局状态 / IPC；052 只记录缺口，不显示静态假结局。
 - 2026-10-19：用户指出 `ending-choice.html` 的固定结局列表不适合作为产品逻辑，并质疑“方向预设”约束模型的可靠性；进一步提出由不同隐藏数值形成标签，再根据标签生成结局总结，并可由剧本预设或在周目开始时生成后锁定 SQL。当前方案为“剧本声明 → 周目前冻结规则 → 引擎求值标签 → 权威事实摘要 → AI 叙事”：生成模式只可使用剧本声明的隐藏字段和既有标签目录，严禁任意谓词；锁定后不重算。标签支持多项组合并保留来源；原始运行数值不传模型。规范摘要由冻结标签确定性生成，AI 只据此写非权威叙事，不改变正史，也不向记忆和后续规则供给事实。规则 schema、属性缺值与冲突语义、hash 输入、本地化冻结、开局计费 / 恢复及终局崩溃恢复按本 task 下文定稿。
 - 2026-10-19：独立评审发现生成声明 / 冻结结果校验歧义及无 sidecar / 旧存档恢复缺口；已补充用途区分校验、非法生成结果整份拒绝和 `disabled` / `legacy-disabled` 兼容，并明确 resolutionId 哈希。
-- 2026-10-22：用户决定所有新周目的目标、标签和规则全部在开局由 LLM 生成，剧本只登记可信字段 schema；旧实现设计中 `authored` 标签目录、可选 sidecar 与新 run `disabled` 回退均被此决策取代。固定 guide NPC 通过实体元数据明确登记，否则生成姓名 / 种族。
+- 2026-10-22：用户决定所有新周目的目标、标签和规则全部在开局由 LLM 生成，剧本只登记可信字段 schema；旧实现设计中 `authored` 标签目录、可选 sidecar 与新 run `disabled` 回退均被此决策取代。2026-10-23 用户进一步明确：固定引导角色需在剧本角色资料中显式标记；未标记角色不得自动当选，零个标记才生成周目 NPC，多个标记应拒绝剧本。固定角色资料包含背景、身份、种族、年龄、性别，开场职责 / 对玩家关系分开登记；人物资料不自动授予场景在场、人物关系或额外获知权限。
 
 ## 完成摘要
 
