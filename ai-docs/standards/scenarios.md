@@ -76,6 +76,8 @@
 
 开局生成结果是 run 私有、版本化、严格白名单校验并冻结的产物，至少包含最终目标、目标状态可引用的标签 ID、tag 目录、受限比较规则、有限的初始任务、所有缺少固定资料的剧情角色档案，以及仅在剧本没有固定 guide NPC 时生成的引导 NPC。人物档案补齐和 guide NPC 的选择是两项独立职责：固定 guide 仍须由 `isGuide` 显式指定，模型不能因为要补全主角或配角资料而把他们选为 guide。引擎自行创建 ID 和顺序，完整结果要通过数量、字符、locale、重复 ID、字段引用、互斥组、阈值、任务依赖和跨字段一致性校验；未知字段或任一部分无效时整份拒绝，不部分应用。应用支持的 locale 必须完整覆盖用户可见目标、任务及公开标签说明。对规范化 JSON 使用 `aoidos-cycle-init-v1\0` 域标签与 64 位大端长度前缀计算 SHA-256，冻结在该 run 初始化快照；规则 hash、终局 resolutionId 与 summaryHash 分别使用 `aoidos-ending-effective-rule-v1\0`、`aoidos-ending-resolution-v1\0`、`aoidos-ending-summary-v1\0` 独立域标签和长度前缀。
 
+当前 engine 纯输出校验阶段已覆盖 guide 分支：有且仅有一个固定 guide 时冻结该档案并拒绝模型再提交 guide；没有固定 guide 时要求模型提交完整有界档案，认知字段必须唯一且属于允许字段，由 engine 派生 run-local ID。这个局部校验不等于完整开局产物，尚未覆盖其余未登记人物档案或可信实体注册。
+
 生成请求的物理 requestId、预算和 profile 快照必须先按 027 / 035 持久化。每个新周目先进入不可玩的 initializing 状态，成功校验且完整初始化快照持久化后才变为 playable；失败或 unknown 不自动重发、不换规则、不开放游戏。显式重试使用同一 run / 预算身份和新的物理 requestId。旧存档和明确废弃的初始化 run 沿既有恢复 / 删除协议处理，不静默升级为新周目。
 
 结局事实、可信终局触发、恢复、标签求值、确定性摘要和 AI 非权威叙事边界见 [054](../task/054-ending-flow-design.md)、[056](../task/056-ending-flow-impl.md) 与[结局架构](../architecture/gameplay/cycle/ending-flow.md)。正文解析器只处理 Markdown 原文；初始化和规则都由 engine 明确登记及执行。

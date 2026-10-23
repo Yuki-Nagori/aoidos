@@ -71,7 +71,7 @@ pub(crate) struct CharacterProfile {
     #[serde(default)]
     pub(crate) opening_relationship: Option<String>,
 }
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CharacterTruth {
     pub(crate) personal_name: String,
@@ -81,7 +81,7 @@ pub(crate) struct CharacterTruth {
     pub(crate) age: String,
     pub(crate) gender: String,
 }
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CharacterPresentation {
     pub(crate) display_name: String,
