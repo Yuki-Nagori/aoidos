@@ -472,7 +472,7 @@ fn logical_clock_counts_only_confirmed_rounds_once() {
 
 #[test]
 fn batch_digest_and_capacity_reject_untrusted_snapshots() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let material = f
         .repo
         .register_material(&f.conn, &f.port, &f.source(), 0)
@@ -1072,7 +1072,7 @@ fn material_registration_requires_a_valid_source_and_bounded_ordinal() {
 
 #[test]
 fn batch_reads_reject_unsupported_versions_and_identity_mismatch() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let material = f
         .repo
         .register_material(&f.conn, &f.port, &f.source(), 0)
@@ -1180,7 +1180,7 @@ fn malformed_persisted_material_source_is_reported_as_corruption() {
 }
 
 fn queued_fixture() -> (Fixture, String, String, String) {
-    let mut f = Fixture::new();
+    let mut f = Fixture::new_in_memory();
     let material = f
         .repo
         .register_material(&f.conn, &f.port, &f.source(), 0)
