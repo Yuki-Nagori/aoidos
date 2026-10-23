@@ -163,7 +163,7 @@ describe("App", () => {
     await wrapper.get('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.get(".app-shell").element.hasAttribute("inert")).toBe(true);
     expect(wrapper.text()).toContain("system dialog");
-    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(13);
+    expect(wrapper.findAll(".settings-nav-icon")).toHaveLength(14);
     const dialog = wrapper.get('[role="dialog"]');
     const focusable = Array.from(
       dialog.element.querySelectorAll<HTMLElement>(

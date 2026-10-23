@@ -648,7 +648,7 @@ describe("useBilling price selection and registration", () => {
     await state.savePrice();
     expect(registerPrice).toHaveBeenCalledWith(
       expect.objectContaining({
-        schedule: expect.objectContaining({ version: "deepseek-api-utc-weekday-holiday-2026-v1" }),
+        schedule: expect.objectContaining({ version: "deepseek-api-utc-weekday-holiday-2026-v2" }),
       }),
     );
     scope.stop();

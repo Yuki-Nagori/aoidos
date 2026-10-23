@@ -3,8 +3,18 @@ import { computed, onMounted, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { DiceRollFact, DiceSkinId } from "../utils/dice-visual";
 import { diceVisualShape, resolveDiceSkin, resolveDiceSkinColor } from "../utils/dice-visual";
-import { createDiceEngine, diceRenderer, projectDicePoint, retainDiceRenderer, wakeDice } from "../utils/dice-renderer";
+import {
+  createDiceEngine,
+  createDiceSceneCancellation,
+  diceRenderer,
+  projectDicePoint,
+  renderAndSubmitDiceFrame,
+  retainDiceRenderer,
+  waitForDiceSceneReady,
+  wakeDice,
+} from "../utils/dice-renderer";
 import type { DiceFaceData } from "../utils/dice-geometry";
+import { drawDiceAtlas, drawFlatDiceCanvas, hashStr, seededNumber } from "../utils/dice-canvas";
 import { buildDiceFaces, diceFaceUprightAngle } from "../utils/dice-geometry";
 
 const props = withDefaults(
@@ -109,223 +119,6 @@ function mixColor(from: string, to: string, amount: number): string {
 }
 
 type DiceFace = DiceFaceData;
-function hashStr(seed: string): number {
-  let value = 2166136261;
-  for (let index = 0; index < seed.length; index += 1)
-    value = Math.imul(value ^ seed.charCodeAt(index), 16777619);
-  return value >>> 0;
-}
-
-function seededNumber(seed: number): () => number {
-  let value = seed >>> 0;
-  return () => {
-    value = (value + 0x6d2b79f5) >>> 0;
-    let next = value;
-    next = Math.imul(next ^ (next >>> 15), next | 1);
-    next ^= next + Math.imul(next ^ (next >>> 7), next | 61);
-    return ((next ^ (next >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function drawAtlas(
-  faces: DiceFace[],
-  sides: number,
-  skin: ReturnType<typeof resolvedSkin>,
-): HTMLCanvasElement {
-  const G = Math.ceil(Math.sqrt(faces.length)),
-    C = 256,
-    cv = document.createElement("canvas");
-  cv.width = cv.height = G * C;
-  const g = cv.getContext("2d");
-  if (!g) return cv;
-  const R = seededNumber(hashStr(skin.id || "x") + sides);
-  let serif =
-    skin.font === "sans"
-      ? '"Inter", "Helvetica Neue", Arial, sans-serif'
-      : '"Cinzel", "Trajan Pro", Georgia, "Times New Roman", serif';
-  faces.forEach((f, index) => {
-    let ox = (index % G) * C,
-      oy = Math.floor(index / G) * C;
-    g.save();
-    g.translate(ox, oy);
-    let poly =
-      f.vertices.length === 3
-        ? [
-            [0.5, 0.934],
-            [0.05, 0.155],
-            [0.95, 0.155],
-          ]
-        : [
-            [0.03, 0.03],
-            [0.97, 0.03],
-            [0.97, 0.97],
-            [0.03, 0.97],
-          ];
-    // 填满整个图块，避免 mipmap 与抗锯齿采到图块缝隙。
-    g.fillStyle = skin.face2;
-    g.fillRect(0, 0, C, C);
-    let gr = g.createLinearGradient(0, 0, C * 0.3, C);
-    gr.addColorStop(0, skin.face);
-    gr.addColorStop(1, skin.face2);
-    g.fillStyle = gr;
-    g.fillRect(0, 0, C, C);
-    g.save();
-    g.beginPath();
-    poly.forEach((p, i) => {
-      let X = p[0]! * C,
-        Y = (1 - p[1]!) * C;
-      if (i) g.lineTo(X, Y);
-      else g.moveTo(X, Y);
-    });
-    g.closePath();
-    g.clip();
-    let pc = skin.patternColor;
-    if (skin.pattern === "veins" || skin.pattern === "mist") {
-      g.strokeStyle = pc;
-      g.globalAlpha = skin.pattern === "mist" ? 0.22 : 0.35;
-      g.lineCap = "round";
-      for (let v = 0; v < (skin.pattern === "mist" ? 5 : 4); v++) {
-        g.lineWidth = skin.pattern === "mist" ? 10 + R() * 18 : 1 + R() * 2.5;
-        g.beginPath();
-        let x = R() * C,
-          y = R() * C;
-        g.moveTo(x, y);
-        for (let s2 = 0; s2 < 5; s2++) {
-          x += (R() - 0.3) * C * 0.45;
-          y += (R() - 0.5) * C * 0.35;
-          g.quadraticCurveTo(x - 30 * R(), y + 30 * R(), x, y);
-        }
-        if (skin.pattern === "mist") g.filter = "blur(6px)";
-        g.stroke();
-        g.filter = "none";
-      }
-      g.globalAlpha = 1;
-    } else if (skin.pattern === "speckle") {
-      g.fillStyle = pc;
-      for (let q = 0; q < 160; q++) {
-        g.globalAlpha = 0.15 + R() * 0.35;
-        g.beginPath();
-        g.arc(R() * C, R() * C, 0.6 + R() * 1.8, 0, 7);
-        g.fill();
-      }
-      g.globalAlpha = 1;
-    } else if (skin.pattern === "brushed") {
-      g.strokeStyle = pc;
-      for (let b = 0; b < 70; b++) {
-        g.globalAlpha = 0.05 + R() * 0.12;
-        g.lineWidth = 1;
-        let yy = R() * C;
-        g.beginPath();
-        g.moveTo(0, yy);
-        g.lineTo(C, yy + (R() - 0.5) * 6);
-        g.stroke();
-      }
-      g.globalAlpha = 1;
-    } else if (skin.pattern === "facet") {
-      let rg = g.createRadialGradient(C * 0.35, C * 0.3, 4, C * 0.5, C * 0.5, C * 0.8);
-      rg.addColorStop(0, pc);
-      rg.addColorStop(1, "rgba(0,0,0,0)");
-      g.globalAlpha = 0.22;
-      g.fillStyle = rg;
-      g.fillRect(0, 0, C, C);
-      g.globalAlpha = 1;
-    }
-    // 面内倒角阴影与描边。
-    g.lineJoin = "round";
-    g.strokeStyle = "rgba(0,0,0,.28)";
-    g.lineWidth = 16;
-    g.beginPath();
-    poly.forEach((p, i) => {
-      let X = p[0]! * C,
-        Y = (1 - p[1]!) * C;
-      if (i) g.lineTo(X, Y);
-      else g.moveTo(X, Y);
-    });
-    g.closePath();
-    g.stroke();
-    g.strokeStyle = skin.edge;
-    g.lineWidth = 5;
-    g.stroke();
-    g.restore();
-    // 数字与点数。
-    let cx = 0.5 * C,
-      cy = (1 - (f.vertices.length === 3 ? 0.414 : 0.5)) * C,
-      val = f.value;
-    if (sides === 6 && skin.d6 === "pips") {
-      let P: Record<number, number[][]> = {
-        1: [[0, 0]],
-        2: [
-          [-1, -1],
-          [1, 1],
-        ],
-        3: [
-          [-1, -1],
-          [0, 0],
-          [1, 1],
-        ],
-        4: [
-          [-1, -1],
-          [1, -1],
-          [-1, 1],
-          [1, 1],
-        ],
-        5: [
-          [-1, -1],
-          [1, -1],
-          [0, 0],
-          [-1, 1],
-          [1, 1],
-        ],
-        6: [
-          [-1, -1],
-          [1, -1],
-          [-1, 0],
-          [1, 0],
-          [-1, 1],
-          [1, 1],
-        ],
-      };
-      const pips = P[val] ?? [];
-      pips.forEach((d) => {
-        let X = cx + d[0]! * C * 0.25,
-          Y = cy + d[1]! * C * 0.25,
-          rad = (val === 1 ? 0.12 : 0.085) * C;
-        g.fillStyle = skin.numeralStroke;
-        g.beginPath();
-        g.arc(X, Y + 2, rad + 2, 0, 7);
-        g.fill();
-        g.fillStyle = val === 1 && skin.id !== "brass" ? skin.particle : skin.numeral;
-        g.beginPath();
-        g.arc(X, Y, rad, 0, 7);
-        g.fill();
-      });
-    } else {
-      let fs = sides === 20 ? 0.34 : sides === 8 ? 0.4 : 0.52;
-      g.font = `700 ${Math.round(fs * C)}px ${serif}`;
-      g.textAlign = "center";
-      g.textBaseline = "middle";
-      let label = String(val);
-      g.lineWidth = 7;
-      g.strokeStyle = skin.numeralStroke;
-      g.lineJoin = "round";
-      g.strokeText(label, cx, cy + 2);
-      g.fillStyle = skin.numeral;
-      g.fillText(label, cx, cy + 2);
-      if (val === 6 || val === 9) {
-        // 下划线区分 6 与 9。
-        let w = fs * C * 0.42,
-          uy = cy + fs * C * 0.48;
-        g.fillStyle = skin.numeralStroke;
-        g.fillRect(cx - w / 2 - 2, uy - 2, w + 4, 9);
-        g.fillStyle = skin.numeral;
-        g.fillRect(cx - w / 2, uy, w, 5);
-      }
-    }
-    g.restore();
-  });
-  return cv;
-}
-
 async function makeScene(
   targetCanvas: HTMLCanvasElement,
   instance: number,
@@ -398,10 +191,24 @@ async function makeScene(
   };
   resizeOutput();
   const scene = new Scene(activeEngine);
-  const cancelPendingScene = () => scene.dispose();
-  pendingScenes.add(cancelPendingScene);
   scene.useRightHandedSystem = true;
   const contextLostObserver = activeEngine.onContextLostObservable.add(onContextLost);
+  let sceneDisposed = false;
+  const disposeBabylonScene = () => {
+    if (sceneDisposed) return;
+    sceneDisposed = true;
+    try {
+      scene.dispose();
+    } finally {
+      activeEngine.onContextLostObservable.remove(contextLostObserver);
+    }
+  };
+  const cancellation = createDiceSceneCancellation(() => {
+    disposeBabylonScene();
+  });
+  // 销毁正在加载字体或纹理的场景时，ready promise 也会被取消，提前接住拒绝。
+  void cancellation.promise.catch(() => {});
+  pendingScenes.add(cancellation.cancel);
   try {
     scene.clearColor = new Color4(0, 0, 0, 0);
     const camera = new TargetCamera(`dice-camera-${instance}`, new Vector3(0, 0.35, 7.4), scene);
@@ -440,7 +247,7 @@ async function makeScene(
     const faces = buildDiceFaces(shape.sides);
     const faceCount = faces.length;
     const atlasColumns = Math.ceil(Math.sqrt(faceCount));
-    const atlas = drawAtlas(faces, shape.sides, skin);
+    const atlas = drawDiceAtlas(faces, shape.sides, skin);
     const texture = new DynamicTexture(
       `dice-atlas-${instance}`,
       { width: atlas.width, height: atlas.height },
@@ -713,12 +520,11 @@ async function makeScene(
         }
       });
       activeEngine.setSize(targetCanvas.width, targetCanvas.height);
-      activeEngine.beginFrame();
-      scene.render();
-      if (!scene.isReady()) {
-        activeEngine.endFrame();
-        return;
-      }
+      const sceneReady = renderAndSubmitDiceFrame(activeEngine, () => {
+        scene.render();
+        return scene.isReady();
+      });
+      if (!sceneReady) return;
       const context = output;
       {
         const width = targetCanvas.width, height = targetCanvas.height;
@@ -789,7 +595,6 @@ async function makeScene(
           context.drawImage(diceRenderer.canvas, 0, 0, width, height);
           context.restore();
         }
-        activeEngine.endFrame();
         if (showEffect && props.effect === "crit") {
           geometries.forEach((item) => {
             const center = project(item.mesh.position);
@@ -841,8 +646,8 @@ async function makeScene(
       return true;
     };
     wakeDice(loop);
-    await scene.whenReadyAsync();
-    pendingScenes.delete(cancelPendingScene);
+    await waitForDiceSceneReady(scene.whenReadyAsync(), cancellation.promise);
+    pendingScenes.delete(cancellation.cancel);
     if (!disposed && revision === instance) render(performance.now());
     return {
       render,
@@ -853,7 +658,6 @@ async function makeScene(
       },
       dispose: () => {
         diceRenderer.live.delete(loop);
-        activeEngine.onContextLostObservable.remove(contextLostObserver);
         edgeMeshes.forEach((edgeMesh) => edgeMesh.dispose(false, false));
         geometries.forEach((item) => {
           item.mesh.getChildMeshes().forEach((child) => child.material?.dispose(false, false));
@@ -862,12 +666,12 @@ async function makeScene(
         });
         material.dispose(false, true);
         texture.dispose();
-        scene.dispose();
+        disposeBabylonScene();
       },
     };
   } catch (error) {
-    pendingScenes.delete(cancelPendingScene);
-    scene.dispose();
+    pendingScenes.delete(cancellation.cancel);
+    disposeBabylonScene();
     throw error;
   }
 }
@@ -960,8 +764,25 @@ function color3FromCss(
   return new Color3(red! / 255, green! / 255, blue! / 255);
 }
 
+function drawFallbackFrame(): boolean {
+  const targetCanvas = canvas.value;
+  const shape = getShape();
+  return !!targetCanvas && !!shape && drawFlatDiceCanvas(targetCanvas, shape, resolvedSkin());
+}
+
 async function renderDice(): Promise<void> {
-  if (!canvas.value || !getShape() || disposed || !visible.value) return;
+  if (disposed || !visible.value) return;
+  if (!canvas.value || !getShape()) {
+    // 先作废正在加载的旧场景，避免它稍后失败时仍使用已卸载的画布。
+    revision += 1;
+    pendingScenes.forEach((cancel) => cancel());
+    pendingScenes.clear();
+    cleanupScene?.();
+    cleanupScene = undefined;
+    available.value = false;
+    renderFailed.value = false;
+    return;
+  }
   const currentRevision = ++revision;
   const keepCurrentFrame = available.value;
   pendingScenes.forEach((cancel) => cancel());
@@ -998,7 +819,7 @@ async function renderDice(): Promise<void> {
     };
   } catch {
     if (disposed || currentRevision !== revision) return;
-    available.value = drawFlatDice();
+    available.value = drawFallbackFrame();
     canvasRenderer.value = "2d";
     renderFailed.value = !available.value;
     if (props.motion === "rolling") emitSettledOnce(getShape()?.values ?? []);
@@ -1009,35 +830,6 @@ function emitSettledOnce(values: readonly number[]): void {
   if (settledSent) return;
   settledSent = true;
   emit("settled", { values, effect: props.effect });
-}
-
-function drawFlatDice(): boolean {
-  const target = canvas.value, shape = getShape();
-  if (!target || !shape) return false;
-  const context = target.getContext("2d");
-  if (!context) return false;
-  const ratio = Math.min(2, window.devicePixelRatio || 1), bounds = target.getBoundingClientRect();
-  const width = Math.max(16, Math.round(bounds.width * ratio));
-  target.width = width;
-  const height = Math.max(16, Math.round(bounds.height * ratio));
-  target.height = height;
-  const skin = resolvedSkin(), size = Math.min(height * 0.8, width / shape.count * 0.8);
-  const corners = shape.sides === 6 ? 4 : shape.sides === 8 ? 3 : 6;
-  context.clearRect(0, 0, width, height);
-  for (let index = 0; index < shape.count; index += 1) {
-    const x = width / (shape.count + 1) * (index + 1), y = height / 2;
-    context.beginPath();
-    for (let corner = 0; corner < corners; corner += 1) {
-      const angle = -Math.PI / 2 + corner * Math.PI * 2 / corners + (corners === 4 ? Math.PI / 4 : 0);
-      context.lineTo(x + Math.cos(angle) * size / 2, y + Math.sin(angle) * size / 2);
-    }
-    context.closePath(); context.fillStyle = skin.face; context.fill();
-    context.strokeStyle = skin.edge; context.lineWidth = 3; context.stroke();
-    context.fillStyle = skin.numeral; context.font = `700 ${Math.round(size * 0.36)}px Georgia, serif`;
-    context.textAlign = "center"; context.textBaseline = "middle";
-    context.fillText(String(shape.values[index] ?? (shape.sides === 6 ? [6, 5, 4, 3][index] : shape.sides - index)), x, y);
-  }
-  return true;
 }
 
 function observeVisibility(): void {
@@ -1157,6 +949,7 @@ watch(
   () => {
     if (host.value && visible.value) void renderDice();
   },
+  { flush: "post" },
 );
 
 onScopeDispose(() => {

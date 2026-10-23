@@ -73,10 +73,12 @@
 
 ## 验证计划与结果
 
-| 日期       | 环境 / 命令                                                                                                                                                                                                                                    | 预期                                                 | 实际结果                    |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------------- |
-| 2026-10-22 | `bun run typecheck`                                                                                                                                                                                                                            | 前端与脚本类型检查通过                               | 通过                        |
-| 2026-10-22 | `bun run test -- tests/web/features/game/utils/dice-visual.test.ts tests/web/features/game/components/RecordFeed.test.ts tests/web/features/game/composables/useUiPreferences.test.ts tests/web/app/App.test.ts tests/web/api/records.test.ts` | 覆盖骰式事实映射、皮肤选择、偏好持久化和现有记录视图 | 5 个测试文件、26 个测试通过 |
+| 日期       | 环境 / 命令                                                                                                                                                                                                                                    | 预期                                                     | 实际结果                                                             |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
+| 2026-10-22 | `bun run typecheck`                                                                                                                                                                                                                            | 前端与脚本类型检查通过                                   | 通过                                                                 |
+| 2026-10-22 | `bun run test -- tests/web/features/game/utils/dice-visual.test.ts tests/web/features/game/components/RecordFeed.test.ts tests/web/features/game/composables/useUiPreferences.test.ts tests/web/app/App.test.ts tests/web/api/records.test.ts` | 覆盖骰式事实映射、皮肤选择、偏好持久化和现有记录视图     | 5 个测试文件、26 个测试通过                                          |
+| 2026-10-23 | `bun run verify`                                                                                                                                                                                                                               | 全量类型、lint、格式、覆盖率、视觉、构建和 Rust 文档门禁 | 通过；Vitest 545 项，Rust workspace 覆盖率 94.72%                    |
+| 2026-10-23 | Playwright WebGL2 设置页烟测                                                                                                                                                                                                                   | 检查视口内九个骰子预览均生成 Babylon 画面                | 通过；无头 Chromium 未提供 WebGPU adapter，尚待桌面 WebView 实机确认 |
 
 ## 风险与回退
 
@@ -87,6 +89,8 @@ WebGL 能力、驱动和可用内存因系统与设备而异；任何初始化�
 - 2026-10-22：只读核对 Aoidos 架构与 task 目录，并检查 `aoidos-art` 的 `399f67f4d7e50aefff0847c9bd77181311b022ff` 基线。原型骰子依赖本地 Three.js r158；任务指定采用 Babylon.js。规则 ID 统一骰式在前：Aoidos 当前引擎登记 `2d6-pbta-v1`，设计仓库 `d20-dc-v1` / `d8-tiers-v1` 仍只是未启用的规则草案。task 只规划可视化消费已提交骰值，不扩大引擎规则。渲染后端采用 WebGPU 优先、WebGL 回退、静态结果兜底。
 - 2026-10-22：采用 Babylon.js 9.31.0，按需加载并优先尝试 WebGPU，初始化失败回退 WebGL；7 套皮肤与自动剧本绑定规则已迁入前端 feature，设置文字在 `locales/`，组件样式在 `src-web/styles/components/dice.css`。
 - 2026-10-22：应用户要求将骰子托盘替换等待判定时的输入区；托盘仍仅触发现有判定提交，手势参数不参与骰值。骰子皮肤加入既有 UI 偏好，并通过 serde 默认值兼容旧文件；未更改骰判协议和规则。
+- 2026-10-23：修正 WebGPU 帧提交顺序。Babylon 的 `endFrame()` 会提交 GPU 命令，必须在从共享 GPU 画布执行 `drawImage()` 前完成；原型 `aoidos-art/assets/dice/dice.js` 也按此顺序实现。现将 begin/render/readiness/endFrame 收拢为可测的帧提交 helper，并添加调用顺序测试。真实 WebGPU adapter 在无头 Chromium 不可用，当前仅完成 WebGL2 九个预览实例的浏览器烟测，待桌面 WebView 实机验收。
+- 2026-10-23：将骰面 atlas / 静态绘制提取到 `game/utils/dice-canvas.ts`，共享引擎与 RAF / 取消逻辑放在 `game/utils/dice-renderer.ts`；Vue SFC 保留 Babylon 场景编排和交互状态，避免把高耦合场景局部机械拆分。视觉回归脚本同步新增的设置分区顺序。
 
 ## 完成摘要
 

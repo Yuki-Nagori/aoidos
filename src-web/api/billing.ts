@@ -77,6 +77,18 @@ export interface RunPeriod {
   runId: string;
   items: ModelUsageSummary[];
   warnings: BudgetWarning[];
+  tierItems?: TierUsageSummary[];
+  hasEstimatedRequests?: boolean;
+}
+
+export type PriceTier = "regular" | "peak" | "off";
+export interface TierUsageSummary {
+  currency: BillingCurrency;
+  tier: PriceTier;
+  settledAmount: string;
+  reservedAmount: string;
+  requestCount: number;
+  estimatedRequests: number;
 }
 
 export interface MonthlyPeriod {
@@ -93,6 +105,8 @@ interface BillingRequestItem {
   currency: BillingCurrency;
   priceVersionId: string;
   dispatchAt: string;
+  priceTier?: PriceTier;
+  estimated?: boolean;
   state: "reserved" | "settled" | "unconfirmed";
   settlementPending: boolean;
   diagnosticCode: string | null;

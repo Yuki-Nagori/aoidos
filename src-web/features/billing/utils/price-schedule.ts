@@ -53,13 +53,16 @@ export function formatPeakSchedule(timeZone: string, locale: string, now = new D
 const hourMs = 3_600_000;
 const dayMs = 24 * hourMs;
 const deepseekSchedule = "deepseek-api-utc-weekday-holiday-2026-v1";
+const deepseekScheduleV2 = "deepseek-api-utc-weekday-holiday-2026-v2";
 const goSchedule = "opencode-go-deepseek-utc-weekday-v1";
 
 /** Mirrors the versioned Rust schedule for display only; settlement remains in Rust. */
 export function priceTierAt(version: string, instant: Date): "peak" | "off" | undefined {
-  if (version !== deepseekSchedule && version !== goSchedule) return undefined;
-  if (version === deepseekSchedule) {
+  if (version !== deepseekSchedule && version !== deepseekScheduleV2 && version !== goSchedule)
+    return undefined;
+  if (version === deepseekSchedule || version === deepseekScheduleV2) {
     const china = new Date(instant.getTime() + 8 * hourMs);
+    if (version === deepseekScheduleV2 && china.getUTCFullYear() !== 2026) return "peak";
     const month = china.getUTCMonth() + 1;
     const day = china.getUTCDate();
     const holidays: Record<number, [number, number]> = {

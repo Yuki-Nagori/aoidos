@@ -6,6 +6,7 @@ import type { OpenedSession } from "../../../../../src-web/api/engine";
 import type { useUiPreferences } from "../../../../../src-web/features/game/composables/useUiPreferences";
 import ActionComposer from "../../../../../src-web/features/game/components/ActionComposer.vue";
 import GameWorkspace from "../../../../../src-web/features/game/components/GameWorkspace.vue";
+import RecordFeed from "../../../../../src-web/features/game/components/RecordFeed.vue";
 import { i18n } from "../../../../../src-web/i18n/index";
 
 const { useWorkspaceMock } = vi.hoisted(() => ({ useWorkspaceMock: vi.fn() }));
@@ -115,6 +116,7 @@ describe("GameWorkspace", () => {
       unreadRecords: ref(false),
       panelProtected: ref(false),
       confirmation,
+      rewindSelectorOpen: ref(false),
       slashMenuDismissed: ref(false),
       panel,
       orderedRecords,
@@ -139,6 +141,8 @@ describe("GameWorkspace", () => {
       interruptDraft: vi.fn(),
       submitComposer: vi.fn(),
       confirmOperation: vi.fn(),
+      requestRegenerate: vi.fn(),
+      selectRewindTarget: vi.fn(),
       chooseSlashCommand: vi.fn(),
       closePanel: vi.fn(),
       loadOlder: vi.fn(),
@@ -163,7 +167,8 @@ describe("GameWorkspace", () => {
         plugins: [i18n],
         stubs: {
           RecordFeed: {
-            props: ["items", "preview"],
+            props: ["items", "preview", "onRequestRewind", "rewindSelectorOpen"],
+            emits: ["rewind"],
             template:
               '<div class="record-feed-probe" :data-preview="preview?.text ?? \'\'" :data-narration-count="items.filter((item) => item.kind === \'narration\').length" />',
           },
@@ -188,6 +193,14 @@ describe("GameWorkspace", () => {
     await wrapper.get('[role="alert"] button').trigger("click");
     expect(fixture.reconnect).toHaveBeenCalledOnce();
     expect(wrapper.find(".work").exists()).toBe(false);
+    const feed = wrapper.findComponent(RecordFeed);
+    expect(feed.props("onRequestRewind")).toBeTypeOf("function");
+    feed.props("onRequestRewind")?.();
+    await nextTick();
+    expect(fixture.rewindSelectorOpen.value).toBe(true);
+    feed.vm.$emit("rewind", 1);
+    expect(fixture.selectRewindTarget).toHaveBeenCalledWith(1);
+    fixture.rewindSelectorOpen.value = false;
     expect(wrapper.find(".dialogue-panel-history > .record-feed").exists()).toBe(true);
     expect(wrapper.find(".dialogue-panel-composer").exists()).toBe(true);
     expect(wrapper.text()).not.toContain(i18n.global.t("game.diceMode"));

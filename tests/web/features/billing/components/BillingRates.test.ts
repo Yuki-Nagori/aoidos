@@ -34,6 +34,43 @@ function render(value: PriceVersion | null = price) {
   });
 }
 describe("BillingRates", () => {
+  it("uses the complete frozen tier report without changing historic amounts or combining currencies", async () => {
+    const wrapper = render();
+    await wrapper.setProps({
+      usage: [
+        {
+          currency: "CNY",
+          tier: "peak",
+          settledAmount: "1.25",
+          reservedAmount: "0.2",
+          requestCount: 80,
+          estimatedRequests: 1,
+        },
+        {
+          currency: "CNY",
+          tier: "off",
+          settledAmount: "3.75",
+          reservedAmount: "0",
+          requestCount: 120,
+          estimatedRequests: 0,
+        },
+        {
+          currency: "USD",
+          tier: "regular",
+          settledAmount: "2",
+          reservedAmount: "0",
+          requestCount: 2,
+          estimatedRequests: 0,
+        },
+      ],
+    });
+    expect(wrapper.findAll(".billing-tier-group")).toHaveLength(2);
+    expect(wrapper.findAll(".billing-tier-row")).toHaveLength(3);
+    expect(wrapper.get(".billing-tier-split .peak").attributes("style")).toContain("25%");
+    expect(wrapper.text()).toContain(i18n.global.t("billing.estimated"));
+    expect(wrapper.text()).toContain(i18n.global.t("rates.requestCount", { count: 120 }));
+    wrapper.unmount();
+  });
   it("renders the registered prices and metadata with a live tier and zone controls", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-23T04:48:00Z"));

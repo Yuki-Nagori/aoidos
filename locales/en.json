@@ -48,6 +48,7 @@
     "title": "Existing runs",
     "description": "Browse saved runs without opening their records or sending a request.",
     "empty": "No saved runs are registered yet.",
+    "filterEmpty": "No runs on this page need attention.",
     "pendingCleanup": "Run cleanup to resume",
     "lastFailure": "Last recovery error: {code}",
     "noProfile": "Profile not bound",
@@ -111,6 +112,7 @@
       "billing": "Cost & limits",
       "price": "Price registration",
       "balance": "Provider balance",
+      "runs": "Runs",
       "memory": "Memory",
       "memory-list": "Memory query",
       "memory-pending": "Pending confirmations",
@@ -495,7 +497,8 @@
       "runLimitMissing": "Set a limit for the provider's billing currency before sending a paid request.",
       "reconciliationRequired": "This run's legacy billing scope has not been reconciled; paid requests are temporarily blocked.",
       "settlementBacklog": "Pending settlement recovery reached its safety limit. Retry existing settlements before sending new requests."
-    }
+    },
+    "estimated": "Estimated"
   },
   "game": {
     "intro": "Choose a scenario and model to begin. Reopening a cycle does not generate text automatically.",
@@ -679,7 +682,9 @@
     "tableTitle": "Rate card",
     "perMillion": "Per 1M tokens",
     "nowMultHint": "Peak ×2",
-    "official": "Official · registered"
+    "official": "Official · registered",
+    "requestCount": "{count} request(s)",
+    "legacyCalendar": "Legacy v1 keeps its original weekday schedule outside 2026; confirm a new price version to use conservative estimates for uncovered dates."
   },
   "tpl": {
     "title": "Use DeepSeek's official rates?",

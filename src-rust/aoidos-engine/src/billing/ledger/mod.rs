@@ -1,6 +1,6 @@
 use aoidos_billing::{
     money::{Currency, NanoMoney, UnitPrice},
-    price::PriceVersion,
+    price::{PriceTier, PriceVersion},
     usage::NormalizedUsage,
 };
 use jiff::{ToSpan, civil::Date};
@@ -105,6 +105,18 @@ pub struct ModelUsageSummary {
     pub request_count: u64,
 }
 
+/// 按请求冻结时段汇总本局原币金额，预留与已结算费用分别展示。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TierUsageSummary {
+    pub currency: Currency,
+    pub tier: PriceTier,
+    pub settled_amount: NanoMoney,
+    pub reserved_amount: NanoMoney,
+    pub request_count: u64,
+    pub estimated_requests: u64,
+}
+
 #[derive(Default)]
 struct MonthlyAggregate {
     settled_nanos: i64,
@@ -135,6 +147,8 @@ pub struct RequestItem {
     pub currency: Currency,
     pub price_version_id: String,
     pub dispatch_at: String,
+    pub price_tier: PriceTier,
+    pub estimated: bool,
     pub state: String,
     pub reserved_amount: NanoMoney,
     pub actual_amount: Option<NanoMoney>,
@@ -1044,6 +1058,11 @@ impl BillingLedger {
                 settlement_pending,
                 diagnostic_code,
             ) = row;
+            let price =
+                Self::price_by_id(connection, &price_version_id)?.ok_or(BillingError::Storage)?;
+            let pricing = price
+                .pricing_context_at(&dispatch_at)
+                .map_err(|_| BillingError::Storage)?;
             items.push(RequestItem {
                 request_id,
                 profile_id,
@@ -1052,6 +1071,8 @@ impl BillingLedger {
                 currency: currency.parse().map_err(|_| BillingError::Storage)?,
                 price_version_id,
                 dispatch_at,
+                price_tier: pricing.tier,
+                estimated: pricing.estimated,
                 state,
                 reserved_amount: NanoMoney::from_nanos(reserved)
                     .map_err(|_| BillingError::Storage)?,
@@ -1361,6 +1382,81 @@ impl BillingLedger {
             });
         }
         Ok(result)
+    }
+
+    /// 从不可变价格版本和发送时刻汇总全部请求，不受前端请求分页影响。
+    ///
+    /// # Errors
+    /// 价格或请求损坏、金额溢出以及数据库读取失败时返回错误。
+    pub fn run_tier_summary(
+        connection: &Connection,
+        run_id: &str,
+    ) -> Result<Vec<TierUsageSummary>, BillingError> {
+        validate_text(run_id, 128)?;
+        let mut prices = BTreeMap::new();
+        let mut totals: BTreeMap<(String, u8), TierUsageSummary> = BTreeMap::new();
+        let mut statement = connection.prepare("SELECT price_version_id,dispatch_at,currency,state,reserved_nanos,actual_nanos FROM billing_physical_requests WHERE run_id=?1").map_err(storage)?;
+        let mut rows = statement.query([run_id]).map_err(storage)?;
+        while let Some(row) = rows.next().map_err(storage)? {
+            let version: String = row.get(0).map_err(storage)?;
+            let dispatch: String = row.get(1).map_err(storage)?;
+            let currency: String = row.get(2).map_err(storage)?;
+            let state: String = row.get(3).map_err(storage)?;
+            let reserved: i64 = row.get(4).map_err(storage)?;
+            let actual: Option<i64> = row.get(5).map_err(storage)?;
+            if !prices.contains_key(&version) {
+                let price =
+                    Self::price_by_id(connection, &version)?.ok_or(BillingError::Storage)?;
+                prices.insert(version.clone(), price);
+            }
+            let pricing = prices[&version]
+                .pricing_context_at(&dispatch)
+                .map_err(|_| BillingError::Storage)?;
+            let key = match pricing.tier {
+                PriceTier::Regular => 0,
+                PriceTier::Peak => 1,
+                PriceTier::Off => 2,
+            };
+            let parsed_currency = currency.parse().map_err(|_| BillingError::Storage)?;
+            let total = totals.entry((currency, key)).or_insert(TierUsageSummary {
+                currency: parsed_currency,
+                tier: pricing.tier,
+                settled_amount: NanoMoney::ZERO,
+                reserved_amount: NanoMoney::ZERO,
+                request_count: 0,
+                estimated_requests: 0,
+            });
+            total.request_count = total
+                .request_count
+                .checked_add(1)
+                .ok_or(BillingError::Invalid)?;
+            if pricing.estimated {
+                total.estimated_requests = total
+                    .estimated_requests
+                    .checked_add(1)
+                    .ok_or(BillingError::Invalid)?;
+            }
+            let amount = if state == "settled" {
+                actual.ok_or(BillingError::Storage)?
+            } else if state == "reserved" || state == "unconfirmed" {
+                reserved
+            } else {
+                return Err(BillingError::Storage);
+            };
+            let destination = if state == "settled" {
+                &mut total.settled_amount
+            } else {
+                &mut total.reserved_amount
+            };
+            *destination = NanoMoney::from_nanos(
+                destination
+                    .nanos()
+                    .checked_add(amount)
+                    .ok_or(BillingError::Invalid)?,
+            )
+            .map_err(|_| BillingError::Storage)?;
+        }
+        Ok(totals.into_values().collect())
     }
 
     /// Reads a run's two currency limits and revision without creating a budget implicitly.

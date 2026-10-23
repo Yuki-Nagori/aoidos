@@ -9,6 +9,7 @@ defineProps<{
     | "rates"
     | "price"
     | "balance"
+    | "runs"
     | "memory"
     | "memory-list"
     | "memory-pending"
@@ -51,6 +52,9 @@ defineProps<{
     </template>
     <template v-else-if="name === 'balance'">
       <path d="M3 12h3l2-6 4 12 3-9 2 3h4" />
+    </template>
+    <template v-else-if="name === 'runs'">
+      <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
     </template>
     <template v-else-if="name === 'memory'">
       <path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 1V5a3 3 0 0 0-3-1zM15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 1" />

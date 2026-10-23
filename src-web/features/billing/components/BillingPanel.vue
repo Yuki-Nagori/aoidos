@@ -297,6 +297,12 @@ const billingErrorMessage = computed(() => {
               })
             }}
           </p>
+          <p v-if="item.priceTier" class="text-sm">
+            <span class="tag">{{
+              item.priceTier === 'peak' ? t("rates.peak") : item.priceTier === 'off' ? t("rates.offPeak") : t("settings.priceRegularPeriod")
+            }}</span>
+            <span v-if="item.estimated" class="tag warn">{{ t("billing.estimated") }}</span>
+          </p>
           <p>
             {{ t("billing.labeledValue", { label: t("billing.requestState"), value: item.state }) }}
           </p>
@@ -525,6 +531,7 @@ const billingErrorMessage = computed(() => {
     <BillingRates
       v-if="view === 'rates'"
       :price="billing.selectedPrice?.value"
+      :usage="billing.period.value?.tierItems"
       :locale="locale"
       :time-zone="billing.monthly.value?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone"
       :provider-label="props.providerLabel ?? providerId"

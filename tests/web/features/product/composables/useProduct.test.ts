@@ -223,6 +223,42 @@ it("does not let a late selected-price read overwrite an explicit currency choic
   scope.stop();
 });
 
+it("waits for the registered currency before applying the language default", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  const pending = deferred<{ currency: string } | null>();
+  api.selectedPrice.mockReturnValue(pending.promise as never);
+  await product.load();
+  const opening = product.prepareBillingCurrency("en");
+  pending.resolve({ currency: "CNY" });
+  expect(await opening).toBe(true);
+  expect(product.billingCurrency.value).toBe("CNY");
+  expect(product.registeredBillingCurrency.value).toBe("CNY");
+  scope.stop();
+});
+
+it("applies the language currency only after a successful empty lookup and stops on lookup failure", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  await product.load();
+  expect(await product.prepareBillingCurrency("en")).toBe(true);
+  expect(product.billingCurrency.value).toBe("USD");
+  api.selectedPrice.mockRejectedValue({ code: "store.database", message: "Lookup failed" });
+  const failedScope = effectScope(),
+    failed = failedScope.run(() => useProduct(api))!;
+  await failed.load();
+  expect(await failed.prepareBillingCurrency("en")).toBe(false);
+  expect(failed.error.value?.code).toBe("store.database");
+  api.selectedPrice.mockResolvedValue({ currency: "CNY" } as never);
+  expect(await failed.prepareBillingCurrency("en")).toBe(true);
+  expect(failed.billingCurrency.value).toBe("CNY");
+  expect(failed.error.value).toBeUndefined();
+  failedScope.stop();
+  scope.stop();
+});
+
 it("does not let a late selected-price read overwrite a newly registered currency", async () => {
   const api = transport(),
     scope = effectScope(),
@@ -586,5 +622,6 @@ it("keeps the frozen opened-run profile separate from an edited current profile"
   expect(product.profiles.value).toEqual([editedProfile]);
   expect(product.profileId.value).toBe(frozenProfile.profileId);
   expect(product.activeProfile.value).toEqual(frozenProfile);
+  expect(product.scriptId.value).toBe(opened.scriptId);
   scope.stop();
 });

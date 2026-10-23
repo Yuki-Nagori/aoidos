@@ -340,3 +340,35 @@
     color: var(--accent);
   }
 }
+
+@layer components {
+  .billing-tier-group {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .billing-tier-split {
+    display: flex;
+    height: 0.625rem;
+    gap: 2px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--hairline);
+  }
+  .billing-tier-split .peak {
+    background: var(--accent-warm);
+  }
+  .billing-tier-split .off {
+    background: var(--accent);
+  }
+  .billing-tier-split .regular {
+    background: var(--muted);
+  }
+  .billing-tier-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: space-between;
+    font-size: 0.8125rem;
+  }
+}

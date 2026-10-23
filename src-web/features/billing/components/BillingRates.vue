@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import type { PriceVersion } from "../../../api/billing";
+import type { PriceVersion, PriceTier, TierUsageSummary } from "../../../api/billing";
+import { summarizeRunUsage, usageProgressPercent } from "../utils/run-usage";
 import type { Locale } from "../../../api/locale";
 import { formatExactCurrency } from "../../../shared/utils/format";
 import { nextPriceTransition, priceTierAt, priceWeek, resolvePriceTimeZone, isDoublePrice } from "../utils/price-schedule";
 
-const props = defineProps<{ price?: PriceVersion | null; locale: Locale; timeZone: string; providerLabel: string; preview?: boolean }>();
+const props = defineProps<{ price?: PriceVersion | null; locale: Locale; timeZone: string; providerLabel: string; preview?: boolean; usage?: TierUsageSummary[] }>();
 const { t } = useI18n();
 const now = ref(new Date());
 const showUtc = ref(false);
@@ -16,6 +17,11 @@ onScopeDispose(() => clearInterval(timer));
 const zone = computed(() => showUtc.value ? "UTC" : resolvePriceTimeZone(props.timeZone));
 const version = computed(() => props.price?.schedule?.version ?? "");
 const tier = computed(() => priceTierAt(version.value, now.value));
+const estimated = computed(() => version.value === "deepseek-api-utc-weekday-holiday-2026-v2" && Number(new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric" }).format(now.value)) !== 2026);
+const tierGroups = computed(() => summarizeRunUsage(props.usage ?? [], { CNY: null, USD: null }).map((total) => ({ ...total, items: props.usage!.filter((item) => item.currency === total.currency) })));
+function tierLabel(value: PriceTier): string {
+  return value === "peak" ? t("rates.peak") : value === "off" ? t("rates.offPeak") : t("settings.priceRegularPeriod");
+}
 const week = computed(() => priceWeek(version.value, zone.value, now.value));
 const ribbon = computed(() => priceWeek("opencode-go-deepseek-utc-weekday-v1", zone.value, now.value)[1]!.hours);
 const doublePrices = computed(() => props.price?.schedule && rows.value.every((row) => isDoublePrice(props.price![row.key], props.price!.schedule!.peak[row.key])));
@@ -75,6 +81,7 @@ const source = computed(() => {
             t("rates.nowLabel", { time: currentLabel, timeZone: zone })
           }}</span>
           <strong>{{ t(tier === 'peak' ? 'rates.nowPeak' : 'rates.nowOff') }}</strong>
+          <span v-if="estimated" class="tag warn">{{ t("billing.estimated") }}</span>
           <span v-if="next" class="text-sm text-muted">{{
             t(tier === 'off' ? 'rates.nextPeak' : 'rates.nextOff', { time: clock(next), hours: Math.floor(nextMinutes / 60), minutes: nextMinutes % 60 })
           }}</span>
@@ -203,10 +210,35 @@ const source = computed(() => {
     </section>
     <section v-if="!preview" class="billing-rates-section">
       <h3>{{ t("rates.splitTitle") }}</h3>
-      <p class="note">{{ t("rates.splitUnavailable") }}</p>
+      <p v-if="usage === undefined" class="note">{{ t("rates.splitUnavailable") }}</p>
+      <p v-else-if="!tierGroups.length" class="note">{{ t("billing.noUsage") }}</p>
+      <div v-for="group in tierGroups" :key="group.currency" class="billing-tier-group">
+        <strong class="mono">{{ group.currency }}</strong>
+        <div class="billing-tier-split" aria-hidden="true">
+          <span
+            v-for="item in group.items"
+            :key="item.tier"
+            :class="item.tier"
+            :style="{ width: `${usageProgressPercent(item.settledAmount, group.settledAmount)}%` }"
+          />
+        </div>
+        <div v-for="item in group.items" :key="item.tier" class="billing-tier-row">
+          <span>{{ tierLabel(item.tier) }} · {{
+              t("rates.requestCount", { count: item.requestCount })
+            }}<span v-if="item.estimatedRequests" class="tag warn">{{
+              t("billing.estimated")
+            }}</span></span>
+          <span class="mono">{{
+            formatExactCurrency(item.settledAmount, item.currency, locale)
+          }}</span>
+          <span v-if="item.reservedAmount !== '0'" class="text-sm text-muted">{{
+              t("billing.reserved")
+            }} {{ formatExactCurrency(item.reservedAmount, item.currency, locale) }}</span>
+        </div>
+      </div>
     </section>
     <section
-      v-if="!preview && version === 'deepseek-api-utc-weekday-holiday-2026-v1'"
+      v-if="!preview && version.startsWith('deepseek-api-utc-weekday-holiday-2026-')"
       class="billing-rates-section"
     >
       <h3>{{ t("rates.holidayTitle") }}</h3>
@@ -219,7 +251,9 @@ const source = computed(() => {
       </div>
       <div class="billing-rates-calendar-note">
         <strong>{{ t("rates.uncoveredTitle") }}</strong><p class="text-sm text-muted">
-          {{ t("billing.deepseekHolidayNote") }}
+          {{
+            version.endsWith('-v1') ? t("rates.legacyCalendar") : t("billing.deepseekHolidayNote")
+          }}
         </p>
       </div>
       <p class="note">{{ t("rates.dispatchNote") }}</p>

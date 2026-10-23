@@ -7,6 +7,8 @@ import SettingsSectionIcon from "./SettingsSectionIcon.vue";
 import SelectMenu from "../../shared/components/SelectMenu.vue";
 import KeyboardShortcuts from "./KeyboardShortcuts.vue";
 import DiceSkinPicker from "../../features/game/components/DiceSkinPicker.vue";
+import RunCatalogPanel from "../../features/product/components/RunCatalogPanel.vue";
+import type { OpenedRun } from "../../api/runs";
 import { useI18n } from "vue-i18n";
 import type { useProduct } from "../../features/product/composables/useProduct";
 import type { useTheme } from "../../features/theme/composables/useTheme";
@@ -32,8 +34,8 @@ const selectedPriceTemplate = computed(() =>
 const emit = defineEmits<{ reconnect: []; close: [] }>();
 const panel = ref<HTMLElement>();
 const priceTemplateOpen = ref(false);
-function openPriceTemplate(): void {
-  if (!product.registeredBillingCurrency.value) product.setBillingCurrency(locale.resolved.value === "zh-Hans" ? "CNY" : "USD");
+async function openPriceTemplate(): Promise<void> {
+  if (!(await product.prepareBillingCurrency(locale.resolved.value))) return;
   priceTemplateOpen.value = true;
 }
 async function confirmPriceTemplate(): Promise<void> {
@@ -57,6 +59,7 @@ const sections = computed(() => [
   { id: "rates", label: t("rates.title") },
   { id: "price", label: t("settings.sections.price") },
   { id: "balance", label: t("settings.sections.balance") },
+  { id: "runs", label: t("settings.sections.runs") },
   { id: "memory", label: t("settings.sections.memory") },
   { id: "memory-list", label: t("settings.sections.memory-list") },
   { id: "memory-pending", label: t("settings.sections.memory-pending") },
@@ -66,6 +69,10 @@ const sections = computed(() => [
 const activeSectionTitle = computed(
   () => sections.value.find((section) => section.id === activeSection.value)?.label ?? t("settings.title"),
 );
+function restoreRun(run: OpenedRun): void {
+  product.adoptOpenedRun(run);
+  emit("close");
+}
 watch(
   () => open,
   async (isOpen) => {
@@ -641,6 +648,19 @@ function themeName(id: string, fallback: string): string {
             <p v-if="!product.session.value" class="text-sm text-muted">
               {{ t("settings.billingAfterStart") }}
             </p>
+          </section>
+
+          <section v-show="activeSection === 'runs'" id="runs" class="settings-section">
+            <SettingsSectionHeading :title="t('settings.sections.runs')" @close="emit('close')" />
+            <RunCatalogPanel
+              v-if="activeSection === 'runs'"
+              :open="open"
+              embedded
+              :scripts="product.scripts.value"
+              :profiles="product.profiles.value"
+              :locale="locale.resolved.value"
+              @restore="restoreRun"
+            />
           </section>
 
           <section v-show="activeSection === 'memory'" id="memory" class="settings-section">

@@ -56,6 +56,14 @@ describe("formatPeakSchedule", () => {
 });
 
 const deepseek = "deepseek-api-utc-weekday-holiday-2026-v1";
+it("keeps v1 frozen semantics while v2 conservatively estimates uncovered dates", () => {
+  const uncovered = new Date("2027-01-03T04:30:00Z");
+  expect(priceTierAt(deepseek, uncovered)).toBe("off");
+  expect(priceTierAt("deepseek-api-utc-weekday-holiday-2026-v2", uncovered)).toBe("peak");
+  expect(
+    priceTierAt("deepseek-api-utc-weekday-holiday-2026-v2", new Date("2026-10-01T01:30:00Z")),
+  ).toBe("off");
+});
 const go = "opencode-go-deepseek-utc-weekday-v1";
 describe("versioned rate display", () => {
   it("matches the UTC peak boundaries and preserves DeepSeek holidays in China time", () => {

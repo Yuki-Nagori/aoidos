@@ -48,6 +48,7 @@
     "title": "已有周目",
     "description": "浏览已保存的周目；列表不会打开记录或发送模型请求。",
     "empty": "暂无已登记的周目。",
+    "filterEmpty": "本页没有需要处理的周目。",
     "pendingCleanup": "待继续清理的周目",
     "lastFailure": "上次恢复错误：{code}",
     "noProfile": "尚未绑定模型",
@@ -111,6 +112,7 @@
       "billing": "费用与上限",
       "price": "价格登记",
       "balance": "服务商余额",
+      "runs": "周目管理",
       "memory": "记忆",
       "memory-list": "记忆查询",
       "memory-pending": "待确认",
@@ -495,7 +497,8 @@
       "runLimitMissing": "发送付费请求前，请设置服务商计价币种对应的本局上限。",
       "reconciliationRequired": "本局历史费用范围尚未核对完成，暂不能发送付费请求。",
       "settlementBacklog": "待恢复费用已达到安全上限。请先重试现有结算，再发送新请求。"
-    }
+    },
+    "estimated": "估算"
   },
   "game": {
     "intro": "选择剧本与模型后开始。重开周目不会自动生成。",
@@ -679,7 +682,9 @@
     "tableTitle": "价目对照",
     "perMillion": "每百万 token",
     "nowMultHint": "峰时 ×2",
-    "official": "官方价目 · 已登记"
+    "official": "官方价目 · 已登记",
+    "requestCount": "{count} 笔请求",
+    "legacyCalendar": "旧版 v1 在 2026 年以外沿用原工作日时段规则；重新确认新价目后，未覆盖日期使用峰时保守估算。"
   },
   "tpl": {
     "title": "使用 DeepSeek 官方价目？",

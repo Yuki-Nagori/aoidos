@@ -174,6 +174,9 @@ void preferences.load();
             <template v-if="billingChip">
               <span class="sep" />
               <span>{{ billingChip }}</span>
+              <span v-if="billing.period.value?.hasEstimatedRequests" class="tag warn">≈ {{
+                  t("billing.estimated")
+                }}</span>
             </template>
             <span class="sep" />
             <span class="dim">{{ product.model.value }}</span>

@@ -476,6 +476,86 @@ fn price_versions_are_immutable_and_idempotently_registered() {
 }
 
 #[test]
+fn tier_report_uses_every_frozen_request_and_keeps_legacy_amounts_and_currencies_separate() {
+    let mut connection = database();
+    prepare(&mut connection);
+    let current = aoidos_billing::providers::deepseek::flash_prices().remove(0);
+    let mut legacy = current.clone();
+    legacy.version_id = "legacy-calendar-price".into();
+    legacy.schedule.as_mut().unwrap().version = "deepseek-api-utc-weekday-holiday-2026-v1".into();
+    let dispatch = "2027-01-03T04:30:00Z";
+    for (id, price) in [("legacy-tier", &legacy), ("estimated-tier", &current)] {
+        BillingLedger::register_price(&mut connection, price, dispatch).unwrap();
+        BillingLedger::select_profile_price_version(
+            &mut connection,
+            "profile-1",
+            &price.version_id,
+            dispatch,
+        )
+        .unwrap();
+        let mut request = reservation(id, Currency::Cny, "1");
+        request.provider_id = price.provider_id.clone();
+        request.model_id = price.model_id.clone();
+        request.price_version_id = price.version_id.clone();
+        request.dispatch_at = dispatch.into();
+        BillingLedger::reserve(&mut connection, &request).unwrap();
+    }
+    let mut settlement = summary_settlement();
+    settlement.amount = NanoMoney::parse("0.0001").unwrap();
+    BillingLedger::settle(&mut connection, "legacy-tier", Some(&settlement), dispatch).unwrap();
+    BillingLedger::select_profile_price(
+        &mut connection,
+        "profile-1",
+        "provider",
+        "model",
+        "direct",
+        Currency::Usd,
+        dispatch,
+    )
+    .unwrap();
+    BillingLedger::reserve(
+        &mut connection,
+        &reservation("regular-usd", Currency::Usd, "0.3"),
+    )
+    .unwrap();
+    let first = BillingLedger::list_requests(&connection, "run-1", None, Some(1)).unwrap();
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.items[0].price_tier, PriceTier::Off);
+    assert!(!first.items[0].estimated);
+    assert_eq!(
+        first.items[0].actual_amount,
+        Some(NanoMoney::parse("0.0001").unwrap())
+    );
+    let second =
+        BillingLedger::list_requests(&connection, "run-1", first.next_cursor.as_deref(), Some(1))
+            .unwrap();
+    assert_eq!(second.items[0].price_tier, PriceTier::Peak);
+    assert!(second.items[0].estimated);
+    let totals = BillingLedger::run_tier_summary(&connection, "run-1").unwrap();
+    assert_eq!(totals.len(), 3);
+    let peak = totals
+        .iter()
+        .find(|item| item.tier == PriceTier::Peak)
+        .unwrap();
+    assert_eq!(peak.estimated_requests, 1);
+    assert_eq!(peak.reserved_amount, NanoMoney::parse("1").unwrap());
+    assert_eq!(peak.settled_amount, NanoMoney::ZERO);
+    let off = totals
+        .iter()
+        .find(|item| item.tier == PriceTier::Off)
+        .unwrap();
+    assert_eq!(off.settled_amount, NanoMoney::parse("0.0001").unwrap());
+    assert_eq!(
+        totals
+            .iter()
+            .find(|item| item.currency == Currency::Usd)
+            .unwrap()
+            .reserved_amount,
+        NanoMoney::parse("0.3").unwrap()
+    );
+}
+
+#[test]
 fn go_peak_schedule_is_persisted_and_settlement_uses_frozen_dispatch_time() {
     let mut connection = database();
     prepare(&mut connection);

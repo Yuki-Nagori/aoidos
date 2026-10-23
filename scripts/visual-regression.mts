@@ -977,8 +977,10 @@ try {
       { id: "gameplay", target: "gameplay" },
       { id: "dice", target: "dice" },
       { id: "billing", target: "billing" },
+      { id: "rates", target: "billing" },
       { id: "price", target: "billing" },
       { id: "balance", target: "billing" },
+      { id: "runs", target: "runs" },
       { id: "memory", target: "memory" },
       { id: "memory-list", target: "memory-query" },
       { id: "memory-pending", target: "memory-query" },
@@ -1155,18 +1157,13 @@ try {
         assert.match(await currencyCard.innerText(), /Peak period[\s\S]*Uncached input[\s\S]*2/);
         assert.match(await currencyCard.innerText(), /Peak period[\s\S]*Output[\s\S]*8/);
         const priceLayout = await currencyCard.evaluate((element) => {
-          const heading = element.querySelector<HTMLElement>(".settings-currency-heading");
-          const select = element.querySelector<HTMLElement>(".select-menu");
           const preview = element.querySelector<HTMLElement>(".settings-price-preview");
-          const grid = preview?.querySelector<HTMLElement>(".settings-price-grid");
           const periods = preview?.querySelector<HTMLElement>(".settings-price-periods");
-          if (!heading || !select || !preview || !grid || !periods)
-            throw new Error("API price controls are missing");
+          const grid = preview?.querySelector<HTMLElement>(".settings-price-grid");
+          if (!preview || !grid || !periods) throw new Error("API price preview is missing");
           return {
             currencyDisplay: getComputedStyle(element).display,
             currencyWidth: element.getBoundingClientRect().width,
-            headingColumns: getComputedStyle(heading).gridTemplateColumns.split(" ").length,
-            selectWidth: select.getBoundingClientRect().width,
             previewWidth: preview.getBoundingClientRect().width,
             previewScrollWidth: preview.scrollWidth,
             priceColumns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
@@ -1188,15 +1185,12 @@ try {
         });
         if (viewport.width <= 720) {
           assert.equal(priceLayout.currencyDisplay, "grid");
-          assert.equal(priceLayout.headingColumns, 1);
           assert.equal(priceLayout.priceColumns, 1);
           assert.equal(priceLayout.periodColumns, 1);
         } else {
+          assert.equal(priceLayout.priceColumns, 2);
           assert.equal(priceLayout.periodColumns, 2, "Regular and peak prices sit side by side");
         }
-        assert.ok(
-          priceLayout.selectWidth > 0 && priceLayout.selectWidth <= priceLayout.currencyWidth,
-        );
         assert.ok(
           priceLayout.previewScrollWidth <= priceLayout.previewWidth,
           `Price preview must not overflow: ${JSON.stringify(priceLayout)}`,

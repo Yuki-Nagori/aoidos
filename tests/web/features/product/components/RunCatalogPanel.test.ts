@@ -84,6 +84,27 @@ it("embeds run summaries, highlights the active run and blocks deletion until se
   wrapper.unmount();
 });
 
+it("shows an empty-state message when the attention filter excludes every ready run", async () => {
+  api.listRuns.mockResolvedValue({
+    ...page([run]),
+    nextCursor: { catalogRevision: 7, afterCreatedAt: run.createdAt, afterSessionId: "next-run" },
+  });
+  const wrapper = mount(RunCatalogPanel, {
+    props: { open: true, embedded: true, scripts: [script], profiles: [], locale: "en" },
+    global: { plugins: [i18n] },
+  });
+  await vi.waitFor(() => expect(wrapper.findAll(".run-catalog-row")).toHaveLength(1));
+
+  await wrapper.findAll(".run-catalog-filter button")[1]!.trigger("click");
+
+  expect(wrapper.findAll(".run-catalog-row")).toHaveLength(0);
+  expect(wrapper.get(".run-catalog-empty").text()).toBe("No runs on this page need attention.");
+  expect(
+    wrapper.findAll(".run-catalog-footer button").at(-1)?.attributes("disabled"),
+  ).toBeUndefined();
+  wrapper.unmount();
+});
+
 it("requires both a selected profile and explicit acknowledgement before binding a legacy save", async () => {
   api.listRuns.mockResolvedValue(
     page([{ ...run, profileId: null, state: "needs-profile-binding" }]),

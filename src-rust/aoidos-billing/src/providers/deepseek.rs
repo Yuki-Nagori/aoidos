@@ -7,7 +7,7 @@ use crate::{
 
 const CHECKED_AT: &str = "2026-10-21T00:00:00Z";
 const EFFECTIVE_FROM: &str = "2026-10-21T00:00:00Z";
-const SCHEDULE: &str = "deepseek-api-utc-weekday-holiday-2026-v1";
+const SCHEDULE: &str = "deepseek-api-utc-weekday-holiday-2026-v2";
 const USAGE_MAPPING: &str = "deepseek-chat-completion-usage-v2";
 /// 历史请求没有独立缓存写入计数；恢复时按零写入量解释。
 pub const LEGACY_USAGE_MAPPING: &str = "deepseek-chat-completion-usage-v1";
@@ -28,7 +28,7 @@ pub fn flash_prices() -> Vec<PriceVersion> {
     [
         (
             Currency::Cny,
-            "deepseek-flash-cny-2026-10-21-v2",
+            "deepseek-flash-cny-2026-10-21-v3",
             "0.02",
             "1",
             "4",
@@ -39,7 +39,7 @@ pub fn flash_prices() -> Vec<PriceVersion> {
         ),
         (
             Currency::Usd,
-            "deepseek-flash-usd-2026-10-21-v2",
+            "deepseek-flash-usd-2026-10-21-v3",
             "0.003",
             "0.15",
             "0.6",
@@ -108,8 +108,8 @@ mod tests {
         assert_eq!(default_currency(), Currency::Cny);
         let prices = flash_prices();
         assert_eq!(prices.len(), 2);
-        assert_eq!(prices[0].version_id, "deepseek-flash-cny-2026-10-21-v2");
-        assert_eq!(prices[1].version_id, "deepseek-flash-usd-2026-10-21-v2");
+        assert_eq!(prices[0].version_id, "deepseek-flash-cny-2026-10-21-v3");
+        assert_eq!(prices[1].version_id, "deepseek-flash-usd-2026-10-21-v3");
         assert_eq!(prices[0].usage_mapping_version, USAGE_MAPPING);
         assert_eq!(USAGE_MAPPING, "deepseek-chat-completion-usage-v2");
         assert_eq!(prices[0].currency, Currency::Cny);

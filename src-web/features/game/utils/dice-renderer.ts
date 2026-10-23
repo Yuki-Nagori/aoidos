@@ -11,13 +11,62 @@ export const diceRenderer = {
 };
 let diceFrame = 0;
 
-/** 优先启用 WebGPU，初始化失败后回退到同一共享 WebGL 引擎。 */
+/** 在场景仍等待 Babylon 资源就绪时，可主动释放场景并结束等待。 */
+export function createDiceSceneCancellation(onCancel: () => void): {
+  promise: Promise<never>;
+  cancel: () => void;
+} {
+  let rejectCancellation!: (reason: Error) => void;
+  let cancelled = false;
+  const promise = new Promise<never>((_, reject) => {
+    rejectCancellation = reject;
+  });
+  return {
+    promise,
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      try {
+        onCancel();
+      } finally {
+        rejectCancellation(new Error("dice-render-cancelled"));
+      }
+    },
+  };
+}
+
+/** 场景销毁时不再等待永远无法完成的 Babylon ready promise。 */
+export async function waitForDiceSceneReady(
+  ready: Promise<unknown>,
+  cancellation: Promise<never>,
+): Promise<void> {
+  await Promise.race([ready, cancellation]);
+}
+
+/** WebGPU 在 endFrame 提交命令；二维画布必须在该提交之后读取共享画布。 */
+export function renderAndSubmitDiceFrame(
+  engine: { beginFrame: () => void; endFrame: () => void },
+  render: () => boolean,
+): boolean {
+  engine.beginFrame();
+  try {
+    return render();
+  } finally {
+    engine.endFrame();
+  }
+}
+
+/** 优先启用 WebGPU；候选引擎失败后，为 WebGL 回退创建独立画布。 */
 export async function createDiceEngine(
   Engine: typeof import("@babylonjs/core/Engines/engine").Engine,
   WebGPUEngine: typeof import("@babylonjs/core/Engines/webgpuEngine").WebGPUEngine,
 ): Promise<DiceEngine> {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 16;
+  const createCanvas = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 16;
+    return canvas;
+  };
+  const canvas = createCanvas();
   diceRenderer.canvas = canvas;
   try {
     if (await WebGPUEngine.IsSupportedAsync) {
@@ -38,8 +87,12 @@ export async function createDiceEngine(
   } catch {
     // WebGPU 不可用时沿用同一个共享 WebGL 回退。
   }
+  // HTMLCanvasElement 一旦取得 WebGPU 上下文，之后不能再切换为 WebGL 上下文。
+  // 即使候选引擎初始化失败，也必须让回退引擎使用全新的画布。
+  const fallbackCanvas = createCanvas();
+  diceRenderer.canvas = fallbackCanvas;
   return new Engine(
-    canvas,
+    fallbackCanvas,
     true,
     {
       alpha: true,

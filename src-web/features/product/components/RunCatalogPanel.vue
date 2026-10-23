@@ -415,7 +415,9 @@ async function previousPage(): Promise<void> {
           </article>
         </section>
         <p v-if="loading" class="run-catalog-empty" role="status">{{ t("common.loading") }}</p>
-        <p v-else-if="rows.length === 0" class="run-catalog-empty">{{ t("runs.empty") }}</p>
+        <p v-else-if="visibleRows.length === 0" class="run-catalog-empty">
+          {{ rows.length === 0 ? t("runs.empty") : t("runs.filterEmpty") }}
+        </p>
 
         <div v-else class="run-catalog-list">
           <article

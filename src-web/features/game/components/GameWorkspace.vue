@@ -77,6 +77,10 @@ const availableCommands = computed<CommandSuggestion[]>(() => {
 const starterSuggestion = computed(() =>
   orderedRecords.value.some((item) => item.kind === "playerSpeech") ? undefined : props.suggestedAction,
 );
+function requestRewindTargetSelection(): void {
+  if (controls.busy.value || !availableCommands.value.includes("rewind")) return;
+  rewindSelectorOpen.value = true;
+}
 const pendingCheck = ref<PlannedCheck>();
 const settledCheck = ref<CheckTrayState>();
 const dicePresentationPending = ref(false);
@@ -375,6 +379,7 @@ defineExpose({ reconnect });
                 :script-skin-enabled="props.scriptSkinEnabled ?? true"
                 :rewind-selector-open="rewindSelectorOpen"
                 :on-retry="requestRegenerate"
+                :on-request-rewind="availableCommands.includes('rewind') ? requestRewindTargetSelection : undefined"
                 :actions-busy="controls.busy.value"
                 :characters="presence.snapshot.value?.characters ?? []"
                 :older-cursor="olderCursor"

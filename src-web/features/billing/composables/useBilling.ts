@@ -353,7 +353,7 @@ export function useBilling(
         schedule: hasGoPeakPrice
           ? {
               version: isDeepseekApiSchedule.value
-                ? "deepseek-api-utc-weekday-holiday-2026-v1"
+                ? "deepseek-api-utc-weekday-holiday-2026-v2"
                 : "opencode-go-deepseek-utc-weekday-v1",
               peak: {
                 inputUncached: peakInputUncached.value,
