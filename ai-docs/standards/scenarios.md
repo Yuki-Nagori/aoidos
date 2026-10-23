@@ -1,10 +1,10 @@
 # 剧本格式与接入规范
 
-更新日期：2026-10-19。项目约定；v1 为最小 Markdown 原文接入、显式结构化实体登记及结局规则 sidecar，不承诺完整规则自动解析或任意剧本包导入。
+更新日期：2026-10-23。项目约定；v1 为最小 Markdown 原文接入、显式结构化实体和周目初始化输入，不承诺完整规则自动解析或任意剧本包导入。
 
 ## 内容真源与资源
 
-剧本在独立内容仓库维护；Aoidos 将已发布原文放入 `resources/scripts/<scriptId>/`。每个目录保存正文、必要署名 / 许可文件，以及显式登记的 `i18n.json` 和 `entities.json`；不随应用打包私有仓库地址、提交号或 SOURCE.json，不在构建 / 运行时隐式读取相邻仓库或联网同步。
+剧本在独立内容仓库维护；Aoidos 将已发布原文放入 `resources/scripts/<scriptId>/`。每个目录保存正文、必要署名 / 许可文件，以及显式登记的 `i18n.json`、`entities.json` 和 `cycle-input.json`；不随应用打包私有仓库地址、提交号或 SOURCE.json，不在构建 / 运行时隐式读取相邻仓库或联网同步。
 
 默认资源由 engine 的资源模块显式登记，使用编译期 `include_bytes!` / `include_str!` 嵌入正文、许可和本地化展示元数据。固定路径属于发布资源配置，运行时按 scriptId 选择，不依赖编译机器目录；业务模块不自行拼接文件路径。首版不引入目录扫描或任意剧本包注册。
 
@@ -12,35 +12,45 @@
 
 `entities.json` 是剧本作者 / 维护者人工审核的规范实体初始清单，不是运行时实体注册表；不由 Markdown、标题、自然语言或模型输出自动提取。v1 顶层必须且只能包含 `{ "version": 1, "revision": 1, "complete": true, "entities": [...] }` 中的字段：`version` 是 schema 版本，当前只接受 1；`revision` 是正整数目录修订，每次目录语义变更递增；`complete` 表示所登记 scope 的规范实体集合完整，只有 `true` 才能用于精确名称解析；`entities` 为非空数组。每项必须且只能包含 `{ "id": "…", "kind": "…", "scope": "…", "canonicalName": "…" }`，`kind` 只接受 `character`、`place`、`organization`、`item`、`term`。`id` 是稳定实体身份，`scope` 是类别内解析范围，全局范围使用 `global`；同类别、同 scope 的规范名必须唯一。实体身份不得复用，重命名应保留 ID 并提升 revision。
 
-清单上限 1 MiB、4096 项；ID 为 1–64 个 ASCII 字母、数字、连字符或下划线，scope 最多 128 UTF-8 字节，规范名最多 256 UTF-8 字节，名称不得为空、带首尾空白或控制字符。解码拒绝非法 UTF-8、重复 JSON 键、尾随内容、未知字段、未知 kind、缺字段和类型错误；清单任一错误使该剧本不可用，不静默降级成空目录。正文 Markdown 继续原字节保存；新增或修订实体只改元数据，不重写原文。目录只支持精确规范名查询，不自动登记别名、不证明角色获知、不授予世界事实写入权限。`complete` 是维护者对剧本中可作规范精确解析对象集合的显式完整性声明；完整目录还须覆盖引擎登记场景中的所有 Character actor。未列出的普通名词不被解析，也不能从目录缺项推断文本不存在其他歧义。
+清单上限 1 MiB、4096 项；ID 为 1–64 个 ASCII 字母、数字、连字符或下划线，scope 最多 128 UTF-8 字节，规范名最多 256 UTF-8 字节，名称不得为空、带首尾空白或控制字符。可选 `guideNpcId` 必须引用清单中 `kind=character` 的稳定实体。解码拒绝非法 UTF-8、重复 JSON 键、尾随内容、未知字段、未知 kind、缺字段和类型错误；清单任一错误使该剧本不可用，不静默降级成空目录。正文 Markdown 继续原字节保存；新增或修订实体只改元数据，不重写原文。目录只支持精确规范名查询，不自动登记别名、不证明角色获知、不授予世界事实写入权限。`complete` 是维护者对剧本中可作规范精确解析对象集合的显式完整性声明；完整目录还须覆盖引擎登记场景中的所有 Character actor。未列出的普通名词不被解析，也不能从目录缺项推断文本不存在其他歧义。
 
 该清单只提供剧本固定实体的初始数据；Rust `EntityRegistry` 在运行时将其与可信世界操作提交的动态实体合并，不改写打包清单，也不把记忆能力绑定到 Mistbell 专属路径。动态 ID 由 Rust 随机分配，不从名称推导；每条注册记录绑定 session、script / catalog revision、源 mutation、hash 和 JSONL recordSeq。实体行、单调 `entityRevision` 与 `store_applied` 回执在共享 SQLite 的一个事务中提交。恢复时重放既有 mutation，不重新生成身份；注册表快照会核验回执及源记录，只暴露当前有效分支上的实体，分支外记录保留供审计。快照有界且只读，注册身份本身不授予任何角色获知该实体或相关事件的权限。动态实体创建仍须由可信规则显式授权；模型文本、记忆候选或名称相似度不会直接创建或合并实体。
 
-### 结局标签规则
+### 周目初始化输入与引导角色
 
-可选 `ending-rules.json` 声明结局属性、标签目录、互斥组及规则来源。它属于可信剧本资源，在构建期显式登记并计算独立的 `endingRulesHash`；不在运行时扫描目录，也不改变现有 `scriptRevision` 的输入。`endingRulesHash` 对 `aoidos_json::canonical_string` 生成的 UTF-8 字节执行 SHA-256，输入前加固定域标签 `aoidos-ending-rules-v1\0` 与 64 位大端字节长度；对象键按库的规范顺序排列、数组保持原顺序，规则数组在校验时按稳定 ID 排序。结构版本未知、属性引用未登记、值域越界、冲突组不合法或未知字段都会使资源校验失败，不能静默降级。
+每个新周目都使用显式登记的 `cycle-input.json`，不从 Markdown 自然语言推断可执行数值字段。文件只声明版本、输入字段 schema 及可选固定引导 NPC 身份；不得包含结局标签、结局规则或最终目标。开局模型根据剧本原文、已登记的字段 schema、locale 与输出协议生成目标、标签目录、规则、初始任务；如果 `entities.json` 登记了 `guideNpcId`，该稳定角色即为首个引导 NPC，模型只生成其开场对白；未登记时模型返回引导 NPC 的姓名和种族，实体 ID 由引擎生成并通过可信初始化路径注册。不得运行时搜索正文猜测角色。
+
+`cycle-input.json` 顶层必须且只能包含 `{ "version": 1, "revision": 1, "stateFields": [...] }` 中的字段。字段项必须且只能包含稳定 `id`、`type`、可执行的可信来源 `source`、整数 `min` / `max`、非空 `operators` 和两种应用 locale 的简短 `descriptions`。source 必须命中 engine 显式注册、由已提交事实确定性派生的状态投影；未知 source、未经注册的字段、重复 ID、非法范围或非法运算符使剧本不可用。模型只能引用这些字段与运算符，不能创造状态源或读取当前隐藏值。字段描述帮助模型理解游戏语义，不构成执行代码或事实。
+
+示例：
 
 ```json
 {
   "version": 1,
   "revision": 1,
-  "ruleSource": "authored",
-  "attributes": [{ "id": "<script-registered-attribute>", "type": "integer", "min": 0, "max": 100, "operators": ["gte", "lt"] }],
-  "conflictGroups": [{ "id": "<stable-group-id>", "resolution": "highestPriority" }],
-  "tags": [{ "id": "<stable-tag-id>", "visibility": "public", "conflictGroup": "<stable-group-id>", "priority": 10, "summaries": { "en": "<factual statement>", "zh-Hans": "<事实描述>" } }],
-  "rules": [{ "id": "<stable-rule-id>", "all": [{ "attribute": "<script-registered-attribute>", "op": "gte", "value": 70 }], "emit": ["<stable-tag-id>"] }]
+  "stateFields": [
+    {
+      "id": "committed_discoveries",
+      "type": "integer",
+      "source": "engine.committed-discoveries.v1",
+      "min": 0,
+      "max": 1000,
+      "operators": ["eq", "gte", "lt"],
+      "descriptions": { "en": "Number of distinct discoveries committed in this run", "zh-Hans": "本周目已提交的不同发现数量" }
+    }
+  ]
 }
 ```
 
-`ruleSource` v1 为 `authored` 或 `generated`；顶层还必须且只能包含 `version`、`revision`、`ruleSource`、`attributes`、`conflictGroups`、`tags`、`rules`。v1 只支持整数属性，范围端点为安全整数且 `min <= max`；运算符仅 `eq`、`ne`、`gt`、`gte`、`lt`、`lte`，比较值必须在属性范围内。单文件 ≤256 KiB，属性 ≤128、冲突组 ≤32、标签 ≤256、规则 ≤512；每条规则含 1–16 个 `all` 条件、最多输出 16 个标签。所有 ID 为 1–64 个 ASCII 字母、数字、连字符或下划线；summary 每语言 1–1024 UTF-8 字节，locale 必须覆盖应用支持语言。作者预设资源及其冻结快照均含 1–512 条规则。生成模式使用同一 DTO / schema，但按用途作条件校验：静态资源声明的 `rules` 必须为空；运行时生成结果须通过严格白名单校验后形成冻结快照，`rules` 必须为 1–512 条，且 `version`、`revision`、`attributes`、`conflictGroups`、`tags` 必须与原声明逐字段相同，只能补入合法规则；任一规则或引用非法时整份结果拒绝，不删除非法项后继续接受。不得把空规则声明误当可执行快照，也不得把非空生成结果按静态资源规则拒绝。属性缺失、未提交、类型错误或超界一律阻止本次终局求值，不能当零、跳过条件或用 AI 推断。多条规则按 OR 生效，每条 `all` 是 AND；tag 默认可并存。互斥组只接受 `highestPriority`，组内所有 tag 必须有唯一的安全整数优先级，非互斥 tag 不得携带 `conflictGroup` / `priority`；命中多个时保留唯一最高者，不能用 ID 或模型意见打破同优先级。若使用 LLM 生成，模型只看到字段定义、比较目录与既有 tag allowlist，不读本局运行值，也不能创建属性、标签、事实或任意谓词；物理请求经现有计费端口记录。两种模式最终都由同一 Rust 类型与字段约束校验器、按用途区分的条件校验、规范化和冻结流程处理。`summaries` 是作者审核的事实描述；visibility 决定能否进入玩家摘要和结局叙事请求。此 sidecar 不改变 Markdown 原文及解析器纯原文职责；规则仅由 engine 执行。
+文件上限 128 KiB，最多 64 个字段；字段 ID 为 1–64 个 ASCII 字母、数字、连字符或下划线，描述每语言 1–256 UTF-8 字节。允许比较仅 `eq`、`ne`、`gt`、`gte`、`lt`、`lte`，阈值必须落在声明范围内；缺失、未提交、类型不符和越界值一律使当前求值进入恢复，不当作零或跳过条件。所有脚本都必须显式登记此文件；无可用状态字段的脚本使用空数组，仍须生成目标和有限标签 / 规则，但规则不能引用未声明字段。
 
-`endingRulesHash` 使用 `aoidos-ending-rules-v1\0` 域标签；`ruleHash` 使用独立的 `aoidos-ending-effective-rule-v1\0` 域标签。二者均按“域标签 + 64 位大端规范 JSON 字节长度 + 规范 JSON UTF-8 字节”计算 SHA-256，输出格式为 `sha256:<hex>`。前者覆盖静态 sidecar 全部字段，后者覆盖该周目的来源模式、有效完整规则、tag / conflict 定义和 schema 版本。`resolutionId` 对 `{ runId, terminalMutationId, ruleHash }` 的规范 JSON 字节使用独立域标签 `aoidos-ending-resolution-v1\0`，按“域标签 + 64 位大端规范 JSON 字节长度 + 规范 JSON UTF-8 字节”计算 SHA-256，结果格式为 `sha256:<hex>`；同一终局锚点与规则快照因此得到相同身份。结局快照同时固定 `summaryLocale`、模板版本和精确摘要 UTF-8 字节；`summaryHash` 是对 `aoidos-ending-summary-v1\0` 域标签后以 64 位大端长度前缀封装的 `{ resolutionId, ruleHash, terminalAnchor, summaryLocale, summaryTemplateVersion, publicTagIds, summaryText }` 规范 JSON 求 SHA-256。排序、整数表示与规范编码复用 `aoidos-json`，数组顺序固定；更换应用语言或模板不改写旧摘要，叙事重试复用原语言、模板版本和精确摘要。
+`entities.json` 可选登记 `guideNpcId`，它必须引用当前完整实体目录中的 `character`。新增字段需提升实体清单 revision；script revision 的哈希输入包括原文、实体清单和 cycle input 字节及其目录修订。`cycle-input.json` 与实体清单均在构建期显式登记并编译期嵌入，不扫描目录或运行时联网；旧 run 继续使用冻结的 script revision，不补造输入 schema、NPC 或初始化快照。
 
-配置了 `ending-rules.json` 的新周目使用持久两阶段初始化：先用稳定 `runId` 写入不可玩的 `initializing` 状态、`endingMode=enabled` 及本周目 CNY / USD 预算快照；035 以此 run 创建预算后，才可登记物理生成请求。初始化恢复按原 `runId` 和原预算配置幂等补齐，不因重开生成新账本身份。规则通过与声明模式相符的校验后，在单个 SQLite 事务中保存完整规则快照并将 run 标为 `playable`。失败或响应未知时保留 initializing 状态与费用 / 未确认占用，不开放游戏、不删账、不自动重发；玩家显式重试时创建新的 requestId 并仍计入原 run，或放弃该未开局 run。作者预设模式跳过物理生成请求，但同样先持久化 initializing，再冻结规则并激活。没有配置结局规则的剧本以 `endingMode=disabled` 正常开始，不生成规则、不建立结局专属初始化步骤，并保持既有 `sessionEnded` 行为。旧存档缺少 `endingMode` 时按 disabled 兼容，不为其补生成或迁移出结局规则；之后恢复、重开、分支回退和剧本升级都复用原快照；规则版本升级只作用于新 run。
+开局生成结果是 run 私有、版本化、严格白名单校验并冻结的产物，至少包含最终目标、目标状态可引用的标签 ID、tag 目录、受限比较规则、有限的初始任务，以及生成 NPC 资料（仅无固定 guide NPC 时）。引擎自行创建 ID 和顺序，完整结果要通过数量、字符、locale、重复 ID、字段引用、互斥组、阈值、任务依赖和跨字段一致性校验；未知字段或任一部分无效时整份拒绝，不部分应用。应用支持的 locale 必须完整覆盖用户可见目标、任务及公开标签说明。对规范化 JSON 使用 `aoidos-cycle-init-v1\0` 域标签与 64 位大端长度前缀计算 SHA-256，冻结在该 run 初始化快照；规则 hash、终局 resolutionId 与 summaryHash 分别使用 `aoidos-ending-effective-rule-v1\0`、`aoidos-ending-resolution-v1\0`、`aoidos-ending-summary-v1\0` 独立域标签和长度前缀。
 
-对 `endingMode=enabled` 的 run，结局事实先于可选 AI 叙事提交。`sessionEnded` applied 后，engine 用同一终局锚点与锁定规则确定性派生 `resolutionId`；再追加已注册的 `endingResolved` 系统记录，并按 022 的 mutation / `store_applied` 协议原子提交标签、来源 rule ID、revision 与规范摘要。启动恢复若看到 enabled run 的已 applied `sessionEnded` 而无 `endingResolved`，必须沿同一锚点补算并提交同一身份；pending 的 `endingResolved` 由 022 恢复，已 applied 则直接读取，绝不重复求值。disabled / legacy-disabled run 沿用原结束行为，不要求也不得补写 `endingResolved`。只有规范终态持久化后才请求 AI 叙事；叙事单独绑定 resolutionId / requestId，失败不撤销结束。
+生成请求的物理 requestId、预算和 profile 快照必须先按 027 / 035 持久化。每个新周目先进入不可玩的 initializing 状态，成功校验且完整初始化快照持久化后才变为 playable；失败或 unknown 不自动重发、不换规则、不开放游戏。显式重试使用同一 run / 预算身份和新的物理 requestId。旧存档和明确废弃的初始化 run 沿既有恢复 / 删除协议处理，不静默升级为新周目。
 
-默认示例为 [Mistbell v1 原文](../../resources/scripts/mistbell/Mistbell.md)及[规范实体清单](../../resources/scripts/mistbell/entities.json)。正文和许可按原字节冻结，格式器不改写；更新为显式发布。`header.scriptRevision` 按现有协议对带域标签和长度前缀的 Markdown 原字节、实体清单字节及目录 revision 计算 SHA256（`sha256:<hex>`）；本次不改变其输入。结局规则 sidecar 单独计算 `endingRulesHash`，并与 `scriptRevision` 一起冻结在周目初始化记录中。引擎加正式 prompt 标记后的静态前缀另算 `staticPrefixHash`。原文、实体目录或结局规则资源更新均不覆盖已有周目；重新打开必须匹配原周目登记版本，不仅校验 scriptId。
+结局事实、可信终局触发、恢复、标签求值、确定性摘要和 AI 非权威叙事边界见 [054](../task/054-ending-flow-design.md)、[056](../task/056-ending-flow-impl.md) 与[结局架构](../architecture/ending-flow.md)。正文解析器只处理 Markdown 原文；初始化和规则都由 engine 明确登记及执行。
 
 ## 最小原文 v1
 
@@ -60,7 +70,7 @@
 
 正文解析与执行配置分开：`aoidos-script` 只解析原文 / 校验结构，不依赖 engine / llm / tauri / store；engine 单向消费普通 DTO，并显式登记场景、规则、actor、RNG 和世界解释器。不能把文章中的“职业 / 金钱 / 法术”等文字自动授予数值执行能力。
 
-024 首版只登记最小章节及现有 `2d6-pbta-v1`，不宣称自动运行完整作者稿、多幕计数或 D&D d20。新规则和世界属性须先定稿、登记并验证，缺能力拒绝，不交给模型代填。结局标签与冻结规则由 [054](../task/054-ending-flow-design.md) 定稿、[056](../task/056-ending-flow-impl.md) 实现；这不等于现有剧本已配置结局数值或标签。后续格式演进沿独立内容仓库迭代，应用只升级已核验的接入版本。
+024 首版只登记最小章节及现有 `2d6-pbta-v1`，不宣称自动运行完整作者稿、多幕计数或 D&D d20。新规则和世界属性须先定稿、登记并验证，缺能力拒绝，不交给模型代填。结局字段输入由 `cycle-input.json` 声明，结局目标、标签和规则按 [054](../task/054-ending-flow-design.md) / [056](../task/056-ending-flow-impl.md) 在开局生成；这不等于现有脚本 schema 已实现或已验证所有结局状态来源。后续格式演进沿独立内容仓库迭代，应用只升级已核验的接入版本。
 
 ## 两仓库验证
 
