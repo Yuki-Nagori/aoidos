@@ -100,6 +100,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     crate::run_catalog::DELETION_RECEIPT_MIGRATION,
     crate::run_catalog::DELETION_CLEANUP_CURSOR_MIGRATION,
     crate::run_catalog::DELETION_ACK_MIGRATION,
+    crate::cycle_initialization::SCHEMA,
 ];
 
 pub struct Storage {
@@ -129,6 +130,7 @@ impl Storage {
                     aoidos_memory::schema::verify(connection)?;
                     crate::game::catalog::verify_entity_registry_schema(connection)?;
                     crate::run_catalog::verify(connection)?;
+                    crate::cycle_initialization::verify(connection)?;
                     crate::run_catalog::verify_deletion_cleanup_schema(connection)?;
                     crate::run_catalog::verify_deletion_receipt_schema(connection)?;
                     crate::run_catalog::verify_deletion_cleanup_cursor_schema(connection)?;

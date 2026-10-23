@@ -25,7 +25,7 @@
 
 开局模型接收当前剧本文本、受限字段 schema、输出版本和应用 locale；不接收本局状态数值。一个有限的结构化响应同时包含最终目标、目标完成 / 未完成时可引用的标签 ID、标签说明和可见性、以白名单字段和比较运算符构成的规则、初始任务以及按需生成 NPC 资料。ID 与顺序由 engine 创建；响应必须整体通过大小 / 数量 / 文本 / locale / ID 唯一性 / 引用 / 互斥组 / 阈值 / 任务依赖等校验，任一字段无效就整体拒绝。
 
-冻结快照绑定 runId、schema / prompt / locale 版本、scriptId / scriptRevision、输入 schema hash、profile revision、物理 requestId、标准化完整输出及其 hash。预算与 run 身份在发请求前保存；成功结果只在一个 SQLite 事务中从 initializing 进入 playable。未知或失败保留原费用记录和待处理义务；显式 retry 使用新 requestId，不能重复创建 run / 预算。初始化阶段的删除由 run 生命周期服务显式放弃，不能因“未结算”而卡住，也不能物理移除账单审计记录。
+冻结快照绑定 runId、schema / prompt / locale 版本、scriptId / scriptRevision、输入 schema hash、profile revision、物理 requestId、标准化完整输出及其 hash。预算与 run 身份在发请求前保存；成功结果只在一个 SQLite 事务中从 initializing 进入 playable。未知或失败保留原费用记录和待处理义务；显式 retry 使用新 requestId，不能重复创建 run / 预算。放弃初始化只停止该 run 并保留费用审计；玩家显式确认完整删除时，沿既有删除 journal 清理该局全部本地数据，包括未结请求和结算 outbox，仍须校验账务身份范围。
 
 任务初始态与后续提议属于引导投影，不是世界事实或终局权限。动态任务只在有意义的已提交里程碑节点提出；优先复用已有回合的结构化响应字段，否则使用独立计费请求。engine 校验来源修订、ID、数量、文本、依赖和当前历史分支后幂等保存；未提交、失败、unknown、重生成、重复回复和被回退回复不改变任务状态。完成项只划线并进入默认折叠区，数据保留以便随有效分支重放；任务完成不写世界状态、不满足结局条件，也不进入记忆证据。
 
