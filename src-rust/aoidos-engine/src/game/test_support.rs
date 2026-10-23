@@ -175,6 +175,7 @@ pub(crate) struct TestGeneration {
     pub(crate) calls: AtomicUsize,
     pub(crate) hold: std::sync::atomic::AtomicBool,
     pub(crate) fail_auth: std::sync::atomic::AtomicBool,
+    pub(crate) prompts: Mutex<Vec<String>>,
     proposal: &'static str,
 }
 impl Generation for TestGeneration {
@@ -198,6 +199,7 @@ impl Generation for TestGeneration {
         let ProviderInput::Completion(ref prompt) = input else {
             return Err(Fault::bad_request());
         };
+        lock(&self.prompts).push(prompt.prompt.clone());
         let text = if prompt.prompt.ends_with("[AOIDOS:CHECK-PROPOSAL]\n")
             || prompt.prompt.ends_with("[AOIDOS:SCENE-PROPOSAL]\n")
         {
@@ -485,6 +487,7 @@ impl Fixture {
                 calls: AtomicUsize::new(0),
                 hold: std::sync::atomic::AtomicBool::new(false),
                 fail_auth: std::sync::atomic::AtomicBool::new(false),
+                prompts: Mutex::new(Vec::new()),
                 proposal,
             }),
             completed,

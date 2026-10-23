@@ -166,6 +166,8 @@ sceneAdvanced / sessionEnded 的世界变更只允许对应注册类型，沿用
 
 checkpoint 只在 resumeRequired=true 且已核验可恢复时出现。stage 表示下一项缺失工作：check 包括未掷骰或缺分档，narration 表示缺 completed 正文，settle 表示缺结算确认，advance 表示缺场景 / 回合收尾。throughSeq 是上表指定的已确认事实锚点，不是物理最后 seq、事件基线或合法 rewind 目标的自动推断。roundEnded/failed、orphan 和 historyFork 控制行自身不能替代这个锚点。
 
+`CheckProposal` 只在场内行动轮进行，不意味着每个行动都要掷骰。LLM 仅在已确认情境下存在真实不确定性、失败或代价会产生有意义的不同后果、且有准确适用的登记规则时提出判定；普通无阻力行动、显而易见或不可能的结果、纯表达及没有后果差异的失败均应 `noCheck`。最终规则与角色仍由引擎白名单及规则校验决定，叙事模型不得臆造阻力来制造骰判。
+
 sourceRoundId 指拥有待恢复工作的最近 roundAccepted.roundId，复用旧 dice / 正文时按 sourceRoundId / checkpointSeq 引用链解析其事实。throughSeq 必须在当前有效路径中，相关 planId / diceSeq / narrativeSeq / applied 标记一致；任何缺失 / 版本未知先 needsRecovery，不猜一个阶段。部分结算以 settlementPlanned 为锚，逐项 applied 状态另外核验。
 
 按表从上到下取第一个匹配项。roundEnded/failed 或 cancelled 保留未完成检查点；resumeRequired 表示等待用户主动恢复，此时没有请求在飞。outcome 描述操作结果，phase 描述当前执行位置。

@@ -27,6 +27,11 @@ use tokio_util::sync::CancellationToken;
 
 type SharedDomain = Arc<Mutex<Box<dyn Domain>>>;
 
+const CHECK_PROPOSAL_GUIDANCE: &str = "\
+判定门槛：只有同时满足以下条件时才提议 check：当前行动的结果在已确认情境下确实不确定；成功与失败/代价都合理且会造成有意义的不同后果；并且存在准确适用的已登记规则。\n\
+普通移动、观察、拿取触手可及的物品、平常交谈，以及没有阻力或实际风险的尝试，直接选择 noCheck 并交给叙事处理；不要因为玩家描述了一个动作就自动要求掷骰，也不要为了触发骰判而臆造危险。结果显而易见、行动不可能、只是表达意图，或失败不会产生不同后果时，也选择 noCheck。\n\
+只依据当前玩家行动与已确认情境判断；若无法指出具体的不确定性、阻力和失败后果，就选择 noCheck。不得发明角色或规则。";
+
 /// 注册域保留唯一 SQL 解释器；驱动与恢复均使用这份所有者，不另开连接。
 pub struct Context {
     pub player_id: String,
@@ -627,7 +632,7 @@ impl Runner {
                 .catalog()
                 .scene(&self.recovered.scene.as_ref().ok_or_else(no_scene)?.scene_id)?;
             format!(
-                "\n仅返回 JSON：{{\"kind\":\"noCheck\"}} 或 {{\"kind\":\"check\",\"ruleId\":\"登记规则\",\"actorId\":\"登记角色\",\"reason\":\"理由\"}}。规则 {:?}；角色 {:?}。",
+                "\n{CHECK_PROPOSAL_GUIDANCE}\n仅返回 JSON：{{\"kind\":\"noCheck\"}} 或 {{\"kind\":\"check\",\"ruleId\":\"登记规则\",\"actorId\":\"登记角色\",\"reason\":\"理由\"}}。规则 {:?}；角色 {:?}。",
                 scene.check_rule_ids, scene.actor_ids
             )
         };

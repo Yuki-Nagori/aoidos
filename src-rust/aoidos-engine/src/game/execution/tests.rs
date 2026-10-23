@@ -5,6 +5,28 @@ use crate::record::facts::DiceMode;
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
+async fn check_proposal_guidance_and_allowlists_reach_the_provider_prompt() {
+    let fixture = Fixture::new(false, "{\"kind\":\"noCheck\"}");
+    let mut runner = fixture.accept("查看房间", DiceMode::Manual).await;
+    fixture.complete(&mut runner).await;
+
+    let prompts = lock(&fixture.generation.prompts);
+    let prompt = prompts.first().expect("check proposal should be requested");
+    assert!(prompt.contains("查看房间"));
+    assert!(prompt.contains("确实不确定"));
+    assert!(prompt.contains("有意义的不同后果"));
+    assert!(prompt.contains("准确适用的已登记规则"));
+    assert!(prompt.contains("普通移动、观察、拿取触手可及的物品、平常交谈"));
+    assert!(prompt.contains("不要因为玩家描述了一个动作就自动要求掷骰"));
+    assert!(prompt.contains("若无法指出具体的不确定性、阻力和失败后果，就选择 noCheck"));
+    assert!(prompt.contains("仅返回 JSON"));
+    assert!(prompt.contains("\"kind\":\"noCheck\""));
+    assert!(prompt.contains("\"kind\":\"check\""));
+    assert!(prompt.contains("规则 ［\"search\"］"));
+    assert!(prompt.contains("角色 ［\"player\"］"));
+}
+
+#[tokio::test]
 async fn no_check_and_ooc_pipeline_share_real_records_and_completed_hook() {
     let fixture = Fixture::new(false, "{\"kind\":\"noCheck\"}");
     let mut runner = fixture.accept("查看房间", DiceMode::Manual).await;
