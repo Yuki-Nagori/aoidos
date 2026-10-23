@@ -102,7 +102,7 @@ ai-docs/
 | 049  | [Windows 测试 I/O 与原生 HMR 超时](task/049-windows-test-io-hmr.md)                  | 底层·工程         | 048                                                        | done        |
 | 050  | [CI 分层与影响范围选择器](task/050-affected-rust-tests.md)                           | 底层·工程         | 048、049                                                   | done        |
 | 051  | [Web UI 架构拆分](task/051-web-ui-architecture-refactor.md)                          | 界面·架构         | 025、034、046、047                                         | done        |
-| 052  | [将 aoidos-art 界面移植到 Vue](task/052-aoidos-art-vue-port.md)                      | 界面·实现         | 051、025、026、031、034、035、046                          | in-progress |
+| 052  | [将 aoidos-art 界面移植到 Vue](task/052-aoidos-art-vue-port.md)                      | 界面·实现         | 051、025、026、031、034、035、046                          | implemented |
 | 055  | [实现：记忆检索与共用搜索输入](task/055-memory-search-impl.md)                       | 底层·记忆 / 界面  | 031、034、052、053                                         | planned     |
 | 056  | [实现：标签驱动结局与周目落幕](task/056-ending-flow-impl.md)                         | 底层·引擎 / 界面  | 018、019、020、023、027、032、035、039、040、041、052、054 | planned     |
 | 057  | [实现：全局快捷键与改键](task/057-keyboard-shortcuts-impl.md)                        | 界面·交互         | 025、034、052、055                                         | planned     |
