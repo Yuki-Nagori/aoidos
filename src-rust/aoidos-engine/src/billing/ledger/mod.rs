@@ -1965,6 +1965,18 @@ impl BillingLedger {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
+        Self::reserve_in_transaction(&transaction, request)?;
+        transaction.commit().map_err(storage)
+    }
+
+    /// Reserves a physical attempt inside a caller-owned transaction.
+    ///
+    /// This allows domain dispatch fences and the billing reservation to commit atomically.
+    pub(crate) fn reserve_in_transaction(
+        transaction: &Transaction<'_>,
+        request: &Reservation,
+    ) -> Result<(), BillingError> {
+        validate_reservation(request)?;
         let existing: Option<ExistingReservation> = transaction
             .query_row(
                 "SELECT run_id,turn_id,profile_id,attempt,provider_id,model_id,route_policy,price_version_id,currency,reserved_nanos FROM billing_physical_requests WHERE request_id=?1",
@@ -2006,12 +2018,12 @@ impl BillingLedger {
             .legacy_scope_id
             .as_deref()
             .filter(|scope| *scope != request.run_id)
-            && Self::has_run_scope_data(&transaction, scope)?
+            && Self::has_run_scope_data(transaction, scope)?
         {
             return Err(BillingError::ReconciliationRequired);
         }
 
-        let price = Self::price_by_id(&transaction, &request.price_version_id)?
+        let price = Self::price_by_id(transaction, &request.price_version_id)?
             .ok_or(BillingError::NotFound)?;
         if price.provider_id != request.provider_id
             || price.model_id != request.model_id
@@ -2035,7 +2047,7 @@ impl BillingLedger {
             return Err(BillingError::Invalid);
         }
 
-        let settings = read_settings(&transaction, &request.run_id)?;
+        let settings = read_settings(transaction, &request.run_id)?;
         let cap = match request.currency {
             Currency::Cny => settings.cny_limit,
             Currency::Usd => settings.usd_limit,
@@ -2080,14 +2092,14 @@ impl BillingLedger {
             )
             .map_err(storage)?;
         maybe_warn(
-            &transaction,
+            transaction,
             &request.run_id,
             request.currency,
             cap,
             &request.dispatch_at,
         )?;
-        bump_revision(&transaction)?;
-        transaction.commit().map_err(storage)
+        bump_revision(transaction)?;
+        Ok(())
     }
 
     /// Settles by request identity. Unknown usage retains the conservative hold; duplicate matching

@@ -18,6 +18,15 @@ pub struct LedgerBudgetPort {
     max_input_tokens: u64,
 }
 
+/// 初始化专用预算端口：同一事务内领取持久 attempt 的唯一 dispatch 权并保留费用。
+/// 在 retry 时必须为新 requestId / revision 新建实例。
+pub struct InitializationBudgetPort {
+    inner: LedgerBudgetPort,
+    session_id: String,
+    expected_revision: u64,
+    request_id: String,
+}
+
 impl LedgerBudgetPort {
     pub fn new(
         storage: Arc<Storage>,
@@ -43,6 +52,20 @@ impl LedgerBudgetPort {
     pub fn with_legacy_scope(mut self, legacy_scope_id: Option<String>) -> Self {
         self.legacy_scope_id = legacy_scope_id;
         self
+    }
+
+    pub fn for_initialization(
+        self,
+        session_id: String,
+        expected_revision: u64,
+        request_id: String,
+    ) -> InitializationBudgetPort {
+        InitializationBudgetPort {
+            inner: self,
+            session_id,
+            expected_revision,
+            request_id,
+        }
     }
 
     fn reserve_attempt(&self, attempt: &AttemptIdentity, input_tokens: u64) -> Result<(), String> {
@@ -86,6 +109,77 @@ impl LedgerBudgetPort {
                     amount: reserve,
                 };
                 BillingLedger::reserve(connection, &reservation).map_err(billing_fault)
+            })
+            .map_err(|fault| fault.code)
+    }
+
+    fn reserve_initialization_attempt(
+        &self,
+        session_id: &str,
+        expected_revision: u64,
+        request_id: &str,
+        attempt: &AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), String> {
+        if self.run_id != session_id
+            || attempt.request_id != request_id
+            || attempt.turn_id != session_id
+            || attempt.attempt != 1
+            || attempt.model != self.model_id
+        {
+            return Err("budget.conflict".into());
+        }
+        let dispatch_at = now();
+        self.storage
+            .with_database(|connection| {
+                let transaction = connection
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(|_| Fault::new("store.database", "开局请求预留失败"))?;
+                crate::cycle_initialization::claim_dispatch_in_transaction(
+                    &transaction,
+                    session_id,
+                    expected_revision,
+                    request_id,
+                    &dispatch_at,
+                )?;
+                let price = BillingLedger::profile_price(
+                    &transaction,
+                    &self.profile_id,
+                    &self.provider_id,
+                    &self.model_id,
+                    &self.route_policy,
+                    &dispatch_at,
+                )
+                .map_err(billing_fault)?
+                .ok_or(BillingError::PriceMissing)
+                .map_err(billing_fault)?;
+                let reserve = price
+                    .upper_bound_cost(
+                        input_tokens.min(self.max_input_tokens),
+                        u64::from(attempt.max_tokens),
+                    )
+                    .and_then(|cost| cost.reserve().map_err(Into::into))
+                    .map_err(|_| Fault::new("budget.price-missing", "模型价格或预留上界不可用"))?;
+                let reservation = Reservation {
+                    request_id: attempt.request_id.clone(),
+                    run_id: self.run_id.clone(),
+                    legacy_scope_id: self.legacy_scope_id.clone(),
+                    turn_id: attempt.turn_id.clone(),
+                    profile_id: self.profile_id.clone(),
+                    attempt: attempt.attempt,
+                    provider_id: self.provider_id.clone(),
+                    model_id: self.model_id.clone(),
+                    route_policy: self.route_policy.clone(),
+                    price_version_id: price.version_id,
+                    currency: price.currency,
+                    dispatch_at: dispatch_at.clone(),
+                    amount: reserve,
+                };
+                BillingLedger::reserve_in_transaction(&transaction, &reservation)
+                    .map_err(billing_fault)?;
+                transaction
+                    .commit()
+                    .map_err(|_| Fault::new("store.commit-unknown", "开局费用预留结果不确定"))
             })
             .map_err(|fault| fault.code)
     }
@@ -250,6 +344,40 @@ impl BudgetPort for LedgerBudgetPort {
 
     fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
         self.settle_attempt(attempt, outcome);
+    }
+}
+
+impl BudgetPort for InitializationBudgetPort {
+    fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial> {
+        self.inner
+            .reserve_initialization_attempt(
+                &self.session_id,
+                self.expected_revision,
+                &self.request_id,
+                attempt,
+                self.inner.max_input_tokens,
+            )
+            .map_err(|reason| BudgetDenial { reason })
+    }
+
+    fn reserve_with_input_upper_bound(
+        &self,
+        attempt: &AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), BudgetDenial> {
+        self.inner
+            .reserve_initialization_attempt(
+                &self.session_id,
+                self.expected_revision,
+                &self.request_id,
+                attempt,
+                input_tokens,
+            )
+            .map_err(|reason| BudgetDenial { reason })
+    }
+
+    fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
+        self.inner.settle_attempt(attempt, outcome);
     }
 }
 
@@ -460,31 +588,37 @@ mod tests {
 
     fn configure(storage: &Storage, limit: &str) {
         storage
-            .with_database(|connection| {
-                BillingLedger::set_settings(
-                    connection,
-                    "run-1",
-                    NanoMoney::parse(limit).unwrap(),
-                    NanoMoney::parse("0").unwrap(),
-                    None,
-                    "2020-01-01T00:00:00Z",
-                )
-                .map_err(billing_fault)?;
-                BillingLedger::register_price(connection, &price(), "2020-01-01T00:00:00Z")
-                    .map_err(billing_fault)?;
-                BillingLedger::select_profile_price(
-                    connection,
-                    "profile-1",
-                    "provider",
-                    "model",
-                    "direct",
-                    Currency::Cny,
-                    "2020-01-01T00:00:00Z",
-                )
-                .map_err(billing_fault)?;
-                Ok(())
-            })
+            .with_database(|connection| configure_on(connection, "run-1", limit))
             .unwrap();
+    }
+
+    fn configure_on(
+        connection: &mut rusqlite::Connection,
+        run_id: &str,
+        limit: &str,
+    ) -> Result<(), Fault> {
+        BillingLedger::set_settings(
+            connection,
+            run_id,
+            NanoMoney::parse(limit).unwrap(),
+            NanoMoney::parse("0").unwrap(),
+            None,
+            "2020-01-01T00:00:00Z",
+        )
+        .map_err(billing_fault)?;
+        BillingLedger::register_price(connection, &price(), "2020-01-01T00:00:00Z")
+            .map_err(billing_fault)?;
+        BillingLedger::select_profile_price(
+            connection,
+            "profile-1",
+            "provider",
+            "model",
+            "direct",
+            Currency::Cny,
+            "2020-01-01T00:00:00Z",
+        )
+        .map_err(billing_fault)?;
+        Ok(())
     }
 
     #[test]
@@ -518,6 +652,145 @@ mod tests {
         assert_eq!(reserved, NanoMoney::parse("0.19").unwrap().nanos());
         storage.close().unwrap();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn initialization_reservation_claims_attempt_once_in_same_transaction() {
+        use aoidos_llm::schedule::BudgetPort;
+
+        let (storage, root) = storage();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let memory_run_id = uuid::Uuid::new_v4().to_string();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        storage
+            .with_database(|connection| {
+                connection
+                    .execute(
+                        "INSERT INTO session_catalog(session_id,script_id,created_at,memory_run_id,billing_run_id,profile_id,profile_schema_version,profile_snapshot,state,revision,updated_at) VALUES(?1,'mistbell','2026-10-23T00:00:00Z',?2,?1,'profile-1',1,x'7b7d','ready',1,'2026-10-23T00:00:00Z')",
+                        rusqlite::params![session_id, memory_run_id],
+                    )
+                    .map_err(|_| Fault::new("store.database", "insert test run failed"))?;
+                configure_on(connection, &session_id, "100")?;
+                crate::cycle_initialization::begin(
+                    connection,
+                    &crate::cycle_initialization::Begin {
+                        session_id: session_id.clone(),
+                        expected_catalog_revision: 1,
+                        request_id: request_id.clone(),
+                        input_snapshot: br#"{"script":"mistbell","schema":"v1"}"#.to_vec(),
+                        created_at: "2026-10-23T00:00:00Z".into(),
+                    },
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let budget = LedgerBudgetPort::new(
+            storage.clone(),
+            session_id.clone(),
+            "profile-1".into(),
+            "provider".into(),
+            "model".into(),
+            "direct".into(),
+            100,
+        )
+        .for_initialization(session_id.clone(), 1, request_id.clone());
+        let initialization_attempt = AttemptIdentity {
+            request_id: request_id.clone(),
+            turn_id: session_id.clone(),
+            attempt: 1,
+            kind: AttemptKind::Initial,
+            model: "model".into(),
+            mode: RequestMode::Completion,
+            max_tokens: 20,
+            temperature: 1.0,
+        };
+        storage
+            .with_database(|connection| {
+                BillingLedger::set_settings(
+                    connection,
+                    &session_id,
+                    NanoMoney::ZERO,
+                    NanoMoney::ZERO,
+                    Some(1),
+                    "2026-10-23T00:00:01Z",
+                )
+                .map_err(billing_fault)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            budget
+                .reserve_with_input_upper_bound(&initialization_attempt, 40)
+                .unwrap_err()
+                .reason,
+            "budget.exceeded"
+        );
+        let rolled_back = storage
+            .with_database(|connection| {
+                let dispatch_started = connection
+                    .query_row(
+                        "SELECT dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1",
+                        [&request_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| Fault::new("store.database", "read test attempt failed"))?;
+                let reservations = connection
+                    .query_row(
+                        "SELECT count(*) FROM billing_physical_requests WHERE request_id=?1",
+                        [&request_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| Fault::new("store.database", "read test reservation failed"))?;
+                Ok((dispatch_started, reservations))
+            })
+            .unwrap();
+        assert_eq!(rolled_back, (0, 0));
+        storage
+            .with_database(|connection| {
+                BillingLedger::set_settings(
+                    connection,
+                    &session_id,
+                    NanoMoney::parse("100").unwrap(),
+                    NanoMoney::ZERO,
+                    Some(2),
+                    "2026-10-23T00:00:02Z",
+                )
+                .map_err(billing_fault)?;
+                Ok(())
+            })
+            .unwrap();
+        budget
+            .reserve_with_input_upper_bound(&initialization_attempt, 40)
+            .unwrap();
+        assert_eq!(
+            budget
+                .reserve_with_input_upper_bound(&initialization_attempt, 40)
+                .unwrap_err()
+                .reason,
+            "app.conflict"
+        );
+        let counts = storage
+            .with_database(|connection| {
+                let dispatch_started = connection
+                    .query_row(
+                        "SELECT dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1",
+                        [&request_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| Fault::new("store.database", "read test attempt failed"))?;
+                let reservations = connection
+                    .query_row(
+                        "SELECT count(*) FROM billing_physical_requests WHERE request_id=?1",
+                        [&request_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| Fault::new("store.database", "read test reservation failed"))?;
+                Ok((dispatch_started, reservations))
+            })
+            .unwrap();
+        assert_eq!(counts, (1, 1));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
