@@ -24,7 +24,7 @@ validated script + frozen profile / budget identity
 
 `session_catalog.state` 继续表示 profile、预算、账务对账和修复状态，不与初始化状态做笛卡尔组合。目录摘要可以单独返回初始化状态。普通 `open_target` / session owner 激活与只读恢复 profile 的路径分离：初始化未完成时，普通 owner、行动、普通模型请求及回合恢复都必须拒绝；初始化专用读取只返回已冻结的 profile、剧本输入和明确的初始化 attempt，不提供普通回合能力。服务端的门禁必须覆盖 `Product::open`、`open_selected`、CLI/TUI、已注册 coordinator 和 `ProfileFactory` 的普通冻结入口，不能只靠前端按钮隐藏。
 
-新局创建前先完成 profile、模型能力、双币预算和脚本输入预检；预算尚未配置时，应在创建 run / 产生任何物理请求之前要求用户设置并确认，不创建一个无法继续的半成品 run。初始化专用 `RunPolicy` 将 `transport_retries=0`、温度 ladder 置空、`max_requests=1`，以保证一份开局请求至多发出一次物理请求；玩家显式重试沿用原 run / profile / budget，分配新 requestId，旧 attempt 与费用记录保留。
+新局创建前先完成 profile、模型能力、双币预算和脚本输入预检；预算尚未配置时，应在创建 run / 产生任何物理请求之前要求用户设置并确认，不创建一个无法继续的半成品 run。初始化专用 `aoidos_llm::schedule::run_generation_once_with_output` 接收已持久化的规范 UUID `requestId`，并强制 `transport_retries=0`、温度 ladder 置空、`max_requests=1`；预算预留、Provider 调用和费用结算沿用同一 requestId。该接口只提供“每次调用最多一个物理请求”的调度原语，不保证相同身份的重复 / 并发调用幂等；调用方须先持久化并原子领取初始化 attempt，防止同一 attempt 被重复派发，重启时将已开始或 unknown 的请求转入恢复而非再次调用。调用方也负责失败 / unknown 状态恢复。玩家显式重试沿用原 run / profile / budget，分配新 requestId，旧 attempt 与费用记录保留。
 
 records 文件和 SQLite 不是同一事务。先创建不可玩的 record/header，再持久登记 canonical run、profile / 输入快照、预算身份和初始化状态；崩溃留下的未激活 record 必须可识别并恢复或显式放弃，不能被 legacy scanner 当作可玩旧局。物理请求身份和冻结输入必须在调用 Provider 前持久化。响应整体校验后，以同一 SQLite 事务 CAS 当前 run revision / requestId，保存规范化快照与 hash 并标记 `playable`；失败不得部分写入，也不得先注册普通 owner。成功冻结与 owner 注册之间若发生崩溃，恢复从冻结快照建立 owner，不再调用 Provider。
 

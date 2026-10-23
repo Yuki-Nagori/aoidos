@@ -272,6 +272,91 @@ pub async fn run_generation_with_output(
     output: &dyn OutputPort,
     turn_id: &str,
 ) -> Result<RunOutcome, RunError> {
+    run_generation_with_identity(
+        provider,
+        request,
+        cancel,
+        policy,
+        budget,
+        output,
+        RequestIdentity {
+            turn_id: turn_id.to_owned(),
+            request_id: None,
+        },
+    )
+    .await
+}
+
+/// 持久化初始化请求的物理身份；用于确保预算预留与 Provider 调度复用同一个 ID。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedRequestIdentity {
+    pub turn_id: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct RequestIdentity {
+    turn_id: String,
+    request_id: Option<String>,
+}
+
+/// 使用已持久化的物理请求身份执行一次开局生成；本次调用不会重试、升温或切换请求身份。
+///
+/// 初始化路径必须先持久化该 `request_id` 和待发送 attempt，再调用本函数；本函数会在
+/// Provider 调用前通过 [`BudgetPort`] 预留该 ID。取消或失败仍按普通物理尝试结算，
+/// 调用者必须通过初始化账本恢复状态。
+/// 同一身份重复或并发调用仍会再次访问 Provider；调用方必须用持久 attempt 状态防止重放，
+/// 并在重启后恢复已开始或 unknown 的请求，而不能再次调用本函数。
+///
+/// # Errors
+/// 非规范 UUID、Provider / 护栏 / 看门狗失败或预算拒绝时返回 [`RunError`]；预算拒绝时
+/// 不会调用 Provider。
+pub async fn run_generation_once_with_output(
+    provider: &dyn Provider,
+    request: GenerationRequest,
+    cancel: CancellationToken,
+    policy: &RunPolicy,
+    budget: &dyn BudgetPort,
+    output: &dyn OutputPort,
+    identity: PersistedRequestIdentity,
+) -> Result<RunOutcome, RunError> {
+    let parsed_request_id = uuid::Uuid::parse_str(&identity.request_id)
+        .map_err(|_| RunError::InvalidPolicy("request id must be a canonical UUID".into()))?;
+    if parsed_request_id.to_string() != identity.request_id {
+        return Err(RunError::InvalidPolicy(
+            "request id must be a canonical UUID".into(),
+        ));
+    }
+    let one_shot = RunPolicy {
+        transport_retries: 0,
+        ladder: Vec::new(),
+        max_requests: 1,
+        ..policy.clone()
+    };
+    run_generation_with_identity(
+        provider,
+        request,
+        cancel,
+        &one_shot,
+        budget,
+        output,
+        RequestIdentity {
+            turn_id: identity.turn_id,
+            request_id: Some(identity.request_id),
+        },
+    )
+    .await
+}
+
+async fn run_generation_with_identity(
+    provider: &dyn Provider,
+    request: GenerationRequest,
+    cancel: CancellationToken,
+    policy: &RunPolicy,
+    budget: &dyn BudgetPort,
+    output: &dyn OutputPort,
+    request_identity: RequestIdentity,
+) -> Result<RunOutcome, RunError> {
     let mode = request.provider_request.mode();
     let caps = provider.capabilities(&request.provider_request.model, mode);
     validate_ladder(
@@ -306,8 +391,11 @@ pub async fn run_generation_with_output(
         };
         let provider_request = request.provider_request.with_temperature(temperature);
         let identity = AttemptIdentity {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            turn_id: turn_id.to_owned(),
+            request_id: request_identity
+                .request_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            turn_id: request_identity.turn_id.clone(),
             attempt: requests + 1,
             kind,
             model: provider_request.model.clone(),
@@ -734,6 +822,7 @@ mod tests {
         sse_reasoning_frame, sse_text_frame, sse_usage_frame,
     };
     use secrecy::SecretString;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     fn fixture_guard() -> crate::guard::GuardSpec {
@@ -2043,6 +2132,172 @@ mod tests {
         assert_eq!(reserves(&log), ["R1:Initial", "R2:TemperatureStep"]);
         assert!(log.iter().any(|e| e.starts_with("S1:Settled")));
         assert!(log.iter().any(|e| e.starts_with("S2:Settled")));
+    }
+
+    #[derive(Default)]
+    struct IdentityRecorder {
+        reserved: Mutex<Vec<AttemptIdentity>>,
+        settled: Mutex<Vec<(AttemptIdentity, AttemptOutcome)>>,
+    }
+
+    struct CountingProvider {
+        starts: AtomicUsize,
+        deltas: Vec<Result<ProviderDelta, ProviderError>>,
+    }
+
+    impl CountingProvider {
+        fn interrupted() -> Self {
+            Self {
+                starts: AtomicUsize::default(),
+                deltas: vec![Err(ProviderError::Interrupted)],
+            }
+        }
+
+        fn empty_finish() -> Self {
+            Self {
+                starts: AtomicUsize::default(),
+                deltas: vec![Ok(ProviderDelta::Finish(ProviderFinish::Stop))],
+            }
+        }
+    }
+
+    impl Provider for CountingProvider {
+        fn capabilities(
+            &self,
+            model: &str,
+            _mode: RequestMode,
+        ) -> crate::provider::ProviderCapabilities {
+            crate::provider::ProviderCapabilities {
+                model: model.to_owned(),
+                context_limit: Some(1_000_000),
+                completion: true,
+                chat: true,
+                prefix: false,
+                thinking: false,
+                stop_limit: 16,
+                max_output_tokens: 4096,
+                temperature_effective: true,
+                temperature_min: 0.0,
+                temperature_max: 2.0,
+            }
+        }
+
+        fn start<'a>(
+            &'a self,
+            _request: ProviderRequest,
+            _cancellation: CancellationToken,
+        ) -> crate::provider::StartFuture<'a> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            let deltas = self.deltas.clone();
+            Box::pin(async move { Ok(futures::stream::iter(deltas).boxed()) })
+        }
+    }
+
+    impl BudgetPort for IdentityRecorder {
+        fn reserve(&self, attempt: &AttemptIdentity) -> Result<(), BudgetDenial> {
+            self.reserved
+                .lock()
+                .expect("reserved")
+                .push(attempt.clone());
+            Ok(())
+        }
+
+        fn settle(&self, attempt: &AttemptIdentity, outcome: &AttemptOutcome) {
+            self.settled
+                .lock()
+                .expect("settled")
+                .push((attempt.clone(), *outcome));
+        }
+    }
+
+    #[tokio::test]
+    async fn one_shot_generation_reuses_persisted_request_id_and_never_retries() {
+        let provider = CountingProvider::interrupted();
+        let budget = IdentityRecorder::default();
+        let (tx, _rx) = mpsc::channel::<String>(32);
+        let request_id = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+
+        let error = run_generation_once_with_output(
+            &provider,
+            generation_request(),
+            CancellationToken::new(),
+            &fast_policy(),
+            &budget,
+            &tx,
+            PersistedRequestIdentity {
+                turn_id: "cycle-init".into(),
+                request_id: request_id.into(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RunError::Provider(ProviderError::Interrupted)
+        ));
+        assert_eq!(provider.starts.load(Ordering::SeqCst), 1);
+        let reserved = budget.reserved.lock().expect("reserved");
+        assert_eq!(reserved.len(), 1);
+        assert_eq!(reserved[0].request_id, request_id);
+        assert_eq!(reserved[0].attempt, 1);
+        let settled = budget.settled.lock().expect("settled");
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].0.request_id, request_id);
+        assert_eq!(settled[0].1, AttemptOutcome::Failed);
+    }
+
+    #[tokio::test]
+    async fn one_shot_generation_disables_temperature_ladder() {
+        let provider = CountingProvider::empty_finish();
+        let budget = IdentityRecorder::default();
+        let (tx, _rx) = mpsc::channel::<String>(32);
+
+        let error = run_generation_once_with_output(
+            &provider,
+            generation_request(),
+            CancellationToken::new(),
+            &fast_policy(),
+            &budget,
+            &tx,
+            PersistedRequestIdentity {
+                turn_id: "cycle-init".into(),
+                request_id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RunError::EmptyOutput { .. }));
+        assert_eq!(provider.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(budget.reserved.lock().expect("reserved").len(), 1);
+        assert_eq!(budget.settled.lock().expect("settled").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn one_shot_generation_rejects_noncanonical_request_id_before_reserving() {
+        let provider = CountingProvider::interrupted();
+        let (tx, _rx) = mpsc::channel::<String>(32);
+        let budget = IdentityRecorder::default();
+        let error = run_generation_once_with_output(
+            &provider,
+            generation_request(),
+            CancellationToken::new(),
+            &fast_policy(),
+            &budget,
+            &tx,
+            PersistedRequestIdentity {
+                turn_id: "cycle-init".into(),
+                request_id: "A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RunError::InvalidPolicy(_)));
+        assert_eq!(provider.starts.load(Ordering::SeqCst), 0);
+        assert!(budget.reserved.lock().expect("reserved").is_empty());
+        assert!(budget.settled.lock().expect("settled").is_empty());
     }
 
     #[tokio::test]

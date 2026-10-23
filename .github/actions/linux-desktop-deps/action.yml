@@ -3,10 +3,27 @@ description: Install GTK, WebKit, Xvfb and D-Bus dependencies for Tauri and nati
 runs:
   using: composite
   steps:
+    - name: Prepare apt package cache
+      id: apt-cache
+      shell: bash
+      run: |
+        source /etc/os-release
+        echo "codename=$VERSION_CODENAME" >> "$GITHUB_OUTPUT"
+        echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+        mkdir -p "$RUNNER_TEMP/aoidos-apt-archives/partial"
+    - uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/aoidos-apt-archives/*.deb
+        key: linux-apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.apt-cache.outputs.codename }}-${{ hashFiles('.github/actions/linux-desktop-deps/action.yml') }}-${{ steps.apt-cache.outputs.week }}
+        restore-keys: |
+          linux-apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.apt-cache.outputs.codename }}-${{ hashFiles('.github/actions/linux-desktop-deps/action.yml') }}-
     - name: Install Tauri Linux dependencies
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+        apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+        sudo apt-get "${apt_options[@]}" update
+        sudo apt-get "${apt_options[@]}" \
+          -o "Dir::Cache::archives=$RUNNER_TEMP/aoidos-apt-archives" \
+          install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
           libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
           xvfb dbus-x11 gnome-keyring
