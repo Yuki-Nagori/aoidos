@@ -1,5 +1,4 @@
-# PR CI 分为变更规划、Ubuntu 共享质量门禁与三平台构建 / 受影响验证；nightly 运行完整 verify。
-# PR 原生验收按变更范围触发；完整覆盖率、全量 lint 与静态审计移到 nightly。
+# 日常 CI 在 Ubuntu 执行共享质量门禁与受影响构建 / 验证；macOS / Windows 完整覆盖由 nightly 执行。
 name: CI
 
 on:
@@ -28,6 +27,7 @@ jobs:
   changes:
     name: detect affected checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
       full: ${{ steps.plan.outputs.full }}
@@ -96,13 +96,9 @@ jobs:
           task: clippy
           plan: ${{ needs.changes.outputs.plan }}
   verify:
-    name: verify（${{ matrix.os }}）
+    name: verify（ubuntu-latest）
     needs: [changes]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +108,6 @@ jobs:
         with:
           rust-components: ""
       - uses: ./.github/actions/linux-desktop-deps
-        if: matrix.os == 'ubuntu-latest'
       - name: Build web assets
         run: bun run build:web:assets
       - name: Build affected Tauri application
@@ -124,11 +119,7 @@ jobs:
         with:
           task: test
           plan: ${{ needs.changes.outputs.plan }}
-      - name: Native platform and IPC tests
-        if: matrix.os != 'ubuntu-latest' && needs.changes.outputs.has_native == 'true'
-        timeout-minutes: 5
-        run: bun run test:native
       - name: Native platform and IPC tests (Linux session)
-        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.has_native == 'true'
+        if: needs.changes.outputs.has_native == 'true'
         timeout-minutes: 5
         uses: ./.github/actions/linux-native-session

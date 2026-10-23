@@ -45,15 +45,15 @@
 
 ## verify 构成
 
-`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `lint:layers` · `format:check` · `format:rust:check` · `test:coverage` · `test:visual` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十四项，任一失败即失败。Rust 库单测随覆盖率任务运行一次；`test:rust` 保留为本地普通 workspace 全量测试入口。PR CI 先由 `changes` job 生成共享变更计划，再并行运行 Ubuntu 质量门禁与三平台构建 / 受影响测试。类型检查、格式、lint 和 Clippy 在 Ubuntu 运行；Web 产物构建及受影响 Rust / Vitest 测试在三平台运行，Vue / TS 改动按镜像关系选择 Vitest，找不到对应测试时扩展到全部 Vitest。除 WebView 夹具直接或传递依赖的文件外，纯 Web 改动不触发 Rust 或原生测试。原生验收在相关 WebView 输入、原生测试输入或 Rust 消费闭包受影响时运行。Nightly 在三平台构建并运行完整 Vitest、workspace Rust 与原生测试；Ubuntu nightly 安装 Playwright Chromium 并运行完整 `bun run verify`，随后单独运行长时 `bun run memory:stress`（仅 Ubuntu 一次，不进入 PR 流水线）。覆盖率、视觉布局、knip、bench、rustdoc 也只在 Ubuntu 运行，并支持手动触发。`vitest.config.ts` 只扩展 Vitest 范围；其他共享配置、空 diff、未知路径或不可用 metadata / 基线回退全量。CI 的复用步骤位于 `.github/actions/`，workflow 负责可见的任务关系与平台条件。Biome / dprint 按文件类型选择，Biome 检查 TS / JS / CSS / JSON lint，i18n 语义检查由 `i18n:check` 承担，Vue、HTML、Markdown 和 YAML 由 dprint 排版。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。每个本地提交前运行 `test:affected`、`format:affected` 与 `lint:affected`；`bun run verify` 用于任务收尾完整验收，不要求对每个中间 commit 重复执行。失败时先复现受影响检查；格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`。
+`typecheck` · `typecheck:rust` · `lint` · `lint:rust` · `lint:layers` · `format:check` · `format:rust:check` · `test:coverage` · `test:visual` · `coverage:rust` · `knip` · `bench` · `build:web` · `doc:rust`，共十四项，任一失败即失败。Rust 库单测随覆盖率任务运行一次；`test:rust` 保留为本地普通 workspace 全量测试入口。PR CI 先由 `changes` job 生成共享变更计划，再并行运行 Ubuntu 质量门禁与 Ubuntu 构建 / 受影响测试。类型检查、格式、lint、Clippy、Web 产物构建及受影响 Rust / Vitest 测试均在 Ubuntu 运行；Vue / TS 改动按镜像关系选择 Vitest，找不到对应测试时扩展到全部 Vitest。除 WebView 夹具直接或传递依赖的文件外，纯 Web 改动不触发 Rust 或原生测试。原生验收仅在相关输入受影响时运行 Linux 会话。Nightly 在三平台构建并运行完整 Vitest、workspace Rust 与原生测试；Ubuntu nightly 安装 Playwright Chromium 并运行完整 `bun run verify`，随后单独运行长时 `bun run memory:stress`（仅 Ubuntu 一次，不进入 PR 流水线）。覆盖率、视觉布局、knip、bench、rustdoc 也只在 Ubuntu 运行，并支持手动触发。`vitest.config.ts` 只扩展 Vitest 范围；其他共享配置、空 diff、未知路径或不可用 metadata / 基线回退全量。CI 的复用步骤位于 `.github/actions/`，workflow 负责可见的任务关系与平台条件。Biome / dprint 按文件类型选择，Biome 检查 TS / JS / CSS / JSON lint，i18n 语义检查由 `i18n:check` 承担，Vue、HTML、Markdown 和 YAML 由 dprint 排版。bench 只验证基准链路可用与产物非空，不做性能阈值判定；build:web 验证 Vite 产物链（资产解析 / 打包）；doc:rust 以 `RUSTDOCFLAGS=-D warnings` 拒绝断链等文档告警。每个本地提交前运行 `test:affected`、`format:affected` 与 `lint:affected`；`bun run verify` 用于任务收尾完整验收，不要求对每个中间 commit 重复执行。失败时先复现受影响检查；格式挂了跑对应 format，lint 能自动修的走 `lint:fix` / `lint:rust:fix`。
 
-PR CI 省略单独的 `cargo check`（Clippy 已含类型检查）；格式、lint 和 Clippy 在 Ubuntu 运行，Web 构建、受影响 Tauri 应用构建及受影响测试在三平台运行，相关原生验收才启动全平台会话。Nightly 在三平台构建并运行完整 Vitest、Rust workspace 与原生测试，完整 `verify` 和覆盖率仅在 Ubuntu 执行。测试、格式和 lint 选择器读取同一份计划：Cargo metadata 生成 workspace 反向依赖闭包；Vue / TS 源码映射到 `tests/web/` 镜像；格式按 Biome、dprint 与 rustfmt 的输入范围区分。本地比较 `origin/main...HEAD` 并合并暂存、未暂存和未跟踪文件，CI 使用事件 base / head SHA。差异缺失、共享配置或未知路径触发全量。`cargo-llvm-cov` 仍通过预编译 action 安装，避免 postinstall 回退到源码编译。依赖方向见[分层规范](../../standards/layering.md)，触发范围见下文。
+PR CI 省略单独的 `cargo check`（Clippy 已含类型检查）；日常格式、lint、Clippy、Web 构建、受影响 Tauri 应用构建及受影响测试均在 Ubuntu 运行，相关原生验收启动 Linux 会话。Nightly 在三平台构建并运行完整 Vitest、Rust workspace 与原生测试，完整 `verify` 和覆盖率仅在 Ubuntu 执行。测试、格式和 lint 选择器读取同一份计划：Cargo metadata 生成 workspace 反向依赖闭包；Vue / TS 源码映射到 `tests/web/` 镜像；格式按 Biome、dprint 与 rustfmt 的输入范围区分。本地比较 `origin/main...HEAD` 并合并暂存、未暂存和未跟踪文件，CI 使用事件 base / head SHA。差异缺失、共享配置或未知路径触发全量。`cargo-llvm-cov` 仍通过预编译 action 安装，避免 postinstall 回退到源码编译。依赖方向见[分层规范](../../standards/layering.md)，触发范围见下文。
 
-CI 把变更规划、Ubuntu 质量门禁、三平台受影响测试和按需原生验收拆成独立 job；nightly 另在三平台运行完整 Rust / 原生测试。Linux GTK / WebKit / D-Bus 安装通过 composite action 复用。PR job 最多运行 30 分钟，nightly job 最多运行 90 分钟；工作流 token 只需读取仓库内容。
+CI 把变更规划、Ubuntu 质量门禁、Ubuntu 受影响测试和按需 Linux 原生验收拆成独立 job；nightly 在三平台运行完整 Rust / 原生测试。Bun 包缓存、Rust 编译缓存和 Linux 桌面 `.deb` 缓存由共享 setup / composite action 负责。Linux GTK / WebKit / D-Bus 安装通过 composite action 复用。PR job 最多运行 30 分钟，nightly job 最多运行 90 分钟；工作流 token 只需读取仓库内容。
 
 验收分别记录 PR 与合并提交的 main push CI。PR 成功后仍须核验默认分支运行；main 失败时补记失败、继续修复并复验，不能只引用 PR 成功宣称交付通过。纯文档提交若按路径过滤不触发 CI，保留最近一次对应代码提交的默认分支证据。
 
-触发范围：main push 与 pull request 仅修改 `ai-docs/**` 或 Markdown 文件时跳过全量 CI；代码、依赖、脚本、工作流及其他配置改动仍跑三平台。PR 按相对 base 的累计 diff 判断，代码 PR 后续补文档仍可能触发；新建的纯文档 PR 与合并后的纯文档 push 会跳过。文档提交保留本地 / husky 格式检查。
+触发范围：main push 与 pull request 仅修改 `ai-docs/**` 或 Markdown 文件时跳过全量 CI；其他代码、依赖、脚本、工作流及配置改动运行日常 Ubuntu CI，跨平台完整覆盖由 nightly 提供。PR 按相对 base 的累计 diff 判断，代码 PR 后续补文档仍可能触发；新建的纯文档 PR 与合并后的纯文档 push 会跳过。文档提交保留本地 / husky 格式检查。
 
 覆盖率口径：前端逻辑层（`utils/`、`stores/`、`composables/`、组件与视图旁 `use*.ts`）行 / 分支 / 函数 / 语句各至少 90%；Rust `coverage:rust` 对纳入的 workspace lib 源行设置 90% 聚合底线。`lib.rs` 与 `platform/windows.rs` 等装配 / 原生适配在配置中排除，并由风险行为清单与平台验收保护；覆盖率用于发现未审查逻辑，不替代行为测试。详情见[测试规范](../../standards/testing.md)与[048](../../task/048-test-quality-ci.md)。
 
@@ -67,7 +67,7 @@ CI 把变更规划、Ubuntu 质量门禁、三平台受影响测试和按需原�
 
 `ipc-platform` 使用真实主 Webview、产品命令及实际前端消费者，覆盖回合、记录、迁移、阶段 / 骰判、回退 / 重启和恢复 / 监听释放；`game-fixture.rs` 提供可信场景，不调用收费 API。具体断言与验证结果见 019–023 对应 task。
 
-CI 各平台运行聚合测试，PR 单步超时 5 分钟、nightly 为 10 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。单平台结果不代替三平台 CI，原生实测不代替安装包验证；覆盖率边界见[测试规范](../../standards/testing.md#rust-覆盖豁免台账)。
+日常 CI 的 Linux 会话与 Nightly 各平台运行聚合测试，PR 单步超时 5 分钟、nightly 为 10 分钟；Linux 使用 Xvfb 与独立 D-Bus / gnome-keyring 会话。Linux PR 结果不代替 nightly 的跨平台验证，原生实测不代替安装包验证；覆盖率边界见[测试规范](../../standards/testing.md#rust-覆盖豁免台账)。
 
 ## 打包与版本
 
