@@ -19,6 +19,8 @@ struct DeleteRunArgs {
     operation_id: String,
     session_id: String,
     expected_revision: u64,
+    #[serde(default)]
+    acknowledge_run_data_loss: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -85,12 +87,13 @@ pub async fn delete_run(
 ) -> Result<aoidos_engine::run_catalog::DeletionOperation, CmdError> {
     let args: DeleteRunArgs = crate::ipc::decode_request(&request, "周目删除参数不合法")?;
     lifecycle
-        .delete_run(
+        .delete_run_confirmed(
             product,
             runtime,
             args.operation_id,
             args.session_id,
             args.expected_revision,
+            args.acknowledge_run_data_loss,
         )
         .await
         .map_err(CmdError::from)

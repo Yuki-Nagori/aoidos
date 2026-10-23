@@ -129,7 +129,9 @@ DeepSeek 以外的供应商余额尚未接入；这不表示供应商永久不�
 
 [059 周目管理设计](../task/059-run-management-design.md)确认，canonical `billingRunId` 为 `sessionId`，不对应独立生成的 `memoryRunId`。当前新会话及私有记忆请求均使用 `sessionId` 作为账本范围；目录会将经 `memory_run_sessions` 精确核实的 `memoryRunId` legacy 预算 / 请求标记为待 reconciliation，不误报为未配置。预留事务再次检查该 legacy scope；只要仍存在预算、物理请求或预算变更审计，就以 `budget.reconciliation-required` 拒绝新请求。engine 已提供目录 revision 与身份映射校验下的原子迁移：请求及其 settlement outbox 保持 requestId，预算更新审计保持 operationId，提醒合并后只要任一来源未读便仍未读；两边预算冲突时必须提交玩家明确选定的最终 CNY / USD 上限，否则事务无写入。共享 app service、Tauri / Web typed API 与 CLI/TUI 周目目录均已接通迁移流程。目录显式保存并核验 canonical `billingRunId`；清理还须覆盖迁移前的已验证 legacy scope，不依赖外键级联或猜测 UUID 映射。没有预算和请求属于尚未配置，不是账本损坏。
 
-本局存在 `reserved` / `unconfirmed` 物理请求或 `billing_pending_settlements` outbox 时拒绝删除，须先解决费用义务。已有完整持久 usage 的请求可走本地结算恢复；当前没有任意费用核销入口，`unconfirmed` 若缺完整 usage 且无供应商回执等可核验证据，只能保留，不能手动改为 settled 或删除。删除不能把未知用量当零或从月报隐去未确认请求。所有请求已结算后，玩家显式确认才一并清除本局预算、预警、请求明细与可精确归属的本地账单审计：仅清理 target 明确关联到已核验周目 scope 的预算 / warning 操作，以及其已核验物理请求的结算审计；价格登记、模型选择和归属不明记录保留。共享价格版本、profile 价格选择及供应商侧账单不受影响。该清除不保证从全库 SQLite 备份物理擦除字节。
+玩家可在删除对话框显式确认永久删除周目全部本地数据，包括 `reserved` / `unconfirmed` 物理请求和 `billing_pending_settlements` outbox；确认状态写入删除 journal，以便崩溃恢复只沿已授权操作继续。若未确认且存在未结账务，后端拒绝创建删除操作。删除前仍必须核验周目、记忆和账务身份映射，不能因确认而扩大到身份不明的账务 scope。删除只清除精确归属该周目的预算、预警、请求、结算 outbox 与可核验本地账单审计；价格登记、模型选择、归属不明记录和供应商侧账单保留。该清除不保证从全库 SQLite 备份物理擦除字节。
+
+目录中的历史 `settlement-pending` 是摘要状态，不是账单事实。目录分页用当前账本义务刷新该状态：结算恢复或补登完成后，刷新周目目录即可更新状态；仍有未结账务时，玩家也可通过删除确认显式授权清除该周目全部本地数据。启动删除时后端重验身份和账务 scope，并将授权写入 journal。
 
 ### 冻结时段投影与本局费用拆分
 

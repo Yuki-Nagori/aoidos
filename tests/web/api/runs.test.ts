@@ -91,12 +91,13 @@ it("forwards explicit deletion confirmation identity and revision", async () => 
   vi.mocked(invoke).mockResolvedValue(operation);
 
   expect(
-    await deleteRun(operation.operationId, operation.sessionId, operation.catalogRevision),
+    await deleteRun(operation.operationId, operation.sessionId, operation.catalogRevision, false),
   ).toBe(operation);
   expect(invoke).toHaveBeenCalledWith("run_delete", {
     operationId: operation.operationId,
     sessionId: operation.sessionId,
     expectedRevision: operation.catalogRevision,
+    acknowledgeRunDataLoss: false,
   });
 });
 

@@ -7,6 +7,7 @@ use crate::{
     record::session::RecordEvents,
     records::Records,
 };
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -98,6 +99,7 @@ const STORAGE_MIGRATIONS: &[&str] = &[
     crate::run_catalog::DELETION_CLEANUP_MIGRATION,
     crate::run_catalog::DELETION_RECEIPT_MIGRATION,
     crate::run_catalog::DELETION_CLEANUP_CURSOR_MIGRATION,
+    crate::run_catalog::DELETION_ACK_MIGRATION,
 ];
 
 pub struct Storage {
@@ -130,6 +132,7 @@ impl Storage {
                     crate::run_catalog::verify_deletion_cleanup_schema(connection)?;
                     crate::run_catalog::verify_deletion_receipt_schema(connection)?;
                     crate::run_catalog::verify_deletion_cleanup_cursor_schema(connection)?;
+                    crate::run_catalog::verify_deletion_ack_schema(connection)?;
                     crate::run_catalog::legacy_scan::verify(connection)?;
                     aoidos_theme::schema::verify(connection)?;
                     aoidos_locale::schema::verify(connection)?;
@@ -877,7 +880,7 @@ impl Storage {
 
     /// 在 SQLite 事务内登记删除意图并封锁目录项；不关闭 owner 或执行文件清理。
     /// # Errors
-    /// revision / 身份不匹配、账单仍未结清或写入失败时拒绝登记。
+    /// 未确认账务清除、revision / 身份不匹配或写入失败时拒绝登记。
     pub fn request_run_deletion(
         &self,
         operation_id: &str,
@@ -885,14 +888,52 @@ impl Storage {
         expected_revision: u64,
         updated_at: &str,
     ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        self.request_run_deletion_confirmed(
+            operation_id,
+            session_id,
+            expected_revision,
+            updated_at,
+            false,
+        )
+    }
+
+    /// 登记玩家已明确确认“删除本局全部数据”的意图。
+    pub fn request_run_deletion_confirmed(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+        expected_revision: u64,
+        updated_at: &str,
+        acknowledge_run_data_loss: bool,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
         self.with_database(|connection| {
-            crate::run_catalog::request_deletion(
+            crate::run_catalog::request_deletion_with_ack(
                 connection,
                 operation_id,
                 session_id,
                 expected_revision,
                 updated_at,
+                acknowledge_run_data_loss,
             )
+        })
+    }
+
+    /// 返回 journal 中已持久化的显式删除授权；旧记录按未授权处理。
+    pub fn run_deletion_acknowledged(
+        &self,
+        operation_id: &str,
+        session_id: &str,
+    ) -> Result<bool, Fault> {
+        self.with_database(|connection| {
+            let acknowledged = connection
+                .query_row(
+                    "SELECT ack.acknowledge_run_data_loss FROM session_deletion_ack ack JOIN session_deletion_ops op USING(operation_id) WHERE op.operation_id=?1 AND op.session_id=?2",
+                    rusqlite::params![operation_id, session_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()
+                .map_err(|_| Fault::new("store.database", "读取删除确认状态失败"))?;
+            acknowledged.ok_or_else(|| Fault::new("app.not-found", "删除操作不存在"))
         })
     }
 

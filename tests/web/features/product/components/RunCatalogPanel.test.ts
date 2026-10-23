@@ -59,7 +59,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it("embeds run summaries, highlights the active run and blocks deletion until settlement", async () => {
+it("embeds run summaries, highlights the active run and warns before deleting unsettled billing", async () => {
   api.listRuns.mockResolvedValue(
     page([
       { ...run, active: true },
@@ -75,8 +75,10 @@ it("embeds run summaries, highlights the active run and blocks deletion until se
   expect(wrapper.get(".run-catalog-dialog").attributes("role")).toBe("region");
   expect(wrapper.find(".run-catalog-row.active").exists()).toBe(true);
   const pending = wrapper.findAll(".run-catalog-row")[1]!;
-  expect(pending.get(".danger").attributes("disabled")).toBeDefined();
+  expect(pending.get(".danger").attributes("disabled")).toBeUndefined();
   expect(pending.find(".run-catalog-warning").exists()).toBe(true);
+  expect(pending.get(".primary").text()).toBe("Restore to resolve billing");
+  expect(pending.get(".run-catalog-warning").text()).toContain("permanently remove those requests");
   await wrapper.findAll(".run-catalog-filter button")[1]!.trigger("click");
   expect(wrapper.findAll(".run-catalog-row")).toHaveLength(1);
   expect(wrapper.find(".run-catalog-row.active").exists()).toBe(false);
@@ -102,6 +104,23 @@ it("shows an empty-state message when the attention filter excludes every ready 
   expect(
     wrapper.findAll(".run-catalog-footer button").at(-1)?.attributes("disabled"),
   ).toBeUndefined();
+  wrapper.unmount();
+});
+
+it("disables deletion when a run's memory identity mapping needs repair", async () => {
+  api.listRuns.mockResolvedValue(page([{ ...run, state: "needs-repair" }]));
+  const wrapper = mount(RunCatalogPanel, {
+    props: { open: true, embedded: true, scripts: [script], profiles: [], locale: "en" },
+    global: { plugins: [i18n] },
+  });
+
+  await vi.waitFor(() => expect(wrapper.findAll(".run-catalog-row")).toHaveLength(1));
+
+  const row = wrapper.get(".run-catalog-row");
+  expect(row.get(".run-catalog-warning").text()).toContain(
+    "memory identity mapping is inconsistent",
+  );
+  expect(row.get(".danger").attributes("disabled")).toBeDefined();
   wrapper.unmount();
 });
 
@@ -183,7 +202,7 @@ it("keeps a partially completed deletion visible and resumes it with the same op
   await vi.waitFor(() => expect(buttonNamed("Confirm deletion").disabled).toBe(false));
   await buttonNamed("Confirm deletion").click();
   await vi.waitFor(() => expect(api.deleteRun).toHaveBeenCalledTimes(1));
-  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-1", "session-1", 4);
+  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-1", "session-1", 4, true);
   expect(document.body.textContent).toContain("Run cleanup to resume");
 
   await buttonNamed("Cancel").click();
@@ -195,7 +214,7 @@ it("keeps a partially completed deletion visible and resumes it with the same op
   );
   await buttonNamed("Continue deletion").click();
   await vi.waitFor(() => expect(api.deleteRun).toHaveBeenCalledTimes(2));
-  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-1", "session-1", 4);
+  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-1", "session-1", 4, false);
   expect(document.body.textContent).not.toContain("Run cleanup to resume");
   wrapper.unmount();
   document.body.innerHTML = "";
@@ -226,13 +245,13 @@ it("retries a pre-journal deletion failure with the run revision, not the catalo
   await vi.waitFor(() => expect(buttonNamed("Confirm deletion").disabled).toBe(false));
   await buttonNamed("Confirm deletion").click();
   await vi.waitFor(() => expect(api.deleteRun).toHaveBeenCalledTimes(1));
-  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-retry", "session-1", 4);
+  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-retry", "session-1", 4, true);
 
   await buttonNamed("Cancel").click();
   await buttonNamed("Resume deletion").click();
   await buttonNamed("Continue deletion").click();
   await vi.waitFor(() => expect(api.deleteRun).toHaveBeenCalledTimes(2));
-  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-retry", "session-1", 4);
+  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-retry", "session-1", 4, false);
   wrapper.unmount();
   document.body.innerHTML = "";
 });
@@ -271,7 +290,7 @@ it("hydrates deletion retry from the persisted journal after restart", async () 
   await buttonNamed("Resume deletion").click();
   await buttonNamed("Continue deletion").click();
   await vi.waitFor(() => expect(api.deleteRun).toHaveBeenCalledTimes(1));
-  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-persisted", "session-1", 8);
+  expect(api.deleteRun).toHaveBeenLastCalledWith("delete-op-persisted", "session-1", 8, false);
   wrapper.unmount();
   document.body.innerHTML = "";
 });

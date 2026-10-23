@@ -821,6 +821,25 @@ impl Product {
         session_id: String,
         expected_revision: u64,
     ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
+        self.close_and_freeze_run_deletion_confirmed(
+            service,
+            operation_id,
+            session_id,
+            expected_revision,
+            false,
+        )
+        .await
+    }
+
+    /// 玩家确认删除本局全部数据后，登记并冻结删除目标。
+    pub async fn close_and_freeze_run_deletion_confirmed(
+        &self,
+        service: &Service,
+        operation_id: String,
+        session_id: String,
+        expected_revision: u64,
+        acknowledge_run_data_loss: bool,
+    ) -> Result<crate::run_catalog::DeletionOperation, Fault> {
         if !crate::record::format::valid_uuid(&operation_id)
             || !crate::record::format::valid_uuid(&session_id)
             || expected_revision == 0
@@ -839,11 +858,12 @@ impl Product {
         let request_session = session_id.clone();
         let updated_for_request = updated_at.clone();
         let operation = crate::blocking::run(move || {
-            storage.request_run_deletion(
+            storage.request_run_deletion_confirmed(
                 &request_operation,
                 &request_session,
                 expected_revision,
                 &updated_for_request,
+                acknowledge_run_data_loss,
             )
         })
         .await?;
