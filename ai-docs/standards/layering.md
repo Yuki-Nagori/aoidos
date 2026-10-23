@@ -67,4 +67,4 @@ api → Tauri IPC API 与载荷类型
 
 `bun run lint:layers` 通过 `cargo metadata` 检查 workspace crate 清单和允许依赖边。新增 crate 未登记、超出允许边或任一依赖方向反转都会失败。CI 对涉及 Rust 清单 / 源码的变更运行此检查；本地 `bun run verify` 也包含此项。
 
-测试、构建、格式和 lint selector 共用同一份变更路径解析结果。PR 在三平台构建 Web 产物及受影响 Tauri 应用，并按受影响 crate / 文件运行测试；格式、lint、Clippy 与 coverage 等质量检查只在 Ubuntu 执行。相关原生验收仅在 WebView 夹具直接或传递输入、原生测试输入或 Rust 消费闭包受影响时运行。Nightly 在三平台完整构建并运行 Vitest、workspace Rust 与原生测试，Ubuntu nightly 运行完整 `bun run verify`，包括覆盖率、knip、bench 和 rustdoc。共享配置、空 diff、路径未知或元数据解析失败时保守回退全量。
+测试、构建、格式和 lint selector 共用同一份变更路径解析结果。日常 PR 与 main push 在 Ubuntu 构建 Web 产物和受影响 Tauri 应用，并按受影响 crate / 文件运行测试、格式、lint 与 Clippy。相关 Linux 原生验收仅在 WebView 夹具直接或传递输入、原生测试输入或 Rust 消费闭包受影响时运行。Nightly 在三平台完整构建并运行 Vitest、workspace Rust 与原生测试，Ubuntu nightly 运行完整 `bun run verify`，包括覆盖率、knip、bench 和 rustdoc。共享配置、空 diff、路径未知或元数据解析失败时保守回退全量。
