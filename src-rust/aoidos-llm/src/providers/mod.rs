@@ -14,6 +14,34 @@ pub use deepseek::{
 };
 pub use opencode::{OpenCode, OpenCodeEdition};
 
+/// Resolve static model capabilities from public profile fields without constructing an HTTP
+/// client, reading credentials, or contacting the provider. Unknown providers and models return
+/// capabilities with no supported mode or context window.
+#[must_use]
+pub fn capabilities_for_profile(
+    profile: &crate::config::LlmProfile,
+) -> crate::provider::ProviderCapabilities {
+    let mode = profile.mode.into();
+    match ProviderId::parse(&profile.provider_id) {
+        Some(ProviderId::DeepSeek) => deepseek::deepseek_capabilities(&profile.model, mode),
+        Some(ProviderId::OpenCodeZen) => OpenCodeEdition::Zen.capabilities(&profile.model, mode),
+        Some(ProviderId::OpenCodeGo) => OpenCodeEdition::Go.capabilities(&profile.model, mode),
+        None => crate::provider::ProviderCapabilities {
+            model: profile.model.clone(),
+            context_limit: None,
+            completion: false,
+            chat: false,
+            prefix: false,
+            thinking: false,
+            stop_limit: 0,
+            max_output_tokens: 0,
+            temperature_effective: false,
+            temperature_min: 0.0,
+            temperature_max: 0.0,
+        },
+    }
+}
+
 /// 供应商身份；与持久 profile 的 providerId 同源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderId {
@@ -136,6 +164,36 @@ mod tests {
                 .default_base()
                 .starts_with("https://")
         );
+    }
+
+    #[test]
+    fn profile_capabilities_are_resolved_without_provider_construction() {
+        use crate::{
+            config::{LlmProfile, ProfileMode, ProxyConfig},
+            sampling::Sampling,
+        };
+        let profile = LlmProfile {
+            profile_id: "fixture".into(),
+            provider_id: "opencode-go".into(),
+            model: "gpt-6-luna".into(),
+            mode: ProfileMode::Chat,
+            thinking: false,
+            sampling: Sampling {
+                temperature: 1.0,
+                max_tokens: 64,
+            },
+            proxy: ProxyConfig::None,
+        };
+        let caps = capabilities_for_profile(&profile);
+        assert!(caps.chat);
+        assert!(caps.context_limit.is_some());
+        assert!(!caps.completion);
+
+        let mut unsupported = profile;
+        unsupported.model = "unlisted-model".into();
+        let caps = capabilities_for_profile(&unsupported);
+        assert!(!caps.chat);
+        assert_eq!(caps.context_limit, None);
     }
     #[test]
     fn frozen_factory_preserves_profile_validation_and_sanitizes_transport_failure() {

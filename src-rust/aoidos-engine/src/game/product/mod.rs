@@ -17,6 +17,7 @@ use aoidos_llm::{
         AllowAll, BudgetPort, GenerationRequest, PersistedRequestIdentity, RunOutcome, RunPolicy,
     },
 };
+use sha2::{Digest, Sha256};
 use std::{
     future::Future,
     path::{Path, PathBuf},
@@ -46,17 +47,11 @@ pub trait ProfileSource: Send + Sync {
         Ok(())
     }
 
-    /// 读取不含凭据的公开 profile 快照；应用持久化 adapter 应避免访问密钥库。
+    /// 读取不含凭据的公开 profile 快照。实现必须只访问 profile 配置，不能读取密钥库。
     ///
     /// # Errors
     /// 配置不存在或结构无效时返回稳定 Fault。
-    fn public_profile(&self, id: &str) -> Result<LlmProfile, Fault> {
-        let resolved = self.freeze(id)?;
-        if resolved.frozen.profile.profile_id != id {
-            return Err(Fault::bad_request());
-        }
-        Ok(resolved.frozen.profile)
-    }
+    fn public_profile(&self, id: &str) -> Result<LlmProfile, Fault>;
 
     /// # Errors
     /// 未知配置、存储 / 凭据 / 代理读取失败按稳定错误返回。
@@ -686,6 +681,14 @@ pub struct InitializationDispatchResult {
     pub state: crate::cycle_initialization::State,
 }
 
+/// Durable identity returned after preparing, but not dispatching, a new initialization.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializationPreparationResult {
+    pub session_id: String,
+    pub request_id: String,
+}
+
 pub struct Product {
     root: PathBuf,
     storage: Arc<Storage>,
@@ -720,6 +723,93 @@ impl Product {
             read_authoritative_selection(&self.storage, &self.root)?.ok_or_else(no_selection)?;
         Ok((selection.session_id, selection.profile_id))
     }
+
+    /// Persist a non-playable run and its canonical initialization request using limits
+    /// explicitly supplied by the caller after user confirmation. This does not close or
+    /// replace the active run, create an owner, reserve billing, or contact a Provider.
+    ///
+    /// # Errors
+    /// Invalid profile, locale, budget, script resources, or persistence failures are returned
+    /// without changing the current active selection.
+    pub async fn prepare_initialization(
+        &self,
+        profile_id: &str,
+        script_id: &str,
+        locale: &str,
+        cny_limit: aoidos_billing::money::NanoMoney,
+        usd_limit: aoidos_billing::money::NanoMoney,
+    ) -> Result<InitializationPreparationResult, Fault> {
+        if !matches!(locale, "zh-Hans" | "en") {
+            return Err(Fault::bad_request());
+        }
+        self.storage.ready()?;
+        let profile = self.factory.public_profile(profile_id)?;
+        profile.validate().map_err(invalid_profile)?;
+        let capabilities = aoidos_llm::providers::capabilities_for_profile(&profile);
+        let mode_supported = match profile.mode {
+            aoidos_llm::config::ProfileMode::Completion => capabilities.completion,
+            aoidos_llm::config::ProfileMode::Chat => capabilities.chat,
+        };
+        if !mode_supported
+            || profile.thinking
+            || profile.sampling.max_tokens == 0
+            || profile.sampling.max_tokens > capabilities.max_output_tokens
+            || !profile.sampling.temperature.is_finite()
+            || profile.sampling.temperature < capabilities.temperature_min
+            || profile.sampling.temperature > capabilities.temperature_max
+        {
+            return Err(Fault::bad_request());
+        }
+        let header = builtin::header(script_id)?;
+        let snapshots =
+            super::assets::initialization_asset_snapshots(script_id, &header.script_revision)?;
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let profile_snapshot = aoidos_json::to_vec(&profile).map_err(|_| Fault::bad_request())?;
+        let input = crate::run_catalog::FrozenInitializationInput {
+            version: 1,
+            operation_id: operation_id.clone(),
+            session_id: header.session_id.clone(),
+            script_id: header.script_id.clone(),
+            script_revision: header.script_revision.clone(),
+            profile_id: profile.profile_id.clone(),
+            profile_snapshot_hash: format!("{:x}", Sha256::digest(profile_snapshot)),
+            locale: locale.to_owned(),
+            prompt_version: "init-v1".into(),
+            output_schema_version: 2,
+            script_snapshot: snapshots.script,
+            entity_snapshot: snapshots.entities,
+            cycle_input_snapshot: snapshots.cycle_input,
+            provider_request: serde_json::Value::Null,
+        };
+        let provider_request = super::initialization_prompt::build_request(&input, &profile)?;
+        let mut input = input;
+        input.provider_request =
+            serde_json::to_value(provider_request).map_err(|_| Fault::bad_request())?;
+        let request_id_for_result = request_id.clone();
+        let session_id = header.session_id.clone();
+        let storage = self.storage.clone();
+        crate::blocking::run(move || {
+            storage.create_inactive_run(&crate::run_catalog::InactiveRunIntent {
+                operation_id,
+                header,
+                profile,
+                preparation: Some(crate::run_catalog::InitializationPreparation {
+                    version: 1,
+                    request_id,
+                    input,
+                    cny_limit,
+                    usd_limit,
+                }),
+            })
+        })
+        .await?;
+        Ok(InitializationPreparationResult {
+            session_id,
+            request_id: request_id_for_result,
+        })
+    }
+
     /// 明确新建或重开已选择周目；预检不发 HTTP，重开保持暂停并等待显式恢复。
     /// # Errors
     /// 参数、门禁、配置、资源版本或磁盘失败拒绝；失败保留已存在存档。

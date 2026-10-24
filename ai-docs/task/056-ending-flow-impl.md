@@ -99,6 +99,8 @@
 
 2026-10-24 canonical initialization prompt 切片：新增从冻结 script / entity / cycle-input 快照及 profile 确定性构造 Completion 或 Chat 开局请求的 builder，移除固定角色真值和初始认知字段，并给输入加统一字节上限；创建准备校验会重算请求并拒绝任何与持久化 provider request 不一致的快照。覆盖两种调用形态、冻结输入及隐私投影和身份版本不匹配。独立评审补齐模型输出档案结构、字段白名单以及任务 key / 连续任务依赖契约。已有预算 dispatch coordinator 尚未由 Product 新局入口串联，因此此切片只规范和持久化请求，不触发 Provider 调用或 playable 激活。
 
+2026-10-24 Product 初始化准备切片：新增 `Product::prepare_initialization`，由调用方传入已确认的 CNY / USD 上限与 locale；读取公开 profile、冻结注册剧本的 script / entity / cycle-input 资源，生成 canonical provider request，并经 inactive creation journal 原子保存 budget 与 pending attempt。持久化前通过无凭据、无网络的静态 provider 能力目录校验模型、调用形态、temperature 与输出上限；不支持的 profile 在建 run 前拒绝。该步骤不关闭当前周目、不创建 owner、不改活动选择、不预留费用、不 dispatch。行为测试验证已有 active owner 保持不变，新目录项处于 `recovery-required` 且无 memory run，并可读回同一冻结 dispatch candidate；不支持模型拒绝测试确认没有读取凭据或新增 catalog 项。此 API 仍未通过 Tauri / Web 新局流程调用；成功 dispatch 后激活与失败 / unknown 的显式重试 UI 仍待实现。
+
 ## 风险与回退
 
 开局生成的规则、最终目标、任务初始态和生成 NPC 都是本周目的不可变初始化输入；剧本、模型、提示词或 schema 更新不能漂移既有周目。模型可能产出结构合法但语义不合理的目标 / 标签，因此要把可验证规则限制为白名单状态比较，并在发布前用剧本样例验收可达性和叙事一致性。任务提议属于可回退的引导投影，不升级为正史；如果模型把任务标记错误，修复只能提交新的有效分支任务状态，不得改写旧提交记录。生成或存储失败时保留不可玩初始化状态与费用义务，提供明确恢复 / 放弃路径；不能通过旧流程静默绕过最终目标。

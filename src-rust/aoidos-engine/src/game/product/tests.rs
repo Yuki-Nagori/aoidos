@@ -698,6 +698,139 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn preparation_persists_a_non_playable_run_without_replacing_the_active_owner() {
+    use aoidos_billing::money::NanoMoney;
+
+    let fixture = Fixture::with_stress_provider();
+    let active = fixture.open(true).await.unwrap();
+    let profile_freezes_before_preparation = fixture.source.calls.load(Ordering::SeqCst);
+    let provider_starts_before_preparation = fixture
+        .stress_provider
+        .as_ref()
+        .unwrap()
+        .starts
+        .load(Ordering::SeqCst);
+    let preparation = fixture
+        .product
+        .prepare_initialization(
+            "default",
+            "mistbell",
+            "zh-Hans",
+            NanoMoney::parse("10").unwrap(),
+            NanoMoney::parse("5").unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(preparation.session_id, active.session_id);
+    assert_eq!(
+        fixture
+            .storage
+            .active_run_selection()
+            .unwrap()
+            .unwrap()
+            .session_id,
+        active.session_id
+    );
+    assert!(fixture.service.get_phase(&active.session_id).is_ok());
+    assert_eq!(
+        fixture.source.calls.load(Ordering::SeqCst),
+        profile_freezes_before_preparation
+    );
+    assert_eq!(
+        fixture
+            .stress_provider
+            .as_ref()
+            .unwrap()
+            .starts
+            .load(Ordering::SeqCst),
+        provider_starts_before_preparation
+    );
+    assert!(fixture.service.get_phase(&preparation.session_id).is_err());
+    let page = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap();
+    let prepared_run = page
+        .entries
+        .iter()
+        .find(|entry| entry.session_id == preparation.session_id)
+        .unwrap();
+    assert_eq!(
+        prepared_run.state,
+        crate::run_catalog::RunState::RecoveryRequired
+    );
+    assert_eq!(prepared_run.memory_run_id, None);
+    assert!(!prepared_run.active);
+
+    let candidate = fixture
+        .storage
+        .initialization_dispatch_candidate(&preparation.session_id)
+        .unwrap();
+    assert_eq!(candidate.request_id, preparation.request_id);
+    assert_eq!(candidate.input.locale, "zh-Hans");
+    assert_eq!(
+        candidate.input.provider_request["model"],
+        candidate.profile.model
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn preparation_rejects_an_unsupported_profile_before_persisting_a_run() {
+    use aoidos_billing::money::NanoMoney;
+
+    let fixture = Fixture::new();
+    *fixture.source.model.lock().unwrap() = "unlisted-model".into();
+    let before = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap();
+    let creation_operations_before = fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .query_row("SELECT count(*) FROM session_creation_ops", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map_err(|_| Fault::new("store.database", "读取创建操作计数失败"))
+        })
+        .unwrap();
+    let error = fixture
+        .product
+        .prepare_initialization(
+            "default",
+            "mistbell",
+            "zh-Hans",
+            NanoMoney::parse("10").unwrap(),
+            NanoMoney::parse("5").unwrap(),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "app.bad-request");
+    assert_eq!(fixture.source.calls.load(Ordering::SeqCst), 0);
+    let after = fixture
+        .storage
+        .run_catalog_page(None, crate::run_catalog::DEFAULT_PAGE_SIZE)
+        .unwrap();
+    assert_eq!(after.entries.len(), before.entries.len());
+    assert_eq!(fixture.storage.active_run_selection().unwrap(), None);
+    let creation_operations_after = fixture
+        .storage
+        .with_database(|connection| {
+            connection
+                .query_row("SELECT count(*) FROM session_creation_ops", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map_err(|_| Fault::new("store.database", "读取创建操作计数失败"))
+        })
+        .unwrap();
+    assert_eq!(creation_operations_after, creation_operations_before);
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn opening_reloading_and_switching_profiles_do_not_start_requests_or_replace_history() {
     let fixture = Fixture::new();
     assert_eq!(

@@ -1254,6 +1254,12 @@ async fn startup_recovery_finishes_a_pending_deletion_before_exposing_the_catalo
 struct FakeProfileSource;
 
 impl ProfileSource for FakeProfileSource {
+    fn public_profile(&self, id: &str) -> Result<aoidos_llm::config::LlmProfile, Fault> {
+        let mut profile = fake_profile();
+        profile.profile_id = id.to_owned();
+        Ok(profile)
+    }
+
     fn freeze(&self, id: &str) -> Result<ResolvedProfile, Fault> {
         let mut profile = fake_profile();
         profile.profile_id = id.to_owned();

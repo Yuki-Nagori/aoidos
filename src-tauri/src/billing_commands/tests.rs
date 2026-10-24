@@ -978,6 +978,11 @@ async fn balance_profile_validation_and_cached_read_do_not_access_the_vault() {
     let proxy = aoidos_llm::proxy::SystemProxySnapshot::default();
     struct FixtureProfiles<'a>(&'a aoidos_llm::config::FrozenProfile);
     impl aoidos_engine::game::product::ProfileSource for FixtureProfiles<'_> {
+        fn public_profile(&self, id: &str) -> Result<aoidos_llm::config::LlmProfile, Fault> {
+            assert_eq!(id, self.0.profile.profile_id);
+            Ok(self.0.profile.clone())
+        }
+
         fn freeze(&self, id: &str) -> Result<aoidos_engine::game::product::ResolvedProfile, Fault> {
             assert_eq!(id, self.0.profile.profile_id);
             Ok(aoidos_engine::game::product::ResolvedProfile {
