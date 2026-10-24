@@ -79,6 +79,8 @@
 
 ## 验证计划与结果
 
+2026-10-24 开局 provider 请求契约切片：冻结请求按严格类型解析，并在创建 journal 写入前核对模型、调用形态、采样参数与冻结 profile 一致；可选 session routing id 必须属于当前周目，输入大小 / 数量和 stop 列表有界，sampling 子对象也拒绝未知字段。回归用例覆盖模型、模式、采样、session routing、空输入、额外采样字段和 stop 上限。`bun run test:affected`、`bun run format:affected`、`bun run lint:affected` 与 `git diff --check` 通过；独立评审指出的嵌套字段与测试覆盖问题已修复并待复核。该边界为后续 coordinator 使用已保存请求提供可校验输入，但仍未派发 Provider 请求或接入新局入口。
+
 首个创建 journal 切片的受影响检查已通过：`bun run test:affected`（554 passed、3 ignored）、`bun run format:affected`、`bun run lint:affected`。2026-10-24 当前结构化输出切片通过 `bun scripts/cargo.mts test -p aoidos-engine --lib cycle_output::tests -- --nocapture`（6 passed）及 `bun scripts/cargo.mts check -p aoidos-engine --lib`；独立 6.1-sol 评审未发现阻止提交的问题。提交前 `bun run format:affected`、`bun run test:affected`（engine 560 passed、3 ignored）和 `bun run lint:affected` 均通过。它还没有生成全部角色档案 / guide NPC，也没有接入 Provider、账本、存储或 playable 转换，因此不是完整开局快照，不能用于启用新局入口。仍待验证并实施：固定 / 生成 guide NPC、完整结构化输出与初始化冻结、WorldPort / 周目恢复、027 / 035 物理计费与 unknown 对账、032 单向对接、任务分支投影与回退、跨平台 IPC、Vitest、更多故障注入及完整 `bun run verify`。
 
 2026-10-24 guide 档案校验切片通过 focused 测试（8 passed）、`bun run test:affected`（562 passed、3 ignored）、`bun run format:affected`、`bun run lint:affected` 和 `git diff --check`；独立 `gpt-6.1-sol` 静态评审未发现阻止提交的问题。它确认固定 guide 不可由模型替换、生成档案有界且不接入生产 playable 路径。仍未接 Provider、账本、存储或 playable 转换。

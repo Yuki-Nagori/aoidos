@@ -408,7 +408,12 @@ fn validate_intent(intent: &InactiveRunIntent) -> Result<(), Fault> {
             || !matches!(preparation.input.locale.as_str(), "zh-Hans" | "en")
             || preparation.input.prompt_version != "init-v1"
             || preparation.input.output_schema_version != 2
-            || !preparation.input.provider_request.is_object()
+            || validate_provider_request(
+                &preparation.input.provider_request,
+                &intent.profile,
+                &intent.header.session_id,
+            )
+            .is_err()
         {
             return Err(Fault::bad_request());
         }
@@ -428,6 +433,78 @@ fn validate_intent(intent: &InactiveRunIntent) -> Result<(), Fault> {
             &preparation.input.cycle_input_snapshot,
         )
         .map_err(|_| Fault::bad_request())?;
+    }
+    Ok(())
+}
+
+fn validate_provider_request(
+    value: &serde_json::Value,
+    profile: &LlmProfile,
+    session_id: &str,
+) -> Result<(), Fault> {
+    use aoidos_llm::provider::{ProviderInput, ProviderRequest, RequestMode};
+
+    let sampling = value
+        .get("sampling")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(Fault::bad_request)?;
+    if sampling.len() != 2
+        || !sampling.contains_key("temperature")
+        || !sampling.contains_key("maxTokens")
+    {
+        return Err(Fault::bad_request());
+    }
+    let request: ProviderRequest =
+        aoidos_json::from_value(value.clone()).map_err(|_| Fault::bad_request())?;
+    if request.model != profile.model
+        || request.mode() != RequestMode::from(profile.mode)
+        || request.sampling != profile.sampling
+        || request
+            .session_id
+            .as_deref()
+            .is_some_and(|request_session_id| request_session_id != session_id)
+        || request.stops.len() > 64
+        || request
+            .stops
+            .iter()
+            .any(|stop| stop.is_empty() || stop.len() > 256)
+    {
+        return Err(Fault::bad_request());
+    }
+    let input_bytes = match &request.input {
+        ProviderInput::Completion(input) if !input.prompt.trim().is_empty() => input.prompt.len(),
+        ProviderInput::Chat(input) if !input.messages.is_empty() && input.messages.len() <= 128 => {
+            let mut bytes = 0usize;
+            for message in &input.messages {
+                if message.content.trim().is_empty() {
+                    return Err(Fault::bad_request());
+                }
+                bytes = bytes
+                    .checked_add(message.content.len())
+                    .ok_or_else(Fault::bad_request)?;
+                if bytes > 256 * 1024 {
+                    return Err(Fault::bad_request());
+                }
+            }
+            if let Some(prefix) = &input.assistant_prefix {
+                if prefix.trim().is_empty() {
+                    return Err(Fault::bad_request());
+                }
+                bytes = bytes
+                    .checked_add(prefix.len())
+                    .ok_or_else(Fault::bad_request)?;
+            }
+            bytes
+        }
+        _ => return Err(Fault::bad_request()),
+    };
+    if input_bytes > 256 * 1024
+        || serde_json::to_vec(&request.input)
+            .map_err(|_| Fault::bad_request())?
+            .len()
+            > 256 * 1024
+    {
+        return Err(Fault::bad_request());
     }
     Ok(())
 }

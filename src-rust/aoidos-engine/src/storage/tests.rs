@@ -100,7 +100,13 @@ fn prepared_intent() -> crate::run_catalog::InactiveRunIntent {
                 script_snapshot: snapshots.script,
                 entity_snapshot: snapshots.entities,
                 cycle_input_snapshot: snapshots.cycle_input,
-                provider_request: serde_json::json!({"model":"deepseek-v4.1-flash","messages":[]}),
+                provider_request: serde_json::json!({
+                    "model":"deepseek-v4.1-flash",
+                    "sessionId":null,
+                    "input":{"kind":"completion","prompt":"Generate the cycle opening."},
+                    "sampling":{"temperature":1.0,"maxTokens":1024},
+                    "stops":[]
+                }),
             },
             cny_limit: aoidos_billing::money::NanoMoney::parse("10").unwrap(),
             usd_limit: aoidos_billing::money::NanoMoney::parse("5").unwrap(),
@@ -477,6 +483,73 @@ fn preparation_rejects_unavailable_locale_schema_and_unbound_script_snapshots() 
             ))
             .exists()
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn inactive_creation_rejects_provider_requests_outside_the_frozen_profile_contract() {
+    type Intent = crate::run_catalog::InactiveRunIntent;
+    type ProviderRequestCase = (&'static str, fn(&mut Intent));
+    let root = std::env::temp_dir().join(format!(
+        "aoidos-inactive-provider-mismatch-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let events = Arc::new(Events::default());
+    let record_events = Arc::new(test_support::Events::default());
+    let storage = Storage::new(&root, events, record_events);
+    let cases: [ProviderRequestCase; 7] = [
+        ("model", |intent| {
+            intent.preparation.as_mut().unwrap().input.provider_request["model"] =
+                serde_json::Value::String("another-model".into());
+        }),
+        ("mode", |intent| {
+            let input = &mut intent.preparation.as_mut().unwrap().input.provider_request["input"];
+            input["kind"] = serde_json::Value::String("chat".into());
+            input["messages"] = serde_json::json!([{"role":"user","content":"Generate."}]);
+            input.as_object_mut().unwrap().remove("prompt");
+        }),
+        ("sampling", |intent| {
+            intent.preparation.as_mut().unwrap().input.provider_request["sampling"]["maxTokens"] =
+                serde_json::json!(64);
+        }),
+        ("session routing", |intent| {
+            intent.preparation.as_mut().unwrap().input.provider_request["sessionId"] =
+                serde_json::Value::String(uuid::Uuid::new_v4().to_string());
+        }),
+        ("unknown sampling field", |intent| {
+            intent.preparation.as_mut().unwrap().input.provider_request["sampling"]["extra"] =
+                serde_json::Value::Bool(true);
+        }),
+        ("empty prompt", |intent| {
+            intent.preparation.as_mut().unwrap().input.provider_request["input"]["prompt"] =
+                serde_json::Value::String("  ".into());
+        }),
+        ("too many stops", |intent| {
+            intent.preparation.as_mut().unwrap().input.provider_request["stops"] =
+                serde_json::Value::Array(
+                    (0..65)
+                        .map(|index| serde_json::json!(format!("s{index}")))
+                        .collect(),
+                );
+        }),
+    ];
+
+    for (name, mutate) in cases {
+        let mut intent = prepared_intent();
+        mutate(&mut intent);
+        let error = storage.create_inactive_run(&intent).unwrap_err();
+        assert_eq!(error.code, "app.bad-request", "case: {name}");
+        assert!(
+            !root
+                .join(format!(
+                    "workspaces/{}/transcript/{}.jsonl",
+                    intent.header.script_id, intent.header.session_id
+                ))
+                .exists()
+        );
+    }
+    drop(storage);
     let _ = std::fs::remove_dir_all(root);
 }
 

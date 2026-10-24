@@ -106,7 +106,8 @@ impl ProviderInput {
 
 /// 一次物理请求的全部输入：模式已选定，只带适用的服务端 stop 子集；
 /// `GuardSpec` 匹配状态不进 adapter（护栏归调用方）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderRequest {
     pub model: String,
     /// 供应商用于会话路由或提示缓存的稳定游戏会话标识。
