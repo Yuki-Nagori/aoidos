@@ -103,6 +103,8 @@
 
 2026-10-24 初始化准备 IPC 切片：增加严格解码的 `run_prepare_initialization` 命令与 TypeScript API 契约，预算使用十进制字符串；只返回持久的 `sessionId` / `requestId`，不 dispatch、不激活，不更改当前 run。Tauri handler 集成测试覆盖合法准备请求、错误预算类型与未知字段拒绝，并确认准备不会创建活动周目；Vitest 覆盖前端参数映射。产品新局流程尚未调用此 API，待接入确认预算 UI 与可恢复的后续 dispatch / finalize 流程。`bun run test:affected`、`bun run format:affected`、`bun run lint:affected` 和完整 `bun run verify` 均通过；Rust workspace 覆盖率为 94.08%。
 
+2026-10-24 初始化 dispatch IPC 切片：暴露 `run_dispatch_initialization` 和对应 TypeScript 结果类型；命令只能接收持久化 `sessionId`，由已有一次性 coordinator 领取同一 requestId 的 dispatch / 费用权，严格校验后才冻结为 playable。Tauri handler 测试拒绝缺失、错误类型和附加字段，并验证合法但不存在的 session 在构造 Provider 前以 not-found 结束；Vitest 验证调用体只传 sessionId。`bun run test:affected`（Engine 577 passed、3 ignored，Vitest 8 passed）、`bun run format:affected`、`bun run lint:affected` 和完整 `bun run verify` 均通过，Rust workspace 覆盖率 94.11%；独立复核无阻断。此 IPC 仍未接入新局 UI、预算确认 UI、重试 / unknown 恢复或激活周目流程。
+
 ## 风险与回退
 
 开局生成的规则、最终目标、任务初始态和生成 NPC 都是本周目的不可变初始化输入；剧本、模型、提示词或 schema 更新不能漂移既有周目。模型可能产出结构合法但语义不合理的目标 / 标签，因此要把可验证规则限制为白名单状态比较，并在发布前用剧本样例验收可达性和叙事一致性。任务提议属于可回退的引导投影，不升级为正史；如果模型把任务标记错误，修复只能提交新的有效分支任务状态，不得改写旧提交记录。生成或存储失败时保留不可玩初始化状态与费用义务，提供明确恢复 / 放弃路径；不能通过旧流程静默绕过最终目标。

@@ -25,6 +25,12 @@ struct PrepareInitializationArgs {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispatchInitializationArgs {
+    session_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeleteRunArgs {
     operation_id: String,
     session_id: String,
@@ -87,6 +93,21 @@ pub async fn prepare_initialization(
             args.cny_limit,
             args.usd_limit,
         )
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 派发已持久化的新局请求一次；仅在输出完整校验并冻结后返回 playable 状态。
+/// # Errors
+/// 请求缺失、状态冲突、Provider、预算、输出校验或持久化失败时返回稳定错误；已领取的 attempt 不会重放。
+pub async fn dispatch_initialization(
+    product: &Product,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::game::product::InitializationDispatchResult, CmdError> {
+    let args: DispatchInitializationArgs =
+        crate::ipc::decode_request(&request, "新周目派发参数不合法")?;
+    product
+        .dispatch_initialization_once(&args.session_id)
         .await
         .map_err(CmdError::from)
 }
