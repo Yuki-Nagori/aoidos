@@ -75,7 +75,7 @@ pub struct InitializationDispatchCandidate {
     pub provider_request: aoidos_llm::provider::ProviderRequest,
 }
 
-/// Versioned request envelope. `provider_request` is the complete serialized request body;
+/// Versioned request envelope. `provider_request` is the canonical serialized request body;
 /// `script_revision` and `profile_snapshot_hash` bind it to the immutable run inputs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -93,8 +93,8 @@ pub struct FrozenInitializationInput {
     pub script_snapshot: Vec<u8>,
     pub entity_snapshot: Vec<u8>,
     pub cycle_input_snapshot: Vec<u8>,
-    /// Captured for durable preparation only; no caller may dispatch it until a future
-    /// coordinator validates it against the provider request contract.
+    /// Canonical request captured for durable preparation. Creation re-derives it from the
+    /// frozen snapshots and rejects any mismatch; dispatch still requires the coordinator.
     pub provider_request: serde_json::Value,
 }
 
@@ -601,6 +601,14 @@ fn validate_intent(intent: &InactiveRunIntent) -> Result<(), Fault> {
             &preparation.input.cycle_input_snapshot,
         )
         .map_err(|_| Fault::bad_request())?;
+        let canonical_request =
+            crate::game::initialization_prompt::build_request(&preparation.input, &intent.profile)
+                .map_err(|_| Fault::bad_request())?;
+        let canonical_value =
+            serde_json::to_value(canonical_request).map_err(|_| Fault::bad_request())?;
+        if preparation.input.provider_request != canonical_value {
+            return Err(Fault::bad_request());
+        }
     }
     Ok(())
 }

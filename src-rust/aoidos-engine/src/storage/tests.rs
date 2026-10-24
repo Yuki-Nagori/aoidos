@@ -79,6 +79,24 @@ fn prepared_intent() -> crate::run_catalog::InactiveRunIntent {
         &header.script_revision,
     )
     .unwrap();
+    let mut input = crate::run_catalog::FrozenInitializationInput {
+        version: 1,
+        operation_id: operation_id.clone(),
+        session_id: header.session_id.clone(),
+        script_id: header.script_id.clone(),
+        script_revision: header.script_revision.clone(),
+        profile_id: profile.profile_id.clone(),
+        profile_snapshot_hash,
+        locale: "zh-Hans".into(),
+        prompt_version: "init-v1".into(),
+        output_schema_version: 2,
+        script_snapshot: snapshots.script,
+        entity_snapshot: snapshots.entities,
+        cycle_input_snapshot: snapshots.cycle_input,
+        provider_request: serde_json::Value::Null,
+    };
+    let request = crate::game::initialization_prompt::build_request(&input, &profile).unwrap();
+    input.provider_request = serde_json::to_value(request).unwrap();
     crate::run_catalog::InactiveRunIntent {
         operation_id: operation_id.clone(),
         header: header.clone(),
@@ -86,28 +104,7 @@ fn prepared_intent() -> crate::run_catalog::InactiveRunIntent {
         preparation: Some(crate::run_catalog::InitializationPreparation {
             version: 1,
             request_id,
-            input: crate::run_catalog::FrozenInitializationInput {
-                version: 1,
-                operation_id,
-                session_id: header.session_id.clone(),
-                script_id: header.script_id.clone(),
-                script_revision: header.script_revision.clone(),
-                profile_id: "test-profile".into(),
-                profile_snapshot_hash,
-                locale: "zh-Hans".into(),
-                prompt_version: "init-v1".into(),
-                output_schema_version: 2,
-                script_snapshot: snapshots.script,
-                entity_snapshot: snapshots.entities,
-                cycle_input_snapshot: snapshots.cycle_input,
-                provider_request: serde_json::json!({
-                    "model":"deepseek-v4.1-flash",
-                    "sessionId":null,
-                    "input":{"kind":"completion","prompt":"Generate the cycle opening."},
-                    "sampling":{"temperature":1.0,"maxTokens":1024},
-                    "stops":[]
-                }),
-            },
+            input,
             cny_limit: aoidos_billing::money::NanoMoney::parse("10").unwrap(),
             usd_limit: aoidos_billing::money::NanoMoney::parse("5").unwrap(),
         }),

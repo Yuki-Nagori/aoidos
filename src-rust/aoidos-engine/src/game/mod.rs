@@ -28,3 +28,5 @@ pub mod builtin;
 pub mod product;
 
 pub mod assets;
+
+pub mod initialization_prompt;

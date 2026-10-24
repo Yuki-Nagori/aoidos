@@ -97,6 +97,8 @@
 
 2026-10-24 初始化 dispatch 候选读取切片：新增 `Storage::initialization_dispatch_candidate`，只从已关闭创建 journal 的 `registered` 记录构造 typed ProviderRequest，并重新核验创建 / profile / catalog / initialization / preparation 快照、哈希、双币预算和尚未领取的 pending attempt；requestId 与 revision 原样返回，后续仍须通过 initialization billing port 原子领取派发权并预留费用。独立评审发现候选读取与删除状态变化间存在竞态，以及正常状态变化不应映射为 corruption；现由领取派发权的同一 `IMMEDIATE` 事务核验目录仍为 recovery-required、billingRunId 与 session 一致且 memory owner 尚未创建，正常失败 / 重试 / deleting 状态返回 conflict。行为测试覆盖有效读取不改 dispatch 状态、失败终态分类、读取候选后目录删除会阻止 claim、重复 claim 仍拒绝。Focused 测试通过（storage / cycle initialization / billing port 各 1 passed）；最终 `bun run test:affected` 通过（engine 570 passed、3 ignored，相关 Rust consumers 通过）；`bun run format:affected`、`bun run lint:affected` 和 `git diff --check` 通过。独立复核完成，原子删除门禁与状态分类无剩余阻断项；曾发现的 lifecycle 测试夹具已修正并复测通过。本切片仍不构造 Provider、不发请求、不做 playable 激活。
 
+2026-10-24 canonical initialization prompt 切片：新增从冻结 script / entity / cycle-input 快照及 profile 确定性构造 Completion 或 Chat 开局请求的 builder，移除固定角色真值和初始认知字段，并给输入加统一字节上限；创建准备校验会重算请求并拒绝任何与持久化 provider request 不一致的快照。覆盖两种调用形态、冻结输入及隐私投影和身份版本不匹配。独立评审补齐模型输出档案结构、字段白名单以及任务 key / 连续任务依赖契约。已有预算 dispatch coordinator 尚未由 Product 新局入口串联，因此此切片只规范和持久化请求，不触发 Provider 调用或 playable 激活。
+
 ## 风险与回退
 
 开局生成的规则、最终目标、任务初始态和生成 NPC 都是本周目的不可变初始化输入；剧本、模型、提示词或 schema 更新不能漂移既有周目。模型可能产出结构合法但语义不合理的目标 / 标签，因此要把可验证规则限制为白名单状态比较，并在发布前用剧本样例验收可达性和叙事一致性。任务提议属于可回退的引导投影，不升级为正史；如果模型把任务标记错误，修复只能提交新的有效分支任务状态，不得改写旧提交记录。生成或存储失败时保留不可玩初始化状态与费用义务，提供明确恢复 / 放弃路径；不能通过旧流程静默绕过最终目标。
