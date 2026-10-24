@@ -53,6 +53,12 @@ export interface InitializationPreparationResult {
   requestId: string;
 }
 
+export interface InitializationDispatchResult {
+  sessionId: string;
+  revision: number;
+  state: "initializing" | "failed" | "unknown" | "playable" | "abandoned";
+}
+
 /** Persist a user-confirmed new-run preparation without dispatching or activating it. */
 export function prepareInitialization(
   profileId: string,
@@ -68,6 +74,11 @@ export function prepareInitialization(
     cnyLimit,
     usdLimit,
   });
+}
+
+/** Dispatch a persisted initialization attempt once; an already claimed request cannot replay. */
+export function dispatchInitialization(sessionId: string): Promise<InitializationDispatchResult> {
+  return invoke("run_dispatch_initialization", { sessionId });
 }
 
 export interface DeletionOperation {

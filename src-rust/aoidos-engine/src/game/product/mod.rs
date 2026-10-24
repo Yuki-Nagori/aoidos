@@ -810,6 +810,21 @@ impl Product {
         })
     }
 
+    /// Dispatch the persisted initialization request once and freeze a playable result only
+    /// after strict validation. The attempt identity and billing reservation remain durable.
+    ///
+    /// # Errors
+    /// Missing or stale preparations, dispatch, validation, or persistence failures are returned
+    /// without replaying an attempt whose dispatch claim has already been consumed.
+    pub async fn dispatch_initialization_once(
+        &self,
+        session_id: &str,
+    ) -> Result<InitializationDispatchResult, Fault> {
+        self.factory
+            .dispatch_initialization_once(session_id, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
     /// 明确新建或重开已选择周目；预检不发 HTTP，重开保持暂停并等待显式恢复。
     /// # Errors
     /// 参数、门禁、配置、资源版本或磁盘失败拒绝；失败保留已存在存档。

@@ -4,6 +4,7 @@ import type { RunPage, RunState, RunSummary } from "../../../src-web/api/runs";
 import {
   bindRunProfile,
   deleteRun,
+  dispatchInitialization,
   listRuns,
   openSelectedRun,
   prepareInitialization,
@@ -95,6 +96,20 @@ it("prepares a confirmed-budget initialization using exact decimal strings", asy
     locale: "zh-Hans",
     cnyLimit: "12.5",
     usdLimit: "3",
+  });
+});
+
+it("dispatches only the persisted initialization identity", async () => {
+  const response = {
+    sessionId: "00000000-0000-4000-8000-000000000004",
+    revision: 2,
+    state: "playable" as const,
+  };
+  vi.mocked(invoke).mockResolvedValue(response);
+
+  expect(await dispatchInitialization(response.sessionId)).toBe(response);
+  expect(invoke).toHaveBeenCalledWith("run_dispatch_initialization", {
+    sessionId: response.sessionId,
   });
 });
 

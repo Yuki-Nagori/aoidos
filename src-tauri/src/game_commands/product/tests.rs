@@ -114,6 +114,7 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
             crate::game_ipc::engine_list_scripts,
             crate::game_ipc::engine_open_session,
             crate::run_ipc::run_prepare_initialization,
+            crate::run_ipc::run_dispatch_initialization,
             crate::run_ipc::run_open_selected
         ])
         .build(mock_context(noop_assets()))
@@ -171,6 +172,30 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
             "app.bad-request"
         );
     }
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"sessionId":1}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000099","requestId":"override"}),
+    ] {
+        assert_eq!(
+            call(
+                "run_dispatch_initialization",
+                tauri::ipc::InvokeBody::Json(body)
+            )
+            .unwrap_err()["code"],
+            "app.bad-request"
+        );
+    }
+    assert_eq!(
+        call(
+            "run_dispatch_initialization",
+            tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "sessionId":"00000000-0000-4000-8000-000000000099"
+            }))
+        )
+        .unwrap_err()["code"],
+        "app.not-found"
+    );
     for body in [
         serde_json::json!({}),
         serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001"}),
