@@ -121,6 +121,7 @@ function transport() {
     ]),
     selectedPrice: vi.fn().mockResolvedValue(null),
     open: vi.fn().mockResolvedValue(opened),
+    prepare: vi.fn().mockResolvedValue({ sessionId: "prepared-session", requestId: "request-1" }),
   };
 }
 it("defaults to Flash and exposes supported providers and model choices", async () => {
@@ -187,6 +188,28 @@ it("switches models by reusing matching DeepSeek profiles and never picks anothe
     pro,
   ]);
   expect(api.save).not.toHaveBeenCalled();
+  scope.stop();
+});
+
+it("prepares a new cycle with explicit dual-currency limits without opening or dispatching it", async () => {
+  const api = transport(),
+    scope = effectScope(),
+    product = scope.run(() => useProduct(api))!;
+  api.profiles.mockResolvedValue({ items: [profile] });
+  await product.load();
+
+  await expect(product.prepareNewCycle("12.5", "3", "zh-Hans")).resolves.toBe("prepared-session");
+
+  expect(api.prepare).toHaveBeenCalledExactlyOnceWith(
+    "default",
+    "mistbell",
+    "zh-Hans",
+    "12.5",
+    "3",
+  );
+  expect(api.open).not.toHaveBeenCalled();
+  expect(product.session.value).toBeUndefined();
+  expect(product.busy.value).toBe(false);
   scope.stop();
 });
 

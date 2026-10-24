@@ -330,9 +330,54 @@ async function openWelcome(
               if (data.scriptsFail) throw { code: "store.io", message: "visual fixture failure" };
               return [data.script];
             case "engine_open_session":
+              throw new Error("Welcome continuation must use the existing-run catalog");
+            case "run_catalog_page":
               if (!data.activeSession)
-                throw new Error("Unexpected session open in welcome fixture");
-              return session;
+                return {
+                  entries: [],
+                  nextCursor: null,
+                  catalogRevision: 1,
+                  scanIncomplete: false,
+                  scanIssueCount: 0,
+                  pendingDeletions: [],
+                  pendingDeletionsTruncated: false,
+                };
+              return {
+                entries: [
+                  {
+                    sessionId: session.sessionId,
+                    scriptId: session.scriptId,
+                    createdAt: "2026-10-24T00:00:00Z",
+                    memoryRunId: session.memoryRunId,
+                    billingRunId: session.sessionId,
+                    profileId: session.profileId,
+                    revision: 1,
+                    state: "ready",
+                    active: false,
+                    deletionOperationId: null,
+                  },
+                ],
+                nextCursor: null,
+                catalogRevision: 1,
+                scanIncomplete: false,
+                scanIssueCount: 0,
+                pendingDeletions: [],
+                pendingDeletionsTruncated: false,
+              };
+            case "run_open_selected":
+              if (!data.activeSession) throw new Error("Unexpected run open in welcome fixture");
+              return {
+                session,
+                profile: {
+                  profileId: session.profileId,
+                  providerId: "deepseek",
+                  model: "deepseek-flash",
+                  mode: "completion",
+                  thinking: false,
+                  sampling: { temperature: 1, maxTokens: 2048 },
+                  proxy: { mode: "system" },
+                },
+              };
             case "engine_get_phase":
               return phase;
             case "engine_get_record_view":
@@ -738,7 +783,7 @@ try {
       await dialog.getByRole("button", { name: "Retry" }).click();
       await dialog.getByText("Key is not set").waitFor();
       await dialog.getByRole("button", { name: "Close" }).click();
-      assert.equal(await page.locator(".welcome-start").isDisabled(), true);
+      assert.equal(await page.locator(".welcome-new-cycle").isDisabled(), true);
       assert.equal(
         await page.evaluate(() =>
           (window as unknown as BrowserBridge).__VISUAL_CALLS__?.includes("llm_get_key_status"),
@@ -765,6 +810,7 @@ try {
       activeSession: true,
     });
     await page.locator(".welcome-start").click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.locator(".game-stage").waitFor();
     const stageLayout = await page.locator(".stage-area").evaluate((element) => {
       const rect = element.getBoundingClientRect();

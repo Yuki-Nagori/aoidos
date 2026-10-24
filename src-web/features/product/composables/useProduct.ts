@@ -3,6 +3,7 @@ import type { LlmProfile, KeyStatus } from "../../../api/llm";
 import { getKeyStatus, listProfiles, saveProfile, setKey } from "../../../api/llm";
 import type { OpenedSession, ScriptInfo } from "../../../api/engine";
 import type { OpenedRun } from "../../../api/runs";
+import { prepareInitialization } from "../../../api/runs";
 import { listScripts, openSession } from "../../../api/engine";
 import type { BillingCurrency } from "../../../api/billing";
 import {
@@ -22,6 +23,7 @@ interface Transport {
   priceTemplates: typeof getDeepseekPriceTemplates;
   selectedPrice: typeof getSelectedPrice;
   open: typeof openSession;
+  prepare: typeof prepareInitialization;
 }
 const defaults: Transport = {
   profiles: listProfiles,
@@ -33,6 +35,7 @@ const defaults: Transport = {
   priceTemplates: getDeepseekPriceTemplates,
   selectedPrice: getSelectedPrice,
   open: openSession,
+  prepare: prepareInitialization,
 };
 const openCodeZenIds = [
   "deepseek-v4.1-flash",
@@ -416,6 +419,37 @@ export function useProduct(transport: Transport = defaults) {
       }
     });
   }
+  /** Persist a user-confirmed budget and frozen initialization input without dispatching a request. */
+  async function prepareNewCycle(
+    cnyLimit: string,
+    usdLimit: string,
+    locale: "zh-Hans" | "en",
+  ): Promise<string | undefined> {
+    if (busy.value || disposed) return undefined;
+    busy.value = true;
+    error.value = undefined;
+    try {
+      const selected = await selectProfile();
+      if (disposed) return undefined;
+      const prepared = await transport.prepare(
+        selected,
+        scriptId.value,
+        locale,
+        cnyLimit,
+        usdLimit,
+      );
+      if (!disposed) {
+        profileId.value = selected;
+        activeProfile.value = profiles.value.find((profile) => profile.profileId === selected);
+      }
+      return prepared.sessionId;
+    } catch (failure) {
+      if (!disposed) error.value = safeError(failure, "新周目初始化准备失败");
+      return undefined;
+    } finally {
+      if (!disposed) busy.value = false;
+    }
+  }
   function adoptOpenedRun(opened: OpenedRun): void {
     const profile = opened.profile;
     scriptId.value = opened.session.scriptId;
@@ -455,6 +489,7 @@ export function useProduct(transport: Transport = defaults) {
     configureKey,
     confirmBillingPrice,
     open,
+    prepareNewCycle,
     adoptOpenedRun,
   };
 }
