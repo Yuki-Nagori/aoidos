@@ -10,13 +10,21 @@ use super::{
 use crate::{fault::Fault, record::calibration::Calibration, storage::Storage, turn::Coordinator};
 use aoidos_llm::{
     config::{FrozenProfile, LlmProfile},
+    guard::GuardSpec,
     provider::Provider,
     proxy::{ProxyAuth, SystemProxySnapshot},
-    schedule::{AllowAll, BudgetPort},
+    schedule::{
+        AllowAll, BudgetPort, GenerationRequest, PersistedRequestIdentity, RunOutcome, RunPolicy,
+    },
 };
 use std::{
+    future::Future,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 pub struct ResolvedProfile {
@@ -228,6 +236,206 @@ impl ProfileFactory {
         )
     }
 
+    /// Executes the persisted first initialization request exactly once and only makes the run
+    /// playable after strict output validation and an atomic snapshot commit.
+    ///
+    /// # Errors
+    /// Missing/stale candidates, provider construction, generation, output validation, or
+    /// persistence failures are returned without replaying the persisted request identity.
+    pub async fn dispatch_initialization_once(
+        self: &Arc<Self>,
+        session_id: &str,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<InitializationDispatchResult, Fault> {
+        let storage = self.storage.clone();
+        let candidate_session = session_id.to_owned();
+        let candidate = crate::blocking::run(move || {
+            storage.initialization_dispatch_candidate(&candidate_session)
+        })
+        .await?;
+        let candidate_for_setup = candidate.clone();
+        let factory = self.clone();
+        let runtime =
+            crate::blocking::run(move || factory.initialization_runtime(candidate_for_setup))
+                .await?;
+
+        let output = InitializationOutput::default();
+        let result = aoidos_llm::schedule::run_generation_once_with_output(
+            runtime.provider.as_ref(),
+            runtime.request,
+            cancel,
+            &runtime.policy,
+            runtime.budget.as_ref(),
+            &output,
+            PersistedRequestIdentity {
+                turn_id: runtime.candidate.session_id.clone(),
+                request_id: runtime.candidate.request_id.clone(),
+            },
+        )
+        .await;
+        let dispatch_claimed = runtime.budget.was_claimed();
+
+        let bytes = match result {
+            Ok(RunOutcome::Completed { .. }) if dispatch_claimed => output.take()?,
+            Ok(RunOutcome::Completed { .. }) => {
+                return Err(Fault::new("app.conflict", "开局请求未取得派发权"));
+            }
+            Ok(RunOutcome::Cancelled { requests, .. }) => {
+                if !dispatch_claimed {
+                    return Err(Fault::new("app.initialization-failed", "开局生成已取消"));
+                }
+                let state = if requests == 0 {
+                    crate::cycle_initialization::State::Failed
+                } else {
+                    crate::cycle_initialization::State::Unknown
+                };
+                self.finish_initialization_attempt(&runtime.candidate, state)
+                    .await?;
+                return Err(Fault::new("app.initialization-failed", "开局生成已取消"));
+            }
+            Err(error) => {
+                if !dispatch_claimed {
+                    return Err(Fault::new(
+                        "app.initialization-failed",
+                        "开局请求未派发或预算拒绝",
+                    ));
+                }
+                let state = match error {
+                    aoidos_llm::error::RunError::Budget { .. }
+                    | aoidos_llm::error::RunError::InvalidPolicy(_) => {
+                        crate::cycle_initialization::State::Failed
+                    }
+                    _ => crate::cycle_initialization::State::Unknown,
+                };
+                self.finish_initialization_attempt(&runtime.candidate, state)
+                    .await?;
+                return Err(Fault::new(
+                    "app.initialization-failed",
+                    "开局生成结果待确认",
+                ));
+            }
+        };
+
+        let validated = match crate::cycle_output::validate_and_normalize(
+            &bytes,
+            &runtime.candidate.session_id,
+            &runtime.candidate.request_id,
+            &runtime.candidate.input.locale,
+            &runtime.candidate.input.cycle_input_snapshot,
+            &runtime.candidate.input.entity_snapshot,
+        ) {
+            Ok(validated) => validated,
+            Err(error) => {
+                self.finish_initialization_attempt(
+                    &runtime.candidate,
+                    crate::cycle_initialization::State::Failed,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
+
+        let storage = self.storage.clone();
+        let candidate = runtime.candidate;
+        let updated_at = initialization_timestamp();
+        let snapshot = crate::blocking::run(move || {
+            storage.with_database(|connection| {
+                crate::cycle_initialization::finalize(
+                    connection,
+                    &candidate.session_id,
+                    candidate.revision,
+                    &candidate.request_id,
+                    &validated,
+                    &updated_at,
+                )?;
+                crate::cycle_initialization::load(connection, &candidate.session_id)
+            })
+        })
+        .await?;
+        Ok(InitializationDispatchResult {
+            session_id: snapshot.session_id,
+            revision: snapshot.revision,
+            state: snapshot.state,
+        })
+    }
+
+    fn initialization_runtime(
+        &self,
+        candidate: crate::run_catalog::InitializationDispatchCandidate,
+    ) -> Result<InitializationRuntime, Fault> {
+        candidate.profile.validate().map_err(invalid_profile)?;
+        let resolved = self.source.freeze_snapshot(&candidate.profile)?;
+        if resolved.frozen.profile != candidate.profile {
+            return Err(Fault::new("app.conflict", "周目冻结的模型配置无法恢复"));
+        }
+        let provider = (self.builder)(
+            resolved.frozen,
+            &self.snapshot,
+            resolved.proxy_auth.as_ref(),
+        )?;
+        let capabilities = provider.capabilities(
+            &candidate.provider_request.model,
+            candidate.provider_request.mode(),
+        );
+        let budget: Arc<dyn BudgetPort> = Arc::new(
+            crate::billing::LedgerBudgetPort::new(
+                self.storage.clone(),
+                candidate.session_id.clone(),
+                candidate.profile.profile_id.clone(),
+                candidate.profile.provider_id.clone(),
+                candidate.profile.model.clone(),
+                billing_route_policy(&candidate.profile.provider_id).to_owned(),
+                u64::from(capabilities.context_limit.unwrap_or(0)),
+            )
+            .for_initialization(
+                candidate.session_id.clone(),
+                candidate.revision,
+                candidate.request_id.clone(),
+            ),
+        );
+        let budget = Arc::new(InitializationDispatchBudget::new(budget));
+        let policy = RunPolicy::default_for(
+            candidate.provider_request.sampling.temperature,
+            &capabilities,
+        );
+        Ok(InitializationRuntime {
+            request: GenerationRequest {
+                provider_request: candidate.provider_request.clone(),
+                guard: GuardSpec::default(),
+            },
+            provider,
+            policy,
+            budget,
+            candidate,
+        })
+    }
+
+    async fn finish_initialization_attempt(
+        &self,
+        candidate: &crate::run_catalog::InitializationDispatchCandidate,
+        state: crate::cycle_initialization::State,
+    ) -> Result<(), Fault> {
+        let storage = self.storage.clone();
+        let session_id = candidate.session_id.clone();
+        let request_id = candidate.request_id.clone();
+        let revision = candidate.revision;
+        let updated_at = initialization_timestamp();
+        crate::blocking::run(move || {
+            storage.with_database(|connection| {
+                crate::cycle_initialization::finish_dispatched_attempt(
+                    connection,
+                    &session_id,
+                    revision,
+                    &request_id,
+                    state,
+                    &updated_at,
+                )?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     /// 返回可持久化的公开配置快照，不向目录写入任何凭据值。
     /// # Errors
     /// 配置缺失或结构无效时返回稳定 Fault。
@@ -317,6 +525,116 @@ impl RoundFactory for ProfileFactory {
         self.for_snapshot(&target.profile, session_id, Some(session_id), legacy_scope)
     }
 }
+
+struct InitializationRuntime {
+    candidate: crate::run_catalog::InitializationDispatchCandidate,
+    provider: Arc<dyn Provider>,
+    request: GenerationRequest,
+    policy: RunPolicy,
+    budget: Arc<InitializationDispatchBudget>,
+}
+
+struct InitializationDispatchBudget {
+    inner: Arc<dyn BudgetPort>,
+    claimed: AtomicBool,
+}
+
+impl InitializationDispatchBudget {
+    fn new(inner: Arc<dyn BudgetPort>) -> Self {
+        Self {
+            inner,
+            claimed: AtomicBool::new(false),
+        }
+    }
+
+    fn was_claimed(&self) -> bool {
+        self.claimed.load(Ordering::Acquire)
+    }
+}
+
+impl BudgetPort for InitializationDispatchBudget {
+    fn reserve(
+        &self,
+        attempt: &aoidos_llm::schedule::AttemptIdentity,
+    ) -> Result<(), aoidos_llm::schedule::BudgetDenial> {
+        self.inner.reserve(attempt)?;
+        self.claimed.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn reserve_with_input_upper_bound(
+        &self,
+        attempt: &aoidos_llm::schedule::AttemptIdentity,
+        input_tokens: u64,
+    ) -> Result<(), aoidos_llm::schedule::BudgetDenial> {
+        self.inner
+            .reserve_with_input_upper_bound(attempt, input_tokens)?;
+        self.claimed.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn settle(
+        &self,
+        attempt: &aoidos_llm::schedule::AttemptIdentity,
+        outcome: &aoidos_llm::schedule::AttemptOutcome,
+    ) {
+        self.inner.settle(attempt, outcome);
+    }
+}
+
+#[derive(Default)]
+struct InitializationOutput {
+    bytes: Mutex<Vec<u8>>,
+    overflowed: Mutex<bool>,
+}
+
+impl InitializationOutput {
+    const MAX_BYTES: usize = 128 * 1024;
+
+    fn take(&self) -> Result<Vec<u8>, Fault> {
+        let overflowed = *self
+            .overflowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if overflowed {
+            return Err(Fault::new("app.bad-request", "开局输出超过长度限制"));
+        }
+        Ok(std::mem::take(
+            &mut *self
+                .bytes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ))
+    }
+}
+
+impl aoidos_llm::schedule::OutputPort for InitializationOutput {
+    fn send(&self, text: String) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+        Box::pin(async move {
+            let mut bytes = self
+                .bytes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let next_len = bytes.len().checked_add(text.len());
+            if next_len.is_none_or(|size| size > Self::MAX_BYTES) {
+                *self
+                    .overflowed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+                return false;
+            }
+            bytes.extend_from_slice(text.as_bytes());
+            true
+        })
+    }
+}
+
+fn initialization_timestamp() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+}
+
 /// 返回计费账本用于匹配当前供应商价格的路由身份。
 pub fn billing_route_policy(provider_id: &str) -> &str {
     if provider_id == "openrouter" {
@@ -358,6 +676,16 @@ pub struct OpenedSession {
     /// SQLite 已提交活动周目，但兼容文件未能写入时为 true；后续读取会重试修复。
     pub selection_mirror_pending: bool,
 }
+
+/// Public, content-free result of a successful one-shot initialization dispatch.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializationDispatchResult {
+    pub session_id: String,
+    pub revision: u64,
+    pub state: crate::cycle_initialization::State,
+}
+
 pub struct Product {
     root: PathBuf,
     storage: Arc<Storage>,
