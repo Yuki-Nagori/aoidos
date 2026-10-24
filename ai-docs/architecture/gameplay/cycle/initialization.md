@@ -29,7 +29,7 @@ validated script + frozen profile / budget identity
 
 dispatch 围栏由初始化专用预算端口实现：它在单个 SQLite `IMMEDIATE` 事务内 CAS 领取当前 attempt 的 `dispatch_started` 权，并写入同一 `requestId` 的物理费用预留；价格、额度或结算队列校验失败时两者一起回滚。重复或并发提交同一身份无法再次领取，即使物理账本对相同预留幂等，也不能重新访问 Provider。只有事务提交确认后才可调用 one-shot scheduler。进程在权已领取后退出时，恢复按可能已发送处理，不自动重放；费用预留继续承担原有对账义务。显式 retry 创建新 requestId 和未领取 attempt。
 
-恢复 IPC 只返回 `sessionId`、`revision`、当前 `requestId` 和初始化状态，不包含冻结输入或输出。显式重试要求调用方传入当前 revision、前一 requestId 与稳定的新 requestId；同一个重试请求可在 IPC 响应丢失时幂等重放。存储事务同时要求 run 仍处于 `recovery-required`、未创建 memory owner 且保留冻结 profile 与预算身份，避免删除或激活开始后继续创建初始化 attempt。状态与重试 API 已有 Tauri / TypeScript 契约，但 UI 尚未调用它们。
+恢复 IPC 只返回 `sessionId`、`revision`、当前 `requestId`、初始化状态和 `dispatchAvailable`，不包含冻结输入或输出。`dispatchAvailable` 只在当前 attempt 仍为 pending、尚未领取派发权、run 仍为 `recovery-required` 且没有 memory owner 时为 true；前端必须以此门禁显示单次派发按钮。显式重试要求调用方传入当前 revision、前一 requestId 与稳定的新 requestId；同一个重试请求可在 IPC 响应丢失时幂等重放。存储事务同时要求 run 仍处于 `recovery-required`、未创建 memory owner 且保留冻结 profile 与预算身份，避免删除或激活开始后继续创建初始化 attempt。周目管理 UI 先显式检查状态；failed / unknown 只显示创建新 attempt 的重试操作，重试不会自动派发。只有显式点击派发按钮才调用模型，并明确提示可能产生费用；已领取的初始化显示等待 / 刷新说明而不允许重复派发。playable 后刷新目录，仍由用户显式继续周目。
 
 records 文件和 SQLite 不是同一事务。先创建不可玩的 record/header，再持久登记 canonical run、profile / 输入快照、预算身份和初始化状态；崩溃留下的未激活 record 必须可识别并恢复或显式放弃，不能被 legacy scanner 当作可玩旧局。物理请求身份和冻结输入必须在调用 Provider 前持久化。响应整体校验后，以同一 SQLite 事务 CAS 当前 run revision / requestId，保存规范化快照与 hash 并标记 `playable`；失败不得部分写入，也不得先注册普通 owner。成功冻结与 owner 注册之间若发生崩溃，恢复从冻结快照建立 owner，不再调用 Provider。
 

@@ -105,7 +105,9 @@
 
 2026-10-24 初始化 dispatch IPC 切片：暴露 `run_dispatch_initialization` 和对应 TypeScript 结果类型；命令只能接收持久化 `sessionId`，由已有一次性 coordinator 领取同一 requestId 的 dispatch / 费用权，严格校验后才冻结为 playable。Tauri handler 测试拒绝缺失、错误类型和附加字段，并验证合法但不存在的 session 在构造 Provider 前以 not-found 结束；Vitest 验证调用体只传 sessionId。`bun run test:affected`（Engine 577 passed、3 ignored，Vitest 8 passed）、`bun run format:affected`、`bun run lint:affected` 和完整 `bun run verify` 均通过，Rust workspace 覆盖率 94.11%；独立复核无阻断。此 IPC 仍未接入新局 UI、预算确认 UI、重试 / unknown 恢复或激活周目流程。
 
-2026-10-24 初始化恢复 IPC 切片：增加仅含 session / revision / requestId / state 的状态投影，以及带 expected revision、前一 requestId 和稳定新 requestId 的显式重试 IPC / TypeScript 契约。存储事务会校验 run 仍为 `recovery-required`、没有 memory owner 且冻结 profile 仍存在；行为测试覆盖私有字段不泄漏、同一重试请求幂等、旧 revision 冲突及冻结输入不变。独立评审发现 retry 更新后的 requestId 与候选读取仍绑原 preparation ID，已改为读取 current initialization requestId，并补 retry 后 candidate 身份测试。`bun run test:affected`（Engine 578 passed、3 ignored，Vitest 10 passed）、`bun run format:affected`、`bun run lint:affected` 和完整 `bun run verify` 均通过；Rust workspace 覆盖率 94.11%，独立复核确认阻断已解决。此切片不调用 Provider，也不接 UI。
+2026-10-24 初始化恢复 IPC 切片：增加仅含 session / revision / requestId / state 的状态投影，以及带 expected revision、前一 requestId 和稳定新 requestId 的显式重试 IPC / TypeScript 契约。存储事务会校验 run 仍为 `recovery-required`、没有 memory owner 且冻结 profile 仍存在；行为测试覆盖私有字段不泄漏、同一重试请求幂等、旧 revision 冲突及冻结输入不变。独立评审发现 retry 更新后的 requestId 与候选读取仍绑原 preparation ID，已改为读取 current initialization requestId，并补 retry 后 candidate 身份测试。`bun run test:affected`（Engine 578 passed、3 ignored，Vitest 10 passed）、`bun run format:affected`、`bun run lint:affected` 和完整 `bun run verify` 均通过；Rust workspace 覆盖率 94.11%，独立复核确认阻断已解决。该切片不调用 Provider，也不接 UI。
+
+2026-10-24 初始化恢复 UI 切片：周目管理对 `recovery-required` 记录提供显式状态检查；状态投影增加 `dispatchAvailable`，只在当前 pending attempt 未领取派发权且目录 / owner 门禁仍成立时开放单次派发。failed / unknown 可显式创建新 requestId 重试，重试后不会自动派发；已领取状态提示刷新且禁用旧“继续”入口。派发按钮明确提示会调用模型并可能产生费用；playable 后仅刷新目录，继续周目仍由用户操作。行为测试覆盖检查不触发请求、retry 不派发、unknown 不提供旧 continue、显式 dispatch 才调用一次并在完成后刷新目录。待完成本切片的完整测试 / 格式 / lint / 独立复核与 PR CI。
 
 ## 风险与回退
 

@@ -121,6 +121,7 @@ it("reads only the content-free persisted initialization status", async () => {
     revision: 2,
     requestId: "00000000-0000-4000-8000-000000000005",
     state: "unknown" as const,
+    dispatchAvailable: false,
   };
   vi.mocked(invoke).mockResolvedValue(response);
 
