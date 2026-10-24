@@ -31,6 +31,21 @@ struct DispatchInitializationArgs {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InitializationStatusArgs {
+    session_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RetryInitializationArgs {
+    session_id: String,
+    expected_revision: u64,
+    previous_request_id: String,
+    request_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeleteRunArgs {
     operation_id: String,
     session_id: String,
@@ -108,6 +123,39 @@ pub async fn dispatch_initialization(
         crate::ipc::decode_request(&request, "新周目派发参数不合法")?;
     product
         .dispatch_initialization_once(&args.session_id)
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 读取不含冻结输入或输出的开局恢复状态摘要。
+/// # Errors
+/// 未登记的初始化记录或损坏状态返回稳定错误。
+pub fn initialization_status(
+    product: &Product,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::game::product::InitializationStatus, CmdError> {
+    let args: InitializationStatusArgs =
+        crate::ipc::decode_request(&request, "开局状态查询参数不合法")?;
+    product
+        .initialization_status(&args.session_id)
+        .map_err(CmdError::from)
+}
+
+/// 显式重试失败或结果不确定的开局；requestId 由客户端稳定生成以支持安全重放。
+/// # Errors
+/// revision / request 身份过期、周目不可恢复或存储失败时返回稳定错误。
+pub async fn retry_initialization(
+    product: &Product,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::game::product::InitializationStatus, CmdError> {
+    let args: RetryInitializationArgs = crate::ipc::decode_request(&request, "开局重试参数不合法")?;
+    product
+        .retry_initialization(
+            &args.session_id,
+            args.expected_revision,
+            &args.previous_request_id,
+            &args.request_id,
+        )
         .await
         .map_err(CmdError::from)
 }

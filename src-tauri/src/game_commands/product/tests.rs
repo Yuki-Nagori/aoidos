@@ -115,6 +115,8 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
             crate::game_ipc::engine_open_session,
             crate::run_ipc::run_prepare_initialization,
             crate::run_ipc::run_dispatch_initialization,
+            crate::run_ipc::run_get_initialization_status,
+            crate::run_ipc::run_retry_initialization,
             crate::run_ipc::run_open_selected
         ])
         .build(mock_context(noop_assets()))
@@ -196,6 +198,45 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
         .unwrap_err()["code"],
         "app.not-found"
     );
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"sessionId":1}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000099","extra":true}),
+    ] {
+        assert_eq!(
+            call(
+                "run_get_initialization_status",
+                tauri::ipc::InvokeBody::Json(body)
+            )
+            .unwrap_err()["code"],
+            "app.bad-request"
+        );
+    }
+    assert_eq!(
+        call(
+            "run_get_initialization_status",
+            tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "sessionId":"00000000-0000-4000-8000-000000000099"
+            }))
+        )
+        .unwrap_err()["code"],
+        "app.not-found"
+    );
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000099"}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000099","expectedRevision":"1","previousRequestId":"00000000-0000-4000-8000-000000000001","requestId":"00000000-0000-4000-8000-000000000002"}),
+        serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000099","expectedRevision":1,"previousRequestId":"00000000-0000-4000-8000-000000000001","requestId":"00000000-0000-4000-8000-000000000002","extra":true}),
+    ] {
+        assert_eq!(
+            call(
+                "run_retry_initialization",
+                tauri::ipc::InvokeBody::Json(body)
+            )
+            .unwrap_err()["code"],
+            "app.bad-request"
+        );
+    }
     for body in [
         serde_json::json!({}),
         serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001"}),

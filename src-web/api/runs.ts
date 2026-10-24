@@ -59,6 +59,16 @@ export interface InitializationDispatchResult {
   state: "initializing" | "failed" | "unknown" | "playable" | "abandoned";
 }
 
+type InitializationState = "initializing" | "failed" | "unknown" | "playable" | "abandoned";
+
+/** Content-free progress and retry identity for a prepared initialization. */
+export interface InitializationStatus {
+  sessionId: string;
+  revision: number;
+  requestId: string;
+  state: InitializationState;
+}
+
 /** Persist a user-confirmed new-run preparation without dispatching or activating it. */
 export function prepareInitialization(
   profileId: string,
@@ -79,6 +89,26 @@ export function prepareInitialization(
 /** Dispatch a persisted initialization attempt once; an already claimed request cannot replay. */
 export function dispatchInitialization(sessionId: string): Promise<InitializationDispatchResult> {
   return invoke("run_dispatch_initialization", { sessionId });
+}
+
+/** Read the persisted initialization state without exposing frozen input or output snapshots. */
+export function getInitializationStatus(sessionId: string): Promise<InitializationStatus> {
+  return invoke("run_get_initialization_status", { sessionId });
+}
+
+/** Retry a failed/uncertain attempt with an idempotent caller-generated request ID. */
+export function retryInitialization(
+  sessionId: string,
+  expectedRevision: number,
+  previousRequestId: string,
+  requestId: string,
+): Promise<InitializationStatus> {
+  return invoke("run_retry_initialization", {
+    sessionId,
+    expectedRevision,
+    previousRequestId,
+    requestId,
+  });
 }
 
 export interface DeletionOperation {
