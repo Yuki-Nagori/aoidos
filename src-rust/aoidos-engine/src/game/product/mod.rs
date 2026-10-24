@@ -660,7 +660,7 @@ struct Selection {
     profile_id: String,
     script_id: String,
 }
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenedSession {
     pub session_id: String,

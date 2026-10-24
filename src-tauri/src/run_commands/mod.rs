@@ -15,6 +15,16 @@ struct OpenSelectedArgs {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrepareInitializationArgs {
+    profile_id: String,
+    script_id: String,
+    locale: String,
+    cny_limit: NanoMoney,
+    usd_limit: NanoMoney,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeleteRunArgs {
     operation_id: String,
     session_id: String,
@@ -58,6 +68,27 @@ struct ReconcileBillingArgs {
 
 fn default_page_size() -> usize {
     aoidos_engine::run_catalog::DEFAULT_PAGE_SIZE
+}
+
+/// 保存已确认预算的新局准备记录；不 dispatch 模型请求，也不改变当前活动周目。
+/// # Errors
+/// 参数、profile 能力、剧本资源或存储失败时返回稳定错误。
+pub async fn prepare_initialization(
+    product: &Product,
+    request: tauri::ipc::Request<'_>,
+) -> Result<aoidos_engine::game::product::InitializationPreparationResult, CmdError> {
+    let args: PrepareInitializationArgs =
+        crate::ipc::decode_request(&request, "新周目初始化参数不合法")?;
+    product
+        .prepare_initialization(
+            &args.profile_id,
+            &args.script_id,
+            &args.locale,
+            args.cny_limit,
+            args.usd_limit,
+        )
+        .await
+        .map_err(CmdError::from)
 }
 
 /// 显式恢复所选周目，并返回其冻结的公开 profile；不会自动发送行动。
@@ -175,6 +206,41 @@ mod tests {
                 "sessionId": "00000000-0000-4000-8000-000000000001",
                 "expectedRevision": 4,
                 "selectedLimits": { "cnyLimit": 12.5, "usdLimit": "3" }
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn initialization_preparation_request_requires_decimal_budget_strings_and_exact_fields() {
+        let args: PrepareInitializationArgs = serde_json::from_value(serde_json::json!({
+            "profileId": "default",
+            "scriptId": "mistbell",
+            "locale": "zh-Hans",
+            "cnyLimit": "12.5",
+            "usdLimit": "3"
+        }))
+        .unwrap();
+        assert_eq!(args.cny_limit.to_decimal_string(), "12.5");
+        assert_eq!(args.usd_limit.to_decimal_string(), "3");
+        assert!(
+            serde_json::from_value::<PrepareInitializationArgs>(serde_json::json!({
+                "profileId": "default",
+                "scriptId": "mistbell",
+                "locale": "zh-Hans",
+                "cnyLimit": 12.5,
+                "usdLimit": "3"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<PrepareInitializationArgs>(serde_json::json!({
+                "profileId": "default",
+                "scriptId": "mistbell",
+                "locale": "zh-Hans",
+                "cnyLimit": "12.5",
+                "usdLimit": "3",
+                "startImmediately": true
             }))
             .is_err()
         );

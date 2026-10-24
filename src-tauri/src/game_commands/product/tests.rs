@@ -113,6 +113,7 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
         .invoke_handler(tauri::generate_handler![
             crate::game_ipc::engine_list_scripts,
             crate::game_ipc::engine_open_session,
+            crate::run_ipc::run_prepare_initialization,
             crate::run_ipc::run_open_selected
         ])
         .build(mock_context(noop_assets()))
@@ -158,6 +159,20 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
     }
     for body in [
         serde_json::json!({}),
+        serde_json::json!({"profileId":"p","scriptId":"mistbell","locale":"zh-Hans","cnyLimit":12.5,"usdLimit":"3"}),
+        serde_json::json!({"profileId":"p","scriptId":"mistbell","locale":"zh-Hans","cnyLimit":"12.5","usdLimit":"3","startImmediately":true}),
+    ] {
+        assert_eq!(
+            call(
+                "run_prepare_initialization",
+                tauri::ipc::InvokeBody::Json(body)
+            )
+            .unwrap_err()["code"],
+            "app.bad-request"
+        );
+    }
+    for body in [
+        serde_json::json!({}),
         serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001"}),
         serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001","expectedRevision":"1"}),
         serde_json::json!({"sessionId":"00000000-0000-4000-8000-000000000001","expectedRevision":1,"scriptId":"mistbell"}),
@@ -171,6 +186,23 @@ async fn session_commands_accept_only_complete_selection_and_preserve_saved_iden
         call("engine_open_session", tauri::ipc::InvokeBody::Raw(vec![1])).unwrap_err()["code"],
         "app.bad-request"
     );
+    let prepared = call(
+        "run_prepare_initialization",
+        tauri::ipc::InvokeBody::Json(serde_json::json!({
+            "profileId":"p",
+            "scriptId":"mistbell",
+            "locale":"zh-Hans",
+            "cnyLimit":"12.5",
+            "usdLimit":"3"
+        })),
+    )
+    .unwrap()
+    .deserialize::<serde_json::Value>()
+    .unwrap();
+    let prepared_session_id = prepared["sessionId"].as_str().unwrap();
+    uuid::Uuid::parse_str(prepared_session_id).unwrap();
+    uuid::Uuid::parse_str(prepared["requestId"].as_str().unwrap()).unwrap();
+    assert!(!root.join("active-session.json").exists());
     assert_eq!(
         call(
             "engine_open_session",
