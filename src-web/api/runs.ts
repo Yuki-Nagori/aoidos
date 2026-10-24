@@ -47,6 +47,29 @@ export interface OpenedRun {
   profile: LlmProfile;
 }
 
+/** Frozen identity returned after preparing a confirmed-budget initialization; the run is not playable yet. */
+export interface InitializationPreparationResult {
+  sessionId: string;
+  requestId: string;
+}
+
+/** Persist a user-confirmed new-run preparation without dispatching or activating it. */
+export function prepareInitialization(
+  profileId: string,
+  scriptId: string,
+  locale: "zh-Hans" | "en",
+  cnyLimit: string,
+  usdLimit: string,
+): Promise<InitializationPreparationResult> {
+  return invoke("run_prepare_initialization", {
+    profileId,
+    scriptId,
+    locale,
+    cnyLimit,
+    usdLimit,
+  });
+}
+
 export interface DeletionOperation {
   operationId: string;
   sessionId: string;

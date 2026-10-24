@@ -6,6 +6,7 @@ import {
   deleteRun,
   listRuns,
   openSelectedRun,
+  prepareInitialization,
   reconcileRunBilling,
   scanLegacyRuns,
 } from "../../../src-web/api/runs";
@@ -77,6 +78,23 @@ it("opens only the explicitly selected run revision", async () => {
   expect(invoke).toHaveBeenCalledWith("run_open_selected", {
     sessionId: response.session.sessionId,
     expectedRevision: 7,
+  });
+});
+
+it("prepares a confirmed-budget initialization using exact decimal strings", async () => {
+  const response = {
+    sessionId: "00000000-0000-4000-8000-000000000004",
+    requestId: "00000000-0000-4000-8000-000000000005",
+  };
+  vi.mocked(invoke).mockResolvedValue(response);
+
+  expect(await prepareInitialization("profile", "mistbell", "zh-Hans", "12.5", "3")).toBe(response);
+  expect(invoke).toHaveBeenCalledWith("run_prepare_initialization", {
+    profileId: "profile",
+    scriptId: "mistbell",
+    locale: "zh-Hans",
+    cnyLimit: "12.5",
+    usdLimit: "3",
   });
 });
 

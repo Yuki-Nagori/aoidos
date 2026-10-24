@@ -101,6 +101,8 @@
 
 2026-10-24 Product 初始化准备切片：新增 `Product::prepare_initialization`，由调用方传入已确认的 CNY / USD 上限与 locale；读取公开 profile、冻结注册剧本的 script / entity / cycle-input 资源，生成 canonical provider request，并经 inactive creation journal 原子保存 budget 与 pending attempt。持久化前通过无凭据、无网络的静态 provider 能力目录校验模型、调用形态、temperature 与输出上限；不支持的 profile 在建 run 前拒绝。该步骤不关闭当前周目、不创建 owner、不改活动选择、不预留费用、不 dispatch。行为测试验证已有 active owner 保持不变，新目录项处于 `recovery-required` 且无 memory run，并可读回同一冻结 dispatch candidate；不支持模型拒绝测试确认没有读取凭据或新增 catalog 项。此 API 仍未通过 Tauri / Web 新局流程调用；成功 dispatch 后激活与失败 / unknown 的显式重试 UI 仍待实现。
 
+2026-10-24 初始化准备 IPC 切片：增加严格解码的 `run_prepare_initialization` 命令与 TypeScript API 契约，预算使用十进制字符串；只返回持久的 `sessionId` / `requestId`，不 dispatch、不激活，不更改当前 run。Tauri handler 集成测试覆盖合法准备请求、错误预算类型与未知字段拒绝，并确认准备不会创建活动周目；Vitest 覆盖前端参数映射。产品新局流程尚未调用此 API，待接入确认预算 UI 与可恢复的后续 dispatch / finalize 流程。`bun run test:affected`、`bun run format:affected`、`bun run lint:affected` 和完整 `bun run verify` 均通过；Rust workspace 覆盖率为 94.08%。
+
 ## 风险与回退
 
 开局生成的规则、最终目标、任务初始态和生成 NPC 都是本周目的不可变初始化输入；剧本、模型、提示词或 schema 更新不能漂移既有周目。模型可能产出结构合法但语义不合理的目标 / 标签，因此要把可验证规则限制为白名单状态比较，并在发布前用剧本样例验收可达性和叙事一致性。任务提议属于可回退的引导投影，不升级为正史；如果模型把任务标记错误，修复只能提交新的有效分支任务状态，不得改写旧提交记录。生成或存储失败时保留不可玩初始化状态与费用义务，提供明确恢复 / 放弃路径；不能通过旧流程静默绕过最终目标。
