@@ -803,8 +803,9 @@ async fn initialization_status_is_private_and_retry_is_revision_scoped_and_idemp
         initial.state,
         crate::cycle_initialization::State::Initializing
     );
+    assert!(initial.dispatch_available);
     let serialized = serde_json::to_value(&initial).unwrap();
-    assert_eq!(serialized.as_object().unwrap().len(), 4);
+    assert_eq!(serialized.as_object().unwrap().len(), 5);
     assert!(serialized.get("inputSnapshot").is_none());
     assert!(serialized.get("outputSnapshot").is_none());
 
@@ -828,6 +829,13 @@ async fn initialization_status_is_private_and_retry_is_revision_scoped_and_idemp
             Ok(())
         })
         .unwrap();
+    assert!(
+        !fixture
+            .product
+            .initialization_status(&prepared.session_id)
+            .unwrap()
+            .dispatch_available
+    );
     let retry_id = uuid::Uuid::new_v4().to_string();
     let retried = fixture
         .product
@@ -840,6 +848,7 @@ async fn initialization_status_is_private_and_retry_is_revision_scoped_and_idemp
     );
     assert_eq!(retried.revision, 3);
     assert_eq!(retried.request_id, retry_id);
+    assert!(retried.dispatch_available);
     let candidate = fixture
         .storage
         .initialization_dispatch_candidate(&prepared.session_id)

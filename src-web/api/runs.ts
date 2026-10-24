@@ -67,6 +67,8 @@ export interface InitializationStatus {
   revision: number;
   requestId: string;
   state: InitializationState;
+  /** True only while the persisted attempt is still eligible for its one dispatch claim. */
+  dispatchAvailable: boolean;
 }
 
 /** Persist a user-confirmed new-run preparation without dispatching or activating it. */

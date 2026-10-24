@@ -689,6 +689,7 @@ pub struct InitializationStatus {
     pub revision: u64,
     pub request_id: String,
     pub state: crate::cycle_initialization::State,
+    pub dispatch_available: bool,
 }
 
 /// Durable identity returned after preparing, but not dispatching, a new initialization.
@@ -839,15 +840,8 @@ impl Product {
     /// # Errors
     /// Missing or corrupt initialization records are returned as stable faults.
     pub fn initialization_status(&self, session_id: &str) -> Result<InitializationStatus, Fault> {
-        self.storage.with_database(|connection| {
-            let snapshot = crate::cycle_initialization::load(connection, session_id)?;
-            Ok(InitializationStatus {
-                session_id: snapshot.session_id,
-                revision: snapshot.revision,
-                request_id: snapshot.request_id,
-                state: snapshot.state,
-            })
-        })
+        self.storage
+            .with_database(|connection| project_initialization_status(connection, session_id))
     }
 
     /// Retry a failed or uncertain initialization with the same frozen input and budget.
@@ -876,13 +870,7 @@ impl Product {
                     &request_id,
                     &updated_at,
                 )?;
-                let snapshot = crate::cycle_initialization::load(connection, &session_id)?;
-                Ok(InitializationStatus {
-                    session_id: snapshot.session_id,
-                    revision: snapshot.revision,
-                    request_id: snapshot.request_id,
-                    state: snapshot.state,
-                })
+                project_initialization_status(connection, &session_id)
             })
         })
         .await
@@ -1420,6 +1408,31 @@ impl Product {
         let id = id.to_owned();
         let _ = crate::blocking::run(move || records.close(&id)).await;
     }
+}
+
+fn project_initialization_status(
+    connection: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<InitializationStatus, Fault> {
+    let snapshot = crate::cycle_initialization::load(connection, session_id)?;
+    let dispatch_available = if snapshot.state == crate::cycle_initialization::State::Initializing {
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts a JOIN session_catalog c USING(session_id) WHERE a.session_id=?1 AND a.request_id=?2 AND a.state='pending' AND a.dispatch_started=0 AND c.state='recovery-required' AND c.billing_run_id=c.session_id AND c.memory_run_id IS NULL)",
+                rusqlite::params![session_id, snapshot.request_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| Fault::new("store.database", "读取周目初始化状态失败"))?
+    } else {
+        false
+    };
+    Ok(InitializationStatus {
+        session_id: snapshot.session_id,
+        revision: snapshot.revision,
+        request_id: snapshot.request_id,
+        state: snapshot.state,
+        dispatch_available,
+    })
 }
 fn open_busy(_: tokio::sync::TryLockError) -> Fault {
     Fault::new("app.busy", "会话正在打开")

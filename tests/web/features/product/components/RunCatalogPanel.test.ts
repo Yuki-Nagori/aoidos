@@ -7,10 +7,13 @@ import { i18n } from "../../../../../src-web/i18n/index";
 
 const api = vi.hoisted(() => ({
   bindRunProfile: vi.fn(),
+  dispatchInitialization: vi.fn(),
   deleteRun: vi.fn(),
+  getInitializationStatus: vi.fn(),
   listRuns: vi.fn(),
   openSelectedRun: vi.fn(),
   reconcileRunBilling: vi.fn(),
+  retryInitialization: vi.fn(),
   scanLegacyRuns: vi.fn(),
 }));
 vi.mock("../../../../../src-web/api/runs", () => api);
@@ -363,6 +366,167 @@ it("asks for explicit final limits only when legacy billing budgets conflict", a
     cnyLimit: "12.5",
     usdLimit: "3",
   });
+  wrapper.unmount();
+  document.body.innerHTML = "";
+});
+
+it("requires an explicit status check and confirmation before dispatching initialization", async () => {
+  const recoveryRun = { ...run, state: "recovery-required" as const };
+  const prepared = {
+    sessionId: recoveryRun.sessionId,
+    revision: 1,
+    requestId: "request-1",
+    state: "initializing" as const,
+    dispatchAvailable: true,
+  };
+  const playable = {
+    ...prepared,
+    revision: 2,
+    state: "playable" as const,
+    dispatchAvailable: false,
+  };
+  api.listRuns.mockResolvedValue(page([recoveryRun]));
+  api.getInitializationStatus.mockResolvedValueOnce(prepared).mockResolvedValueOnce(playable);
+  api.dispatchInitialization.mockResolvedValue({ ...playable, revision: 2 });
+
+  const wrapper = mount(RunCatalogPanel, {
+    props: { open: false, scripts: [script], profiles: [], locale: "en" },
+    global: { plugins: [i18n] },
+    attachTo: document.body,
+  });
+  await wrapper.setProps({ open: true });
+  await vi.waitFor(() => expect(api.listRuns).toHaveBeenCalledTimes(1));
+
+  expect(api.dispatchInitialization).not.toHaveBeenCalled();
+  await buttonNamed("Check initialization").click();
+  await vi.waitFor(() => expect(api.getInitializationStatus).toHaveBeenCalledWith("session-1"));
+  expect(api.dispatchInitialization).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("This sends a model request and may incur a charge.");
+
+  await buttonNamed("Send initialization request").click();
+  await vi.waitFor(() => expect(api.dispatchInitialization).toHaveBeenCalledWith("session-1"));
+  expect(api.getInitializationStatus).toHaveBeenCalledTimes(2);
+  expect(api.listRuns).toHaveBeenCalledTimes(2);
+  wrapper.unmount();
+  document.body.innerHTML = "";
+});
+
+it("retries an uncertain attempt without dispatching it or offering the old Continue action", async () => {
+  const randomUUID = vi.fn().mockReturnValueOnce("request-2").mockReturnValueOnce("request-3");
+  vi.stubGlobal("crypto", { randomUUID });
+  const recoveryRun = { ...run, state: "recovery-required" as const };
+  const uncertain = {
+    sessionId: recoveryRun.sessionId,
+    revision: 2,
+    requestId: "request-1",
+    state: "unknown" as const,
+    dispatchAvailable: false,
+  };
+  const retried = {
+    ...uncertain,
+    revision: 3,
+    requestId: "request-2",
+    state: "initializing" as const,
+    dispatchAvailable: true,
+  };
+  api.listRuns.mockResolvedValue(page([recoveryRun]));
+  api.getInitializationStatus.mockResolvedValueOnce(uncertain).mockRejectedValueOnce({
+    code: "app.ipc",
+    message: "The retry response was lost.",
+  });
+  api.retryInitialization
+    .mockRejectedValueOnce({
+      code: "app.ipc",
+      message: "The retry response was lost.",
+    })
+    .mockResolvedValueOnce(retried);
+
+  const wrapper = mount(RunCatalogPanel, {
+    props: { open: false, scripts: [script], profiles: [], locale: "en" },
+    global: { plugins: [i18n] },
+    attachTo: document.body,
+  });
+  await wrapper.setProps({ open: true });
+  await vi.waitFor(() => expect(api.listRuns).toHaveBeenCalledTimes(1));
+  await buttonNamed("Check initialization").click();
+  await vi.waitFor(() => expect(buttonNamed("Retry initialization")).toBeTruthy());
+  expect(document.body.textContent).toContain("does not send a model request yet");
+  expect(
+    [...document.body.querySelectorAll("button")].some(
+      (button) => button.textContent?.trim() === "Continue",
+    ),
+  ).toBe(false);
+
+  await buttonNamed("Retry initialization").click();
+  await vi.waitFor(() => expect(api.retryInitialization).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(buttonNamed("Retry initialization").disabled).toBe(false));
+  await buttonNamed("Retry initialization").click();
+  await vi.waitFor(() => expect(api.retryInitialization).toHaveBeenCalledTimes(2));
+  expect(api.retryInitialization).toHaveBeenNthCalledWith(
+    1,
+    "session-1",
+    2,
+    "request-1",
+    "request-2",
+  );
+  expect(api.retryInitialization).toHaveBeenNthCalledWith(
+    2,
+    "session-1",
+    2,
+    "request-1",
+    "request-2",
+  );
+  expect(randomUUID).toHaveBeenCalledTimes(1);
+  expect(api.dispatchInitialization).not.toHaveBeenCalled();
+  expect(
+    [...document.body.querySelectorAll("button")].some(
+      (button) => button.textContent?.trim() === "Send initialization request",
+    ),
+  ).toBe(true);
+  wrapper.unmount();
+  document.body.innerHTML = "";
+});
+
+it("can refresh a claimed initialization after it moves into an uncertain state", async () => {
+  const recoveryRun = { ...run, state: "recovery-required" as const };
+  api.listRuns.mockResolvedValue(page([recoveryRun]));
+  api.getInitializationStatus
+    .mockResolvedValueOnce({
+      sessionId: "session-1",
+      revision: 2,
+      requestId: "request-1",
+      state: "initializing",
+      dispatchAvailable: false,
+    })
+    .mockResolvedValueOnce({
+      sessionId: "session-1",
+      revision: 3,
+      requestId: "request-1",
+      state: "unknown",
+      dispatchAvailable: false,
+    });
+
+  const wrapper = mount(RunCatalogPanel, {
+    props: { open: false, scripts: [script], profiles: [], locale: "en" },
+    global: { plugins: [i18n] },
+    attachTo: document.body,
+  });
+  await wrapper.setProps({ open: true });
+  await vi.waitFor(() => expect(api.listRuns).toHaveBeenCalledTimes(1));
+
+  await buttonNamed("Check initialization").click();
+  await vi.waitFor(() => expect(document.body.textContent).toContain("do not send it again"));
+  expect(buttonNamed("Refresh initialization status")).toBeTruthy();
+  expect(
+    [...document.body.querySelectorAll("button")].some(
+      (button) => button.textContent?.trim() === "Retry initialization",
+    ),
+  ).toBe(false);
+
+  await buttonNamed("Refresh initialization status").click();
+  await vi.waitFor(() => expect(api.getInitializationStatus).toHaveBeenCalledTimes(2));
+  expect(document.body.textContent).toContain("Retry initialization");
+  expect(api.dispatchInitialization).not.toHaveBeenCalled();
   wrapper.unmount();
   document.body.innerHTML = "";
 });

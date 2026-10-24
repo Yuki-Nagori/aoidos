@@ -3,13 +3,16 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   bindRunProfile,
+  dispatchInitialization,
   deleteRun,
+  getInitializationStatus,
   listRuns,
   openSelectedRun,
   reconcileRunBilling,
+  retryInitialization,
   scanLegacyRuns,
 } from "../../../api/runs";
-import type { DeletionOperation, OpenedRun, RunCursor, RunSummary } from "../../../api/runs";
+import type { DeletionOperation, InitializationStatus, OpenedRun, RunCursor, RunSummary } from "../../../api/runs";
 import type { ScriptInfo } from "../../../api/engine";
 import type { LlmProfile } from "../../../api/llm";
 import { safeError } from "../../../shared/utils/error";
@@ -44,6 +47,8 @@ const selectedProfileId = ref("");
 const loading = ref(false);
 const busyRunId = ref<string>();
 const error = ref<string>();
+const initializationStatuses = ref(new Map<string, InitializationStatus | null>());
+const retryRequestIds = ref(new Map<string, string>());
 const deleteTarget = ref<RunSummary>();
 const deleteAcknowledged = ref(false);
 const bindTarget = ref<RunSummary>();
@@ -211,6 +216,75 @@ async function restore(run: RunSummary): Promise<void> {
     emit("close");
   } catch (failure) {
     error.value = errorMessage(failure);
+  } finally {
+    busyRunId.value = undefined;
+  }
+}
+
+async function inspectInitialization(run: RunSummary): Promise<void> {
+  busyRunId.value = run.sessionId;
+  error.value = undefined;
+  try {
+    const status = await getInitializationStatus(run.sessionId);
+    initializationStatuses.value.set(run.sessionId, status);
+    if (retryRequestIds.value.get(run.sessionId) === status.requestId) {
+      retryRequestIds.value.delete(run.sessionId);
+    }
+  } catch (failure) {
+    const safe = safeError(failure, t("common.unknownError"));
+    if (safe.code === "app.not-found") initializationStatuses.value.set(run.sessionId, null);
+    else error.value = safe.message;
+  } finally {
+    busyRunId.value = undefined;
+  }
+}
+
+async function retryInitializationAttempt(run: RunSummary): Promise<void> {
+  const status = initializationStatuses.value.get(run.sessionId);
+  if (!status || !["failed", "unknown"].includes(status.state)) return;
+  busyRunId.value = run.sessionId;
+  error.value = undefined;
+  const requestId = retryRequestIds.value.get(run.sessionId) ?? crypto.randomUUID();
+  retryRequestIds.value.set(run.sessionId, requestId);
+  try {
+    const updated = await retryInitialization(
+      run.sessionId,
+      status.revision,
+      status.requestId,
+      requestId,
+    );
+    initializationStatuses.value.set(run.sessionId, updated);
+    if (updated.requestId === requestId) retryRequestIds.value.delete(run.sessionId);
+  } catch (failure) {
+    error.value = errorMessage(failure);
+    try {
+      const current = await getInitializationStatus(run.sessionId);
+      initializationStatuses.value.set(run.sessionId, current);
+      if (current.requestId === requestId) retryRequestIds.value.delete(run.sessionId);
+    } catch {
+      // Keep both the previous status and request ID so an uncertain IPC can be replayed safely.
+    }
+  } finally {
+    busyRunId.value = undefined;
+  }
+}
+
+async function dispatchInitializationAttempt(run: RunSummary): Promise<void> {
+  const status = initializationStatuses.value.get(run.sessionId);
+  if (status?.state !== "initializing" || !status.dispatchAvailable) return;
+  busyRunId.value = run.sessionId;
+  error.value = undefined;
+  try {
+    const result = await dispatchInitialization(run.sessionId);
+    initializationStatuses.value.set(run.sessionId, await getInitializationStatus(run.sessionId));
+    if (result.state === "playable") await refreshCatalog();
+  } catch (failure) {
+    error.value = errorMessage(failure);
+    try {
+      initializationStatuses.value.set(run.sessionId, await getInitializationStatus(run.sessionId));
+    } catch {
+      // Keep the last known content-free status when the follow-up read also fails.
+    }
   } finally {
     busyRunId.value = undefined;
   }
@@ -443,6 +517,37 @@ async function previousPage(): Promise<void> {
               <p v-else-if="run.state === 'needs-repair'" class="run-catalog-warning">
                 {{ t("runs.identityRepairRequired") }}
               </p>
+              <section
+                v-if="run.state === 'recovery-required' && initializationStatuses.has(run.sessionId)"
+                class="run-initialization-recovery"
+              >
+                <p
+                  v-if="initializationStatuses.get(run.sessionId) === null"
+                  class="run-catalog-note"
+                >
+                  {{ t("runs.initializationMissing") }}
+                </p>
+                <template v-else-if="initializationStatuses.get(run.sessionId)">
+                  <p
+                    v-if="initializationStatuses.get(run.sessionId)?.state === 'initializing' && !initializationStatuses.get(run.sessionId)?.dispatchAvailable"
+                    class="run-catalog-warning"
+                  >
+                    {{ t("runs.initializationInProgress") }}
+                  </p>
+                  <p
+                    v-else-if="initializationStatuses.get(run.sessionId)?.state === 'playable'"
+                    class="run-catalog-note"
+                  >
+                    {{ t("runs.initializationReady") }}
+                  </p>
+                  <p
+                    v-else-if="['failed', 'unknown'].includes(initializationStatuses.get(run.sessionId)?.state ?? '')"
+                    class="run-catalog-warning"
+                  >
+                    {{ t("runs.initializationNeedsRetry") }}
+                  </p>
+                </template>
+              </section>
               <ol
                 v-if="pendingDeletions.has(run.sessionId)"
                 class="run-deletion-stages"
@@ -477,7 +582,7 @@ async function previousPage(): Promise<void> {
                 {{ t("runs.reconcileBilling") }}
               </button>
               <button
-                v-else-if="['ready', 'recovery-required', 'billing-not-configured', 'settlement-pending'].includes(run.state)"
+                v-else-if="['ready', 'billing-not-configured', 'settlement-pending'].includes(run.state) || (run.state === 'recovery-required' && (!initializationStatuses.has(run.sessionId) || initializationStatuses.get(run.sessionId) === null || initializationStatuses.get(run.sessionId)?.state === 'playable'))"
                 type="button"
                 class="btn primary"
                 :disabled="Boolean(busyRunId)"
@@ -486,6 +591,41 @@ async function previousPage(): Promise<void> {
                 {{
                   run.state === "settlement-pending" ? t("runs.handleBilling") : t("runs.restore")
                 }}
+              </button>
+              <button
+                v-if="run.state === 'recovery-required'"
+                type="button"
+                class="btn"
+                :disabled="Boolean(busyRunId)"
+                @click="inspectInitialization(run)"
+              >
+                {{
+                  initializationStatuses.has(run.sessionId) ? t("runs.refreshInitialization") : t("runs.checkInitialization")
+                }}
+              </button>
+              <button
+                v-if="run.state === 'recovery-required' && initializationStatuses.get(run.sessionId)?.state === 'initializing' && initializationStatuses.get(run.sessionId)?.dispatchAvailable"
+                type="button"
+                class="btn primary"
+                :disabled="Boolean(busyRunId)"
+                @click="dispatchInitializationAttempt(run)"
+              >
+                {{ t("runs.dispatchInitialization") }}
+              </button>
+              <p
+                v-if="run.state === 'recovery-required' && initializationStatuses.get(run.sessionId)?.state === 'initializing' && initializationStatuses.get(run.sessionId)?.dispatchAvailable"
+                class="run-catalog-warning"
+              >
+                {{ t("runs.dispatchInitializationWarning") }}
+              </p>
+              <button
+                v-if="run.state === 'recovery-required' && ['failed', 'unknown'].includes(initializationStatuses.get(run.sessionId)?.state ?? '')"
+                type="button"
+                class="btn"
+                :disabled="Boolean(busyRunId)"
+                @click="retryInitializationAttempt(run)"
+              >
+                {{ t("runs.retryInitialization") }}
               </button>
               <button
                 v-if="run.state !== 'deleting'"
@@ -694,6 +834,7 @@ async function previousPage(): Promise<void> {
 .run-state.deleting { color: var(--accent-violet); }
 .run-state.needs-profile-binding, .run-state.settlement-pending, .run-catalog-warning { color: var(--warning); }
 .run-catalog-warning { margin: .25rem 0 0; }
+.run-initialization-recovery { margin-top: .5rem; }
 .run-deletion-stages { display: flex; list-style: none; padding: 0; gap: .25rem; margin: .75rem 0; }
 .run-deletion-stages li { flex: 1; min-width: 0; font-size: .625rem; color: var(--muted); border-top: 4px solid var(--hairline); padding-top: .25rem; overflow-wrap: anywhere; }
 .run-deletion-stages li.done { border-color: var(--accent-violet); }
