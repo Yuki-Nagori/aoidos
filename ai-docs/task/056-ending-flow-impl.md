@@ -107,7 +107,9 @@
 
 2026-10-24 初始化恢复 IPC 切片：增加仅含 session / revision / requestId / state 的状态投影，以及带 expected revision、前一 requestId 和稳定新 requestId 的显式重试 IPC / TypeScript 契约。存储事务会校验 run 仍为 `recovery-required`、没有 memory owner 且冻结 profile 仍存在；行为测试覆盖私有字段不泄漏、同一重试请求幂等、旧 revision 冲突及冻结输入不变。独立评审发现 retry 更新后的 requestId 与候选读取仍绑原 preparation ID，已改为读取 current initialization requestId，并补 retry 后 candidate 身份测试。`bun run test:affected`（Engine 578 passed、3 ignored，Vitest 10 passed）、`bun run format:affected`、`bun run lint:affected` 和完整 `bun run verify` 均通过；Rust workspace 覆盖率 94.11%，独立复核确认阻断已解决。该切片不调用 Provider，也不接 UI。
 
-2026-10-24 初始化恢复 UI 切片：周目管理对 `recovery-required` 记录提供显式状态检查；状态投影增加 `dispatchAvailable`，只在当前 pending attempt 未领取派发权且目录 / owner 门禁仍成立时开放单次派发。failed / unknown 可显式创建新 requestId 重试，重试后不会自动派发；已领取状态提示刷新且禁用旧“继续”入口。派发按钮明确提示会调用模型并可能产生费用；playable 后仅刷新目录，继续周目仍由用户操作。行为测试覆盖检查不触发请求、retry 不派发、unknown 不提供旧 continue、显式 dispatch 才调用一次并在完成后刷新目录。待完成本切片的完整测试 / 格式 / lint / 独立复核与 PR CI。
+2026-10-24 初始化恢复 UI 切片：周目管理对 `recovery-required` 记录提供显式状态检查；状态投影增加 `dispatchAvailable`，只在当前 pending attempt 未领取派发权且目录 / owner 门禁仍成立时开放单次派发。failed / unknown 可显式创建新 requestId 重试，重试后不会自动派发；已领取状态提示刷新且禁用旧“继续”入口。派发按钮明确提示会调用模型并可能产生费用；playable 后仅刷新目录，继续周目仍由用户操作。行为测试覆盖检查不触发请求、retry 不派发、unknown 不提供旧 continue、显式 dispatch 才调用一次并在完成后刷新目录。PR #244 已通过完整 verify、独立评审和 GitHub CI，并于 2026-10-24 合并到 main；本地已同步 main 并清理分支。
+
+2026-10-24 欢迎页新局准备 UI 切片：新周目按钮改为预算确认表单，要求分别输入 CNY / USD 上限并勾选确认；金额校验覆盖 NanoMoney 表示上限，确认后调用 `prepareInitialization` 保存冻结快照与 non-playable run，然后打开周目管理。准备操作不会派发模型请求，失败会在对话框内展示；对话框支持焦点管理、Tab 循环和 Escape。欢迎页继续入口只打开现有周目目录，不再调用可能创建新局的 `open(false)` fallback。设置页旧 `open(false)` / `open(true)`、`engine_open_session(startNew=true)` 以及 CLI/TUI 仍待迁移或关闭，因此本切片仅收紧欢迎页，不代表所有新局路径均已启用初始化门禁。`bun run verify` 通过：63 个 Vitest 文件 / 560 项测试、Rust workspace 覆盖率 94.11%，包含类型、lint、格式、视觉回归、构建、基准和 Rust 文档检查；独立最终复核通过；PR CI / 合并待完成。
 
 ## 风险与回退
 

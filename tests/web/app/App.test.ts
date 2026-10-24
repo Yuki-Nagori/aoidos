@@ -2,6 +2,7 @@ import { mount } from "@vue/test-utils";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../../src-web/app/App.vue";
+import RunCatalogPanel from "../../../src-web/features/product/components/RunCatalogPanel.vue";
 import { localeStartupKey } from "../../../src-web/api/locale";
 import { i18n } from "../../../src-web/i18n/index";
 
@@ -15,13 +16,8 @@ describe("App", () => {
     delete document.documentElement.dataset.localeFallback;
   });
   it("展示正式入口，初始化不打开会话或发起生成", async () => {
-    let resolveProfileSave: ((value: unknown) => void) | undefined;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "llm_list_profiles") return { items: [] };
-      if (command === "llm_save_profile")
-        return new Promise((resolve) => {
-          resolveProfileSave = resolve;
-        });
       if (command === "engine_open_session") throw new Error("race test request completed");
       if (command === "engine_list_scripts")
         return [
@@ -278,26 +274,9 @@ describe("App", () => {
       "theme_skin_load",
     ]);
     await wrapper.get(".welcome-start").trigger("click");
-    await vi.waitFor(() => expect(resolveProfileSave).toBeTypeOf("function"));
-    const scriptSelector = wrapper.get('.welcome-script-select [role="combobox"]');
-    expect((scriptSelector.element as HTMLButtonElement).disabled).toBe(true);
-    expect(scriptSelector.text()).toContain("mistbell");
-    resolveProfileSave?.({
-      profileId: "default",
-      providerId: "deepseek",
-      model: "deepseek-flash",
-      mode: "completion",
-      thinking: false,
-      sampling: { temperature: 1, maxTokens: 2048 },
-      proxy: { mode: "system" },
-    });
-    await vi.waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("engine_open_session", {
-        profileId: "default",
-        scriptId: "mistbell",
-        startNew: false,
-      }),
-    );
+    expect(wrapper.findComponent(RunCatalogPanel).props("open")).toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith("llm_save_profile", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("engine_open_session", expect.anything());
     wrapper.unmount();
   });
   it("浏览器缺 IPC 明确展示恢复错误，不伪造本地生成结果", async () => {
@@ -350,7 +329,8 @@ describe("App", () => {
       },
     });
     expect(wrapper.text()).toContain("选择剧本与模型后开始");
-    expect(wrapper.find(".welcome-start").attributes("disabled")).toBeDefined();
+    expect(wrapper.find(".welcome-start").attributes("disabled")).toBeUndefined();
+    expect(wrapper.find(".welcome-new-cycle").attributes("disabled")).toBeDefined();
     expect(document.documentElement.lang).toBe("zh-Hans");
     expect(invoke).not.toHaveBeenCalledWith("locale_get_preference");
     await wrapper.get('button[aria-label="设置"]').trigger("click");

@@ -42,7 +42,13 @@
     "selectedScenario": "当前选择 · {id}",
     "changeInSettings": "在设置中修改",
     "settingsHint": "语言、主题、API、骰子与费用上限都在设置里",
-    "openRuns": "继续已有周目"
+    "openRuns": "继续已有周目",
+    "newCycleBudgetTitle": "准备新周目",
+    "newCycleBudgetDescription": "为本局初始化分别设置 CNY 与 USD 费用上限；未使用的币种额度不会被扣除。",
+    "newCyclePreparationOnly": "此步骤只保存周目和冻结的初始化请求，不会联系模型。之后可在周目管理检查状态，再明确选择发送初始化请求。",
+    "newCycleBudgetAck": "我确认此周目的 CNY 与 USD 费用上限。",
+    "newCycleBudgetInvalid": "每个上限须在 0 到 9,223,372,036.854775807 之间，且小数最多 9 位。",
+    "prepareNewCycle": "保存上限并准备"
   },
   "runs": {
     "title": "已有周目",

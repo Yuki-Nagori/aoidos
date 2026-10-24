@@ -42,7 +42,13 @@
     "selectedScenario": "Selected · {id}",
     "changeInSettings": "Change in Settings",
     "settingsHint": "Language, theme, API, dice and limits all live in Settings",
-    "openRuns": "Continue an existing run"
+    "openRuns": "Continue an existing run",
+    "newCycleBudgetTitle": "Prepare a new run",
+    "newCycleBudgetDescription": "Set the maximum initialization budget for this run in both CNY and USD. The unused currency will remain available.",
+    "newCyclePreparationOnly": "This step saves the run and its frozen initialization request. It does not contact the model. You can review the run, then explicitly send the initialization request from Run management.",
+    "newCycleBudgetAck": "I confirm these CNY and USD spending limits for this run.",
+    "newCycleBudgetInvalid": "Each limit must be between 0 and 9,223,372,036.854775807, with at most 9 fractional digits.",
+    "prepareNewCycle": "Save limits and prepare"
   },
   "runs": {
     "title": "Existing runs",

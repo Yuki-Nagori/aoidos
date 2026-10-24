@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Locale } from "../../api/locale";
 import type { useProduct } from "../../features/product/composables/useProduct";
@@ -14,6 +14,13 @@ const props = defineProps<{
 const emit = defineEmits<{ openSettings: [section: string, trigger: HTMLElement] }>();
 const { t } = useI18n();
 const runsOpen = ref(false);
+const newCycleOpen = ref(false);
+const cnyLimit = ref("");
+const usdLimit = ref("");
+const budgetAcknowledged = ref(false);
+const preparationFailed = ref(false);
+const budgetDialog = ref<HTMLElement>();
+let previousBudgetFocus: HTMLElement | undefined;
 const principles = computed(() => [
   {
     id: "agency",
@@ -60,6 +67,59 @@ const canStart = computed(
     props.product.keyStatus.value?.set !== false &&
     scenario.value !== undefined,
 );
+const validBudget = (value: string) =>
+  value.length <= 32 && /^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/.test(value) && (() => {
+    const [whole = "0", fraction = ""] = value.split(".");
+    return BigInt(whole) * 1_000_000_000n + BigInt(fraction.padEnd(9, "0") || "0") <= 9_223_372_036_854_775_807n;
+  })();
+watch(newCycleOpen, async (open) => {
+  if (open) {
+    previousBudgetFocus = document.activeElement as HTMLElement;
+    await nextTick();
+    budgetDialog.value?.querySelector<HTMLElement>("input:not(:disabled)")?.focus();
+  } else {
+    previousBudgetFocus?.focus();
+    previousBudgetFocus = undefined;
+  }
+});
+onScopeDispose(() => previousBudgetFocus?.focus());
+function onBudgetDialogKeydown(event: KeyboardEvent): void {
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    if (props.product.busy.value || event.isComposing) return;
+    event.preventDefault();
+    newCycleOpen.value = false;
+    return;
+  }
+  if (event.key !== "Tab" || !budgetDialog.value) return;
+  const elements = [...budgetDialog.value.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)")];
+  const first = elements[0];
+  const last = elements.at(-1);
+  if (!first || !last) { event.preventDefault(); budgetDialog.value.focus(); return; }
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+}
+const canPrepareNewCycle = computed(
+  () => canStart.value && budgetAcknowledged.value && validBudget(cnyLimit.value) && validBudget(usdLimit.value),
+);
+function beginNewCycle(): void {
+  cnyLimit.value = "";
+  usdLimit.value = "";
+  budgetAcknowledged.value = false;
+  preparationFailed.value = false;
+  newCycleOpen.value = true;
+}
+async function prepareNewCycle(): Promise<void> {
+  if (!canPrepareNewCycle.value) return;
+  budgetDialog.value?.focus();
+  const sessionId = await props.product.prepareNewCycle(cnyLimit.value, usdLimit.value, props.locale);
+  if (!sessionId) {
+    preparationFailed.value = true;
+    return;
+  }
+  newCycleOpen.value = false;
+  runsOpen.value = true;
+}
 </script>
 
 <template>
@@ -191,27 +251,19 @@ const canStart = computed(
         <button
           type="button"
           class="btn primary lg welcome-start"
-          :disabled="!canStart"
-          @click="product.open(false)"
+          @click="runsOpen = true"
         >
-          {{ product.busy.value ? t("common.loading") : t("game.restart") }}
+          {{ t("welcome.openRuns") }}
         </button>
         <button
           type="button"
           class="btn lg welcome-new-cycle"
           :disabled="!canStart"
-          @click="product.open(true)"
+          @click="beginNewCycle"
         >
           {{ t("game.newCycle") }}
         </button>
       </div>
-      <button
-        type="button"
-        class="welcome-text-button welcome-runs-button"
-        @click="runsOpen = true"
-      >
-        {{ t("welcome.openRuns") }}
-      </button>
       <div class="hr" />
       <button
         type="button"
@@ -229,6 +281,77 @@ const canStart = computed(
         </svg>
       </button>
     </section>
+    <div v-if="newCycleOpen" class="welcome-budget-backdrop">
+      <section
+        ref="budgetDialog"
+        class="welcome-budget-dialog glass"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        :aria-label="t('welcome.newCycleBudgetTitle')"
+        @keydown="onBudgetDialogKeydown"
+      >
+        <h2>{{ t("welcome.newCycleBudgetTitle") }}</h2>
+        <p>{{ t("welcome.newCycleBudgetDescription") }}</p>
+        <p class="welcome-budget-note">{{ t("welcome.newCyclePreparationOnly") }}</p>
+        <label class="welcome-budget-field">
+          {{ t("runs.cnyLimit") }}
+          <input
+            v-model="cnyLimit"
+            inputmode="decimal"
+            maxlength="32"
+            autocomplete="off"
+            :disabled="product.busy.value"
+          />
+        </label>
+        <p
+          v-if="(cnyLimit && !validBudget(cnyLimit)) || (usdLimit && !validBudget(usdLimit))"
+          class="welcome-budget-error"
+          role="alert"
+        >
+          {{ t("welcome.newCycleBudgetInvalid") }}
+        </p>
+        <p
+          v-if="preparationFailed && product.error.value"
+          class="welcome-budget-error"
+          role="alert"
+        >
+          {{ product.error.value.message }}
+        </p>
+        <label class="welcome-budget-field">
+          {{ t("runs.usdLimit") }}
+          <input
+            v-model="usdLimit"
+            inputmode="decimal"
+            maxlength="32"
+            autocomplete="off"
+            :disabled="product.busy.value"
+          />
+        </label>
+        <label class="welcome-budget-ack">
+          <input v-model="budgetAcknowledged" type="checkbox" :disabled="product.busy.value" />
+          {{ t("welcome.newCycleBudgetAck") }}
+        </label>
+        <div class="row wrap welcome-budget-actions">
+          <button
+            type="button"
+            class="btn"
+            :disabled="product.busy.value"
+            @click="newCycleOpen = false"
+          >
+            {{ t("common.cancel") }}
+          </button>
+          <button
+            type="button"
+            class="btn primary"
+            :disabled="!canPrepareNewCycle"
+            @click="prepareNewCycle"
+          >
+            {{ product.busy.value ? t("common.loading") : t("welcome.prepareNewCycle") }}
+          </button>
+        </div>
+      </section>
+    </div>
     <RunCatalogPanel
       :open="runsOpen"
       :scripts="product.scripts.value"
@@ -239,3 +362,17 @@ const canStart = computed(
     />
   </div>
 </template>
+
+<style scoped>
+.welcome-budget-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 1rem; background: rgb(0 0 0 / 60%); }
+.welcome-budget-dialog { width: min(100%, 28rem); padding: 1.25rem; border: 1px solid var(--hairline); border-radius: 1rem; background: var(--panel); box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 40%); }
+.welcome-budget-dialog h2 { margin: 0; font-size: 1.25rem; }
+.welcome-budget-dialog p { color: var(--muted); font-size: .875rem; }
+.welcome-budget-note { padding: .625rem .75rem; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.welcome-budget-error { color: var(--danger, #ff7b72); }
+.welcome-budget-field { display: grid; gap: .375rem; margin-top: .875rem; font-size: .8125rem; }
+.welcome-budget-field input { min-width: 0; border: 1px solid var(--hairline); border-radius: .5rem; padding: .625rem .75rem; color: var(--ink); background: var(--surface); font: inherit; }
+.welcome-budget-ack { display: flex; gap: .5rem; align-items: flex-start; margin-top: 1rem; font-size: .8125rem; }
+.welcome-budget-ack input { accent-color: var(--accent); margin-top: .2rem; }
+.welcome-budget-actions { justify-content: flex-end; margin-top: 1rem; }
+</style>
