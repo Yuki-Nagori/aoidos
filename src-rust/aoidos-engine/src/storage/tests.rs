@@ -264,6 +264,57 @@ fn prepared_inactive_run_atomically_freezes_budget_request_and_pending_attempt()
     storage.create_inactive_run(&intent).unwrap();
 
     let preparation = intent.preparation.as_ref().unwrap();
+    let candidate = storage
+        .initialization_dispatch_candidate(&intent.header.session_id)
+        .unwrap();
+    assert_eq!(candidate.session_id, intent.header.session_id);
+    assert_eq!(candidate.revision, 1);
+    assert_eq!(candidate.request_id, preparation.request_id);
+    assert_eq!(candidate.profile, intent.profile);
+    assert_eq!(candidate.input, preparation.input);
+    assert_eq!(candidate.provider_request.model, intent.profile.model);
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE cycle_initializations SET state='failed' WHERE session_id=?1",
+                    [&intent.header.session_id],
+                )
+                .map_err(|_| Fault::new("store.database", "test fixture update failed"))?;
+            connection
+                .execute(
+                    "UPDATE cycle_initialization_attempts SET state='failed' WHERE request_id=?1",
+                    [&preparation.request_id],
+                )
+                .map_err(|_| Fault::new("store.database", "test fixture update failed"))?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        storage
+            .initialization_dispatch_candidate(&intent.header.session_id)
+            .unwrap_err()
+            .code,
+        "app.conflict",
+        "a finalized failed request must not be reported as corrupt storage"
+    );
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE cycle_initializations SET state='initializing' WHERE session_id=?1",
+                    [&intent.header.session_id],
+                )
+                .map_err(|_| Fault::new("store.database", "test fixture update failed"))?;
+            connection
+                .execute(
+                    "UPDATE cycle_initialization_attempts SET state='pending' WHERE request_id=?1",
+                    [&preparation.request_id],
+                )
+                .map_err(|_| Fault::new("store.database", "test fixture update failed"))?;
+            Ok(())
+        })
+        .unwrap();
     let input_snapshot = aoidos_json::to_vec(&preparation.input).unwrap();
     let rows = storage
         .with_database(|connection| {
@@ -356,6 +407,43 @@ fn prepared_inactive_run_atomically_freezes_budget_request_and_pending_attempt()
             Err(error) if error.code == "app.not-found"
         ),
         "prepared run must not acquire a record owner"
+    );
+    storage
+        .with_database(|connection| {
+            connection
+                .execute(
+                    "UPDATE session_catalog SET state='deleting' WHERE session_id=?1",
+                    [&intent.header.session_id],
+                )
+                .map_err(|_| Fault::new("store.database", "test fixture update failed"))?;
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|_| Fault::new("store.database", "test transaction failed"))?;
+            assert_eq!(
+                crate::cycle_initialization::claim_dispatch_in_transaction(
+                    &transaction,
+                    &candidate.session_id,
+                    candidate.revision,
+                    &candidate.request_id,
+                    "2026-10-24T00:00:00Z",
+                )
+                .unwrap_err()
+                .code,
+                "app.conflict"
+            );
+            transaction
+                .rollback()
+                .map_err(|_| Fault::new("store.database", "test rollback failed"))?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        storage
+            .initialization_dispatch_candidate(&intent.header.session_id)
+            .unwrap_err()
+            .code,
+        "app.conflict",
+        "a deleting run must not return a dispatch candidate"
     );
     let _ = std::fs::remove_dir_all(root);
 }

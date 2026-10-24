@@ -681,6 +681,12 @@ mod tests {
                         created_at: "2026-10-23T00:00:00Z".into(),
                     },
                 )?;
+                connection
+                    .execute(
+                        "UPDATE session_catalog SET state='recovery-required',memory_run_id=NULL WHERE session_id=?1",
+                        [&session_id],
+                    )
+                    .map_err(|_| Fault::new("store.database", "update test run failed"))?;
                 Ok(())
             })
             .unwrap();

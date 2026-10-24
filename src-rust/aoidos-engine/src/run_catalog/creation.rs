@@ -62,6 +62,19 @@ pub struct InitializationPreparation {
     pub usd_limit: NanoMoney,
 }
 
+/// A validated immutable opening request that is eligible for its first dispatch.
+/// Loading this value does not claim dispatch rights; the billing port must still
+/// atomically claim the attempt and reserve its budget before calling a Provider.
+#[derive(Debug, Clone)]
+pub struct InitializationDispatchCandidate {
+    pub session_id: String,
+    pub revision: u64,
+    pub request_id: String,
+    pub profile: LlmProfile,
+    pub input: FrozenInitializationInput,
+    pub provider_request: aoidos_llm::provider::ProviderRequest,
+}
+
 /// Versioned request envelope. `provider_request` is the complete serialized request body;
 /// `script_revision` and `profile_snapshot_hash` bind it to the immutable run inputs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -107,6 +120,16 @@ struct PendingCreation {
     state: String,
     created_at: String,
 }
+
+type DispatchCreationRow = (String, String, Vec<u8>, String, Vec<u8>, String, String);
+type DispatchCatalogRow = (
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<String>,
+);
 
 /// 先登记不可变 intent，再允许写 transcript，重试只能重放相同身份与快照。
 pub(crate) fn begin_inactive_creation(
@@ -325,6 +348,151 @@ pub(crate) fn complete_inactive_creation(
     transaction
         .commit()
         .map_err(|_| Fault::new("store.commit-unknown", "周目创建登记结果不确定"))
+}
+
+pub(crate) fn initialization_dispatch_candidate(
+    connection: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<InitializationDispatchCandidate, Fault> {
+    if !crate::record::format::valid_uuid(session_id) {
+        return Err(Fault::bad_request());
+    }
+    let creation: Option<DispatchCreationRow> = connection
+        .query_row(
+            "SELECT operation_id,script_id,header_snapshot,header_hash,profile_snapshot,profile_hash,state FROM session_creation_ops WHERE session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((
+        operation_id,
+        script_id,
+        header_bytes,
+        header_hash,
+        profile_bytes,
+        profile_hash,
+        creation_state,
+    )) = creation
+    else {
+        return Err(Fault::new("app.not-found", "周目创建意图不存在"));
+    };
+    match creation_state.as_str() {
+        "registered" => {}
+        "intent" | "record-created" => {
+            return Err(Fault::new("app.conflict", "周目创建尚未登记完成"));
+        }
+        "needs-repair" => {
+            return Err(Fault::new("store.needs-repair", "周目创建意图需要修复"));
+        }
+        _ => return Err(corrupt()),
+    }
+    if header_bytes.len() > 2_097_152
+        || profile_bytes.len() > 65_536
+        || hash(&header_bytes) != header_hash
+        || hash(&profile_bytes) != profile_hash
+    {
+        return Err(corrupt());
+    }
+    let header: Header = decode(&header_bytes)?;
+    let profile: LlmProfile = decode(&profile_bytes)?;
+    if header.session_id != session_id || header.script_id != script_id {
+        return Err(corrupt());
+    }
+    let Some((preparation_bytes, preparation_hash, preparation)) =
+        load_preparation(connection, &operation_id)?
+    else {
+        return Err(Fault::new("app.conflict", "该周目没有待派发的开局请求"));
+    };
+    validate_intent(&InactiveRunIntent {
+        operation_id,
+        header,
+        profile: profile.clone(),
+        preparation: Some(preparation.clone()),
+    })
+    .map_err(|_| corrupt())?;
+
+    let catalog: Option<DispatchCatalogRow> = connection
+        .query_row(
+            "SELECT state,profile_id,profile_schema_version,profile_snapshot,billing_run_id,memory_run_id FROM session_catalog WHERE session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    let Some((state, profile_id, schema_version, snapshot, billing_run_id, memory_run_id)) =
+        catalog
+    else {
+        return Err(corrupt());
+    };
+    if state != "recovery-required" {
+        return Err(Fault::new(
+            "app.conflict",
+            "周目状态已变化，不能派发开局请求",
+        ));
+    }
+    if profile_id.as_deref() != Some(profile.profile_id.as_str())
+        || schema_version != Some(1)
+        || snapshot.as_deref() != Some(profile_bytes.as_slice())
+        || billing_run_id.as_deref() != Some(session_id)
+        || memory_run_id.is_some()
+    {
+        return Err(corrupt());
+    }
+
+    let initialization = crate::cycle_initialization::load(connection, session_id)?;
+    if initialization.state != crate::cycle_initialization::State::Initializing
+        || initialization.request_id != preparation.request_id
+    {
+        return Err(Fault::new("app.conflict", "开局请求已变化或不再等待派发"));
+    }
+    if initialization.input_snapshot
+        != aoidos_json::to_vec(&preparation.input).map_err(|_| corrupt())?
+        || initialization.input_hash != hash(&initialization.input_snapshot)
+    {
+        return Err(corrupt());
+    }
+    let attempt: Option<(String, i64)> = connection
+        .query_row(
+            "SELECT state,dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2",
+            rusqlite::params![preparation.request_id, session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    if attempt
+        .as_ref()
+        .is_none_or(|(state, dispatch_started)| state != "pending" || *dispatch_started != 0)
+    {
+        return Err(Fault::new("app.conflict", "开局请求已领取或状态已变化"));
+    }
+    let budget: Option<(i64, i64)> = connection
+        .query_row(
+            "SELECT cny_limit_nanos,usd_limit_nanos FROM billing_run_budgets WHERE run_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?;
+    if budget != Some((preparation.cny_limit.nanos(), preparation.usd_limit.nanos())) {
+        return Err(Fault::new(
+            "app.conflict",
+            "周目预算已变化，不能派发开局请求",
+        ));
+    }
+    if hash(&preparation_bytes) != preparation_hash {
+        return Err(corrupt());
+    }
+    let provider_request = aoidos_json::from_value(preparation.input.provider_request.clone())
+        .map_err(|_| corrupt())?;
+    Ok(InitializationDispatchCandidate {
+        session_id: session_id.to_owned(),
+        revision: initialization.revision,
+        request_id: preparation.request_id,
+        profile,
+        input: preparation.input,
+        provider_request,
+    })
 }
 
 pub(crate) fn pending_inactive_creations(

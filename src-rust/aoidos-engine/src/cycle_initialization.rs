@@ -383,6 +383,19 @@ pub(crate) fn claim_dispatch_in_transaction(
     {
         return Err(Fault::bad_request());
     }
+    let dispatchable: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_catalog WHERE session_id=?1 AND state='recovery-required' AND billing_run_id=?1 AND memory_run_id IS NULL)",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if !dispatchable {
+        return Err(Fault::new(
+            "app.conflict",
+            "周目状态已变化，不能派发开局请求",
+        ));
+    }
     let claimed = transaction
         .execute(
             "UPDATE cycle_initialization_attempts SET dispatch_started=1,updated_at=?1 WHERE request_id=?2 AND session_id=?3 AND state='pending' AND dispatch_started=0 AND EXISTS(SELECT 1 FROM cycle_initializations WHERE session_id=?3 AND state='initializing' AND revision=?4 AND current_request_id=?2)",
@@ -987,6 +1000,12 @@ mod tests {
             load(&connection, session_id).unwrap().state,
             State::Initializing
         );
+        connection
+            .execute(
+                "UPDATE session_catalog SET state='recovery-required',memory_run_id=NULL WHERE session_id=?1",
+                [session_id],
+            )
+            .unwrap();
 
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -1129,6 +1148,12 @@ mod tests {
             },
         )
         .unwrap();
+        connection
+            .execute(
+                "UPDATE session_catalog SET state='recovery-required',memory_run_id=NULL WHERE session_id=?1",
+                [session_id],
+            )
+            .unwrap();
 
         {
             let transaction = connection
