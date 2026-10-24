@@ -31,6 +31,24 @@ impl aoidos_engine::record::session::RecordEvents for StorageEvents {
 }
 struct Profiles;
 impl ProfileSource for Profiles {
+    fn public_profile(&self, id: &str) -> Result<aoidos_llm::config::LlmProfile, Fault> {
+        if id == "missing" {
+            return Err(Fault::new("llm.missing-key", "请登记密钥"));
+        }
+        Ok(aoidos_llm::config::LlmProfile {
+            profile_id: id.into(),
+            provider_id: "deepseek".into(),
+            model: "deepseek-v4-pro".into(),
+            mode: aoidos_llm::config::ProfileMode::Completion,
+            thinking: false,
+            sampling: aoidos_llm::sampling::Sampling {
+                temperature: 1.0,
+                max_tokens: 128,
+            },
+            proxy: aoidos_llm::config::ProxyConfig::None,
+        })
+    }
+
     fn freeze(&self, id: &str) -> Result<ResolvedProfile, Fault> {
         if id == "missing" {
             return Err(Fault::new("llm.missing-key", "请登记密钥"));

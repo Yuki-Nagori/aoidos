@@ -45,6 +45,36 @@ impl OpenCodeEdition {
         };
         catalog.iter().find(|spec| spec.id == model)
     }
+
+    pub(super) fn capabilities(self, model: &str, mode: RequestMode) -> ProviderCapabilities {
+        let spec = self.model(model);
+        let protocol = spec.map(|spec| spec.protocol);
+        let known_spec = spec.filter(|_| mode == RequestMode::Chat);
+        let known = known_spec.is_some();
+        let stop_limit = match protocol {
+            Some(Protocol::ChatCompletions) => CHAT_STOP_LIMIT,
+            Some(Protocol::Messages | Protocol::Gemini) => MESSAGES_STOP_LIMIT,
+            Some(Protocol::Responses) | None => 0,
+        };
+        let temperature_max = if protocol == Some(Protocol::Messages) {
+            1.0
+        } else {
+            2.0
+        };
+        ProviderCapabilities {
+            model: model.to_owned(),
+            context_limit: known_spec.map(|spec| spec.context_window),
+            completion: false,
+            chat: known,
+            prefix: false,
+            thinking: false,
+            stop_limit: if known { stop_limit } else { 0 },
+            max_output_tokens: known_spec.map_or(0, |spec| spec.max_output_tokens),
+            temperature_effective: known,
+            temperature_min: 0.0,
+            temperature_max,
+        }
+    }
 }
 
 impl Protocol {
@@ -80,34 +110,7 @@ impl OpenCode {
 
 impl Provider for OpenCode {
     fn capabilities(&self, model: &str, mode: RequestMode) -> ProviderCapabilities {
-        let spec = self.edition.model(model);
-        let protocol = spec.map(|spec| spec.protocol);
-        let known_spec = spec.filter(|_| mode == RequestMode::Chat);
-        let known = known_spec.is_some();
-        let stop_limit = match protocol {
-            Some(Protocol::ChatCompletions) => CHAT_STOP_LIMIT,
-            Some(Protocol::Messages | Protocol::Gemini) => MESSAGES_STOP_LIMIT,
-            Some(Protocol::Responses) | None => 0,
-        };
-        let temperature_max = if protocol == Some(Protocol::Messages) {
-            1.0
-        } else {
-            2.0
-        };
-        ProviderCapabilities {
-            model: model.to_owned(),
-            // 使用 edition 专属目录中的上下文窗口和最大输出上限。
-            context_limit: known_spec.map(|spec| spec.context_window),
-            completion: false,
-            chat: known,
-            prefix: false,
-            thinking: false,
-            stop_limit: if known { stop_limit } else { 0 },
-            max_output_tokens: known_spec.map_or(0, |spec| spec.max_output_tokens),
-            temperature_effective: known,
-            temperature_min: 0.0,
-            temperature_max,
-        }
+        self.edition.capabilities(model, mode)
     }
 
     fn start(

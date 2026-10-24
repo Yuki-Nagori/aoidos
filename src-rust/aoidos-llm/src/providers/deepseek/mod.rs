@@ -235,34 +235,35 @@ impl DeepSeek {
     }
 }
 
+pub(super) fn deepseek_capabilities(model: &str, mode: RequestMode) -> ProviderCapabilities {
+    let spec = DEEPSEEK_MODELS.iter().find(|spec| spec.id == model);
+    let known = spec.is_some();
+    let (max_output, thinking, temperature_effective) = match mode {
+        // FIM 使用端点级限制，不使用型号的 Chat 输出上限。
+        RequestMode::Completion => (if known { FIM_MAX_OUTPUT_TOKENS } else { 0 }, false, known),
+        // chat 默认启用 thinking；thinking 下 temperature 无效，
+        // 叙事 profile 显式关闭后生效，能力按形态声明、由协调器结合 profile 判定。
+        RequestMode::Chat => (spec.map_or(0, |spec| spec.max_output_tokens), known, known),
+    };
+    ProviderCapabilities {
+        model: model.to_owned(),
+        context_limit: spec.map(|spec| spec.context_window),
+        completion: known && mode == RequestMode::Completion,
+        chat: known && mode == RequestMode::Chat,
+        prefix: known && mode == RequestMode::Chat,
+        thinking,
+        stop_limit: if known { STOP_LIMIT } else { 0 },
+        max_output_tokens: max_output,
+        temperature_effective,
+        temperature_min: 0.0,
+        temperature_max: 2.0,
+    }
+}
+
 impl Provider for DeepSeek {
     fn capabilities(&self, model: &str, mode: RequestMode) -> ProviderCapabilities {
-        let spec = DEEPSEEK_MODELS.iter().find(|spec| spec.id == model);
-        let known = spec.is_some();
-        let (max_output, thinking, temperature_effective) = match mode {
-            // FIM 使用端点级限制，不使用型号的 Chat 输出上限。
-            RequestMode::Completion => {
-                (if known { FIM_MAX_OUTPUT_TOKENS } else { 0 }, false, known)
-            }
-            // chat 默认启用 thinking；thinking 下 temperature 无效，
-            // 叙事 profile 显式关闭后生效，能力按形态声明、由协调器结合 profile 判定。
-            RequestMode::Chat => (spec.map_or(0, |spec| spec.max_output_tokens), known, known),
-        };
-        ProviderCapabilities {
-            model: model.to_owned(),
-            context_limit: spec.map(|spec| spec.context_window),
-            completion: known && mode == RequestMode::Completion,
-            chat: known && mode == RequestMode::Chat,
-            prefix: known && mode == RequestMode::Chat,
-            thinking,
-            stop_limit: if known { STOP_LIMIT } else { 0 },
-            max_output_tokens: max_output,
-            temperature_effective,
-            temperature_min: 0.0,
-            temperature_max: 2.0,
-        }
+        deepseek_capabilities(model, mode)
     }
-
     fn start(
         &self,
         request: ProviderRequest,

@@ -152,13 +152,12 @@ pub(crate) fn cycle_input(id: &str) -> Result<CycleInputManifest, Fault> {
     Ok(input)
 }
 /// Captures the exact resources a new initialization must later validate against.
-#[cfg(test)]
+/// Exact resources a new initialization must later validate against.
 pub(crate) struct InitializationAssetSnapshots {
     pub(crate) script: Vec<u8>,
     pub(crate) entities: Vec<u8>,
     pub(crate) cycle_input: Vec<u8>,
 }
-#[cfg(test)]
 pub(crate) fn initialization_asset_snapshots(
     id: &str,
     expected_revision: &str,
