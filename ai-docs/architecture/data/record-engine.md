@@ -1,6 +1,6 @@
 # 对局记录与上下文引擎
 
-更新日期：2026-10-20；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](../ai/llm.md)，跨端载荷以[通信契约](../core/ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。已开周目目录、恢复选择与删除语义由 [059](../../task/059-run-management-design.md) 定稿，060 待实现。阶段决策归 [012](../../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../../task/045-scene-presence-dialogue-impl.md) 承接。
+更新日期：2026-10-24；官方资料核验日期：2026-10-08。task 006 的规则与结构设计，依据 [issue #9](https://github.com/Yuki-Nagori/aoidos/issues/9) 细化格式、持久化、投影和运行期协议；022 已实现并验收。LLM 匹配机制与请求策略见 [005](../ai/llm.md)，跨端载荷以[通信契约](../core/ipc-contract.md)为唯一来源，文件工具和目录规则见[存储基建](storage.md)。已开周目目录、恢复选择与删除语义由 [059](../../task/059-run-management-design.md) 定稿，[060 周目管理实现](../../task/060-run-management-impl.md) 已完成并验收。阶段决策归 [012](../../task/012-turn-state-machine-design.md)；可信在场与获知事件由 [045](../../task/045-scene-presence-dialogue-impl.md) 承接。
 
 ## 方案与边界
 

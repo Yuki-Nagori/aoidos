@@ -468,7 +468,7 @@ pub fn finalize(
     session_id: &str,
     expected_revision: u64,
     request_id: &str,
-    output_snapshot: &[u8],
+    output: &crate::cycle_output::ValidatedOutput,
     updated_at: &str,
 ) -> Result<u64, Fault> {
     if !crate::record::format::valid_uuid(session_id)
@@ -479,12 +479,71 @@ pub fn finalize(
     {
         return Err(Fault::bad_request());
     }
+    let output_snapshot = output.as_bytes();
     validate_json(output_snapshot)?;
     let output_hash = hash(output_snapshot);
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database)?;
     let next = expected_revision.checked_add(1).ok_or_else(corrupt)?;
+    let (input_snapshot, input_hash): (Vec<u8>, String) = transaction
+        .query_row(
+            "SELECT input_snapshot,input_hash FROM cycle_initializations WHERE session_id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database)?
+        .ok_or_else(|| Fault::new("app.not-found", "周目开局记录不存在"))?;
+    let (script_id, profile_id, profile_snapshot): (String, Option<String>, Option<Vec<u8>>) =
+        transaction
+            .query_row(
+                "SELECT script_id,profile_id,profile_snapshot FROM session_catalog WHERE session_id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(database)?
+            .ok_or_else(|| Fault::new("app.not-found", "周目不存在"))?;
+    if input_snapshot.len() > MAX_SNAPSHOT_BYTES || hash(&input_snapshot) != input_hash {
+        return Err(corrupt());
+    }
+    let frozen: crate::run_catalog::FrozenInitializationInput =
+        aoidos_json::decode_bytes(&input_snapshot, MAX_SNAPSHOT_BYTES).map_err(|_| corrupt())?;
+    let profile_snapshot = profile_snapshot.ok_or_else(corrupt)?;
+    if frozen.version != 1
+        || !crate::record::format::valid_uuid(&frozen.operation_id)
+        || frozen.session_id != session_id
+        || frozen.script_id != script_id
+        || frozen.profile_id != profile_id.as_deref().unwrap_or_default()
+        || frozen.profile_snapshot_hash != hash(&profile_snapshot)
+        || !crate::record::format::valid_hash(&frozen.script_revision)
+        || !matches!(frozen.locale.as_str(), "zh-Hans" | "en")
+        || frozen.prompt_version != "init-v1"
+        || frozen.output_schema_version != 2
+        || !frozen.provider_request.is_object()
+        || frozen.script_snapshot.len() > MAX_SNAPSHOT_BYTES
+        || frozen.entity_snapshot.len() > MAX_SNAPSHOT_BYTES
+        || frozen.cycle_input_snapshot.len() > 128 * 1024
+        || !output.is_bound_to(
+            session_id,
+            request_id,
+            &frozen.locale,
+            &frozen.cycle_input_snapshot,
+            &frozen.entity_snapshot,
+        )
+    {
+        return Err(Fault::new("app.conflict", "开局输出与冻结输入不匹配"));
+    }
+    crate::game::assets::validate_frozen_initialization_assets(
+        &frozen.script_id,
+        &frozen.script_revision,
+        &frozen.script_snapshot,
+        &frozen.entity_snapshot,
+        &frozen.cycle_input_snapshot,
+    )
+    .map_err(|_| Fault::new("app.conflict", "冻结剧本资源校验失败"))?;
+
     if let Some((state_now, revision_now, request_now, output_now, hash_now)) = transaction
         .query_row(
             "SELECT state,revision,current_request_id,output_snapshot,output_hash FROM cycle_initializations WHERE session_id=?1",
@@ -759,27 +818,56 @@ mod tests {
             .unwrap();
     }
 
+    fn frozen_input(session_id: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let header = crate::game::builtin::header("mistbell").unwrap();
+        let snapshots = crate::game::assets::initialization_asset_snapshots(
+            &header.script_id,
+            &header.script_revision,
+        )
+        .unwrap();
+        let input = crate::run_catalog::FrozenInitializationInput {
+            version: 1,
+            operation_id: "00000000-0000-4000-8000-000000000010".into(),
+            session_id: session_id.into(),
+            script_id: header.script_id,
+            script_revision: header.script_revision,
+            profile_id: "test-profile".into(),
+            profile_snapshot_hash: hash(b"{}"),
+            locale: "zh-Hans".into(),
+            prompt_version: "init-v1".into(),
+            output_schema_version: 2,
+            script_snapshot: snapshots.script,
+            entity_snapshot: snapshots.entities.clone(),
+            cycle_input_snapshot: snapshots.cycle_input.clone(),
+            provider_request: serde_json::json!({"model":"test","messages":[]}),
+        };
+        (
+            aoidos_json::to_vec(&input).unwrap(),
+            snapshots.cycle_input,
+            snapshots.entities,
+        )
+    }
+
     #[test]
     fn initialization_transitions_are_revision_scoped_and_idempotent() {
         let mut connection = connection();
         let session_id = "00000000-0000-4000-8000-000000000001";
         let request_id = "00000000-0000-4000-8000-000000000003";
         ready_run(&connection, session_id);
-        let input = br#"{"script":"mistbell","schema":"v1"}"#;
-        let output = br#"{"endingGoal":"find-the-well","tags":[]}"#;
+        let (input, cycle_input, entities) = frozen_input(session_id);
         let started = begin(
             &mut connection,
             &Begin {
                 session_id: session_id.into(),
                 expected_catalog_revision: 1,
                 request_id: request_id.into(),
-                input_snapshot: input.to_vec(),
+                input_snapshot: input.clone(),
                 created_at: "2026-10-23T00:00:00Z".into(),
             },
         )
         .unwrap();
         assert_eq!(started.state, State::Initializing);
-        assert_eq!(started.input_hash, hash(input));
+        assert_eq!(started.input_hash, hash(&input));
         assert!(require_playable(&connection, session_id).is_err());
         let repeated_start = begin(
             &mut connection,
@@ -787,7 +875,7 @@ mod tests {
                 session_id: session_id.into(),
                 expected_catalog_revision: 1,
                 request_id: request_id.into(),
-                input_snapshot: input.to_vec(),
+                input_snapshot: input.clone(),
                 created_at: "2026-10-23T00:00:00Z".into(),
             },
         )
@@ -854,13 +942,41 @@ mod tests {
         );
         assert_eq!(load(&connection, session_id).unwrap().input_snapshot, input);
 
+        let output = crate::cycle_output::tests::validated_fixture(
+            session_id,
+            retry_id,
+            "zh-Hans",
+            &cycle_input,
+            &entities,
+        );
+        let wrong_context = crate::cycle_output::tests::validated_fixture(
+            session_id,
+            "00000000-0000-4000-8000-000000000005",
+            "zh-Hans",
+            &cycle_input,
+            &entities,
+        );
         assert_eq!(
             finalize(
                 &mut connection,
                 session_id,
                 retry_revision,
                 retry_id,
-                output,
+                &wrong_context,
+                "2026-10-23T00:00:02Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict"
+        );
+
+        assert_eq!(
+            finalize(
+                &mut connection,
+                session_id,
+                retry_revision,
+                retry_id,
+                &output,
                 "2026-10-23T00:00:02Z",
             )
             .unwrap_err()
@@ -885,26 +1001,79 @@ mod tests {
         .unwrap();
         transaction.commit().unwrap();
 
-        let final_revision = finalize(
-            &mut connection,
-            session_id,
-            retry_revision,
-            retry_id,
-            output,
-            "2026-10-23T00:00:03Z",
-        )
-        .unwrap();
-        let frozen = load(&connection, session_id).unwrap();
-        assert_eq!(frozen.revision, final_revision);
-        assert_eq!(frozen.state, State::Playable);
-        assert_eq!(frozen.output_hash.as_deref(), Some(hash(output).as_str()));
+        connection
+            .execute(
+                "UPDATE cycle_initializations SET input_hash=?1 WHERE session_id=?2",
+                rusqlite::params!["0".repeat(64), session_id],
+            )
+            .unwrap();
         assert_eq!(
             finalize(
                 &mut connection,
                 session_id,
                 retry_revision,
                 retry_id,
-                output,
+                &output,
+                "2026-10-23T00:00:03Z",
+            )
+            .unwrap_err()
+            .code,
+            "store.corrupt"
+        );
+        let unchanged: (String, i64, Option<Vec<u8>>) = connection
+            .query_row(
+                "SELECT state,revision,output_snapshot FROM cycle_initializations WHERE session_id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(unchanged.0, "initializing");
+        assert_eq!(unchanged.1, retry_revision as i64);
+        assert_eq!(
+            unchanged.2, None,
+            "a rejected finalize must not persist output bytes"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state,dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1",
+                    [retry_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
+                )
+                .unwrap(),
+            ("pending".to_owned(), true),
+            "a rejected finalize must leave the dispatched attempt recoverable"
+        );
+        connection
+            .execute(
+                "UPDATE cycle_initializations SET input_hash=?1 WHERE session_id=?2",
+                rusqlite::params![hash(&input), session_id],
+            )
+            .unwrap();
+
+        let final_revision = finalize(
+            &mut connection,
+            session_id,
+            retry_revision,
+            retry_id,
+            &output,
+            "2026-10-23T00:00:03Z",
+        )
+        .unwrap();
+        let frozen = load(&connection, session_id).unwrap();
+        assert_eq!(frozen.revision, final_revision);
+        assert_eq!(frozen.state, State::Playable);
+        assert_eq!(
+            frozen.output_hash.as_deref(),
+            Some(hash(output.as_bytes()).as_str())
+        );
+        assert_eq!(
+            finalize(
+                &mut connection,
+                session_id,
+                retry_revision,
+                retry_id,
+                &output,
                 "2026-10-23T00:00:04Z",
             )
             .unwrap(),
@@ -916,7 +1085,7 @@ mod tests {
                 session_id,
                 retry_revision - 1,
                 retry_id,
-                output,
+                &output,
                 "2026-10-23T00:00:04Z",
             )
             .unwrap_err()

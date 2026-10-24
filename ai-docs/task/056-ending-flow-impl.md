@@ -91,6 +91,8 @@
 
 同日独立只读评审指出原草稿没有随 run 冻结可独立校验的 cycle-input / entity 资源，且 locale / schema 只做了宽松格式检查；按建议补齐脚本原始快照与 script revision 重算校验，将 locale 限定为当前支持的两种、prompt 固定为 `init-v1`、输出 schema 固定为 `2`，并明确草稿不能 dispatch。评审建议的注册后实际 product open / provider gate 仍由现有 `require_playable` 门禁覆盖；准备测试现已明确断言 initializing preparation 被拒绝。独立评审未发现事务原子性、旧 journal 恢复或误开放 playable 的阻断问题。
 
+2026-10-24 初始化提交边界加固：`cycle_initialization::finalize` 不再接收任意 JSON 字节，只接受 `cycle_output::validate_and_normalize` 返回的私有构造 `ValidatedOutput`；校验结果绑定周目、物理 requestId、locale 及精确 entity / cycle-input 快照。提交事务重新校验初始化 input hash、严格冻结 envelope、catalog 的剧本 / profile 身份、profile hash、prompt / schema 版本与冻结剧本资源，再允许转为 playable。覆盖错误身份绑定、未派发拒绝、成功提交与幂等重放；这只封住 finalize 的校验绕过面，尚未接 Provider、账本 dispatch coordinator 或产品新局入口。
+
 ## 风险与回退
 
 开局生成的规则、最终目标、任务初始态和生成 NPC 都是本周目的不可变初始化输入；剧本、模型、提示词或 schema 更新不能漂移既有周目。模型可能产出结构合法但语义不合理的目标 / 标签，因此要把可验证规则限制为白名单状态比较，并在发布前用剧本样例验收可达性和叙事一致性。任务提议属于可回退的引导投影，不升级为正史；如果模型把任务标记错误，修复只能提交新的有效分支任务状态，不得改写旧提交记录。生成或存储失败时保留不可玩初始化状态与费用义务，提供明确恢复 / 放弃路径；不能通过旧流程静默绕过最终目标。
