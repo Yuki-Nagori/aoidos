@@ -473,6 +473,16 @@ pub fn retry(
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database)?;
+    let retryable_run: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_catalog WHERE session_id=?1 AND state='recovery-required' AND billing_run_id=?1 AND memory_run_id IS NULL AND profile_snapshot IS NOT NULL)",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(database)?;
+    if !retryable_run {
+        return Err(Fault::new("app.conflict", "周目状态不可恢复"));
+    }
     let next = expected_revision.checked_add(1).ok_or_else(corrupt)?;
     if let Some((state_now, revision_now, request_now)) = transaction
         .query_row(
@@ -874,6 +884,15 @@ mod tests {
             .unwrap();
     }
 
+    fn make_recovery_required(connection: &rusqlite::Connection, session_id: &str) {
+        connection
+            .execute(
+                "UPDATE session_catalog SET state='recovery-required',memory_run_id=NULL WHERE session_id=?1",
+                [session_id],
+            )
+            .unwrap();
+    }
+
     fn frozen_input(session_id: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         let header = crate::game::builtin::header("mistbell").unwrap();
         let snapshots = crate::game::assets::initialization_asset_snapshots(
@@ -947,6 +966,7 @@ mod tests {
             "2026-10-23T00:00:01Z",
         )
         .unwrap();
+        make_recovery_required(&connection, session_id);
         assert_eq!(
             retry(
                 &mut connection,
@@ -1414,6 +1434,7 @@ mod tests {
                 rusqlite::params![retry_request, session_id],
             )
             .unwrap();
+        make_recovery_required(&connection, session_id);
         let error = retry(
             &mut connection,
             session_id,

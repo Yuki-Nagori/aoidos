@@ -777,6 +777,123 @@ async fn preparation_persists_a_non_playable_run_without_replacing_the_active_ow
 }
 
 #[tokio::test]
+async fn initialization_status_is_private_and_retry_is_revision_scoped_and_idempotent() {
+    use aoidos_billing::money::NanoMoney;
+
+    let fixture = Fixture::with_stress_provider();
+    let prepared = fixture
+        .product
+        .prepare_initialization(
+            "default",
+            "mistbell",
+            "zh-Hans",
+            NanoMoney::parse("10").unwrap(),
+            NanoMoney::parse("5").unwrap(),
+        )
+        .await
+        .unwrap();
+    let initial = fixture
+        .product
+        .initialization_status(&prepared.session_id)
+        .unwrap();
+    assert_eq!(initial.session_id, prepared.session_id);
+    assert_eq!(initial.request_id, prepared.request_id);
+    assert_eq!(initial.revision, 1);
+    assert_eq!(
+        initial.state,
+        crate::cycle_initialization::State::Initializing
+    );
+    let serialized = serde_json::to_value(&initial).unwrap();
+    assert_eq!(serialized.as_object().unwrap().len(), 4);
+    assert!(serialized.get("inputSnapshot").is_none());
+    assert!(serialized.get("outputSnapshot").is_none());
+
+    let input_before = fixture
+        .storage
+        .with_database(|connection| {
+            Ok(crate::cycle_initialization::load(connection, &prepared.session_id)?.input_snapshot)
+        })
+        .unwrap();
+    fixture
+        .storage
+        .with_database(|connection| {
+            crate::cycle_initialization::finish_attempt(
+                connection,
+                &prepared.session_id,
+                1,
+                &prepared.request_id,
+                crate::cycle_initialization::State::Unknown,
+                "2026-10-24T00:00:00Z",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let retry_id = uuid::Uuid::new_v4().to_string();
+    let retried = fixture
+        .product
+        .retry_initialization(&prepared.session_id, 2, &prepared.request_id, &retry_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        retried.state,
+        crate::cycle_initialization::State::Initializing
+    );
+    assert_eq!(retried.revision, 3);
+    assert_eq!(retried.request_id, retry_id);
+    let candidate = fixture
+        .storage
+        .initialization_dispatch_candidate(&prepared.session_id)
+        .unwrap();
+    assert_eq!(candidate.request_id, retry_id);
+    assert_eq!(candidate.revision, retried.revision);
+    assert_eq!(candidate.input.locale, "zh-Hans");
+    assert_eq!(
+        fixture
+            .product
+            .retry_initialization(&prepared.session_id, 2, &prepared.request_id, &retry_id,)
+            .await
+            .unwrap(),
+        retried
+    );
+    assert_eq!(
+        fixture
+            .storage
+            .with_database(|connection| {
+                Ok(
+                    crate::cycle_initialization::load(connection, &prepared.session_id)?
+                        .input_snapshot,
+                )
+            })
+            .unwrap(),
+        input_before
+    );
+    assert_eq!(
+        fixture
+            .stress_provider
+            .as_ref()
+            .unwrap()
+            .starts
+            .load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(
+        fixture
+            .product
+            .retry_initialization(
+                &prepared.session_id,
+                2,
+                &prepared.request_id,
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "app.conflict"
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn preparation_rejects_an_unsupported_profile_before_persisting_a_run() {
     use aoidos_billing::money::NanoMoney;
 

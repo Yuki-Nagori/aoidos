@@ -441,9 +441,7 @@ pub(crate) fn initialization_dispatch_candidate(
     }
 
     let initialization = crate::cycle_initialization::load(connection, session_id)?;
-    if initialization.state != crate::cycle_initialization::State::Initializing
-        || initialization.request_id != preparation.request_id
-    {
+    if initialization.state != crate::cycle_initialization::State::Initializing {
         return Err(Fault::new("app.conflict", "开局请求已变化或不再等待派发"));
     }
     if initialization.input_snapshot
@@ -455,7 +453,7 @@ pub(crate) fn initialization_dispatch_candidate(
     let attempt: Option<(String, i64)> = connection
         .query_row(
             "SELECT state,dispatch_started FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2",
-            rusqlite::params![preparation.request_id, session_id],
+            rusqlite::params![initialization.request_id, session_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
@@ -488,7 +486,7 @@ pub(crate) fn initialization_dispatch_candidate(
     Ok(InitializationDispatchCandidate {
         session_id: session_id.to_owned(),
         revision: initialization.revision,
-        request_id: preparation.request_id,
+        request_id: initialization.request_id,
         profile,
         input: preparation.input,
         provider_request,

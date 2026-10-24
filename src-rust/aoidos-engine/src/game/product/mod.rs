@@ -681,6 +681,16 @@ pub struct InitializationDispatchResult {
     pub state: crate::cycle_initialization::State,
 }
 
+/// Public, content-free snapshot used by the initialization recovery UI.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializationStatus {
+    pub session_id: String,
+    pub revision: u64,
+    pub request_id: String,
+    pub state: crate::cycle_initialization::State,
+}
+
 /// Durable identity returned after preparing, but not dispatching, a new initialization.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -823,6 +833,59 @@ impl Product {
         self.factory
             .dispatch_initialization_once(session_id, tokio_util::sync::CancellationToken::new())
             .await
+    }
+
+    /// Return only the durable initialization identity and state, never frozen prompt data.
+    /// # Errors
+    /// Missing or corrupt initialization records are returned as stable faults.
+    pub fn initialization_status(&self, session_id: &str) -> Result<InitializationStatus, Fault> {
+        self.storage.with_database(|connection| {
+            let snapshot = crate::cycle_initialization::load(connection, session_id)?;
+            Ok(InitializationStatus {
+                session_id: snapshot.session_id,
+                revision: snapshot.revision,
+                request_id: snapshot.request_id,
+                state: snapshot.state,
+            })
+        })
+    }
+
+    /// Retry a failed or uncertain initialization with the same frozen input and budget.
+    /// The caller supplies a stable new request ID so a lost IPC response can be replayed.
+    /// # Errors
+    /// Stale state, invalid IDs, deletion, or persistence failures are returned as stable faults.
+    pub async fn retry_initialization(
+        &self,
+        session_id: &str,
+        expected_revision: u64,
+        previous_request_id: &str,
+        request_id: &str,
+    ) -> Result<InitializationStatus, Fault> {
+        let storage = self.storage.clone();
+        let session_id = session_id.to_owned();
+        let previous_request_id = previous_request_id.to_owned();
+        let request_id = request_id.to_owned();
+        let updated_at = initialization_timestamp();
+        crate::blocking::run(move || {
+            storage.with_database(|connection| {
+                crate::cycle_initialization::retry(
+                    connection,
+                    &session_id,
+                    expected_revision,
+                    &previous_request_id,
+                    &request_id,
+                    &updated_at,
+                )?;
+                let snapshot = crate::cycle_initialization::load(connection, &session_id)?;
+                Ok(InitializationStatus {
+                    session_id: snapshot.session_id,
+                    revision: snapshot.revision,
+                    request_id: snapshot.request_id,
+                    state: snapshot.state,
+                })
+            })
+        })
+        .await
     }
 
     /// 明确新建或重开已选择周目；预检不发 HTTP，重开保持暂停并等待显式恢复。
