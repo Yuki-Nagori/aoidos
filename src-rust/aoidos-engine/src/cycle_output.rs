@@ -17,6 +17,39 @@ const MAX_KEY_BYTES: usize = 48;
 const MAX_TITLE_BYTES: usize = 160;
 const MAX_DESCRIPTION_BYTES: usize = 1024;
 
+/// Strictly validated, canonical opening output bound to the frozen inputs used to validate it.
+/// Its private fields make the validator the only way to construct a finalizable value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedOutput {
+    bytes: Vec<u8>,
+    session_id: String,
+    request_id: String,
+    locale: String,
+    cycle_input_hash: String,
+    entity_hash: String,
+}
+
+impl ValidatedOutput {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn is_bound_to(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        locale: &str,
+        cycle_input_snapshot: &[u8],
+        entity_snapshot: &[u8],
+    ) -> bool {
+        self.session_id == session_id
+            && self.request_id == request_id
+            && self.locale == locale
+            && self.cycle_input_hash == hash_bytes(cycle_input_snapshot)
+            && self.entity_hash == hash_bytes(entity_snapshot)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Response {
@@ -240,7 +273,7 @@ pub fn validate_and_normalize(
     locale: &str,
     cycle_input_snapshot: &[u8],
     entity_snapshot: &[u8],
-) -> Result<Vec<u8>, Fault> {
+) -> Result<ValidatedOutput, Fault> {
     if bytes.len() > MAX_OUTPUT_BYTES
         || !crate::record::format::valid_uuid(session_id)
         || !crate::record::format::valid_uuid(request_id)
@@ -400,7 +433,7 @@ pub fn validate_and_normalize(
         })
         .collect();
     let tasks = normalize_tasks(&response.initial_tasks, session_id, request_id)?;
-    to_vec(&OpeningContent {
+    let normalized = to_vec(&OpeningContent {
         version: 2,
         locale: response.locale,
         goal: GoalSnapshot {
@@ -413,7 +446,19 @@ pub fn validate_and_normalize(
         characters,
         guide,
     })
-    .map_err(|_| invalid_output())
+    .map_err(|_| invalid_output())?;
+    Ok(ValidatedOutput {
+        bytes: normalized,
+        session_id: session_id.to_owned(),
+        request_id: request_id.to_owned(),
+        locale: locale.to_owned(),
+        cycle_input_hash: hash_bytes(cycle_input_snapshot),
+        entity_hash: hash_bytes(entity_snapshot),
+    })
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn normalize_guide(
@@ -767,7 +812,7 @@ fn invalid_output() -> Fault {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const SESSION: &str = "00000000-0000-4000-8000-000000000001";
@@ -792,6 +837,27 @@ mod tests {
             cycle_input_snapshot,
             &crate::game::assets::entity_manifest_snapshot("mistbell").unwrap(),
         )
+        .map(|output| output.as_bytes().to_vec())
+    }
+
+    pub(crate) fn validated_fixture(
+        session_id: &str,
+        request_id: &str,
+        locale: &str,
+        cycle_input_snapshot: &[u8],
+        entity_snapshot: &[u8],
+    ) -> ValidatedOutput {
+        let mut response = valid_response();
+        response["locale"] = serde_json::Value::String(locale.to_owned());
+        super::validate_and_normalize(
+            &serde_json::to_vec(&response).unwrap(),
+            session_id,
+            request_id,
+            locale,
+            cycle_input_snapshot,
+            entity_snapshot,
+        )
+        .unwrap()
     }
 
     fn text(en: &str, zh: &str) -> serde_json::Value {
