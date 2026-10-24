@@ -187,6 +187,19 @@ impl Storage {
         })
     }
 
+    /// 读取已登记且仍可首次派发的冻结开局请求；不领取派发权，也不发网络请求。
+    /// 调用方仍须由初始化账本端口原子领取 requestId 并预留预算后才能调用 Provider。
+    /// # Errors
+    /// 未完成创建、身份 / 快照损坏、请求已变化或已领取派发权时拒绝返回候选。
+    pub fn initialization_dispatch_candidate(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::run_catalog::InitializationDispatchCandidate, Fault> {
+        self.with_database(|connection| {
+            crate::run_catalog::initialization_dispatch_candidate(connection, session_id)
+        })
+    }
+
     /// 重启时收敛未完成的 inactive run 创建；只重放冻结 intent，不激活周目。
     /// # Errors
     /// 任一意图与 record 文件冲突时停止并保留该周目供显式修复。

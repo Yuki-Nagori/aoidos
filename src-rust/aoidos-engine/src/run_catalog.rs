@@ -113,11 +113,12 @@ pub use legacy_scan::LegacyScanResult;
 pub(crate) mod creation;
 mod deletion;
 pub use creation::{
-    FrozenInitializationInput, InactiveRunCreation, InactiveRunIntent, InitializationPreparation,
+    FrozenInitializationInput, InactiveRunCreation, InactiveRunIntent,
+    InitializationDispatchCandidate, InitializationPreparation,
 };
 pub(crate) use creation::{
-    begin_inactive_creation, complete_inactive_creation, mark_inactive_record_created,
-    pending_inactive_creations,
+    begin_inactive_creation, complete_inactive_creation, initialization_dispatch_candidate,
+    mark_inactive_record_created, pending_inactive_creations,
 };
 pub(crate) use deletion::{
     DeletionCleanupProgress, advance_deletion_cleanup,
