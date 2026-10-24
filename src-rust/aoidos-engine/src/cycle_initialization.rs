@@ -304,6 +304,46 @@ pub fn finish_attempt(
     state: State,
     updated_at: &str,
 ) -> Result<u64, Fault> {
+    finish_attempt_inner(
+        connection,
+        session_id,
+        expected_revision,
+        request_id,
+        state,
+        updated_at,
+        None,
+    )
+}
+
+/// Finishes an attempt only if this dispatch already owns its persisted one-shot claim.
+pub fn finish_dispatched_attempt(
+    connection: &mut rusqlite::Connection,
+    session_id: &str,
+    expected_revision: u64,
+    request_id: &str,
+    state: State,
+    updated_at: &str,
+) -> Result<u64, Fault> {
+    finish_attempt_inner(
+        connection,
+        session_id,
+        expected_revision,
+        request_id,
+        state,
+        updated_at,
+        Some(true),
+    )
+}
+
+fn finish_attempt_inner(
+    connection: &mut rusqlite::Connection,
+    session_id: &str,
+    expected_revision: u64,
+    request_id: &str,
+    state: State,
+    updated_at: &str,
+    expected_dispatch_started: Option<bool>,
+) -> Result<u64, Fault> {
     if !matches!(state, State::Failed | State::Unknown)
         || !crate::record::format::valid_uuid(session_id)
         || !crate::record::format::valid_uuid(request_id)
@@ -331,8 +371,8 @@ pub fn finish_attempt(
     {
         let attempt_matches: bool = transaction
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state=?3)",
-                rusqlite::params![request_id, session_id, state.as_str()],
+                "SELECT EXISTS(SELECT 1 FROM cycle_initialization_attempts WHERE request_id=?1 AND session_id=?2 AND state=?3 AND (?4 IS NULL OR dispatch_started=?4))",
+                rusqlite::params![request_id, session_id, state.as_str(), expected_dispatch_started.map(i64::from)],
                 |row| row.get(0),
             )
             .map_err(database)?;
@@ -353,11 +393,14 @@ pub fn finish_attempt(
     }
     let changed = transaction
         .execute(
-            "UPDATE cycle_initialization_attempts SET state=?1,updated_at=?2 WHERE request_id=?3 AND session_id=?4 AND state='pending'",
-            rusqlite::params![state.as_str(), updated_at, request_id, session_id],
+            "UPDATE cycle_initialization_attempts SET state=?1,updated_at=?2 WHERE request_id=?3 AND session_id=?4 AND state='pending' AND (?5 IS NULL OR dispatch_started=?5)",
+            rusqlite::params![state.as_str(), updated_at, request_id, session_id, expected_dispatch_started.map(i64::from)],
         )
         .map_err(database)?;
     if changed != 1 {
+        if expected_dispatch_started.is_some() {
+            return Err(Fault::new("app.conflict", "开局派发权不属于当前请求"));
+        }
         return Err(corrupt());
     }
     transaction.commit().map_err(database)?;
@@ -1129,6 +1172,78 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn only_a_claimed_dispatch_can_finish_through_the_dispatch_owner_path() {
+        let mut connection = connection();
+        let session_id = "00000000-0000-4000-8000-000000000001";
+        let request_id = "00000000-0000-4000-8000-000000000003";
+        ready_run(&connection, session_id);
+        let (input, _, _) = frozen_input(session_id);
+        let started = begin(
+            &mut connection,
+            &Begin {
+                session_id: session_id.into(),
+                expected_catalog_revision: 1,
+                request_id: request_id.into(),
+                input_snapshot: input,
+                created_at: "2026-10-23T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            finish_dispatched_attempt(
+                &mut connection,
+                session_id,
+                started.revision,
+                request_id,
+                State::Failed,
+                "2026-10-23T00:00:01Z",
+            )
+            .unwrap_err()
+            .code,
+            "app.conflict",
+            "an invocation without a persisted dispatch claim must not finish the attempt"
+        );
+        assert_eq!(
+            load(&connection, session_id).unwrap().state,
+            State::Initializing
+        );
+
+        connection
+            .execute(
+                "UPDATE session_catalog SET state='recovery-required',memory_run_id=NULL WHERE session_id=?1",
+                [session_id],
+            )
+            .unwrap();
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        claim_dispatch_in_transaction(
+            &transaction,
+            session_id,
+            started.revision,
+            request_id,
+            "2026-10-23T00:00:02Z",
+        )
+        .unwrap();
+        transaction.commit().unwrap();
+
+        assert_eq!(
+            finish_dispatched_attempt(
+                &mut connection,
+                session_id,
+                started.revision,
+                request_id,
+                State::Unknown,
+                "2026-10-23T00:00:03Z",
+            )
+            .unwrap(),
+            started.revision + 1
+        );
+        assert_eq!(load(&connection, session_id).unwrap().state, State::Unknown);
     }
 
     #[test]

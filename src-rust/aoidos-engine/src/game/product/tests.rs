@@ -372,6 +372,66 @@ fn billing_route_policy_is_explicit_per_provider_family() {
     assert_eq!(billing_route_policy("deepseek"), "direct");
 }
 
+#[tokio::test]
+async fn initialization_output_is_private_and_enforces_its_byte_limit() {
+    use aoidos_llm::schedule::OutputPort;
+
+    let output = InitializationOutput::default();
+    assert!(output.send("{\"title\":".into()).await);
+    assert!(output.send("\"开局\"}".into()).await);
+    assert_eq!(output.take().unwrap(), "{\"title\":\"开局\"}".as_bytes());
+
+    assert!(
+        !output
+            .send("x".repeat(InitializationOutput::MAX_BYTES + 1))
+            .await
+    );
+    assert_eq!(output.take().unwrap_err().code, "app.bad-request");
+}
+
+#[test]
+fn only_the_successful_reservation_invocation_owns_initialization_finish() {
+    use aoidos_llm::schedule::{
+        AttemptIdentity, AttemptKind, AttemptOutcome, BudgetDenial, BudgetPort,
+    };
+
+    struct SingleClaim(AtomicBool);
+    impl BudgetPort for SingleClaim {
+        fn reserve(&self, _: &AttemptIdentity) -> Result<(), BudgetDenial> {
+            self.0
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .map(|_| ())
+                .map_err(|_| BudgetDenial {
+                    reason: "budget.conflict".into(),
+                })
+        }
+        fn settle(&self, _: &AttemptIdentity, _: &AttemptOutcome) {}
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let attempt = AttemptIdentity {
+        request_id,
+        turn_id: "initialization-owner-test".into(),
+        attempt: 1,
+        kind: AttemptKind::Initial,
+        model: "fixture".into(),
+        mode: aoidos_llm::provider::RequestMode::Completion,
+        max_tokens: 16,
+        temperature: 1.0,
+    };
+    let inner = Arc::new(SingleClaim(AtomicBool::new(false)));
+    let first = InitializationDispatchBudget::new(inner.clone());
+    let concurrent = InitializationDispatchBudget::new(inner);
+
+    first.reserve(&attempt).unwrap();
+    assert!(first.was_claimed());
+    assert!(concurrent.reserve(&attempt).is_err());
+    assert!(
+        !concurrent.was_claimed(),
+        "a losing concurrent invocation must not own the pending attempt"
+    );
+}
+
 use crate::{
     game::test_support::{PhaseEventsFixture, PrepareGate},
     migration::{MigrationEvent, MigrationEvents},

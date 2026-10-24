@@ -118,6 +118,7 @@
 - 2026-10-23：继 #215 后继续实现 dispatch 围栏：初始化 attempt 增加持久 `dispatch_started` CAS；初始化预算端口在一次 SQLite `IMMEDIATE` 事务中领取该权并登记同 requestId 的费用预留，避免账本预留的幂等语义意外授权 Provider 重放。当前只完成围栏与事务内 reserve 原语及 focused test；尚未接入完整开局 coordinator、record 创建 journal、初始化恢复流程或产品新局入口，不能启用新流程。
 - 2026-10-23：登记 `cycle-input-v1.json` 并由 engine 严格验证版本、字段数量 / 类型 / 范围 / 比较符、已注册来源及固定 Character 引用；固定角色显式标注 `isGuide: true`，角色档案拆分真值、初始认知、对外呈现和开场职责。每个剧情角色含主角需在 run 冻结资料中有个人档案；无作者固定档案时由开局初始化补齐。Mistbell 固定使用已登记的洛苇，并显式绑定主角实体；不改正文原始字节，避免历史 v1 script revision 变化。唯一已接入状态源从当前有效历史分支派生已结算的角色内回合数，空历史时值缺失。新 script revision 纳入输入资源和修订；旧 v1 revision 仍能重建原实体目录。完整开局请求、不可玩初始化账本和目标 / 标签快照仍待实现。
 - 2026-10-24：继续初始化准备事务切片，并按 #223 同步角色档案 / 结局架构 / 本任务文档的 v2 语义。新 preparation 只接受 `cycle-input-v2.json`，历史 v1 仍可恢复旧 script revision；新增匹配历史 hash 的 v1 拒绝测试。当前资源已采用显式 `cycle-input-v1.json` / `cycle-input-v2.json` 文件名，代码无无版本 `cycle-input.json` 引用。#219 所需 crate 清单、更新日期和 JSON 共用能力锚点已在基线解决。
+- 2026-10-24：增加 `ProfileFactory::dispatch_initialization_once`，从已登记的冻结候选恢复 profile 凭据和 Provider，创建绑定同一 session / revision / requestId 的初始化预算端口，并调用无重试的一次性调度器。输出只进入 128 KiB 私有缓冲区；正常完成后先严格规范化，再与 `playable` 状态在同一 CAS 事务冻结。每次调用记录自身是否成功预留并取得派发权；只有派发权持有者能结束 attempt，避免并发输家或预取消调用中止正在运行的请求。取消、调度失败和输出校验失败分别保留 failed / unknown 状态，不自动重发。当前 `Product::open(start_new)` 尚未改为创建并派发准备候选，也未接入 IPC / UI，因此新周目尚未走完整流程；该入口仍需后续切片接线并补端到端故障测试。
 
 ## 完成摘要
 
